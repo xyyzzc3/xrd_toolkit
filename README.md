@@ -24,24 +24,27 @@
 
 ```
 .
-├── data/          # XRD 原始数据（.tif，不进 git）
-├── outputs/       # 生成的示例图（PNG）
-├── scripts/       # 独立脚本（view_diffraction.py）
+├── data/                       # XRD 原始数据（.tif，不进 git）
+├── outputs/                    # 生成的示例图（PNG）
+├── scripts/
+│   └── view_diffraction.py     # 衍射图查看器（画图 + 线剖面）
 ├── src/xrd_toolkit/
-│   ├── main.py                   # 程序入口
-│   ├── config.py                 # 全局配置
-│   ├── core/processor.py         # 图像计算（线剖面等）
-│   ├── services/data_loader.py   # 数据读取（fabio）
-│   └── utils/                    # 工具函数
-└── tests/         # 测试
+│   ├── main.py                 # 程序入口
+│   ├── config.py               # 全局配置
+│   ├── core/processor.py       # 图像计算（线剖面等）
+│   ├── services/data_loader.py # 数据读取（fabio）
+│   └── utils/                  # 工具函数
+├── tests/                      # 测试
+├── pyproject.toml              # 项目元信息与依赖
+└── README.md                   # 本文件
 ```
 
 ## 5. 输出示例
 
 二维衍射图（对数色标，红色十字为环圆心）：
 
-![二维衍射图](outputs/LMFP_1_atten0-00029_copy_image.png)
+<img src="outputs/LMFP_1_atten0-00029_copy_image.png" width="60%">
 
 过圆心的强度剖面（横轴为到圆心的距离，单位像素）：
 
-![强度剖面](outputs/LMFP_1_atten0-00029_copy_profile.png)
+<img src="outputs/LMFP_1_atten0-00029_copy_profile.png" width="60%">
