@@ -92,9 +92,9 @@ def main() -> None:
     #   origin="lower" : 数组第 0 行画在下方（数学坐标习惯，探测器也是这么摆放的）
     im = ax.imshow(data, cmap="magma", norm=LogNorm(vmin=100, vmax=50000), origin="lower")
 
-    ax.set_title(f"二维衍射图（{tag}，对数色标）")
-    ax.set_xlabel("探测器横向像素 X (px)")
-    ax.set_ylabel("探测器纵向像素 Y (px)")
+    ax.set_title(f"2D Diffraction Image ({tag}, log scale)")
+    ax.set_xlabel("Detector pixel X (px)")
+    ax.set_ylabel("Detector pixel Y (px)")
 
     # 用红色十字标记剖面经过的圆心，方便核对位置对不对
     prof_cy, prof_cx = center if center is not None else (h / 2.0, w / 2.0)
@@ -103,7 +103,7 @@ def main() -> None:
     ax.plot(prof_cx, prof_cy, "+", color="r", ms=14, mew=2)   # 圆心处的红色十字
 
     cbar = fig.colorbar(im, ax=ax, pad=0.02)   # 颜色条：把颜色和强度数值对应起来
-    cbar.set_label("强度 (counts)")
+    cbar.set_label("Intensity (counts)")
 
     fig.tight_layout()   # 自动收紧边距，防止标签被裁掉
     fig.savefig(outdir / f"{tag}_image.png", dpi=150)  # 存成 PNG，dpi 控制清晰度
@@ -116,9 +116,9 @@ def main() -> None:
 
     fig2, ax2 = plt.subplots(figsize=(7, 3.5))
     ax2.plot(t, profile, linewidth=1.2)  # plot(x, y)：把点连成曲线
-    ax2.set_title(f"过圆心的强度剖面（与水平方向夹角 {args.angle:g}°）")
-    ax2.set_xlabel("到圆心的距离 (px)（负 = 左侧，正 = 右侧）")
-    ax2.set_ylabel("强度 (counts)")
+    ax2.set_title(f"Intensity Profile Through Center ({args.angle:g}° from horizontal)")
+    ax2.set_xlabel("Distance from center (px) (negative = left, positive = right)")
+    ax2.set_ylabel("Intensity (counts)")
     ax2.grid(True, alpha=0.3)  # 浅色网格线，方便读数
     fig2.tight_layout()
     fig2.savefig(outdir / f"{tag}_profile.png", dpi=150)
