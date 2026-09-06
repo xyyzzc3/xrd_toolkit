@@ -66,7 +66,7 @@ def line_profile(image: np.ndarray, center=None, angle_deg: float = 0.0):
     x1c = np.clip(x0 + 1, 0, w - 1)
     y1c = np.clip(y0 + 1, 0, h - 1)
 
-    # 周围四个的强度
+    # 周围四个点的强度
     i00 = image[y0c, x0c]  # 左上
     i10 = image[y0c, x1c]  # 右上
     i01 = image[y1c, x0c]  # 左下
