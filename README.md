@@ -5,7 +5,11 @@ XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，绘�
 ## 安装
 
 ```bash
+# 1. 用 environment.yml 一键创建 conda 环境（只需一次）
+conda env create -f environment.yml
+# 2. 激活环境
 conda activate XRD_Toolkit_Environment
+# 3. 安装本项目（numpy / matplotlib / fabio 依赖会自动装上）
 pip install -e .
 ```
 
@@ -14,6 +18,8 @@ pip install -e .
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angle 0 --outdir outputs
 ```
+
+> 注意：示例数据没有上传到仓库，请把 `data/xxx.tif` 换成你自己的衍射数据文件路径。
 
 参数说明：
 - `--file`：衍射图像路径（.tif / .edf / .cbf）
@@ -36,6 +42,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angl
 │   ├── services/data_loader.py # 数据读取（fabio）
 │   └── utils/                  # 工具函数
 ├── tests/                      # 测试
+├── environment.yml             # conda 环境定义（一键创建环境）
 ├── pyproject.toml              # 项目元信息与依赖
 ├── README.md                   # 项目说明
 └── WEEKLY_REPORT.md            # 周报

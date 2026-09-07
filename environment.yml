@@ -1,0 +1,8 @@
+# conda 环境定义：别人用 `conda env create -f environment.yml` 就能复现你的环境
+# 注意：numpy / matplotlib / fabio 不写在这里，统一由 pyproject.toml 管理，避免两处重复
+name: XRD_Toolkit_Environment
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
