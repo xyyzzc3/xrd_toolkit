@@ -1,26 +1,27 @@
-# Weekly report (archived)
+# XRD Toolkit
 
-## 1. 本周完成情况
-- [x] 环境配置（Conda + PyCharm）
-- [x] 读取 tif 并显示图像
-- [x] 代码微调（至少3项）
-- [x] Git 推送
+XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，绘制二维衍射图与过圆心的强度剖面。
 
-## 2. 遇到的问题与解决方案
-| 问题         | 解决方案   |
-|:-----------|:-------|
-| project格式  | 使用常见模版 |
-| for循环问题    | 学习     |
-| 作图以及改可视化参数 | 学习     |
+## 安装
 
+```bash
+conda activate XRD_Toolkit_Environment
+pip install -e .
+```
 
-## 3. 学习工具记录
-- (removed) 
-  - (removed).
-- (removed)
-  - (removed)。
+## 使用
 
-## 4. 项目结构
+```bash
+python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angle 0 --outdir outputs
+```
+
+参数说明：
+- `--file`：衍射图像路径（.tif / .edf / .cbf）
+- `--center`：环圆心坐标 cx,cy，不填则默认图像几何中心
+- `--angle`：剖面线与水平方向的夹角（度），默认 0
+- `--outdir`：PNG 输出目录，默认 outputs/
+
+## 项目结构
 
 ```
 .
@@ -36,10 +37,11 @@
 │   └── utils/                  # 工具函数
 ├── tests/                      # 测试
 ├── pyproject.toml              # 项目元信息与依赖
-└── README.md                   # 本文件
+├── README.md                   # 项目说明
+└── WEEKLY_REPORT.md            # 周报
 ```
 
-## 5. 输出示例
+## 输出示例
 
 二维衍射图（对数色标，红色十字为环圆心）：
 
