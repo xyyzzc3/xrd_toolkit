@@ -87,7 +87,7 @@ def main() -> None:
     prof_cy, prof_cx = center if center is not None else (h / 2.0, w / 2.0)
     ax.axhline(prof_cy, color="r", linewidth=0.8, alpha=0.7)  # 过圆心的水平红线
     ax.axvline(prof_cx, color="r", linewidth=0.8, alpha=0.7)  # 过圆心的竖直红线
-    # ax.plot(prof_cx, prof_cy, "+", color="r", ms=14, mew=2)   # 圆心处的红色十字
+    ax.plot(prof_cx, prof_cy, "+", color="r", ms=14, mew=2)   # 圆心处的红色十字
 
     # 【可调】pad=0.02 是颜色条与图的间距，调大离得更远
     # shrink=0.85 让颜色条短一点，上下刻度不贴到画布边缘
