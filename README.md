@@ -69,13 +69,11 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 │   ├── integrate_pattern.py    # 全角度积分：2D 图 → 标准 1D 谱（两列 txt）
 │   └── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
 ├── src/xrd_toolkit/
-│   ├── main.py                 # 程序入口
-│   ├── config.py               # 全局配置
+│   ├── config.py               # 全局配置（标定几何参数，全项目唯一一份）
 │   ├── core/processor.py       # 图像计算（线剖面等）
 │   ├── services/data_loader.py # 数据读取（fabio）
-│   ├── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
-│   └── utils/                  # 工具函数
-├── tests/                      # 测试
+│   └── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
+├── tests/                      # 测试（暂空，后续补）
 ├── environment.yml             # conda 环境定义（一键创建环境）
 ├── pyproject.toml              # 项目元信息与依赖
 ├── README.md                   # 项目说明

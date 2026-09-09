@@ -31,19 +31,9 @@ import numpy as np
 # 让脚本可以直接从仓库根目录运行（无需先 pip install）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from xrd_toolkit.config import CALIBRATED  # 任务三标定几何（全项目唯一一份）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_sectors
-
-# 任务三标定好的几何参数（与 integrate_pattern.py 相同，同一批实验通用）
-CALIBRATED = dict(
-    pixel_size_m=200e-6,
-    wavelength_m=0.1223e-10,
-    dist_m=1.59579,
-    poni1_m=1045.17 * 200e-6,
-    poni2_m=1022.03 * 200e-6,
-    rot1_deg=-0.0054,
-    rot2_deg=-0.1632,
-)
 
 
 def main() -> None:
