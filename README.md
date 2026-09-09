@@ -1,6 +1,6 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，绘制二维衍射图与过圆心的强度剖面。
+XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看、LaB₆ 几何校准（pyFAI）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。
 
 ## 安装
 
@@ -14,6 +14,8 @@ pip install -e .
 ```
 
 ## 使用
+
+典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。
 
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angle 0 --outdir outputs
@@ -89,3 +91,11 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 过圆心的强度剖面（横轴为到圆心的距离，单位像素）：
 
 <img src="outputs/week2_lab6/profile.png" width="60%">
+
+校准后的 1D 图谱（红虚线为 LaB₆ 理论峰位）：
+
+<img src="outputs/week2_lab6/calibrated.png" width="60%">
+
+36 扇区瀑布图（每条曲线按方位角沿 Y 轴错开堆叠）：
+
+<img src="outputs/week2_lab6/waterfall.png" width="60%">
