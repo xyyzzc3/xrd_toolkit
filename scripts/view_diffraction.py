@@ -98,6 +98,10 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     # 文件名去掉路径和扩展名，空格换成下划线（避免生成的文件名里有空格）
     tag = path.stem.replace(" ", "_")
 
+    # 输出按样品分文件夹：outputs/{数据名}/，文件名不带数据名前缀
+    sub = outdir / tag
+    sub.mkdir(parents=True, exist_ok=True)
+
     # 圆心：用户用 --center 给了就用用户的；没给就用图像几何中心。
     # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]，
     # 所以传给 line_profile 时要反过来存成 (行, 列)。
@@ -176,7 +180,7 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     fig.tight_layout()   # 自动收紧边距，防止标签被裁掉
     fig.subplots_adjust(bottom=0.20)   # 底部多留白：颜色条最下刻度 10^1 不会被裁
     # 【可调】dpi=150 保存清晰度：改成 300 更清晰但文件更大（印刷用 300）
-    fig.savefig(outdir / f"{tag}_image.png", dpi=150)  # 存成 PNG
+    fig.savefig(sub / "image.png", dpi=150)  # 存成 PNG
 
     # ── 第 4 步：图 2 —— 过圆心的强度剖面 ──
     # line_profile 返回两个数组：
@@ -200,9 +204,9 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     # 【可调】网格：grid(False) 关掉网格；alpha=0.3 网格深浅（0=最浅 ~ 1.0=最深）
     ax2.grid(True, alpha=0.3)  # 浅色网格线，方便读数
     fig2.tight_layout()
-    fig2.savefig(outdir / f"{tag}_profile.png", dpi=150)  # 【可调】dpi 同图 1：清晰度与文件大小的权衡
+    fig2.savefig(sub / "profile.png", dpi=150)  # 【可调】dpi 同图 1：清晰度与文件大小的权衡
 
-    print(f"[OK] {path.name} -> {outdir.resolve()}/{tag}_image.png, {tag}_profile.png")
+    print(f"[OK] {path.name} -> {sub.resolve()}/image.png, profile.png")
 
 
 def main() -> None:
@@ -220,7 +224,8 @@ def main() -> None:
                         help="Angle between the profile line and the horizontal axis (degrees), default 0")
     parser.add_argument("--center",
                         help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); defaults to the image geometric center")
-    parser.add_argument("--outdir", default="outputs", help="Directory to save the PNGs, default outputs/")
+    parser.add_argument("--outdir", default="outputs",
+                        help="Base output directory, default outputs/ (each file is saved into outputs/{filename}/)")
     parser.add_argument("--vmin", type=float, default=None,
                         help="Color scale lower limit; if not given, auto = 1st percentile of the image")
     parser.add_argument("--vmax", type=float, default=None,
