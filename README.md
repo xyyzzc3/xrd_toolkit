@@ -52,8 +52,8 @@ python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angl
 
 二维衍射图（对数色标，红色十字为环圆心）：
 
-<img src="outputs/LMFP_1_atten0-00029_copy_image.png" width="60%">
+<img src="outputs/week2_lab6_image.png" width="60%">
 
 过圆心的强度剖面（横轴为到圆心的距离，单位像素）：
 
-<img src="outputs/LMFP_1_atten0-00029_copy_profile.png" width="60%">
+<img src="outputs/week2_lab6_profile.png" width="60%">

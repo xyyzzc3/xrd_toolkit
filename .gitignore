@@ -9,3 +9,5 @@ __pycache__/
 .env
 .DS_Store
 *.log
+# 周报是个人学习过程记录，只保留在本地，不上传到 GitHub
+WEEKLY_REPORT.md
