@@ -9,7 +9,7 @@ def load_diffraction_image(path: str) -> np.ndarray:
 
     参数：
         path : str
-            文件路径，比如 "data/LMFP_1_atten0-00029 copy.tif"
+            文件路径，比如 "data/week2_lab6.tif"
 
     返回：
         np.ndarray
