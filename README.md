@@ -76,8 +76,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ├── tests/                      # 测试（暂空，后续补）
 ├── environment.yml             # conda 环境定义（一键创建环境）
 ├── pyproject.toml              # 项目元信息与依赖
-├── README.md                   # 项目说明
-└── WEEKLY_REPORT.md            # 周报
+└── README.md                   # 项目说明
 ```
 
 ## 输出示例
