@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "XRD 数据处理工具集"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy", "matplotlib", "fabio"]
+dependencies = ["numpy", "matplotlib", "fabio", "pyfai"]
 
 [project.scripts]
 xrd-toolkit = "xrd_toolkit.main:main"
