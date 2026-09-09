@@ -1,6 +1,6 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看、LaB₆ 几何校准（pyFAI）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。
+XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看（自动定位环圆心）、LaB₆ 几何校准（pyFAI）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。
 
 ## 安装
 
@@ -18,7 +18,7 @@ pip install -e .
 典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。
 
 ```bash
-python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angle 0 --outdir outputs
+python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
 ```
 
 > 注意：示例数据没有上传到仓库，请把 `data/xxx.tif` 换成你自己的衍射数据文件路径。
@@ -81,7 +81,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 ## 输出示例
 
-二维衍射图（对数色标，黑边白环+白十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
+二维衍射图（对数色标，黑边白芯小十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
 
 <img src="outputs/week2_lab6/image.png" width="60%">
 
