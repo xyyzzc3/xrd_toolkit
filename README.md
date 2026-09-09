@@ -17,6 +17,8 @@ pip install -e .
 
 典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。
 
+四个脚本都支持两种方式选文件：`--file` 指定单个文件；不带 `--file` 则弹出交互菜单，列出 `data/` 里所有数据文件按编号选择（`1,2` 多选、`all` 全选）。菜单逻辑统一在 `xrd_toolkit/cli.py`，四个脚本共用一份。
+
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
 ```
@@ -70,6 +72,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 │   └── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
 ├── src/xrd_toolkit/
 │   ├── config.py               # 全局配置（标定几何参数，全项目唯一一份）
+│   ├── cli.py                  # 命令行共用交互选文件菜单（四个脚本共用）
 │   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
 │   ├── services/data_loader.py # 数据读取（fabio）
 │   └── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
