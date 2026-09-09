@@ -25,7 +25,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --center 1020,1024 --angl
 
 参数说明：
 - `--file`：衍射图像路径（.tif / .edf / .cbf）
-- `--center`：环圆心坐标 cx,cy，不填则默认图像几何中心
+- `--center`：环圆心坐标 cx,cy，不填则自动定位（利用衍射图关于圆心中心对称的物理性质，FFT 互相关，任何新数据都通用，精度 < 1 px）
 - `--angle`：剖面线与水平方向的夹角（度），默认 0
 - `--outdir`：PNG 输出目录，默认 outputs/
 
@@ -70,7 +70,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 │   └── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
 ├── src/xrd_toolkit/
 │   ├── config.py               # 全局配置（标定几何参数，全项目唯一一份）
-│   ├── core/processor.py       # 图像计算（线剖面等）
+│   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
 │   ├── services/data_loader.py # 数据读取（fabio）
 │   └── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
 ├── tests/                      # 测试（暂空，后续补）
@@ -81,7 +81,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 ## 输出示例
 
-二维衍射图（对数色标，红色十字为环圆心）：
+二维衍射图（对数色标，黑边白环+白十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
 
 <img src="outputs/week2_lab6/image.png" width="60%">
 

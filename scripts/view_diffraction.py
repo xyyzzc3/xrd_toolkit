@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.core.processor import line_profile
+from xrd_toolkit.core.processor import find_ring_center, line_profile
 
 
 # 支持的衍射数据扩展名（交互菜单只列出这些格式的文件）。
@@ -102,7 +102,10 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     sub = outdir / tag
     sub.mkdir(parents=True, exist_ok=True)
 
-    # 圆心：用户用 --center 给了就用用户的；没给就用图像几何中心。
+    # 圆心：用户用 --center 给了就用用户的；没给就自动定位——
+    # find_ring_center 利用"衍射图关于圆心中心对称"（Friedel 定律），
+    # 把图绕几何中心转 180° 后与原图做 FFT 互相关，峰位的一半就是圆心偏移。
+    # 所以以后任何新数据都不用再量圆心，看图时自动找。
     # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]，
     # 所以传给 line_profile 时要反过来存成 (行, 列)。
     center = None
@@ -114,12 +117,17 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
         # 元组：(cy, cx) 顺序不能乱。
         cx, cy = (float(s) for s in args.center.split(","))
         center = (cy, cx)
+    else:
+        center = find_ring_center(data)   # 自动定位（返回 (行, 列)）
 
     h, w = data.shape  # 数组形状：h = 行数（高），w = 列数（宽）
 
     # f-string：字符串前加 f，花括号 {} 里的变量会被替换成它的值。
     # {data.min():.1f} 里的 :.1f 表示"保留 1 位小数"（浮点数格式化）。
     print(f"\n=== {path.name} ===  Image size: {w} x {h}, intensity range: {data.min():.1f} ~ {data.max():.1f}")
+    # 打印圆心：自动定位时打印 (x, y)，方便和标定值对照；用户手动指定时也回显一遍
+    print(f"  Ring center ({'user-specified' if args.center else 'auto-detected'}): "
+          f"({center[1]:.2f}, {center[0]:.2f}) px")
 
     # ── 颜色标尺范围：自动还是手动？──
     # 不传 --vmin/--vmax 时自动取：
@@ -153,8 +161,9 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     #   origin         行方向："lower"=第 0 行画在下方（现在用的）；"upper"=上下翻转
     im = ax.imshow(data, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax), origin="lower")
 
-    # 标题分两行：文件名很长，一行放不下会超出画布被裁掉
-    ax.set_title(f"2D Diffraction Image\n({tag}, log scale)")
+    # 标题分两行：文件名很长，一行放不下会超出画布被裁掉；
+    # 第二行写明环圆心坐标（自动定位或用户指定），不用再靠肉眼找圆心
+    ax.set_title(f"2D Diffraction Image\n({tag}, log scale, ring center = ({center[1]:.1f}, {center[0]:.1f}) px)")
     ax.set_xlabel("Detector pixel X (px)")
     ax.set_ylabel("Detector pixel Y (px)")
     # 显式指定刻度：防止自动刻度跑到数据范围外、把文字挤出画布
@@ -164,13 +173,31 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     ax.set_xticks(range(0, w, step_x))
     ax.set_yticks(range(0, h, step_y))
 
-    # 用红色十字标记剖面经过的圆心，方便核对位置对不对
-    # 【可调】红线的样子：color="r" 颜色（"r"红 "b"蓝 "w"白）；linewidth 线宽越大越粗；
-    # alpha 透明度（0=全透明 ~ 1=不透明）；ms=14 十字大小；mew=2 十字描边粗细
-    prof_cy, prof_cx = center if center is not None else (h / 2.0, w / 2.0)
-    ax.axhline(prof_cy, color="r", linewidth=0.8, alpha=0.7)  # 过圆心的水平红线
-    ax.axvline(prof_cx, color="r", linewidth=0.8, alpha=0.7)  # 过圆心的竖直红线
-    # ax.plot(prof_cx, prof_cy, "+", color="r", ms=14, mew=2)   # 圆心处的红色十字
+    # 圆心标记 = 小十字（地图标注画法）：先画黑色粗十字打底，再叠白色
+    # 细十字——黑白双描边保证岩浆色标（黑紫→橙黄）深浅背景上都清晰，
+    # 又比瞄准镜环更简洁不占地方。
+    # 沿 --angle 方向再画一条白色虚线表示剖面线的取样方向。
+    # 【可调】arm=臂半长随图像大小缩放（w/60：2048 图 → 34 px）；
+    # 黑底 lw=2.0 / 白面 lw=0.8 是描边粗细
+    prof_cy, prof_cx = center
+    arm = max(16.0, w / 60.0)
+    for color, lw in [("k", 2.0), ("w", 0.8)]:
+        ax.plot([prof_cx - arm, prof_cx + arm], [prof_cy, prof_cy],
+                color=color, lw=lw)  # 十字横臂
+        ax.plot([prof_cx, prof_cx], [prof_cy - arm, prof_cy + arm],
+                color=color, lw=lw)  # 十字竖臂
+    angle_rad = np.radians(args.angle)
+    r_ext = np.hypot(w, h) / 2.0  # 半对角线长，保证虚线一定穿出图像
+    dx, dy = r_ext * np.cos(angle_rad), r_ext * np.sin(angle_rad)
+    ax.plot([prof_cx - dx, prof_cx + dx], [prof_cy - dy, prof_cy + dy],
+            color="w", ls="--", lw=0.8, alpha=0.8)  # 剖面线取样方向（白色虚线）
+
+    # 踩坑记录：虚线故意画到图像外（保证贯穿整图），但 matplotlib 的自动缩放
+    # 会把坐标轴撑大——图像缩成中间一小块、两侧留大白边。
+    # set_xlim/set_ylim 显式调用后，该轴的自动缩放被关闭，显示范围锁回图像本身，
+    # 越界的虚线部分被裁剪掉，不影响图面。
+    ax.set_xlim(-0.5, w - 0.5)
+    ax.set_ylim(-0.5, h - 0.5)
 
     # 【可调】pad=0.02 是颜色条与图的间距，调大离得更远
     # shrink=0.85 让颜色条短一点，上下刻度不贴到画布边缘
@@ -223,7 +250,9 @@ def main() -> None:
     parser.add_argument("--angle", type=float, default=0.0,
                         help="Angle between the profile line and the horizontal axis (degrees), default 0")
     parser.add_argument("--center",
-                        help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); defaults to the image geometric center")
+                        help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); "
+                             "if not given, the center is auto-detected from the image "
+                             "(180-degree rotation cross-correlation)")
     parser.add_argument("--outdir", default="outputs",
                         help="Base output directory, default outputs/ (each file is saved into outputs/{filename}/)")
     parser.add_argument("--vmin", type=float, default=None,
