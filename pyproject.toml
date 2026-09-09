@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xrd-toolkit"
 version = "0.1.0"
-description = "XRD 数据处理工具集"
+description = "Modular Python toolkit for 2D X-ray diffraction analysis: ring-center localization, LaB6 geometric calibration, azimuthal integration, sector analysis"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy", "matplotlib", "fabio", "pyfai"]

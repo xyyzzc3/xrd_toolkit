@@ -1,101 +1,133 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看（自动定位环圆心）、LaB₆ 几何校准（pyFAI）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。
+![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-## 安装
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), localizes the ring center automatically, calibrates the detector geometry against a LaB₆ standard (pyFAI), and integrates the 2D pattern into standard 1D powder diffraction spectra — including sector-wise integration for azimuthal uniformity analysis.
+
+中文说明：[README.zh-CN.md](docs/README.zh-CN.md)
+
+## Highlights
+
+- **Automatic ring-center localization** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center. Fully automatic on any new dataset, accuracy < 1 px.
+- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.79 mm.
+- **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ, intensity), ready for peak finding, profile fitting, and PDF analysis.
+- **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; waterfall plots reveal preferred orientation or large-grain spotiness.
+- **Shared interactive CLI** — one file-selection menu (`xrd_toolkit/cli.py`) reused by all four scripts: number selection, `1,2` multi-select, or `all`.
+
+## Installation
 
 ```bash
-# 1. 用 environment.yml 一键创建 conda 环境（只需一次）
+# 1. Create the conda environment (once)
 conda env create -f environment.yml
-# 2. 激活环境
+# 2. Activate it
 conda activate XRD_Toolkit_Environment
-# 3. 安装本项目（numpy / matplotlib / fabio 依赖会自动装上）
+# 3. Install this package in editable mode (numpy / matplotlib / fabio / pyFAI come along)
 pip install -e .
 ```
 
-## 使用
+## Usage
 
-典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。
+Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). All outputs are written under `outputs/{dataset_name}/`.
 
-四个脚本都支持两种方式选文件：`--file` 指定单个文件；不带 `--file` 则弹出交互菜单，列出 `data/` 里所有数据文件按编号选择（`1,2` 多选、`all` 全选）。菜单逻辑统一在 `xrd_toolkit/cli.py`，四个脚本共用一份。
+Each script accepts either `--file` to pick one dataset, or — without `--file` — an interactive menu listing all files in `data/`.
+
+| Script | What it does |
+|---|---|
+| `scripts/view_diffraction.py` | 2D image viewer (log scale, line profile, auto ring-center mark) |
+| `scripts/calibrate_integrate.py` | LaB₆ geometric calibration (pyFAI) + azimuthal integration (2D → 1D) |
+| `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern (two-column txt) |
+| `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
+
+### View a diffraction image
 
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
 ```
 
-> 注意：示例数据没有上传到仓库，请把 `data/xxx.tif` 换成你自己的衍射数据文件路径。
+Options: `--center cx,cy` (auto-detected if omitted), `--angle` (profile angle in degrees, default 0), `--outdir` (default `outputs/`).
 
-参数说明：
-- `--file`：衍射图像路径（.tif / .edf / .cbf）
-- `--center`：环圆心坐标 cx,cy，不填则自动定位（利用衍射图关于圆心中心对称的物理性质，FFT 互相关，任何新数据都通用，精度 < 1 px）
-- `--angle`：剖面线与水平方向的夹角（度），默认 0
-- `--outdir`：PNG 输出目录，默认 outputs/
-
-### 几何校准 + 1D 图谱（LaB₆ 标样）
+### Geometric calibration + 1D pattern (LaB₆ standard)
 
 ```bash
 python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --pixel 200 --dist0 1600
 ```
 
-- `--wavelength`：X 光波长（Å）
-- `--pixel`：探测器像素尺寸（µm）
-- `--dist0`：探测器距离初值（mm），脚本用 pyFAI 自动精修出精确值
+`--wavelength` X-ray wavelength (Å), `--pixel` detector pixel size (µm), `--dist0` initial detector distance (mm, refined by pyFAI). The pipeline fits the LaB₆ peak positions (`GeometryRefinement`), then integrates azimuthally and writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical LaB₆ positions). Calibration and integration live in `xrd_toolkit/services/integrator.py`.
 
-脚本流程：LaB₆ 峰位校准（pyFAI GeometryRefinement）→ 方位角积分（2D→1D）→ 输出 1D 图谱（`outputs/{数据名}/calibrated_2th.txt` + `calibrated.png`，图中红虚线为理论峰位）。校准与积分函数在 `xrd_toolkit/services/integrator.py`。
-
-### 全角度积分（2D → 1D 标准谱）
+### Full-angle integration (2D → 1D standard pattern)
 
 ```bash
 python scripts/integrate_pattern.py --file data/xxx.tif
 ```
 
-用标定好的几何做 0°–360° 完整方位角积分，输出标准两列 txt（2θ(deg), intensity）+ PNG 图谱，供后续寻峰、拟合、PDF 分析使用。几何参数默认使用任务三标定值（1595.79 mm 等），同一批实验通用；可用 `--dist`、`--poni`、`--wavelength` 覆盖。
+Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.79 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`.
 
-### 扇形积分 + 瀑布图
+### Sector integration + waterfall plots
 
 ```bash
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ```
 
-把 0°–360° 方位角分成 N 个扇区分别积分（默认 36 个，每 10° 一个），输出每个扇区的两列 txt（`outputs/{数据名}/sectors/`）+ 两张瀑布图（原始强度 / 归一化），用于检查衍射环的方位均匀性（大晶粒、择优取向会表现为强度集中在少数扇区）。
+Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus two waterfall plots (raw / normalized) for checking ring uniformity — large grains or preferred orientation show up as intensity concentrated in a few sectors.
 
-## 项目结构
+> Note: sample data are not included in this repository — point `--file` at your own diffraction data.
 
-```
-.
-├── data/                       # XRD 原始数据（.tif，不进 git）
-├── outputs/                    # 生成的示例图与数据（按数据文件分文件夹）
-├── scripts/
-│   ├── view_diffraction.py     # 衍射图查看器（画图 + 线剖面）
-│   ├── calibrate_integrate.py  # LaB₆ 几何校准 + 方位角积分（2D→1D）
-│   ├── integrate_pattern.py    # 全角度积分：2D 图 → 标准 1D 谱（两列 txt）
-│   └── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
-├── src/xrd_toolkit/
-│   ├── config.py               # 全局配置（标定几何参数，全项目唯一一份）
-│   ├── cli.py                  # 命令行共用交互选文件菜单（四个脚本共用）
-│   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
-│   ├── services/data_loader.py # 数据读取（fabio）
-│   └── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
-├── tests/                      # 测试（暂空，后续补）
-├── environment.yml             # conda 环境定义（一键创建环境）
-├── pyproject.toml              # 项目元信息与依赖
-└── README.md                   # 项目说明
-```
+## Output examples
 
-## 输出示例
-
-二维衍射图（对数色标，黑边白芯小十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
+2D diffraction image (log scale; the black-bordered white-core cross marks the auto-localized ring center; white dashed line = profile sampling direction; title shows the center coordinates):
 
 <img src="outputs/week2_lab6/image.png" width="60%">
 
-过圆心的强度剖面（横轴为到圆心的距离，单位像素）：
+Intensity profile through the center (x-axis: distance from center in pixels):
 
 <img src="outputs/week2_lab6/profile.png" width="60%">
 
-校准后的 1D 图谱（红虚线为 LaB₆ 理论峰位）：
+Calibrated 1D pattern (red dashed lines: theoretical LaB₆ peak positions):
 
 <img src="outputs/week2_lab6/calibrated.png" width="60%">
 
-36 扇区瀑布图（每条曲线按方位角沿 Y 轴错开堆叠）：
+36-sector waterfall plot (each curve offset along Y by its azimuthal angle):
 
 <img src="outputs/week2_lab6/waterfall.png" width="60%">
+
+## Project structure
+
+```
+.
+├── data/                          # raw XRD images (.tif), not tracked by git
+├── outputs/                       # example figures & integrated data (per dataset)
+├── scripts/
+│   ├── view_diffraction.py        # 2D viewer (image + line profile + auto center)
+│   ├── calibrate_integrate.py     # LaB₆ geometric calibration + azimuthal integration
+│   ├── integrate_pattern.py       # full 2D → 1D integration
+│   └── sector_waterfall.py        # sector integration + waterfall plots
+├── src/xrd_toolkit/
+│   ├── config.py                  # global configuration (calibrated geometry, single source of truth)
+│   ├── cli.py                     # shared interactive file-selection menu (used by all scripts)
+│   ├── core/processor.py          # image processing (line profiles, auto ring-center localization)
+│   └── services/
+│       ├── data_loader.py         # image I/O (fabio)
+│       └── integrator.py          # geometry refinement + 1D integration (pyFAI)
+├── tests/                         # unit tests (in progress)
+├── docs/                          # Chinese README (original)
+├── environment.yml                # conda environment (one-command setup)
+├── pyproject.toml                 # package metadata & dependencies
+└── README.md
+```
+
+## Roadmap (Semester B)
+
+- Line-profile analysis: Scherrer / Williamson–Hall size–strain
+- Structure-factor simulation
+- A basic Rietveld refinement engine
+- Machine learning: clustering for phase identification and CNN peak-shape classification
+
+## Author
+
+Chenze Bian — MSc in Physics with Data Modelling and Quantum Technologies, City University of Hong Kong · [GitHub](https://github.com/xyyzzc3)
+
+## License
+
+[MIT](LICENSE)
