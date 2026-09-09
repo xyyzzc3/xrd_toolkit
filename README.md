@@ -10,6 +10,9 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 
 ## At a glance
 
+<details open>
+<summary>Show / hide figures</summary>
+
 <table>
   <tr>
     <td align="center" width="50%">
@@ -32,6 +35,8 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
     </td>
   </tr>
 </table>
+
+</details>
 
 ## Highlights
 
