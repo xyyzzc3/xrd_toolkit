@@ -4,9 +4,34 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), localizes the ring center automatically, calibrates the detector geometry against a LaB₆ standard (pyFAI), and integrates the 2D pattern into standard 1D powder diffraction spectra — including sector-wise integration for azimuthal uniformity analysis.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), localizes the ring center automatically, calibrates the detector geometry against a LaB₆ standard (pyFAI), and integrates the 2D pattern into standard 1D powder spectra — including sector-wise azimuthal uniformity analysis.
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md)
+
+## At a glance
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="outputs/week2_lab6/image.png" width="100%"><br>
+      <sub>2D diffraction image (log scale) — cross marks the auto-localized ring center</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="outputs/week2_lab6/profile.png" width="100%"><br>
+      <sub>Radial intensity profile through the center</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="outputs/week2_lab6/calibrated.png" width="100%"><br>
+      <sub>Calibrated 1D powder pattern (red dashed = theoretical LaB₆ positions)</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="outputs/week2_lab6/waterfall.png" width="100%"><br>
+      <sub>36-sector waterfall plot — azimuthal uniformity check</sub>
+    </td>
+  </tr>
+</table>
 
 ## Highlights
 
@@ -16,7 +41,7 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 - **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; waterfall plots reveal preferred orientation or large-grain spotiness.
 - **Shared interactive CLI** — one file-selection menu (`xrd_toolkit/cli.py`) reused by all four scripts: number selection, `1,2` multi-select, or `all`.
 
-## Installation
+## Quick start
 
 ```bash
 # 1. Create the conda environment (once)
@@ -27,7 +52,9 @@ conda activate XRD_Toolkit_Environment
 pip install -e .
 ```
 
-## Usage
+> Note: sample data are not included in this repository — point `--file` at your own diffraction data.
+
+## Scripts
 
 Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). All outputs are written under `outputs/{dataset_name}/`.
 
@@ -40,23 +67,39 @@ Each script accepts either `--file` to pick one dataset, or — without `--file`
 | `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern (two-column txt) |
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
 
-### View a diffraction image
+## Usage details
+
+<details>
+<summary><b>View a diffraction image</b> — <code>scripts/view_diffraction.py</code></summary>
 
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
 ```
 
-Options: `--center cx,cy` (auto-detected if omitted), `--angle` (profile angle in degrees, default 0), `--outdir` (default `outputs/`).
+- `--file`: diffraction image path (.tif / .edf / .cbf)
+- `--center`: ring center `cx,cy` — auto-localized if omitted
+- `--angle`: profile angle in degrees (default 0)
+- `--outdir`: PNG output directory (default `outputs/`)
 
-### Geometric calibration + 1D pattern (LaB₆ standard)
+</details>
+
+<details>
+<summary><b>Geometric calibration + 1D pattern (LaB₆ standard)</b> — <code>scripts/calibrate_integrate.py</code></summary>
 
 ```bash
 python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --pixel 200 --dist0 1600
 ```
 
-`--wavelength` X-ray wavelength (Å), `--pixel` detector pixel size (µm), `--dist0` initial detector distance (mm, refined by pyFAI). The pipeline fits the LaB₆ peak positions (`GeometryRefinement`), then integrates azimuthally and writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical LaB₆ positions). Calibration and integration live in `xrd_toolkit/services/integrator.py`.
+- `--wavelength`: X-ray wavelength (Å)
+- `--pixel`: detector pixel size (µm)
+- `--dist0`: initial detector distance (mm) — refined automatically by pyFAI
 
-### Full-angle integration (2D → 1D standard pattern)
+Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`.
+
+</details>
+
+<details>
+<summary><b>Full-angle integration (2D → 1D standard pattern)</b> — <code>scripts/integrate_pattern.py</code></summary>
 
 ```bash
 python scripts/integrate_pattern.py --file data/xxx.tif
@@ -64,7 +107,10 @@ python scripts/integrate_pattern.py --file data/xxx.tif
 
 Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.79 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`.
 
-### Sector integration + waterfall plots
+</details>
+
+<details>
+<summary><b>Sector integration + waterfall plots</b> — <code>scripts/sector_waterfall.py</code></summary>
 
 ```bash
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
@@ -72,25 +118,14 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus two waterfall plots (raw / normalized) for checking ring uniformity — large grains or preferred orientation show up as intensity concentrated in a few sectors.
 
-> Note: sample data are not included in this repository — point `--file` at your own diffraction data.
+</details>
 
-## Output examples
+## Roadmap (Semester B)
 
-2D diffraction image (log scale; the black-bordered white-core cross marks the auto-localized ring center; white dashed line = profile sampling direction; title shows the center coordinates):
-
-<img src="outputs/week2_lab6/image.png" width="60%">
-
-Intensity profile through the center (x-axis: distance from center in pixels):
-
-<img src="outputs/week2_lab6/profile.png" width="60%">
-
-Calibrated 1D pattern (red dashed lines: theoretical LaB₆ peak positions):
-
-<img src="outputs/week2_lab6/calibrated.png" width="60%">
-
-36-sector waterfall plot (each curve offset along Y by its azimuthal angle):
-
-<img src="outputs/week2_lab6/waterfall.png" width="60%">
+- Line-profile analysis: Scherrer / Williamson–Hall size–strain
+- Structure-factor simulation
+- A basic Rietveld refinement engine
+- Machine learning: clustering for phase identification and CNN peak-shape classification
 
 ## Project structure
 
@@ -116,13 +151,6 @@ Calibrated 1D pattern (red dashed lines: theoretical LaB₆ peak positions):
 ├── pyproject.toml                 # package metadata & dependencies
 └── README.md
 ```
-
-## Roadmap (Semester B)
-
-- Line-profile analysis: Scherrer / Williamson–Hall size–strain
-- Structure-factor simulation
-- A basic Rietveld refinement engine
-- Machine learning: clustering for phase identification and CNN peak-shape classification
 
 ## Author
 
