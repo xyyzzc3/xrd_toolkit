@@ -178,10 +178,12 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     # 又比瞄准镜环更简洁不占地方。
     # 沿 --angle 方向再画一条白色虚线表示剖面线的取样方向。
     # 【可调】arm=臂半长随图像大小缩放（w/60：2048 图 → 34 px）；
-    # 黑底 lw=2.0 / 白面 lw=0.8 是描边粗细
+    # 黑底 lw=2.0 / 白面 lw=1.2 是描边粗细。
+    # 踩坑：白面 <1.2 pt 时线细到每个像素都只被部分覆盖，抗锯齿把
+    # 纯白全抹成灰色，十字在缩略图里基本看不见——"细"有物理下限。
     prof_cy, prof_cx = center
     arm = max(16.0, w / 60.0)
-    for color, lw in [("k", 2.0), ("w", 0.8)]:
+    for color, lw in [("k", 2.0), ("w", 1.2)]:
         ax.plot([prof_cx - arm, prof_cx + arm], [prof_cy, prof_cy],
                 color=color, lw=lw)  # 十字横臂
         ax.plot([prof_cx, prof_cx], [prof_cy - arm, prof_cy + arm],
