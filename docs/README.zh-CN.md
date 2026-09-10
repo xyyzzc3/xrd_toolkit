@@ -40,6 +40,8 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--wavelength`：X 光波长（Å）
 - `--pixel`：探测器像素尺寸（µm）
 - `--dist0`：探测器距离初值（mm），脚本用 pyFAI 自动精修出精确值
+- `--center`：环心初值 cx,cy（像素，默认 1024,1024）
+- `--max-rings`：参与校准的环数（默认 16）
 
 脚本流程：LaB₆ 峰位校准（pyFAI GeometryRefinement）→ 方位角积分（2D→1D）→ 输出 1D 图谱（`outputs/{数据名}/calibrated_2th.txt` + `calibrated.png`，图中红虚线为理论峰位）。校准与积分函数在 `xrd_toolkit/services/integrator.py`。
 

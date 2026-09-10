@@ -98,6 +98,9 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--wavelength`: X-ray wavelength (Å)
 - `--pixel`: detector pixel size (µm)
 - `--dist0`: initial detector distance (mm) — refined automatically by pyFAI
+- `--center`: initial ring center `cx,cy` in pixels (default 1024,1024)
+- `--max-rings`: number of LaB₆ rings used for calibration (default 16)
+- `--outdir`: output directory (default `outputs/`)
 
 Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`.
 
@@ -125,8 +128,9 @@ Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integr
 
 </details>
 
-## Roadmap (Semester B)
+## Roadmap
 
+- Peak finding & profile fitting on the 1D patterns
 - Line-profile analysis: Scherrer / Williamson–Hall size–strain
 - Structure-factor simulation
 - A basic Rietveld refinement engine
@@ -150,7 +154,7 @@ Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integr
 │   └── services/
 │       ├── data_loader.py         # image I/O (fabio)
 │       └── integrator.py          # geometry refinement + 1D integration (pyFAI)
-├── tests/                         # unit tests (in progress)
+├── tests/                         # unit tests (reserved, to be added)
 ├── docs/                          # Chinese README (original)
 ├── environment.yml                # conda environment (one-command setup)
 ├── pyproject.toml                 # package metadata & dependencies
