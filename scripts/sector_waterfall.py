@@ -8,7 +8,7 @@
 
 输出（按样品分文件夹 outputs/{stem}/）：
   - sectors/ 下 36 个两列 txt（2θ, intensity），每个扇区一个
-  - waterfall.png / waterfall_normalized.png（原始强度堆叠 + 各自归一化堆叠）
+  - waterfall.png / waterfall_normalized.png（√强度堆叠 + 各自归一化堆叠）
 
 χ 角约定（pyFAI，实测验证）：χ=0° 沿探测器水平方向（图像 +x 向右），
 逆时针为正（图像上方 = +90°）。integrate2d 从 -180° 分箱，sector_00
@@ -85,18 +85,24 @@ def main() -> None:
                        np.c_[tth, I2d[:, k]], header=header)
         print(f"36 个两列 txt 已保存到: {sec_dir}/")
 
-        # ---- 瀑布图（原始强度：沿 Y 轴错开堆叠）----
-        offset = 1.1 * np.nanmax(I2d)          # 每条曲线占一层，层高略大于最大强度
+        # ---- 瀑布图（√强度：沿 Y 轴错开堆叠）----
+        # 纠错点记录（LMFP 实测）：原始强度动态范围太大（强/弱扇区峰高差 ~20 倍），
+        # 弱扇区曲线被压成贴地的直线、峰形完全看不见。对强度取平方根压缩动态
+        # 范围（20 倍 → ~4.5 倍）：强扇区依然明显更高（强度不一致一目了然），
+        # 弱扇区的峰也能看清。纵轴为 √intensity（任意单位，只用于观察），
+        # 想比峰形峰位用 waterfall_normalized.png，想看真实强度差看统计打印值。
+        sqrt_I = np.sqrt(I2d)
+        offset = 1.1 * np.nanmax(sqrt_I)       # 每条曲线占一层，层高略大于最大√强度
         colors = plt.cm.viridis(np.linspace(0, 1, n))
 
         fig, ax = plt.subplots(figsize=(12, 8))
         for k in range(n):
-            ax.plot(tth, I2d[:, k] + k * offset, color=colors[k], lw=0.5)
+            ax.plot(tth, sqrt_I[:, k] + k * offset, color=colors[k], lw=0.5)
         ax.set_yticks(np.arange(n) * offset)
         ax.set_yticklabels([f"{c:.0f}°" for c in chi], fontsize=6)
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("Azimuthal sector (χ)")
-        ax.set_title(f"{stem}: 36-sector waterfall (raw intensity)")
+        ax.set_title(f"{stem}: 36-sector waterfall (√intensity)")
         ax.grid(alpha=0.2)
         fig.tight_layout()
         fig.savefig(outdir / stem / "waterfall.png", dpi=150)

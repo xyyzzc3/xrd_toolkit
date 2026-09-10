@@ -59,7 +59,7 @@ python scripts/integrate_pattern.py --file data/xxx.tif
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ```
 
-把 0°–360° 方位角分成 N 个扇区分别积分（默认 36 个，每 10° 一个），输出每个扇区的两列 txt（`outputs/{数据名}/sectors/`）+ 两张瀑布图（原始强度 / 归一化），用于检查衍射环的方位均匀性（大晶粒、择优取向会表现为强度集中在少数扇区）。
+把 0°–360° 方位角分成 N 个扇区分别积分（默认 36 个，每 10° 一个），输出每个扇区的两列 txt（`outputs/{数据名}/sectors/`）+ 两张瀑布图（√强度 / 归一化），用于检查衍射环的方位均匀性（大晶粒、择优取向会表现为强度集中在少数扇区）。
 
 ## 项目结构
 

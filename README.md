@@ -124,7 +124,7 @@ Integrates 0°–360° with the calibrated geometry (defaults to the reference c
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ```
 
-Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus two waterfall plots (raw / normalized) for checking ring uniformity — large grains or preferred orientation show up as intensity concentrated in a few sectors.
+Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus two waterfall plots (√intensity / normalized) for checking ring uniformity — large grains or preferred orientation show up as intensity concentrated in a few sectors.
 
 </details>
 
