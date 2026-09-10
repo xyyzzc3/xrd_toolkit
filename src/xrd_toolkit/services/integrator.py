@@ -83,7 +83,7 @@ def calibrate_lab6(
             rot3_deg     倾斜角 3（度，refine2 不精修，保持 0）
             residual_deg 全部控制点的 2θ 残差 RMS（度）
 
-    备注（踩坑记录）：
+    备注（纠错点记录）：
         - calibrant 的波长"设一次就锁死"，之后不能再改；换波长必须
           重新 get_calibrant 创建新对象。
         - extract_cp 返回 ControlPoints 对象，getList() 才是 N×3 数组，
@@ -150,13 +150,13 @@ def calibrate_lab6(
 
 def integrate_1d(
     image: np.ndarray,
-    pixel_size_m: float = 200e-6,
-    wavelength_m: float = 0.1223e-10,
-    dist_m: float = 1.59579,
-    poni1_m: float = 0.209034,
-    poni2_m: float = 0.204406,
-    rot1_deg: float = -0.0054,
-    rot2_deg: float = -0.1632,
+    pixel_size_m: float,
+    wavelength_m: float,
+    dist_m: float,
+    poni1_m: float,
+    poni2_m: float,
+    rot1_deg: float,
+    rot2_deg: float,
     npt: int = 3000,
 ) -> tuple:
     """
@@ -176,12 +176,18 @@ def integrate_1d(
         npt : int
             1D 曲线采样点数（默认 3000）
 
+    备注（纠错点记录）：
+        物理/几何参数全部必传、没有默认值——统一从 config.CALIBRATED 取。
+        以前函数签名里也抄了一份默认值（dist=1.59579 等），和 config 是
+        两份独立数据，改一处忘了另一处就会静默用旧值；必传参数让这种
+        错误变成一眼可见的 TypeError。
+
     返回：
         (tth_deg, intensity) : tuple
             tth_deg     1D 曲线的 2θ 坐标（度）
             intensity   对应强度（numpy 数组）
 
-    备注（踩坑记录）：
+    备注（纠错点记录）：
         integrate1d 的默认输出单位是 q（nm^-1），不是 2θ！
         一定要显式传 unit="2th_deg"，否则 x 轴会变成 0~90 的 q 值，
         看起来像"图谱坏了"，其实只是单位没指定。
@@ -203,14 +209,14 @@ def integrate_1d(
 
 def integrate_sectors(
     image: np.ndarray,
+    pixel_size_m: float,
+    wavelength_m: float,
+    dist_m: float,
+    poni1_m: float,
+    poni2_m: float,
+    rot1_deg: float,
+    rot2_deg: float,
     n_sectors: int = 36,
-    pixel_size_m: float = 200e-6,
-    wavelength_m: float = 0.1223e-10,
-    dist_m: float = 1.59579,
-    poni1_m: float = 0.209034,
-    poni2_m: float = 0.204406,
-    rot1_deg: float = -0.0054,
-    rot2_deg: float = -0.1632,
     npt: int = 3000,
 ) -> tuple:
     """
@@ -233,9 +239,10 @@ def integrate_sectors(
     参数：
         image : np.ndarray
             2D 衍射强度数组
+        像素/波长/几何参数与 integrate_1d 相同（全部必传，
+        统一从 config.CALIBRATED 取，无默认值）
         n_sectors : int
             扇区数（默认 36，每 10° 一个）
-        其余参数与 integrate_1d 相同（几何、波长、像素等）
 
     返回：
         (tth_deg, I2d, chi_centers_deg) : tuple

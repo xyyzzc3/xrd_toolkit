@@ -130,7 +130,7 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     # 沿 --angle 方向再画一条白色虚线表示剖面线的取样方向。
     # 【可调】arm=臂半长随图像大小缩放（w/60：2048 图 → 34 px）；
     # 黑底 lw=2.0 / 白面 lw=1.2 是描边粗细。
-    # 踩坑：白面 <1.2 pt 时线细到每个像素都只被部分覆盖，抗锯齿把
+    # 纠错点：白面 <1.2 pt 时线细到每个像素都只被部分覆盖，抗锯齿把
     # 纯白全抹成灰色，十字在缩略图里基本看不见——"细"有物理下限。
     prof_cy, prof_cx = center
     arm = max(16.0, w / 60.0)
@@ -145,7 +145,7 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     ax.plot([prof_cx - dx, prof_cx + dx], [prof_cy - dy, prof_cy + dy],
             color="w", ls="--", lw=0.8, alpha=0.8)  # 剖面线取样方向（白色虚线）
 
-    # 踩坑记录：虚线故意画到图像外（保证贯穿整图），但 matplotlib 的自动缩放
+    # 纠错点记录：虚线故意画到图像外（保证贯穿整图），但 matplotlib 的自动缩放
     # 会把坐标轴撑大——图像缩成中间一小块、两侧留大白边。
     # set_xlim/set_ylim 显式调用后，该轴的自动缩放被关闭，显示范围锁回图像本身，
     # 越界的虚线部分被裁剪掉，不影响图面。

@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 # 任务三对 LaB₆ 标样校准得到的几何参数（3 次精修取平均，2026-09-09）。
 # 这是全项目唯一一份——脚本统一从这里 import（integrate_pattern.py、
 # sector_waterfall.py），要改波长 / 距离 / 中心等参数只改这一处，
-# 不要再在脚本里各自复制一份（之前就踩过"两处参数不同步"的坑）。
+# 不要再在脚本里各自复制一份（之前就出过"两处参数不同步"的问题）。
 CALIBRATED = dict(
     pixel_size_m=200e-6,          # 像素 200 µm
     wavelength_m=0.1223e-10,      # λ = 0.1223 Å（同步辐射硬 X 光，不是 Cu Kα！）
