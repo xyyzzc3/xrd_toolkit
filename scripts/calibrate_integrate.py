@@ -5,6 +5,9 @@
     python scripts/calibrate_integrate.py --file data/week2_lab6.tif
     python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --dist0 1600
     python scripts/calibrate_integrate.py          # 不带 --file：交互菜单选文件（可多选）
+
+不带 --center 时自动定位环心作初值（find_ring_center，亚像素精度 <1 px），
+换任何新数据都不用先手动量圆心。
 """
 import argparse
 import sys
@@ -20,6 +23,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files  # 交互选文件菜单（四脚本共用）
+from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
 
@@ -34,12 +38,13 @@ def main() -> None:
     parser.add_argument("--wavelength", type=float, default=0.1223, help="X-ray wavelength in Angstrom")
     parser.add_argument("--pixel", type=float, default=200.0, help="pixel size in micrometer")
     parser.add_argument("--dist0", type=float, default=1600.0, help="initial detector distance in mm")
-    parser.add_argument("--center", default="1024,1024", help="initial ring center cx,cy in pixel")
+    parser.add_argument("--center", default=None,
+                        help="initial ring center cx,cy in pixel; if not given, "
+                             "auto-localized with find_ring_center (<1 px accuracy)")
     parser.add_argument("--max-rings", type=int, default=16, help="number of rings used for calibration")
     parser.add_argument("--outdir", default="outputs", help="output directory")
     args = parser.parse_args()
 
-    cx, cy = (float(v) for v in args.center.split(","))
     wavelength_m = args.wavelength * 1e-10
     pixel_m = args.pixel * 1e-6
     dist0_m = args.dist0 * 1e-3
@@ -55,6 +60,21 @@ def main() -> None:
         image = load_diffraction_image(str(path))
         print(f"\n图像: {path} ({image.shape[0]}x{image.shape[1]} px)")
         print(f"参数: λ={args.wavelength} Å, pixel={args.pixel} µm, dist0={args.dist0} mm")
+
+        # 环心初值：给了 --center 就用输入的；没给就自动定位（和 view_diffraction
+        # 同款 find_ring_center）。注意它返回 (行, 列)，而校准要 (cx, cy)，交换顺序。
+        #
+        # 纠错点记录（实测）：初值圆心会轻微影响精修落点——环接近正圆时
+        # rot1/rot2 与 PONI 存在近似简并，自动定位 (1022.2, 1021.7) 与手动
+        # (1024, 1024) 会收敛到两组残差相当的解（PONI 差 ~12/38 px），但
+        # 距离始终稳健（1595.79 mm）。官方标定值（config.CALIBRATED）沿用
+        # --center 1024,1024 三次平均的结果，自动定位仅作便捷初值。
+        if args.center:
+            cx, cy = (float(v) for v in args.center.split(","))
+            print(f"  环心初值（手动指定）: ({cx}, {cy}) px")
+        else:
+            cy, cx = find_ring_center(image)
+            print(f"  环心初值（自动定位）: ({cx:.2f}, {cy:.2f}) px")
 
         # 一条龙：校准 → 积分
         tth, intensity, geometry = calibrate_and_integrate(

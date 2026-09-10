@@ -98,7 +98,7 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--wavelength`: X-ray wavelength (Å)
 - `--pixel`: detector pixel size (µm)
 - `--dist0`: initial detector distance (mm) — refined automatically by pyFAI
-- `--center`: initial ring center `cx,cy` in pixels (default 1024,1024)
+- `--center`: initial ring center `cx,cy` in pixels (default: auto-localized, < 1 px accuracy)
 - `--max-rings`: number of LaB₆ rings used for calibration (default 16)
 - `--outdir`: output directory (default `outputs/`)
 
