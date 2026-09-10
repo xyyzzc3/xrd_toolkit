@@ -29,10 +29,10 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
     files = sorted(p for p in datadir.iterdir() if p.suffix.lower() in SUPPORTED_EXTS)
 
     if not files:
-        print(f"在 {datadir}/ 里没有找到数据文件（支持 {', '.join(sorted(SUPPORTED_EXTS))}）")
+        print(f"No data files found in {datadir}/ (supported: {', '.join(sorted(SUPPORTED_EXTS))})")
         raise SystemExit(1)  # 没有可跑的文件，直接退出程序（退出码 1 = 出错）
 
-    print(f"{datadir}/ 里找到 {len(files)} 个数据文件：")
+    print(f"Found {len(files)} data file(s) in {datadir}/:")
     # enumerate(..., start=1)：给文件编号，从 1 开始
     # （人习惯从 1 数，程序内部习惯从 0 数，这里在"给人看"的环节用 1）
     for i, p in enumerate(files, start=1):
@@ -40,13 +40,13 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
 
     # while True = 无限循环，直到拿到合法输入才 return 跳出
     while True:
-        raw = input("输入要跑的编号（如 1,2 或 all）: ").strip()
+        raw = input("Enter number(s) to run (e.g. 1,2 or all): ").strip()
         if raw.lower() == "all":
             return files
         try:
             picks = []
-            # replace("，", ",")：把中文逗号换成英文逗号，两种写法都能认
-            for part in raw.replace("，", ",").split(","):
+            # split(",")：按英文逗号切分编号（提示语是英文，用英文逗号输入）
+            for part in raw.split(","):
                 part = part.strip()
                 if not part:
                     continue  # 跳过空段（比如输入 "1,," 里的空）
@@ -58,4 +58,4 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
                 return picks
         except ValueError:
             pass  # 非法输入：走不到 return，落到下面的提示，再问一遍
-        print(f"输入不合法，请输入 1~{len(files)} 的编号（多个用逗号隔开）或 all")
+        print(f"Invalid input; enter 1~{len(files)} (comma-separated for several) or all")

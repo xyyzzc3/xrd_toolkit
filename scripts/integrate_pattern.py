@@ -69,7 +69,7 @@ def main() -> None:
 
     for path in file_list:
         image = load_diffraction_image(str(path))
-        print(f"\n图像: {path} ({image.shape[0]}x{image.shape[1]} px)")
+        print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
 
         # 全角度方位角积分：azimuth_range=(-180, 180) 表示 0°~360° 一整圈
         tth, intensity = integrate_1d(
@@ -111,9 +111,9 @@ def main() -> None:
             fig.savefig(p, dpi=150)
             plt.close(fig)
 
-        print(f"2θ 范围: {tth.min():.3f} ~ {tth.max():.3f}°, {len(tth)} 个点")
-        print(f"TXT 已保存: {txt_path}")
-        print(f"PNG 已保存: {png_path} 和 {sample_dir / 'integrated_log.png'}")
+        print(f"2θ range: {tth.min():.3f} ~ {tth.max():.3f}°, {len(tth)} points")
+        print(f"TXT saved: {txt_path}")
+        print(f"PNG saved: {png_path} and {sample_dir / 'integrated_log.png'}")
 
 
 if __name__ == "__main__":

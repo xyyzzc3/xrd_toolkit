@@ -59,7 +59,7 @@ def main() -> None:
 
     for path in file_list:
         image = load_diffraction_image(str(path))
-        print(f"\n图像: {path} ({image.shape[0]}x{image.shape[1]} px)")
+        print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
 
         # 扇形积分：36 条 1D 曲线
         tth, I2d, chi = integrate_sectors(
@@ -70,7 +70,7 @@ def main() -> None:
         )
         n = args.n_sectors
         width = 360.0 / n
-        print(f"扇区数: {n}（每 {width:.1f}° 一个）, 每条曲线 {len(tth)} 点")
+        print(f"Sectors: {n} (one per {width:.1f}°), {len(tth)} points per curve")
 
         # ---- 保存 36 个两列 txt（输出按样品分文件夹：outputs/{数据名}/sectors/）----
         outdir = Path(args.outdir)
@@ -83,7 +83,7 @@ def main() -> None:
                      f"# columns: 2theta(deg)  intensity"
             np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg.txt",
                        np.c_[tth, I2d[:, k]], header=header)
-        print(f"36 个两列 txt 已保存到: {sec_dir}/")
+        print(f"36 two-column txt files saved to: {sec_dir}/")
 
         # ---- 瀑布图（√强度：沿 Y 轴错开堆叠）----
         # 纠错点记录（LMFP 实测）：原始强度动态范围太大（强/弱扇区峰高差 ~20 倍），
@@ -122,15 +122,15 @@ def main() -> None:
         fig.tight_layout()
         fig.savefig(outdir / stem / "waterfall_normalized.png", dpi=150)
         plt.close(fig)
-        print(f"瀑布图已保存: {outdir / stem / 'waterfall.png'}")
-        print(f"归一化瀑布图: {outdir / stem / 'waterfall_normalized.png'}")
+        print(f"Waterfall saved: {outdir / stem / 'waterfall.png'}")
+        print(f"Normalized waterfall: {outdir / stem / 'waterfall_normalized.png'}")
 
         # ---- 回答观察问题：强度一致性 + 峰位偏移 ----
         mean_curve = np.nanmean(I2d, axis=1)                       # 36 扇区平均曲线
         mask = tth > 0.4                                           # 排除直射束区
         i0 = np.argmax(mean_curve[mask])
         t0 = tth[mask][i0]
-        print(f"\n最强峰位置: 2θ = {t0:.4f}°（36 扇区平均曲线）")
+        print(f"\nStrongest peak: 2θ = {t0:.4f}° (mean of 36 sectors)")
 
         win = (tth > t0 - 0.15) & (tth < t0 + 0.15)                # 最强峰 ±0.15° 窗口
         peaks, positions = [], []
@@ -139,9 +139,9 @@ def main() -> None:
             peaks.append(I2d[win, k][j])
             positions.append(tth[win][j])
         peaks = np.array(peaks); positions = np.array(positions)
-        print(f"该峰各扇区强度: 平均 {np.mean(peaks):.0f}, 相对标准差 {np.std(peaks)/np.mean(peaks)*100:.1f}%")
-        print(f"该峰各扇区峰位: 标准差 {np.std(positions):.4f}°, 最大偏移 {np.max(np.abs(positions-np.mean(positions))):.4f}°")
-        print(f"强度最弱/最强扇区: χ={chi[np.argmin(peaks)]:.0f}° / χ={chi[np.argmax(peaks)]:.0f}°")
+        print(f"Peak intensity per sector: mean {np.mean(peaks):.0f}, relative std {np.std(peaks)/np.mean(peaks)*100:.1f}%")
+        print(f"Peak position per sector: std {np.std(positions):.4f}°, max deviation {np.max(np.abs(positions-np.mean(positions))):.4f}°")
+        print(f"Weakest / strongest sector: χ={chi[np.argmin(peaks)]:.0f}° / χ={chi[np.argmax(peaks)]:.0f}°")
 
 
 if __name__ == "__main__":

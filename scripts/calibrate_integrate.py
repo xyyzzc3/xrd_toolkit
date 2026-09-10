@@ -58,8 +58,8 @@ def main() -> None:
 
     for path in file_list:
         image = load_diffraction_image(str(path))
-        print(f"\n图像: {path} ({image.shape[0]}x{image.shape[1]} px)")
-        print(f"参数: λ={args.wavelength} Å, pixel={args.pixel} µm, dist0={args.dist0} mm")
+        print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
+        print(f"Parameters: λ={args.wavelength} Å, pixel={args.pixel} µm, dist0={args.dist0} mm")
 
         # 环心初值：给了 --center 就用输入的；没给就自动定位（和 view_diffraction
         # 同款 find_ring_center）。注意它返回 (行, 列)，而校准要 (cx, cy)，交换顺序。
@@ -71,10 +71,10 @@ def main() -> None:
         # --center 1024,1024 三次平均的结果，自动定位仅作便捷初值。
         if args.center:
             cx, cy = (float(v) for v in args.center.split(","))
-            print(f"  环心初值（手动指定）: ({cx}, {cy}) px")
+            print(f"  Ring center initial (manual): ({cx}, {cy}) px")
         else:
             cy, cx = find_ring_center(image)
-            print(f"  环心初值（自动定位）: ({cx:.2f}, {cy:.2f}) px")
+            print(f"  Ring center initial (auto): ({cx:.2f}, {cy:.2f}) px")
 
         # 一条龙：校准 → 积分
         tth, intensity, geometry = calibrate_and_integrate(
