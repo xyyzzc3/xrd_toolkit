@@ -41,7 +41,7 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 ## Highlights
 
 - **Automatic ring-center localization** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center. Fully automatic on any new dataset, accuracy < 1 px.
-- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.79 mm.
+- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (ring center auto-localized as the initial value).
 - **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ, intensity), ready for peak finding, profile fitting, and PDF analysis.
 - **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; waterfall plots reveal preferred orientation or large-grain spotiness.
 - **Shared interactive CLI** — one file-selection menu (`xrd_toolkit/cli.py`) reused by all four scripts: number selection, `1,2` multi-select, or `all`.
@@ -113,7 +113,7 @@ Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azim
 python scripts/integrate_pattern.py --file data/xxx.tif
 ```
 
-Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.79 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`.
+Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.80 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`.
 
 </details>
 

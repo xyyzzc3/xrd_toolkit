@@ -66,9 +66,9 @@ def main() -> None:
         #
         # 纠错点记录（实测）：初值圆心会轻微影响精修落点——环接近正圆时
         # rot1/rot2 与 PONI 存在近似简并，自动定位 (1022.2, 1021.7) 与手动
-        # (1024, 1024) 会收敛到两组残差相当的解（PONI 差 ~12/38 px），但
-        # 距离始终稳健（1595.79 mm）。官方标定值（config.CALIBRATED）沿用
-        # --center 1024,1024 三次平均的结果，自动定位仅作便捷初值。
+        # (1024, 1024) 会收敛到两组残差相当的解（PONI 差 ~12/36 px），但
+        # 距离始终稳健（1595.80 mm）。官方标定值（config.CALIBRATED）已统一
+        # 为自动圆心三次平均（2026-09-13）；--center 仍保留作手动覆盖。
         if args.center:
             cx, cy = (float(v) for v in args.center.split(","))
             print(f"  Ring center initial (manual): ({cx}, {cy}) px")
