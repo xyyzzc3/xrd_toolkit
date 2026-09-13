@@ -12,6 +12,7 @@ from pyFAI.calibrant import get_calibrant
 from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry, GeometryRefinement, SingleGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
 
 # pyFAI 自带校准样品数据库（calibrant），LaB6 的标准 d 值在包里就有：
 #   d = a / sqrt(h^2 + k^2 + l^2)，a = 4.1568 Å（NIST 标准值）
@@ -46,7 +47,7 @@ def calibrate_lab6(
     pixel_size_m: float = 200e-6,
     wavelength_m: float = 0.1223e-10,
     dist0_m: float = 1.6,
-    center0_px: tuple = (1024.0, 1024.0),
+    center0_px: tuple = None,
     max_rings: int = 16,
 ) -> dict:
     """
@@ -68,7 +69,8 @@ def calibrate_lab6(
         dist0_m : float
             探测器距离初值（米），任务给定 ~1.6 m，精修后得到精确值
         center0_px : tuple
-            环心初值（像素），一般用图像几何中心
+            环心初值（像素，cx, cy）。不传时自动定位
+            （find_ring_center，亚像素精度 <1 px）
         max_rings : int
             参与校准的环数上限
 
@@ -77,7 +79,7 @@ def calibrate_lab6(
             dist_m       精确探测器距离（米）
             poni1_px     PONI 第一坐标（像素，横向）
             poni2_px     PONI 第二坐标（像素，纵向）
-            offset_px    相对图像中心的偏移（像素）
+            offset_px    精修环心相对初值（center0_px）的偏移（像素）
             rot1_deg     倾斜角 1（度）
             rot2_deg     倾斜角 2（度）
             rot3_deg     倾斜角 3（度，refine2 不精修，保持 0）
@@ -95,6 +97,12 @@ def calibrate_lab6(
     cal.wavelength = wavelength_m
 
     det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m, max_shape=image.shape)
+
+    # 环心初值：不传时自动定位。find_ring_center 返回 (行, 列)，
+    # 而校准要用 (cx, cy)，交换顺序。
+    if center0_px is None:
+        cy, cx = find_ring_center(image)
+        center0_px = (cx, cy)
 
     # 1) 按初值建几何，提取控制点
     init_geo = Geometry(
@@ -279,7 +287,7 @@ def calibrate_and_integrate(
     pixel_size_m: float = 200e-6,
     wavelength_m: float = 0.1223e-10,
     dist0_m: float = 1.6,
-    center0_px: tuple = (1024.0, 1024.0),
+    center0_px: tuple = None,
     max_rings: int = 16,
     npt: int = 3000,
 ) -> tuple:
