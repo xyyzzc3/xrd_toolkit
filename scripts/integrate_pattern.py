@@ -46,7 +46,7 @@ def main() -> None:
     parser.add_argument("--dist", type=float, default=None,
                         help="override detector distance in mm (default: calibrated 1595.79)")
     parser.add_argument("--poni", default=None,
-                        help="override PONI as cx,cy in pixel (default: calibrated 1045.17,1022.03)")
+                        help="override PONI as cx,cy in pixel (default: calibrated 1045.2,1022.0)")
     parser.add_argument("--wavelength", type=float, default=None,
                         help="override wavelength in Angstrom (default: 0.1223)")
     args = parser.parse_args()
