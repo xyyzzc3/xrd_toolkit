@@ -165,8 +165,9 @@ def main() -> None:
             tth_plot, I2d_plot = tth, I2d
         for k in range(n):
             c0 = -180 + width * k
-            header = f"# sector {k:02d}: chi = {chi[k]:.2f} deg (range [{c0:.0f}, {c0+width:.0f}))\n" \
-                     f"# columns: 2theta(deg)  intensity"
+            # np.savetxt 会自动给 header 每行加 "# "，这里不重复写
+            header = f"sector {k:02d}: chi = {chi[k]:.2f} deg (range [{c0:.0f}, {c0+width:.0f}))\n" \
+                     f"columns: 2theta(deg)  intensity"
             np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg.txt",
                        np.c_[tth, I2d[:, k]], header=header)
             if tth_trim is not None:
