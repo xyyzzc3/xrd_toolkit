@@ -92,6 +92,17 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 └── README.md                   # 项目说明
 ```
 
+## 测试
+
+合成图像单元测试（不需要真实数据；纯 unittest，无需 pytest）：
+
+```bash
+conda activate XRD_Toolkit_Environment
+python -m unittest discover -s tests -v
+```
+
+覆盖弧覆盖率失效判据（居中 / 边缘 / 角落 / 束心在图像外四种摆法）、几何失效点数值，以及偏置摆法下的自研积分兜底（pyFAI 分箱缺陷的回归护栏）。
+
 ## 输出示例
 
 以下图片来自一份 LaB₆ 标样校准数据集（NIST SRM 660）。
