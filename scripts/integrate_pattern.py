@@ -11,8 +11,8 @@
 几何通用，不需要对每个文件重新标定）。
 
 用法示例：
-    python scripts/integrate_pattern.py --file data/week2_lab6.tif
-    python scripts/integrate_pattern.py --file data/week1_LMFP_1.tif
+    python scripts/integrate_pattern.py --file data/lab6-00024.tif
+    python scripts/integrate_pattern.py --file data/LMFP_1_atten0-00029.tif
     python scripts/integrate_pattern.py          # 不带 --file：交互菜单选文件（可多选）
 """
 import argparse
@@ -28,10 +28,11 @@ import numpy as np
 # 让脚本可以直接从仓库根目录运行（无需先 pip install）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.cli import interactive_pick_files  # 交互选文件菜单（四脚本共用）
+from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
 from xrd_toolkit.config import CALIBRATED  # 任务三标定几何（全项目唯一一份）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
+from xrd_toolkit.services.range_selector import detect_material, select_auto_range
 
 
 def main() -> None:
@@ -44,11 +45,20 @@ def main() -> None:
     parser.add_argument("--outdir", default="outputs", help="output directory")
     parser.add_argument("--npt", type=int, default=5000, help="number of points in the 1D curve")
     parser.add_argument("--dist", type=float, default=None,
-                        help="override detector distance in mm (default: calibrated 1595.79)")
+                        help="override detector distance in mm (default: calibrated 1595.80)")
     parser.add_argument("--poni", default=None,
                         help="override PONI as cx,cy in pixel (default: calibrated 1045.2,1022.0)")
     parser.add_argument("--wavelength", type=float, default=None,
                         help="override wavelength in Angstrom (default: 0.1223)")
+    parser.add_argument("--range", dest="range_", default="auto",
+                        help="2θ range for the plots and the *_auto trimmed txt: "
+                             "full, auto (default: per-material standard range), or "
+                             "lo,hi in degrees (e.g. 1.3,7.3). The full txt is always "
+                             "saved regardless.")
+    parser.add_argument("--material", default="auto",
+                        help="material for the auto-range standard: "
+                             "auto (detect from filename), lab6, or lmfp — the range "
+                             "is then fixed by that material's known peak positions")
     args = parser.parse_args()
 
     # 几何参数：默认任务三标定值，可用命令行覆盖
@@ -84,7 +94,44 @@ def main() -> None:
             npt=args.npt,
         )
 
-        # 标准两列 txt：第一列 2θ（度），第二列强度
+        # ---- 2θ 有效区间选择（可选，默认 auto，与 sector_waterfall 同一套逻辑）----
+        # txt 永远保存完整版（数据母版）；区间只影响图和另存的 _auto 裁剪版。
+        # auto（A+A 方案，2026-09-16 拍板）：下界 = 材料专属标准
+        # （lmfp 第一峰 −0.3°；lab6 光环结束点 −0.6°，≈1.0°）；
+        # 上界 = 数据失效点自动检测（单曲线：几何算"80% 方位角仍在
+        # 探测器内"的精确位置，与瀑布图实测 7.44° 互相印证）。
+        # 注意传的是本次积分实际用的 wavelength/dist/poni（用户可能用
+        # 命令行覆盖过），保证区间计算和积分用的是同一套几何。
+        sel = parse_range_arg(args.range_)
+        if sel == "full":
+            lo = hi = None
+            print("Range: full")
+        elif sel == "auto":
+            material = args.material if args.material != "auto" \
+                else detect_material(path.stem)
+            if material is None:
+                print("Material: not recognized from filename "
+                      "(use --material lab6|lmfp); known-peak check skipped")
+            lo, hi, info = select_auto_range(
+                tth, intensity, material, wavelength_m, image.shape,
+                CALIBRATED["pixel_size_m"], dist_m,
+                poni_px=(poni1_m / CALIBRATED["pixel_size_m"],
+                         poni2_m / CALIBRATED["pixel_size_m"]))
+            print(f"Range: auto -> [{lo:.3f}, {hi:.3f}] deg "
+                  f"({info['lo_reason']} / {info['hi_reason']})")
+            if material is not None:
+                print(f"Material: {material} "
+                      f"({info['n_known_peaks']} known peaks within range)")
+                for line in info["checks"]:
+                    print(f"  {line}")
+                for line in info.get("warnings", []):
+                    print(f"  WARNING: {line}")
+        else:
+            lo, hi = sel
+            print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
+
+        # 标准两列 txt：第一列 2θ（度），第二列强度。完整版永远保存，
+        # 选了区间时另存一份 *_auto.txt（裁剪版），两个都留
         # 输出按样品分文件夹：outputs/{数据名}/，文件名不带数据名前缀
         outdir = Path(args.outdir)
         stem = path.stem
@@ -93,11 +140,18 @@ def main() -> None:
         txt_path = sample_dir / "integrated_2th.txt"
         png_path = sample_dir / "integrated.png"
         np.savetxt(txt_path, np.c_[tth, intensity], header="2theta(deg)  intensity")
+        if lo is not None:
+            keep = (tth >= lo) & (tth <= hi)
+            tth_plot, intensity_plot = tth[keep], intensity[keep]
+            np.savetxt(sample_dir / "integrated_2th_auto.txt",
+                       np.c_[tth_plot, intensity_plot], header="2theta(deg)  intensity")
+        else:
+            tth_plot, intensity_plot = tth, intensity
 
         # 出图（对数纵轴 + 线性各存一张，对数能看清弱峰）
         for log, suffix in ((False, ""), (True, "_log")):
             fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(tth, intensity, "b-", lw=0.8)
+            ax.plot(tth_plot, intensity_plot, "b-", lw=0.8)
             ax.set_xlabel("2θ (deg)")
             ax.set_ylabel("Intensity (a.u.)")
             ax.set_title(f"{stem}: full azimuthal integration (λ={wavelength_m*1e10:.4f} Å)")
@@ -106,6 +160,8 @@ def main() -> None:
                 p = sample_dir / "integrated_log.png"
             else:
                 p = png_path
+            if lo is not None:
+                ax.set_xlim(lo, hi)
             ax.grid(alpha=0.3)
             fig.tight_layout()
             fig.savefig(p, dpi=150)

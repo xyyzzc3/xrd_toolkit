@@ -59,3 +59,28 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
         except ValueError:
             pass  # 非法输入：走不到 return，落到下面的提示，再问一遍
         print(f"Invalid input; enter 1~{len(files)} (comma-separated for several) or all")
+
+
+def parse_range_arg(raw):
+    """解析 --range 参数（三个脚本共用）：full / auto / lo,hi（度）。
+
+    返回三种形式：
+        "full"      → 完整数据（txt 母版永远存这一版）
+        "auto"      → 自动选区（默认）：下界=材料专属标准（lmfp 第一峰
+                      −0.3°；lab6 光环结束点−0.6°，同一材料所有数据相同；
+                      未知则缓坡检测兜底）；
+                      上界=数据失效点自动检测（找不到才退回完整环极限）
+        (lo, hi)    → 手动指定区间，如 --range 1.3,7.3
+    """
+    if raw is None or raw == "auto":
+        return "auto"
+    if raw == "full":
+        return "full"
+    try:
+        lo, hi = (float(v) for v in raw.split(","))
+        if lo >= hi:
+            raise ValueError  # 区间左端必须小于右端
+        return (lo, hi)
+    except ValueError:
+        raise SystemExit(
+            f"Invalid --range '{raw}'; use full, auto, or lo,hi (e.g. 1.3,7.3)")

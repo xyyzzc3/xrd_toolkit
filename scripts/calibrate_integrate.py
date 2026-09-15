@@ -2,7 +2,7 @@
 """LaB6 几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱（任务三流程）。
 
 用法示例：
-    python scripts/calibrate_integrate.py --file data/week2_lab6.tif
+    python scripts/calibrate_integrate.py --file data/lab6-00024.tif
     python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --dist0 1600
     python scripts/calibrate_integrate.py          # 不带 --file：交互菜单选文件（可多选）
 
@@ -22,10 +22,11 @@ import numpy as np
 # 让脚本可以直接从仓库根目录运行（无需先 pip install）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.cli import interactive_pick_files  # 交互选文件菜单（四脚本共用）
+from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
 from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
+from xrd_toolkit.services.range_selector import detect_material, select_auto_range
 
 
 def main() -> None:
@@ -42,6 +43,15 @@ def main() -> None:
                         help="initial ring center cx,cy in pixel; if not given, "
                              "auto-localized with find_ring_center (<1 px accuracy)")
     parser.add_argument("--max-rings", type=int, default=16, help="number of rings used for calibration")
+    parser.add_argument("--range", dest="range_", default="auto",
+                        help="2θ range for the plot and the *_auto trimmed txt: "
+                             "full, auto (default: per-material standard range), or "
+                             "lo,hi in degrees (e.g. 1.3,7.3). The full txt is always "
+                             "saved regardless.")
+    parser.add_argument("--material", default="auto",
+                        help="material for the auto-range standard: "
+                             "auto (detect from filename), lab6, or lmfp — the range "
+                             "is then fixed by that material's known peak positions")
     parser.add_argument("--outdir", default="outputs", help="output directory")
     args = parser.parse_args()
 
@@ -67,8 +77,8 @@ def main() -> None:
         # 纠错点记录（实测）：初值圆心会轻微影响精修落点——环接近正圆时
         # rot1/rot2 与 PONI 存在近似简并，自动定位 (1022.2, 1021.7) 与手动
         # (1024, 1024) 会收敛到两组残差相当的解（PONI 差 ~12/36 px），但
-        # 距离始终稳健（1595.80 mm）。官方标定值（config.CALIBRATED）已统一
-        # 为自动圆心三次平均（2026-09-13）；--center 仍保留作手动覆盖。
+        # 距离始终稳健（1595.80 mm）。官方标定值（config.CALIBRATED）现统一
+        # 为手动圆心初值那组解（见 commit c9ff720）；--center 仍保留作手动覆盖。
         if args.center:
             cx, cy = (float(v) for v in args.center.split(","))
             print(f"  Ring center initial (manual): ({cx}, {cy}) px")
@@ -93,7 +103,42 @@ def main() -> None:
         print(f"Tilt              : rot1={geometry['rot1_deg']:.4f} deg, rot2={geometry['rot2_deg']:.4f} deg")
         print(f"Residual (RMS)    : {geometry['residual_deg']:.4f} deg")
 
-        # 保存 1D 数据 + 出图（红虚线 = LaB6 理论峰位）
+        # ---- 2θ 有效区间选择（可选，默认 auto，同 sector_waterfall/integrate_pattern）----
+        # txt 永远保存完整版（数据母版）；区间只影响图和另存的 _auto 裁剪版。
+        # auto（A+A 方案，2026-09-16 拍板）：下界 = 材料专属标准
+        # （lmfp 第一峰 −0.3°；lab6 光环结束点 −0.6°，≈1.0°）；
+        # 上界 = 数据失效点自动检测。几何用本次精修得到的距离/束心
+        # geometry['dist_m']/poni（而不是 CALIBRATED 里的官方值），保证
+        # 区间计算和本次积分用的是同一套几何。
+        sel = parse_range_arg(args.range_)
+        if sel == "full":
+            lo = hi = None
+            print("Range: full")
+        elif sel == "auto":
+            material = args.material if args.material != "auto" \
+                else detect_material(path.stem)
+            if material is None:
+                print("Material: not recognized from filename "
+                      "(use --material lab6|lmfp); known-peak check skipped")
+            lo, hi, info = select_auto_range(
+                tth, intensity, material, wavelength_m, image.shape,
+                pixel_m, geometry["dist_m"],
+                poni_px=(geometry["poni1_px"], geometry["poni2_px"]))
+            print(f"Range: auto -> [{lo:.3f}, {hi:.3f}] deg "
+                  f"({info['lo_reason']} / {info['hi_reason']})")
+            if material is not None:
+                print(f"Material: {material} "
+                      f"({info['n_known_peaks']} known peaks within range)")
+                for line in info["checks"]:
+                    print(f"  {line}")
+                for line in info.get("warnings", []):
+                    print(f"  WARNING: {line}")
+        else:
+            lo, hi = sel
+            print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
+
+        # 保存 1D 数据 + 出图（红虚线 = LaB6 理论峰位）。完整版永远保存，
+        # 选了区间时另存一份 *_auto.txt（裁剪版），两个都留
         # 输出按样品分文件夹：outputs/{数据名}/；用 calibrated_ 前缀与
         # integrate_pattern.py 的 integrated_ 输出区分（避免互相覆盖）
         outdir = Path(args.outdir)
@@ -103,16 +148,26 @@ def main() -> None:
         dat_path = sample_dir / "calibrated_2th.txt"
         png_path = sample_dir / "calibrated.png"
         np.savetxt(dat_path, np.c_[tth, intensity], header="2theta(deg)  intensity")
+        if lo is not None:
+            keep = (tth >= lo) & (tth <= hi)
+            tth_plot, intensity_plot = tth[keep], intensity[keep]
+            np.savetxt(sample_dir / "calibrated_2th_auto.txt",
+                       np.c_[tth_plot, intensity_plot], header="2theta(deg)  intensity")
+        else:
+            tth_plot, intensity_plot = tth, intensity
 
         theory = lab6_theoretical_2theta(wavelength_m, args.max_rings)
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(tth, intensity, "b-", lw=0.8)
+        ax.plot(tth_plot, intensity_plot, "b-", lw=0.8)
         for i, t0 in enumerate(theory):
             ax.axvline(t0, color="r", ls="--", lw=0.7, alpha=0.7)
         ax.set_xlabel("2θ (deg)")
         ax.set_ylabel("Intensity (a.u.)")
         ax.set_title(f"{stem}: λ={args.wavelength} Å, D={geometry['dist_m']*1000:.1f} mm")
-        ax.set_xlim(0, theory[-1] * 1.2)
+        if lo is not None:
+            ax.set_xlim(lo, hi)               # 选定区间
+        else:
+            ax.set_xlim(0, theory[-1] * 1.2)  # full：保留原视图（看全所有理论环）
         ax.grid(alpha=0.3)
         fig.tight_layout()
         fig.savefig(png_path, dpi=150)
