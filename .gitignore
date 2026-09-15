@@ -2,7 +2,10 @@
 .venv/
 data/*
 !data/.gitkeep
-# outputs/ 有意不忽略：保存示例输出图，供 README 引用/展示
+outputs/
+# 有意不再整体入库（保护实验数据隐私）。已提交的 example_lab6/、example_sample/
+# 不受影响（.gitignore 只管未跟踪的新文件）；脚本按数据文件名新生成的文件夹
+# （带运行编号）自动忽略，不会误提交
 __pycache__/
 *.pyc
 *.egg-info/
