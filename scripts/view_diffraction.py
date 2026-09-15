@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from xrd_toolkit.cli import interactive_pick_files  # 交互选文件菜单（四脚本共用）
+from xrd_toolkit.config import BEAM_CENTER  # 任务三校准的环圆心（直射束落点）
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.core.processor import find_ring_center, line_profile
+from xrd_toolkit.core.processor import line_profile
 
 
 def nice_step(size: float, target_ticks: int = 5) -> float:
@@ -53,12 +54,12 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     sub = outdir / tag
     sub.mkdir(parents=True, exist_ok=True)
 
-    # 圆心：用户用 --center 给了就用用户的；没给就自动定位——
-    # find_ring_center 利用"衍射图关于圆心中心对称"（Friedel 定律），
-    # 把图绕几何中心转 180° 后与原图做 FFT 互相关，峰位的一半就是圆心偏移。
-    # 所以以后任何新数据都不用再量圆心，看图时自动找。
-    # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]，
-    # 所以传给 line_profile 时要反过来存成 (行, 列)。
+    # 圆心（2026-09-16 用户拍板）：默认直接用任务三校准的束心
+    # config.BEAM_CENTER（同一台仪器通用，不再每次自动定位——
+    # find_ring_center 自动定位只保留给校准脚本做初值）；
+    # 用户用 --center 给了就用用户的（手动覆盖）。
+    # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]；
+    # BEAM_CENTER 存的正是 (行, 列)，直接可用。
     center = None
     if args.center:
         # 生成器表达式：(处理(s) for s in 一串东西)
@@ -69,15 +70,15 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
         cx, cy = (float(s) for s in args.center.split(","))
         center = (cy, cx)
     else:
-        center = find_ring_center(data)   # 自动定位（返回 (行, 列)）
+        center = tuple(BEAM_CENTER)   # 校准值 (行, 列) = (1022.0, 1022.3)
 
     h, w = data.shape  # 数组形状：h = 行数（高），w = 列数（宽）
 
     # f-string：字符串前加 f，花括号 {} 里的变量会被替换成它的值。
     # {data.min():.1f} 里的 :.1f 表示"保留 1 位小数"（浮点数格式化）。
     print(f"\n=== {path.name} ===  Image size: {w} x {h}, intensity range: {data.min():.1f} ~ {data.max():.1f}")
-    # 打印圆心：自动定位时打印 (x, y)，方便和标定值对照；用户手动指定时也回显一遍
-    print(f"  Ring center ({'user-specified' if args.center else 'auto-detected'}): "
+    # 打印圆心：默认是校准值；用户手动指定时也回显一遍
+    print(f"  Ring center ({'user-specified' if args.center else 'calibrated'}): "
           f"({center[1]:.2f}, {center[0]:.2f}) px")
 
     # ── 颜色标尺范围：自动还是手动？──
@@ -113,7 +114,7 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     im = ax.imshow(data, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax), origin="lower")
 
     # 标题分两行：文件名很长，一行放不下会超出画布被裁掉；
-    # 第二行写明环圆心坐标（自动定位或用户指定），不用再靠肉眼找圆心
+    # 第二行写明环圆心坐标（校准值或用户指定），不用再靠肉眼找圆心
     ax.set_title(f"2D Diffraction Image\n({tag}, log scale, ring center = ({center[1]:.1f}, {center[0]:.1f}) px)")
     ax.set_xlabel("Detector pixel X (px)")
     ax.set_ylabel("Detector pixel Y (px)")
@@ -204,8 +205,7 @@ def main() -> None:
                         help="Angle between the profile line and the horizontal axis (degrees), default 0")
     parser.add_argument("--center",
                         help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); "
-                             "if not given, the center is auto-detected from the image "
-                             "(180-degree rotation cross-correlation)")
+                             "if not given, the calibrated beam center from config.py is used")
     parser.add_argument("--outdir", default="outputs",
                         help="Base output directory, default outputs/ (each file is saved into outputs/{filename}/)")
     parser.add_argument("--vmin", type=float, default=None,

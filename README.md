@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), localizes the ring center automatically, calibrates the detector geometry against a LaB₆ standard (pyFAI), and integrates the 2D pattern into standard 1D powder spectra — including sector-wise azimuthal uniformity analysis.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard (pyFAI, with automatic ring-center localization as the starting point), and integrates the 2D pattern into standard 1D powder spectra — including sector-wise azimuthal uniformity analysis. All scripts except calibration use the calibrated geometry stored in `src/xrd_toolkit/config.py`.
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md)
 
@@ -17,7 +17,7 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
   <tr>
     <td align="center" width="50%">
       <img src="showcase/lab6/diffraction_image.png" width="100%"><br>
-      <sub>2D diffraction image (log scale) — cross marks the auto-localized ring center</sub>
+      <sub>2D diffraction image (log scale) — cross marks the calibrated beam center</sub>
     </td>
     <td align="center" width="50%">
       <img src="showcase/lab6/radial_profile.png" width="100%"><br>
@@ -42,7 +42,7 @@ Figures generated from a LaB₆ standard calibration dataset (NIST SRM 660).
 
 ## Highlights
 
-- **Automatic ring-center localization** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center. Fully automatic on any new dataset, accuracy < 1 px.
+- **Automatic ring-center localization (calibration starting point)** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center; accuracy < 1 px. It is used only as the initial value for geometric calibration — every other step uses the calibrated geometry in `src/xrd_toolkit/config.py`.
 - **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (reference calibration stored in `src/xrd_toolkit/config.py`).
 - **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ, intensity), ready for peak finding, profile fitting, and PDF analysis.
 - **Automatic 2θ range selection** — `--range auto` (default) picks the interval with one standard per material: lower bound from the material's standard (first known peak − 0.3° for powder samples; detected halo end − 0.6° ≈ 1.0° for the LaB₆ standard), upper bound auto-detected where the data starts failing (sectors dying as rings get clipped by the detector edge, ≈ 7.44° — cross-checked against an exact geometric expectation). The full-range txt master copy is always saved.
@@ -85,7 +85,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir output
 ```
 
 - `--file`: diffraction image path (.tif / .edf / .cbf)
-- `--center`: ring center `cx,cy` — auto-localized if omitted
+- `--center`: ring center `cx,cy` — defaults to the calibrated beam center from `config.py`
 - `--angle`: profile angle in degrees (default 0)
 - `--outdir`: PNG output directory (default `outputs/`)
 

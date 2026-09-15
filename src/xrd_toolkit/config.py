@@ -24,6 +24,6 @@ CALIBRATED = dict(
 
 # 环圆心 = 直射束落点 B（像素坐标，任务三校准结果）。
 # 注意：B ≠ PONI（法线垂足）——探测器有倾斜时两者差 ~23 px。
-# 现在 view_diffraction 画图时默认用 find_ring_center 自动定位圆心
-# （任何新数据都通用），B 保留在此作为校准记录，用于核对自动结果。
+# view_diffraction 画图默认直接用 B（校准值，同一台仪器通用）；
+# find_ring_center 自动定位只保留给校准脚本做初值（2026-09-16 拍板）。
 BEAM_CENTER = (1022.0, 1022.3)

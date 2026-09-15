@@ -1,6 +1,6 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看（自动定位环圆心）、LaB₆ 几何校准（pyFAI）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。
+XRD 衍射图像处理工具箱：读取 .tif / .edf / .cbf 衍射数据，支持二维衍射图与强度剖面查看（环心默认用校准值）、LaB₆ 几何校准（pyFAI，自动定位环心作初值）、2D→1D 全角度积分（标准粉末衍射谱）与扇形积分（瀑布图 / 方位均匀性分析）。除校准外，所有脚本统一使用 `src/xrd_toolkit/config.py` 里的校准几何。
 
 ## 安装
 
@@ -29,7 +29,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir output
 
 参数说明：
 - `--file`：衍射图像路径（.tif / .edf / .cbf）
-- `--center`：环圆心坐标 cx,cy，不填则自动定位（利用衍射图关于圆心中心对称的物理性质，FFT 互相关，任何新数据都通用，精度 < 1 px）
+- `--center`：环圆心坐标 cx,cy，不填则用 config.py 里的校准束心（同一台仪器通用）
 - `--angle`：剖面线与水平方向的夹角（度），默认 0
 - `--outdir`：PNG 输出目录，默认 outputs/
 
@@ -93,7 +93,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 以下图片来自一份 LaB₆ 标样校准数据集（NIST SRM 660）。
 
-二维衍射图（对数色标，黑边白芯小十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
+二维衍射图（对数色标，黑边白芯小十字标记校准环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
 
 <img src="../showcase/lab6/diffraction_image.png" width="60%">
 

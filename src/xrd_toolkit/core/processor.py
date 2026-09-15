@@ -28,6 +28,9 @@ def find_ring_center(image: np.ndarray):
     实测精度：lab6 → (1022.2, 1021.7)，LMFP → (1021.3, 1021.9)，
     与标定值 B = (1022.0, 1022.3) 相差 < 1 px（约 0.05% 图像宽度）。
 
+    当前策略（2026-09-16 用户拍板）：本函数只作校准脚本的初值，
+    其余环节一律用 config 里的校准值，不重新自动定位。
+
     参数：
         image —— 2D numpy 数组，image[行][列] = 该像素的强度
 
@@ -77,14 +80,14 @@ def find_ring_center(image: np.ndarray):
     return cy, cx
 
 
-def line_profile(image: np.ndarray, center=None, angle_deg: float = 0.0):
+def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     """沿过圆心、与水平方向成 angle_deg 的直线采样强度。
 
     参数：
         image     —— 2D numpy 数组，image[行][列] = 该像素的强度
-        center    —— 圆心 (行, 列)。不传时自动定位（find_ring_center，
-                     亚像素精度 <1 px）；不再回落几何中心——真实数据的
-                     圆心（直射光斑位置）和几何中心不是一回事
+        center    —— 圆心 (行, 列)，必传。调用方负责给校准值
+                     （view_diffraction 传 config.BEAM_CENTER）；
+                     自动定位只保留在校准脚本里做初值（2026-09-16 拍板）
         angle_deg —— 直线与水平方向的夹角（度），0 = 水平线
 
     返回：
@@ -95,10 +98,7 @@ def line_profile(image: np.ndarray, center=None, angle_deg: float = 0.0):
     """
 
     h, w = image.shape
-    if center is None:
-        cy, cx = find_ring_center(image)  # 自动定位（返回正好是 (行, 列) 顺序）
-    else:
-        cy, cx = center             # 注意：center 是 (行, 列) = (y, x)
+    cy, cx = center             # 注意：center 是 (行, 列) = (y, x)
 
     # np.radians 负责"角度 → 弧度"的换算。
     theta = np.radians(angle_deg)
