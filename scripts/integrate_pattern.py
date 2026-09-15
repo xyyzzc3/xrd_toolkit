@@ -11,8 +11,7 @@
 几何通用，不需要对每个文件重新标定）。
 
 用法示例：
-    python scripts/integrate_pattern.py --file data/lab6-00024.tif
-    python scripts/integrate_pattern.py --file data/LMFP_1_atten0-00029.tif
+    python scripts/integrate_pattern.py --file data/xxx.tif
     python scripts/integrate_pattern.py          # 不带 --file：交互菜单选文件（可多选）
 """
 import argparse

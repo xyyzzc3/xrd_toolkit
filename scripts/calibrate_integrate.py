@@ -2,7 +2,7 @@
 """LaB6 几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱（任务三流程）。
 
 用法示例：
-    python scripts/calibrate_integrate.py --file data/lab6-00024.tif
+    python scripts/calibrate_integrate.py --file data/xxx.tif
     python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --dist0 1600
     python scripts/calibrate_integrate.py          # 不带 --file：交互菜单选文件（可多选）
 

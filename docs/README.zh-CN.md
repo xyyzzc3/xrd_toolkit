@@ -19,7 +19,7 @@ pip install -e .
 
 四个脚本都支持两种方式选文件：`--file` 指定单个文件；不带 `--file` 则弹出交互菜单，列出 `data/` 里所有数据文件按编号选择（`1,2` 多选、`all` 全选）。菜单逻辑统一在 `xrd_toolkit/cli.py`，四个脚本共用一份。
 
-三个积分脚本（calibrate_integrate / integrate_pattern / sector_waterfall）都支持 `--range`：`full`（完整数据，txt 母版永远存这一版）、`auto`（默认，自动选区）、`lo,hi`（手动指定，如 1.3,7.3）。`auto` 的下界按材料专属标准选取（LMFP：第一个已知峰 − 0.3°；LaB₆：检测到的光环结束点 − 0.6°，≈1.0°），上界自动检测"数据失效点"——环被方形探测器切掉、多数扇区死亡的位置（实测 ≈7.44°，与几何精确计算互相印证）。
+三个积分脚本（calibrate_integrate / integrate_pattern / sector_waterfall）都支持 `--range`：`full`（完整数据，txt 母版永远存这一版）、`auto`（默认，自动选区）、`lo,hi`（手动指定，如 1.3,7.3）。`auto` 的下界按材料专属标准选取（粉末样品：第一个已知峰 − 0.3°；LaB₆ 标样：检测到的光环结束点 − 0.6°，≈1.0°），上界自动检测"数据失效点"——环被方形探测器切掉、多数扇区死亡的位置（实测 ≈7.44°，与几何精确计算互相印证）。
 
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
@@ -90,7 +90,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 ## 输出示例
 
-以下图片来自 LaB₆ 标样数据集 `lab6-00024`（姊妹数据集 `LMFP_1_atten0-00029`）。
+以下图片来自一份 LaB₆ 标样校准数据集（NIST SRM 660）。
 
 二维衍射图（对数色标，黑边白芯小十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
 

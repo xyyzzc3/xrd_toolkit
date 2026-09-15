@@ -17,11 +17,10 @@
 中心 -175°；文件名和瀑布图 y 轴都标注扇区中心 χ 值。
 
 用法示例：
-    python scripts/sector_waterfall.py --file data/lab6-00024.tif
-    python scripts/sector_waterfall.py --file data/LMFP_1_atten0-00029.tif
+    python scripts/sector_waterfall.py --file data/xxx.tif
     python scripts/sector_waterfall.py          # 不带 --file：交互菜单选文件（可多选）
-    python scripts/sector_waterfall.py --file data/LMFP_1_atten0-00029.tif --range full
-    python scripts/sector_waterfall.py --file data/LMFP_1_atten0-00029.tif --range 1.3,7.3 --material lmfp
+    python scripts/sector_waterfall.py --file data/xxx.tif --range full
+    python scripts/sector_waterfall.py --file data/xxx.tif --range 1.3,7.3
 """
 import argparse
 import sys
