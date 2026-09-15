@@ -111,7 +111,8 @@ def main() -> None:
         # 精修完的几何要登记进 src/xrd_toolkit/config.py 的 CONFIGS，才能被
         # 三个消费脚本用 --config 取用。脚本不替你写文件（配置登记要人
         # 看一眼再贴进去，防止坏数据混进仓库），只打印一段可直接复制的模板：
-        #   - key 按"样品简写_exp编号"改成下一个编号（如 lab6_exp2）；
+        #   - key 按"本批实验材料简写_exp编号"改成下一个编号（如 lmfp_exp2），
+        #     跟实验批次走、不跟校准标样走；
         #   - label 只写批次级信息，不写数据集运行号等实验细节（隐私）；
         #   - beam_center 用初值圆心 (行, 列)（自动定位结果，或你给的
         #     --center）——它是直射束落点 B，不是 PONI！view_diffraction
@@ -119,8 +120,8 @@ def main() -> None:
         #   - rot3_deg / offset_px / residual_deg 是诊断量，不进注册表。
         print("\n===== CONFIGS entry for config.py (copy-paste ready) =====")
         print(f"# refined residual: {geometry['residual_deg']:.4f} deg (diagnostic, not stored)")
-        print('    "lab6_exp2": {   # rename key to the next free experiment number')
-        print('        "label": "LaB₆ 标样几何标定",   # TODO: 改成实际批次备注')
+        print('    "exp2": {   # rename key to "<material>_expN" of this batch (e.g. lmfp_exp2)')
+        print('        "label": "（改成实际批次备注）",')
         print('        "geometry": dict(')
         print(f"            pixel_size_m={args.pixel:g}e-6,")
         print(f"            wavelength_m={args.wavelength:g}e-10,")

@@ -8,8 +8,8 @@
     # 方式二：不带 --file 运行 → 列出 data/ 里的文件，按编号选一个或多个
     python scripts/view_diffraction.py
 
-    # 换几何配置条目（默认 lab6_exp1）：
-    python scripts/view_diffraction.py --file data/xxx.tif --config lab6_exp2
+    # 换几何配置条目（默认 lmfp_exp1）：
+    python scripts/view_diffraction.py --file data/xxx.tif --config lmfp_exp2
 """
 
 import argparse
@@ -60,7 +60,7 @@ def process_one_file(path: Path, args, cfg: dict, outdir: Path) -> None:
     sub.mkdir(parents=True, exist_ok=True)
 
     # 圆心（2026-09-16 用户拍板）：默认直接用选中配置条目（--config）的
-    # beam_center（默认 lab6_exp1 的校准值，同一台仪器通用，不再每次
+    # beam_center（默认 lmfp_exp1 的校准值，同一台仪器通用，不再每次
     # 自动定位——find_ring_center 自动定位只保留给校准脚本做初值）；
     # 用户用 --center 给了就用用户的（手动覆盖）。
     # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]；

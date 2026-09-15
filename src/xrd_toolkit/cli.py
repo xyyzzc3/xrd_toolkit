@@ -68,7 +68,7 @@ def pick_config(configs: dict, default: str) -> str:
     用户可输入：
         直接回车   → 用默认条目（DEFAULT_CONFIG）
         2          → 选第 2 个
-        lab6_exp2  → 直接输入条目 key 名也可以
+        lmfp_exp2  → 直接输入条目 key 名也可以
     """
     names = list(configs)
     print(f"\nAvailable geometry configs ({len(names)}):")
