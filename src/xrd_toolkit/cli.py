@@ -61,6 +61,39 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
         print(f"Invalid input; enter 1~{len(files)} (comma-separated for several) or all")
 
 
+def pick_config(configs: dict, default: str) -> str:
+    """交互式选择一个几何配置条目：列出 CONFIGS 里的所有条目，按编号选.
+
+    在交互选完数据文件之后调用（"选完文件，再选一次配置"）。
+    用户可输入：
+        直接回车   → 用默认条目（DEFAULT_CONFIG）
+        2          → 选第 2 个
+        lab6_exp2  → 直接输入条目 key 名也可以
+    """
+    names = list(configs)
+    print(f"\nAvailable geometry configs ({len(names)}):")
+    # enumerate(..., start=1)：给条目编号，从 1 开始（同 interactive_pick_files）
+    for i, name in enumerate(names, start=1):
+        mark = " (default)" if name == default else ""
+        print(f"  [{i}] {name}{mark} — {configs[name]['label']}")
+
+    # while True = 无限循环，直到拿到合法输入才 return 跳出
+    while True:
+        raw = input(f"Enter config number or name (default: {default}): ").strip()
+        if not raw:
+            return default                        # 直接回车 = 默认条目
+        if raw in configs:
+            return raw                            # 直接输入 key 名也行
+        try:
+            n = int(raw)
+            if 1 <= n <= len(names):
+                return names[n - 1]               # 人的编号 1 → 列表下标 0
+        except ValueError:
+            pass
+        print(f"Invalid input; enter 1~{len(names)}, a config name, "
+              f"or press Enter for the default")
+
+
 def parse_range_arg(raw):
     """解析 --range 参数（三个脚本共用）：full / auto / lo,hi（度）。
 

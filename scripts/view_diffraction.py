@@ -7,6 +7,9 @@
 
     # 方式二：不带 --file 运行 → 列出 data/ 里的文件，按编号选一个或多个
     python scripts/view_diffraction.py
+
+    # 换几何配置条目（默认 lab6_exp1）：
+    python scripts/view_diffraction.py --file data/xxx.tif --config lab6_exp2
 """
 
 import argparse
@@ -16,8 +19,8 @@ from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 import numpy as np
 
-from xrd_toolkit.cli import interactive_pick_files  # 交互选文件菜单（四脚本共用）
-from xrd_toolkit.config import BEAM_CENTER  # 任务三校准的环圆心（直射束落点）
+from xrd_toolkit.cli import interactive_pick_files, pick_config  # 交互菜单（选文件 / 选配置，四脚本共用）
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 点名 / 菜单选择）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.core.processor import line_profile
 
@@ -36,11 +39,13 @@ def nice_step(size: float, target_ticks: int = 5) -> float:
     return 10 * power
 
 
-def process_one_file(path: Path, args, outdir: Path) -> None:
+def process_one_file(path: Path, args, cfg: dict, outdir: Path) -> None:
     """对单个文件完成 读图 → 画图 1 → 画图 2 → 存 PNG 的完整流程.
 
     outdir 从 main() 传进来：函数内部看不到外面定义的变量，
-    要用就得通过参数"递"进来（Python 的作用域规则）。"""
+    要用就得通过参数"递"进来（Python 的作用域规则）。
+    cfg 同理：--config 选中的配置条目（含 geometry / beam_center），
+    函数内部不自己 import 配置。"""
 
     # ── 第 2 步：读图像 ──
     # data 是一个 2D numpy 数组：data[行][列] = 该像素的强度。
@@ -54,12 +59,12 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
     sub = outdir / tag
     sub.mkdir(parents=True, exist_ok=True)
 
-    # 圆心（2026-09-16 用户拍板）：默认直接用任务三校准的束心
-    # config.BEAM_CENTER（同一台仪器通用，不再每次自动定位——
-    # find_ring_center 自动定位只保留给校准脚本做初值）；
+    # 圆心（2026-09-16 用户拍板）：默认直接用选中配置条目（--config）的
+    # beam_center（默认 lab6_exp1 的校准值，同一台仪器通用，不再每次
+    # 自动定位——find_ring_center 自动定位只保留给校准脚本做初值）；
     # 用户用 --center 给了就用用户的（手动覆盖）。
     # 注意顺序：屏幕上习惯说 (x, y) = (列, 行)，而数组下标是 data[行][列]；
-    # BEAM_CENTER 存的正是 (行, 列)，直接可用。
+    # beam_center 存的正是 (行, 列)，直接可用。
     center = None
     if args.center:
         # 生成器表达式：(处理(s) for s in 一串东西)
@@ -70,7 +75,7 @@ def process_one_file(path: Path, args, outdir: Path) -> None:
         cx, cy = (float(s) for s in args.center.split(","))
         center = (cy, cx)
     else:
-        center = tuple(BEAM_CENTER)   # 校准值 (行, 列) = (1022.0, 1022.3)
+        center = tuple(cfg["beam_center"])   # 选中条目的校准值 (行, 列)
 
     h, w = data.shape  # 数组形状：h = 行数（高），w = 列数（宽）
 
@@ -201,11 +206,14 @@ def main() -> None:
                              "If not given, an interactive menu lists files in data/ and lets you pick.")
     parser.add_argument("--datadir", default="data",
                         help="Folder scanned by the interactive menu (only used without --file), default data/")
+    parser.add_argument("--config",
+                        help=f"Geometry config name from config.py (default: {DEFAULT_CONFIG}); "
+                             "without --file an interactive menu lets you pick instead")
     parser.add_argument("--angle", type=float, default=0.0,
                         help="Angle between the profile line and the horizontal axis (degrees), default 0")
     parser.add_argument("--center",
                         help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); "
-                             "if not given, the calibrated beam center from config.py is used")
+                             "if not given, the beam center of the selected config is used")
     parser.add_argument("--outdir", default="outputs",
                         help="Base output directory, default outputs/ (each file is saved into outputs/{filename}/)")
     parser.add_argument("--vmin", type=float, default=None,
@@ -213,6 +221,17 @@ def main() -> None:
     parser.add_argument("--vmax", type=float, default=None,
                         help="Color scale upper limit; if not given, auto = 99.9th percentile of the image")
     args = parser.parse_args()
+
+    # --config 名字先校验：写错立即报错退出（argparse 风格：打印用法 +
+    # error 行、退出码 2），不用等到选完文件、读了图才发现
+    if args.config is not None:
+        config_name = args.config
+        try:
+            cfg = get_config(config_name)
+        except ValueError as err:
+            parser.error(str(err))
+    else:
+        config_name = cfg = None
 
     outdir = Path(args.outdir)
     outdir.mkdir(exist_ok=True)  # 目录不存在就创建；exist_ok 让已存在时不报错
@@ -225,9 +244,22 @@ def main() -> None:
         # 没指定 --file：进入交互菜单，让用户按编号选
         file_list = interactive_pick_files(Path(args.datadir))
 
+    # 几何配置三选一（2026-09-16 用户拍板"交互式"）：
+    #   1. --config 点名（命令行 / 脚本用，上面已校验过）
+    #   2. 交互模式下（没带 --file）选完数据文件，再弹菜单选一次配置
+    #   3. 其余情况用默认条目 DEFAULT_CONFIG（PyCharm 运行配置靠它）
+    if cfg is None:
+        if args.file is None:
+            config_name = pick_config(CONFIGS, DEFAULT_CONFIG)
+            cfg = CONFIGS[config_name]
+        else:
+            config_name = DEFAULT_CONFIG
+            cfg = get_config()
+    print(f"Using geometry config: {config_name}")
+
     # for 循环：把选中的每个文件依次交给 process_one_file 处理
     for path in file_list:
-        process_one_file(path, args, outdir)
+        process_one_file(path, args, cfg, outdir)
 
     plt.show()  # 所有图画完后统一弹窗显示；保存的 PNG 不受影响
 

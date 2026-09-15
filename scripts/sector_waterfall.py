@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """扇形积分 + 瀑布图：把 0°~360° 分成 36 个扇区（每 10° 一个）分别积分。
 
-观察目标（任务问题）：
+观察目标：
   - 不同角度的衍射图谱是否有差异？
   - 强度是否一致？
   - 峰位是否偏移？
@@ -35,8 +35,8 @@ import numpy as np
 # 让脚本可以直接从仓库根目录运行（无需先 pip install）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
-from xrd_toolkit.config import CALIBRATED  # 任务三标定几何（全项目唯一一份）
+from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 点名 / 菜单选择）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_sectors
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -49,6 +49,9 @@ def main() -> None:
                              "lists files in data/ and lets you pick (comma-separated for several)")
     parser.add_argument("--datadir", default="data",
                         help="folder scanned by the interactive menu (only used without --file), default data/")
+    parser.add_argument("--config",
+                        help=f"Geometry config name from config.py (default: {DEFAULT_CONFIG}); "
+                             "without --file an interactive menu lets you pick instead")
     parser.add_argument("--n-sectors", type=int, default=36, help="number of azimuthal sectors")
     parser.add_argument("--npt", type=int, default=3000, help="points in each 1D curve")
     parser.add_argument("--range", dest="range_", default="auto",
@@ -63,12 +66,38 @@ def main() -> None:
     parser.add_argument("--outdir", default="outputs", help="output directory")
     args = parser.parse_args()
 
+    # --config 名字先校验：写错立即报错退出（argparse 风格：打印用法 +
+    # error 行、退出码 2），不用等到选完文件、读了图才发现
+    if args.config is not None:
+        config_name = args.config
+        try:
+            cfg = get_config(config_name)
+        except ValueError as err:
+            parser.error(str(err))
+    else:
+        config_name = cfg = None
+
     # 决定要跑哪些文件：给了 --file 就跑指定的；没给就弹交互菜单（同 view_diffraction），
     # 菜单支持多选（如 1,2）→ 循环里逐个处理，输出各自进 outputs/{数据名}/ 不会互相覆盖
     if args.file:
         file_list = [Path(args.file)]
     else:
         file_list = interactive_pick_files(Path(args.datadir))
+
+    # 几何配置三选一（2026-09-16 用户拍板"交互式"）：
+    #   1. --config 点名（命令行 / 脚本用，上面已校验过）
+    #   2. 交互模式下（没带 --file）选完数据文件，再弹菜单选一次配置
+    #   3. 其余情况用默认条目 DEFAULT_CONFIG（PyCharm 运行配置靠它）
+    if cfg is None:
+        if args.file is None:
+            config_name = pick_config(CONFIGS, DEFAULT_CONFIG)
+            cfg = CONFIGS[config_name]
+        else:
+            config_name = DEFAULT_CONFIG
+            cfg = get_config()
+    print(f"Using geometry config: {config_name}")
+
+    geom = cfg["geometry"]   # 扇形积分直接 **geom 展开 7 个几何键
 
     for path in file_list:
         image = load_diffraction_image(str(path))
@@ -79,7 +108,7 @@ def main() -> None:
             image,
             n_sectors=args.n_sectors,
             npt=args.npt,
-            **CALIBRATED,
+            **geom,
         )
         n = args.n_sectors
         width = 360.0 / n
@@ -105,11 +134,11 @@ def main() -> None:
                 print("Material: not recognized from filename "
                       "(use --material lab6|lmfp); known-peak check skipped")
             lo, hi, info = select_auto_range(
-                tth, mean_curve, material, CALIBRATED["wavelength_m"],
-                image.shape, CALIBRATED["pixel_size_m"], CALIBRATED["dist_m"],
+                tth, mean_curve, material, geom["wavelength_m"],
+                image.shape, geom["pixel_size_m"], geom["dist_m"],
                 I2d=I2d.T,    # 36 条扇区曲线 → 上界按存活比例 <80% 自动检测
-                poni_px=(CALIBRATED["poni1_m"] / CALIBRATED["pixel_size_m"],
-                         CALIBRATED["poni2_m"] / CALIBRATED["pixel_size_m"]))
+                poni_px=(geom["poni1_m"] / geom["pixel_size_m"],
+                         geom["poni2_m"] / geom["pixel_size_m"]))
             print(f"Range: auto -> [{lo:.3f}, {hi:.3f}] deg "
                   f"({info['lo_reason']} / {info['hi_reason']})")
             if material is not None:

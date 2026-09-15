@@ -86,7 +86,7 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     参数：
         image     —— 2D numpy 数组，image[行][列] = 该像素的强度
         center    —— 圆心 (行, 列)，必传。调用方负责给校准值
-                     （view_diffraction 传 config.BEAM_CENTER）；
+                     （view_diffraction 传选中配置的 beam_center）；
                      自动定位只保留在校准脚本里做初值（2026-09-16 拍板）
         angle_deg —— 直线与水平方向的夹角（度），0 = 水平线
 

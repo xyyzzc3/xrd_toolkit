@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LaB6 几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱（任务三流程）。
+"""LaB6 几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱。
 
 用法示例：
     python scripts/calibrate_integrate.py --file data/xxx.tif
@@ -8,6 +8,9 @@
 
 不带 --center 时自动定位环心作初值（find_ring_center，亚像素精度 <1 px），
 换任何新数据都不用先手动量圆心。
+
+标定完成后会打印一段可直接粘贴进 config.py CONFIGS 的条目模板
+（脚本不写文件——配置登记由人看一眼再贴进去，防止坏数据混进仓库）。
 """
 import argparse
 import sys
@@ -77,8 +80,9 @@ def main() -> None:
         # 纠错点记录（实测）：初值圆心会轻微影响精修落点——环接近正圆时
         # rot1/rot2 与 PONI 存在近似简并，自动定位 (1022.2, 1021.7) 与手动
         # (1024, 1024) 会收敛到两组残差相当的解（PONI 差 ~12/36 px），但
-        # 距离始终稳健（1595.80 mm）。官方标定值（config.CALIBRATED）现统一
-        # 为手动圆心初值那组解（见 commit c9ff720）；--center 仍保留作手动覆盖。
+        # 距离始终稳健（1595.80 mm）。参考标定值（config.py 的 CONFIGS
+        # 注册表）现统一为手动圆心初值那组解（见 commit c9ff720）；
+        # --center 仍保留作手动覆盖。
         if args.center:
             cx, cy = (float(v) for v in args.center.split(","))
             print(f"  Ring center initial (manual): ({cx}, {cy}) px")
@@ -103,13 +107,39 @@ def main() -> None:
         print(f"Tilt              : rot1={geometry['rot1_deg']:.4f} deg, rot2={geometry['rot2_deg']:.4f} deg")
         print(f"Residual (RMS)    : {geometry['residual_deg']:.4f} deg")
 
+        # ══ CONFIGS 条目模板（复制粘贴用）═══════════════════════════════
+        # 精修完的几何要登记进 src/xrd_toolkit/config.py 的 CONFIGS，才能被
+        # 三个消费脚本用 --config 取用。脚本不替你写文件（配置登记要人
+        # 看一眼再贴进去，防止坏数据混进仓库），只打印一段可直接复制的模板：
+        #   - key 按"样品简写_exp编号"改成下一个编号（如 lab6_exp2）；
+        #   - label 只写批次级信息，不写数据集运行号等实验细节（隐私）；
+        #   - beam_center 用初值圆心 (行, 列)（自动定位结果，或你给的
+        #     --center）——它是直射束落点 B，不是 PONI！view_diffraction
+        #     用 B 画十字；有倾斜时 B 与 PONI 差 ~23 px。
+        #   - rot3_deg / offset_px / residual_deg 是诊断量，不进注册表。
+        print("\n===== CONFIGS entry for config.py (copy-paste ready) =====")
+        print(f"# refined residual: {geometry['residual_deg']:.4f} deg (diagnostic, not stored)")
+        print('    "lab6_exp2": {   # rename key to the next free experiment number')
+        print('        "label": "LaB₆ 标样几何标定",   # TODO: 改成实际批次备注')
+        print('        "geometry": dict(')
+        print(f"            pixel_size_m={args.pixel:g}e-6,")
+        print(f"            wavelength_m={args.wavelength:g}e-10,")
+        print(f"            dist_m={geometry['dist_m']:.5f},")
+        print(f"            poni1_m={geometry['poni1_px']:.3f} * {args.pixel:g}e-6,")
+        print(f"            poni2_m={geometry['poni2_px']:.3f} * {args.pixel:g}e-6,")
+        print(f"            rot1_deg={geometry['rot1_deg']:.4f},")
+        print(f"            rot2_deg={geometry['rot2_deg']:.4f},")
+        print('        ),')
+        print(f'        "beam_center": ({cy:.2f}, {cx:.2f}),   # (row, col) px = direct beam spot')
+        print('    },')
+
         # ---- 2θ 有效区间选择（可选，默认 auto，同 sector_waterfall/integrate_pattern）----
         # txt 永远保存完整版（数据母版）；区间只影响图和另存的 _auto 裁剪版。
         # auto（A+A 方案，2026-09-16 拍板）：下界 = 材料专属标准
         # （lmfp 第一峰 −0.3°；lab6 光环结束点 −0.6°，≈1.0°）；
         # 上界 = 数据失效点自动检测。几何用本次精修得到的距离/束心
-        # geometry['dist_m']/poni（而不是 CALIBRATED 里的官方值），保证
-        # 区间计算和本次积分用的是同一套几何。
+        # geometry['dist_m']/poni（而不是 CONFIGS 注册表里的参考标定值），
+        # 保证区间计算和本次积分用的是同一套几何。
         sel = parse_range_arg(args.range_)
         if sel == "full":
             lo = hi = None

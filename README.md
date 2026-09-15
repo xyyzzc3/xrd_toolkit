@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard (pyFAI, with automatic ring-center localization as the starting point), and integrates the 2D pattern into standard 1D powder spectra — including sector-wise azimuthal uniformity analysis. All scripts except calibration use the calibrated geometry stored in `src/xrd_toolkit/config.py`.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard (pyFAI, with automatic ring-center localization as the starting point), and integrates the 2D pattern into standard 1D powder spectra — including sector-wise azimuthal uniformity analysis. All scripts except calibration read a named geometry config from `src/xrd_toolkit/config.py` (selectable via `--config`, default `lab6_exp1`).
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md)
 
@@ -42,10 +42,11 @@ Figures generated from a LaB₆ standard calibration dataset (NIST SRM 660).
 
 ## Highlights
 
-- **Automatic ring-center localization (calibration starting point)** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center; accuracy < 1 px. It is used only as the initial value for geometric calibration — every other step uses the calibrated geometry in `src/xrd_toolkit/config.py`.
-- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (reference calibration stored in `src/xrd_toolkit/config.py`).
+- **Automatic ring-center localization (calibration starting point)** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center; accuracy < 1 px. It is used only as the initial value for geometric calibration — every other step uses the geometry of the config selected via `--config` from `src/xrd_toolkit/config.py`.
+- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (stored as config `lab6_exp1` in `src/xrd_toolkit/config.py`).
 - **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ, intensity), ready for peak finding, profile fitting, and PDF analysis.
 - **Automatic 2θ range selection** — `--range auto` (default) picks the interval with one standard per material: lower bound from the material's standard (first known peak − 0.3° for powder samples; detected halo end − 0.6° ≈ 1.0° for the LaB₆ standard), upper bound auto-detected where the data starts failing (sectors dying as rings get clipped by the detector edge, ≈ 7.44° — cross-checked against an exact geometric expectation). The full-range txt master copy is always saved.
+- **Named geometry configs** — per-batch calibrated geometries are registered in `src/xrd_toolkit/config.py` and selected with `--config` (in interactive mode, a second menu picks the config after the data files). Calibration prints a copy-paste-ready entry to register a new batch.
 - **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; the stacked raw-intensity waterfall (one curve per sector, each drawn until its own intensity drops to zero) reveals preferred orientation or large-grain spotiness and visualizes the detector-clipping geometry.
 - **Shared interactive CLI** — one file-selection menu (`xrd_toolkit/cli.py`) reused by all four scripts: number selection, `1,2` multi-select, or `all`.
 
@@ -66,11 +67,11 @@ pip install -e .
 
 Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). All outputs are written under `outputs/{dataset_name}/`.
 
-Each script accepts either `--file` to pick one dataset, or — without `--file` — an interactive menu listing all files in `data/`.
+Each script accepts either `--file` to pick one dataset, or — without `--file` — an interactive menu listing all files in `data/`. The three consuming scripts also accept `--config NAME` to select a geometry config (default `lab6_exp1`); in interactive mode, after picking the data files a second menu asks for the config. `calibrate_integrate.py` prints a copy-paste-ready entry to register a newly calibrated batch in `src/xrd_toolkit/config.py`.
 
 | Script | What it does |
 |---|---|
-| `scripts/view_diffraction.py` | 2D image viewer (log scale, line profile, auto ring-center mark) |
+| `scripts/view_diffraction.py` | 2D image viewer (log scale, line profile, calibrated beam-center mark) |
 | `scripts/calibrate_integrate.py` | LaB₆ geometric calibration (pyFAI) + azimuthal integration (2D → 1D) |
 | `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern (two-column txt) |
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
@@ -85,7 +86,8 @@ python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir output
 ```
 
 - `--file`: diffraction image path (.tif / .edf / .cbf)
-- `--center`: ring center `cx,cy` — defaults to the calibrated beam center from `config.py`
+- `--center`: ring center `cx,cy` — defaults to the beam center of the selected config
+- `--config`: geometry config name from `config.py` (default `lab6_exp1`)
 - `--angle`: profile angle in degrees (default 0)
 - `--outdir`: PNG output directory (default `outputs/`)
 
@@ -106,7 +108,7 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--range`: 2θ range — `full`, `auto` (default, per-material standard), or `lo,hi` degrees (e.g. 1.3,7.3); the full txt is always saved
 - `--outdir`: output directory (default `outputs/`)
 
-Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`.
+Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`. After refinement, a copy-paste-ready `CONFIGS` entry is printed so the new batch can be registered in `src/xrd_toolkit/config.py` (the script never writes that file itself).
 
 </details>
 
@@ -117,7 +119,7 @@ Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azim
 python scripts/integrate_pattern.py --file data/xxx.tif
 ```
 
-Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.80 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`; `--range full/auto/lo,hi` controls the 2θ interval of the plot and the `_auto` trimmed txt (full txt always saved).
+Integrates 0°–360° with the geometry of the selected config (default `lab6_exp1`, e.g. 1595.80 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`; `--range full/auto/lo,hi` controls the 2θ interval of the plot and the `_auto` trimmed txt (full txt always saved).
 
 </details>
 
@@ -128,7 +130,7 @@ Integrates 0°–360° with the calibrated geometry (defaults to the reference c
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ```
 
-Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus a raw-intensity stacked waterfall plot (36 curves offset along the Y axis with adaptive row spacing; each curve is drawn until its own intensity drops to zero, so the staircase right edge marks where each sector's ring is clipped by the detector). Large grains or preferred orientation show up as intensity concentrated in a few sectors. Supports `--range full/auto/lo,hi`.
+Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately (geometry from the selected `--config`, default `lab6_exp1`), and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus a raw-intensity stacked waterfall plot (36 curves offset along the Y axis with adaptive row spacing; each curve is drawn until its own intensity drops to zero, so the staircase right edge marks where each sector's ring is clipped by the detector). Large grains or preferred orientation show up as intensity concentrated in a few sectors. Supports `--range full/auto/lo,hi`.
 
 </details>
 
@@ -153,7 +155,7 @@ Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integr
 │   ├── integrate_pattern.py       # full 2D → 1D integration
 │   └── sector_waterfall.py        # sector integration + waterfall plots
 ├── src/xrd_toolkit/
-│   ├── config.py                  # global configuration (calibrated geometry, single source of truth)
+│   ├── config.py                  # registry of named geometry configs (one per batch; --config selects)
 │   ├── cli.py                     # shared interactive file-selection menu (used by all scripts)
 │   ├── core/processor.py          # image processing (line profiles, auto ring-center localization)
 │   └── services/

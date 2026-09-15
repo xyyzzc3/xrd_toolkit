@@ -7,8 +7,9 @@
 "全角度积分" = 对 0°~360° 所有方位角上的像素积分（每个 2θ 环一整圈都算），
 而不是只取某一条剖面线（那是 view_diffraction.py 做的事）。
 
-几何参数默认用任务三对 LaB₆ 标定好的精确值（同一批实验、同一个仪器，
-几何通用，不需要对每个文件重新标定）。
+几何参数默认用选中配置条目（--config）的标定值（默认 lab6_exp1：同一批
+实验、同一个仪器，几何通用，不需要对每个文件重新标定）；多批实验时用
+--config 切换（交互模式下选完文件会再弹配置菜单）。
 
 用法示例：
     python scripts/integrate_pattern.py --file data/xxx.tif
@@ -27,8 +28,8 @@ import numpy as np
 # 让脚本可以直接从仓库根目录运行（无需先 pip install）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
-from xrd_toolkit.config import CALIBRATED  # 任务三标定几何（全项目唯一一份）
+from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 点名 / 菜单选择）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -43,12 +44,15 @@ def main() -> None:
                         help="folder scanned by the interactive menu (only used without --file), default data/")
     parser.add_argument("--outdir", default="outputs", help="output directory")
     parser.add_argument("--npt", type=int, default=5000, help="number of points in the 1D curve")
+    parser.add_argument("--config",
+                        help=f"Geometry config name from config.py (default: {DEFAULT_CONFIG}); "
+                             "without --file an interactive menu lets you pick instead")
     parser.add_argument("--dist", type=float, default=None,
-                        help="override detector distance in mm (default: calibrated 1595.80)")
+                        help="override detector distance in mm (default: from the selected config; lab6_exp1: 1595.80)")
     parser.add_argument("--poni", default=None,
-                        help="override PONI as cx,cy in pixel (default: calibrated 1045.2,1022.0)")
+                        help="override PONI as cx,cy in pixel (default: from the selected config; lab6_exp1: 1045.2,1022.0)")
     parser.add_argument("--wavelength", type=float, default=None,
-                        help="override wavelength in Angstrom (default: 0.1223)")
+                        help="override wavelength in Angstrom (default: from the selected config; lab6_exp1: 0.1223)")
     parser.add_argument("--range", dest="range_", default="auto",
                         help="2θ range for the plots and the *_auto trimmed txt: "
                              "full, auto (default: per-material standard range), or "
@@ -60,14 +64,16 @@ def main() -> None:
                              "is then fixed by that material's known peak positions")
     args = parser.parse_args()
 
-    # 几何参数：默认任务三标定值，可用命令行覆盖
-    dist_m = CALIBRATED["dist_m"] if args.dist is None else args.dist * 1e-3
-    wavelength_m = CALIBRATED["wavelength_m"] if args.wavelength is None else args.wavelength * 1e-10
-    if args.poni is None:
-        poni1_m, poni2_m = CALIBRATED["poni1_m"], CALIBRATED["poni2_m"]
+    # --config 名字先校验：写错立即报错退出（argparse 风格：打印用法 +
+    # error 行、退出码 2），不用等到选完文件、读了图才发现
+    if args.config is not None:
+        config_name = args.config
+        try:
+            cfg = get_config(config_name)
+        except ValueError as err:
+            parser.error(str(err))
     else:
-        cx, cy = (float(v) for v in args.poni.split(","))
-        poni1_m, poni2_m = cx * CALIBRATED["pixel_size_m"], cy * CALIBRATED["pixel_size_m"]
+        config_name = cfg = None
 
     # 决定要跑哪些文件：给了 --file 就跑指定的；没给就弹交互菜单（同 view_diffraction），
     # 菜单支持多选（如 1,2）→ 循环里逐个处理，输出各自进 outputs/{数据名}/ 不会互相覆盖
@@ -76,6 +82,29 @@ def main() -> None:
     else:
         file_list = interactive_pick_files(Path(args.datadir))
 
+    # 几何配置三选一（2026-09-16 用户拍板"交互式"）：
+    #   1. --config 点名（命令行 / 脚本用，上面已校验过）
+    #   2. 交互模式下（没带 --file）选完数据文件，再弹菜单选一次配置
+    #   3. 其余情况用默认条目 DEFAULT_CONFIG（PyCharm 运行配置靠它）
+    if cfg is None:
+        if args.file is None:
+            config_name = pick_config(CONFIGS, DEFAULT_CONFIG)
+            cfg = CONFIGS[config_name]
+        else:
+            config_name = DEFAULT_CONFIG
+            cfg = get_config()
+    print(f"Using geometry config: {config_name}")
+
+    # 几何参数：默认选中条目的标定值，可用命令行覆盖
+    geom = cfg["geometry"]
+    dist_m = geom["dist_m"] if args.dist is None else args.dist * 1e-3
+    wavelength_m = geom["wavelength_m"] if args.wavelength is None else args.wavelength * 1e-10
+    if args.poni is None:
+        poni1_m, poni2_m = geom["poni1_m"], geom["poni2_m"]
+    else:
+        cx, cy = (float(v) for v in args.poni.split(","))
+        poni1_m, poni2_m = cx * geom["pixel_size_m"], cy * geom["pixel_size_m"]
+
     for path in file_list:
         image = load_diffraction_image(str(path))
         print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
@@ -83,13 +112,13 @@ def main() -> None:
         # 全角度方位角积分：azimuth_range=(-180, 180) 表示 0°~360° 一整圈
         tth, intensity = integrate_1d(
             image,
-            pixel_size_m=CALIBRATED["pixel_size_m"],
+            pixel_size_m=geom["pixel_size_m"],
             wavelength_m=wavelength_m,
             dist_m=dist_m,
             poni1_m=poni1_m,
             poni2_m=poni2_m,
-            rot1_deg=CALIBRATED["rot1_deg"],
-            rot2_deg=CALIBRATED["rot2_deg"],
+            rot1_deg=geom["rot1_deg"],
+            rot2_deg=geom["rot2_deg"],
             npt=args.npt,
         )
 
@@ -113,9 +142,9 @@ def main() -> None:
                       "(use --material lab6|lmfp); known-peak check skipped")
             lo, hi, info = select_auto_range(
                 tth, intensity, material, wavelength_m, image.shape,
-                CALIBRATED["pixel_size_m"], dist_m,
-                poni_px=(poni1_m / CALIBRATED["pixel_size_m"],
-                         poni2_m / CALIBRATED["pixel_size_m"]))
+                geom["pixel_size_m"], dist_m,
+                poni_px=(poni1_m / geom["pixel_size_m"],
+                         poni2_m / geom["pixel_size_m"]))
             print(f"Range: auto -> [{lo:.3f}, {hi:.3f}] deg "
                   f"({info['lo_reason']} / {info['hi_reason']})")
             if material is not None:

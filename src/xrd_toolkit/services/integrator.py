@@ -63,11 +63,11 @@ def calibrate_lab6(
         image : np.ndarray
             2D 衍射强度数组（load_diffraction_image 读出来的）
         pixel_size_m : float
-            探测器像素尺寸（米），任务给定 200 µm
+            探测器像素尺寸（米），本仪器 200 µm
         wavelength_m : float
-            X 光波长（米），任务给定 0.1223 Å
+            X 光波长（米），本实验 0.1223 Å
         dist0_m : float
-            探测器距离初值（米），任务给定 ~1.6 m，精修后得到精确值
+            探测器距离初值（米），本实验 ~1.6 m，精修后得到精确值
         center0_px : tuple
             环心初值（像素，cx, cy）。不传时自动定位
             （find_ring_center，亚像素精度 <1 px）
@@ -185,7 +185,8 @@ def integrate_1d(
             1D 曲线采样点数（默认 3000）
 
     备注（纠错点记录）：
-        物理/几何参数全部必传、没有默认值——统一从 config.CALIBRATED 取。
+        物理/几何参数全部必传、没有默认值——由脚本从 config.py 的
+        CONFIGS 注册表选中条目后取出来传进来。
         以前函数签名里也抄了一份默认值（dist=1.59579 等），和 config 是
         两份独立数据，改一处忘了另一处就会静默用旧值；必传参数让这种
         错误变成一眼可见的 TypeError。
@@ -248,7 +249,7 @@ def integrate_sectors(
         image : np.ndarray
             2D 衍射强度数组
         像素/波长/几何参数与 integrate_1d 相同（全部必传，
-        统一从 config.CALIBRATED 取，无默认值）
+        统一由脚本从 config.CONFIGS 选中条目传入，无默认值）
         n_sectors : int
             扇区数（默认 36，每 10° 一个）
 
