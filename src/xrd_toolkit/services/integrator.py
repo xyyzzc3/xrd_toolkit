@@ -15,6 +15,26 @@ from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（
 #   d = a / sqrt(h² + k² + l²)，a = 4.1568 Å（NIST 标准值）
 LAB6_NAME = "LaB6"
 
+# 束心偏离探测器中心的阈值（像素）：超过则切换自研 numpy 积分。
+# 实测（pyFAI 2026.5.0，合成 1 px 宽环验证）：integrate1d/2d 的径向
+# 分箱相对探测器中心而非 PONI——束心偏离 24 px 时峰高衰减 5 倍、
+# 124 px 时衰减 70 倍；integrate2d 在 5° 环行的存活扇区数随偏离骤降
+# （x0=200 时仅 2~3/36，只有 x0=1024 正确）。所有积分方法
+# （splitpixel/csr/numpy/cython/lut）、显式 radial_range/
+# azimuth_range/Detector 均无法修复，带掩膜同样失效。精修
+# （calibrate_lab6）在偏离大时同样失效。
+# 本数据 lmfp1_lab6 束心仅偏离 ~21 px 且真实峰宽（非 1 px 合成线），
+# 衰减可忽略，保持 pyFAI 路径（输出与已验证的历史结果一致）。
+OFF_CENTER_PX = 100.0
+
+
+def _is_off_center(image_shape, poni1_m, poni2_m, pixel_size_m) -> bool:
+    """束心是否偏离探测器中心超过 OFF_CENTER_PX（触发自研积分）。"""
+    h, w = image_shape
+    dx = poni1_m / pixel_size_m - w / 2.0
+    dy = poni2_m / pixel_size_m - h / 2.0
+    return float(np.hypot(dx, dy)) > OFF_CENTER_PX
+
 
 def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarray:
     """
@@ -39,6 +59,13 @@ def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarra
     return np.degrees(2 * np.arcsin(wavelength_a / (2 * d_angstrom)))
 
 
+# 迭代精修收敛参数（calibrate_lab6）：残差目标、改善阈值、最大轮数。
+# 初始几何通常已接近真值，1~2 轮即收敛；上限 3 轮防止个别数据集震荡。
+REFINE_TARGET_RESIDUAL_DEG = 0.05
+REFINE_TOL = 1e-5
+REFINE_MAX_ITER = 3
+
+
 def calibrate_lab6(
     image: np.ndarray,
     pixel_size_m: float = 200e-6,
@@ -50,11 +77,13 @@ def calibrate_lab6(
     """
     用 LaB6 标样自动校准探测器几何（pyFAI GeometryRefinement）。
 
-    原理（两步）：
-      1) extract_cp：按初始几何预测每个环的 2θ 位置，在预测位置附近
+    原理（迭代精修，最多 3 轮）：
+      1) extract_cp：按当前几何预测每个环的 2θ 位置，在预测位置附近
          搜索图像上的真实峰位，得到若干控制点（像素坐标 + 环序号）；
       2) refine2：最小二乘精修距离、环心、倾斜角，使各控制点的实测
-         2θ 逼近理论 2θ。
+         2θ 逼近理论 2θ；
+      3) 用精修后的几何重新提取控制点再精修，残差不再改善即停止
+         （通常 1~2 轮收敛，残差 < 0.05° 提前停止）。
 
     参数：
         image : np.ndarray
@@ -88,6 +117,9 @@ def calibrate_lab6(
         - extract_cp 返回 ControlPoints 对象，getList() 才是 N×3 数组，
           第三列为环序号（从 0 开始），不是 2θ。
         - GeometryRefinement.tth() 的输入为像素坐标，不是米。
+        - 束心偏离探测器中心过大（> OFF_CENTER_PX）时精修不可靠
+          （pyFAI 已知问题，见常量注释）：偏置摆法数据集应先取居中标样
+          图像精修距离/倾斜角（仪器属性），再配已知束心位置使用。
     """
     # pyFAI 内置 LaB₆ 校准数据（d1 = 4.1568 Å ≈ a）
     cal = get_calibrant(LAB6_NAME)
@@ -101,42 +133,70 @@ def calibrate_lab6(
         cy, cx = find_ring_center(image)
         center0_px = (cx, cy)
 
-    # 1) 按初值建几何，提取控制点
-    init_geo = Geometry(
-        dist=dist0_m,
-        poni1=center0_px[0] * pixel_size_m,
-        poni2=center0_px[1] * pixel_size_m,
-        detector=det,
-        wavelength=wavelength_m,
-    )
-    single = SingleGeometry("lab6", image, calibrant=cal, detector=det, geometry=init_geo)
-    control_points = np.asarray(single.extract_cp(max_rings=max_rings).getList())
+    # 偏置摆法提示：精修在部分环上不可靠（见常量注释），打印提示但
+    # 继续执行（居中标样正常流程不会触发）
+    off_px = float(np.hypot(center0_px[0] - image.shape[1] / 2.0,
+                            center0_px[1] - image.shape[0] / 2.0))
+    if off_px > OFF_CENTER_PX:
+        print(f"NOTE: beam center is {off_px:.0f} px off the detector center — "
+              f"refinement on partial rings is unreliable (pyFAI limitation); "
+              f"prefer calibrating distance/tilt on a centered standard image")
 
-    # 2) 精修：距离 + 环心 + rot1/rot2（rot3 保持 0）
-    ref = GeometryRefinement(
-        data=control_points,
-        calibrant=cal,
-        dist=dist0_m,
-        poni1=center0_px[0] * pixel_size_m,
-        poni2=center0_px[1] * pixel_size_m,
-        rot1=0.0,
-        rot2=0.0,
-        rot3=0.0,
-        detector=det,
-        wavelength=wavelength_m,
-    )
-    ref.refine2()
+    # 迭代精修：每次用当前几何重新提取控制点再 refine2，保留残差
+    # 改善的解。收敛判据：残差 < REFINE_TARGET_RESIDUAL_DEG 提前停止；
+    # 残差改善不足 REFINE_TOL 或达到最大轮数停止。
+    best = None   # (residual_deg, ref, control_points)，取残差最小的一轮
+    params = dict(dist=dist0_m,
+                  poni1=center0_px[0] * pixel_size_m,
+                  poni2=center0_px[1] * pixel_size_m,
+                  rot1=0.0, rot2=0.0, rot3=0.0)
+    for _ in range(REFINE_MAX_ITER):
+        # 1) 按当前参数建几何，提取控制点
+        geo = Geometry(
+            dist=params["dist"],
+            poni1=params["poni1"],
+            poni2=params["poni2"],
+            rot1=params["rot1"],
+            rot2=params["rot2"],
+            rot3=params["rot3"],
+            detector=det,
+            wavelength=wavelength_m,
+        )
+        single = SingleGeometry("lab6", image, calibrant=cal,
+                                detector=det, geometry=geo)
+        control_points = np.asarray(single.extract_cp(max_rings=max_rings).getList())
 
-    # 3) 残差检验：每个控制点的实测 2θ 与理论 2θ 的偏差
-    tth_theo = lab6_theoretical_2theta(wavelength_m, max_rings)
-    residuals = []
-    for ring in range(max_rings):
-        sub = control_points[control_points[:, 2] == ring]
-        if len(sub) == 0:
-            continue
-        measured = np.degrees(ref.tth(sub[:, 0], sub[:, 1]))  # 输入为像素坐标
-        residuals.append(measured - tth_theo[ring])
-    residual_deg = float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
+        # 2) 精修：距离 + 环心 + rot1/rot2（rot3 保持 0）
+        ref = GeometryRefinement(
+            data=control_points,
+            calibrant=cal,
+            dist=params["dist"],
+            poni1=params["poni1"],
+            poni2=params["poni2"],
+            rot1=params["rot1"],
+            rot2=params["rot2"],
+            rot3=params["rot3"],
+            detector=det,
+            wavelength=wavelength_m,
+        )
+        ref.refine2()
+
+        # 3) 残差检验，决定是否继续迭代
+        residual_deg = _control_point_residual(ref, control_points,
+                                               wavelength_m, max_rings)
+        if best is None or residual_deg < best[0] - REFINE_TOL:
+            best = (residual_deg, ref, control_points)
+            params = dict(dist=float(ref.dist),
+                          poni1=float(ref.poni1),
+                          poni2=float(ref.poni2),
+                          rot1=float(ref.rot1),
+                          rot2=float(ref.rot2),
+                          rot3=float(ref.rot3))
+        else:
+            break
+        if residual_deg < REFINE_TARGET_RESIDUAL_DEG:
+            break
+    residual_deg, ref, control_points = best
 
     return {
         "dist_m": float(ref.dist),
@@ -151,6 +211,26 @@ def calibrate_lab6(
         "rot3_deg": float(np.degrees(ref.rot3)),
         "residual_deg": residual_deg,
     }
+
+
+def _control_point_residual(ref, control_points, wavelength_m, max_rings) -> float:
+    """每个控制点的实测 2θ 与理论 2θ 偏差的 RMS（度）。
+
+    ref.tth(x, y) 的输入为像素坐标。残差是精修质量的标尺：
+    迭代精修以它判断收敛，返回值同时作为 calibrate_lab6 的
+    residual_deg。
+    """
+    tth_theo = lab6_theoretical_2theta(wavelength_m, max_rings)
+    residuals = []
+    for ring in range(max_rings):
+        sub = control_points[control_points[:, 2] == ring]
+        if len(sub) == 0:
+            continue
+        measured = np.degrees(ref.tth(sub[:, 0], sub[:, 1]))
+        residuals.append(measured - tth_theo[ring])
+    if not residuals:
+        return float("inf")   # 无任何控制点：残差无定义（视为最差）
+    return float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
 
 
 def integrate_1d(
@@ -195,7 +275,14 @@ def integrate_1d(
     备注：
         integrate1d 默认输出单位为 q（nm⁻¹）而非 2θ，必须显式传
         unit="2th_deg"，否则 x 轴为 q 值（0~90）。
+        束心偏离探测器中心超过 OFF_CENTER_PX（偏置摆法）时 pyFAI 径向
+        分箱错误，自动切换自研 numpy 积分（_integrate_1d_diy，对任意
+        束心位置正确；1D 曲线按存在的方位角归一化，与偏置摆法的
+        扇形矩阵自洽）。
     """
+    if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
+        return _integrate_1d_diy(image, pixel_size_m, dist_m,
+                                 poni1_m, poni2_m, npt)
     ai = AzimuthalIntegrator(
         dist=dist_m,
         poni1=poni1_m,
@@ -252,7 +339,16 @@ def integrate_sectors(
             tth_deg        1D 曲线的 2θ 坐标（度），长度 npt
             I2d            (npt, n_sectors) 矩阵，第 k 列 = 第 k 个扇区的强度
             chi_centers_deg  每个扇区中心方位角（度）
+
+    备注：束心偏离探测器中心超过 OFF_CENTER_PX（偏置摆法）时 pyFAI
+    径向分箱错误，自动切换自研 numpy 扇形积分
+    （_integrate_sectors_diy，对任意束心位置正确）；此时 χ 标注由
+    _covered_azimuth_labels 给出图像实际覆盖的方位角跨度（部分环
+    摆法下不是整圈 −180°~180°，瀑布图 y 轴如实标注）。
     """
+    if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
+        return _integrate_sectors_diy(image, pixel_size_m, dist_m,
+                                      poni1_m, poni2_m, n_sectors, npt)
     ai = AzimuthalIntegrator(
         dist=dist_m,
         poni1=poni1_m,
@@ -271,14 +367,117 @@ def integrate_sectors(
     if i2d.shape[0] != npt and i2d.shape[1] == npt:
         i2d = i2d.T
     chi_centers_deg = np.asarray(chi, dtype=float)
-    # 束心在图像内时 pyFAI 返回覆盖 -180°~180° 的整圈分箱；束心在图像外
-    # 时只返回图像实际覆盖的方位角范围（长度仍为 n_sectors，数值不对应
-    # 全局扇区），此时退回均匀分箱，保证文件名/表头的扇区标注正确
+    # 异常兜底：pyFAI 返回的 χ 数组长度不对或明显不是整圈分箱时，
+    # 用图像实际覆盖的方位角范围重建标注，保证文件名/表头的
+    # 扇区标注正确（近居中摆法时束心在图像内 → 整圈分箱）
     if len(chi_centers_deg) != n_sectors or \
             chi_centers_deg.max() - chi_centers_deg.min() < 350.0:
-        chi_centers_deg = np.linspace(-180 + 180 / n_sectors,
-                                      180 - 180 / n_sectors, n_sectors)
+        chi_centers_deg = _covered_azimuth_labels(
+            (poni1_m / pixel_size_m, poni2_m / pixel_size_m),
+            image.shape, n_sectors)
     return tth_deg, i2d, chi_centers_deg
+
+
+def _polar_bins(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt):
+    """逐像素极坐标分箱：返回 (tth_grid, idx, chi_px)。
+
+    idx[i, j] = 像素 (i, j) 的 2θ 分箱号（0..npt-1），
+    chi_px[i, j] = 像素的方位角（度，约定同 integrate2d 返回值：
+    atan2(dy, dx)，0° 沿 +x 向右、逆时针为正，图像下方 = +90°）。
+    _integrate_1d_diy 与 _integrate_sectors_diy 共用此分箱，保证
+    1D 曲线 = 扇形矩阵的加权平均（自洽）。
+    """
+    h, w = image.shape
+    x0 = poni1_m / pixel_size_m
+    y0 = poni2_m / pixel_size_m
+    rows, cols = np.mgrid[0:h, 0:w]
+    r_px = np.hypot(cols - x0, rows - y0)
+    tth_px = np.degrees(np.arctan(r_px * pixel_size_m / dist_m))
+    t_max = float(np.degrees(np.arctan(
+        np.hypot(max(x0, w - x0), max(y0, h - y0)) * pixel_size_m / dist_m)))
+    tth_grid = np.linspace(0.0, t_max, npt)
+    idx = np.clip(np.digitize(tth_px, tth_grid) - 1, 0, npt - 1)
+    chi_px = np.degrees(np.arctan2(rows - y0, cols - x0))
+    return tth_grid, idx, chi_px
+
+
+def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt):
+    """自研 numpy 方位角积分（1D），束心偏离探测器中心过大时使用。
+
+    pyFAI 2026.x 在该条件下径向分箱错误（见 OFF_CENTER_PX 注释），
+    此函数用逐像素极坐标直接分箱，对任意束心位置都正确：
+      1) 每个像素的 2θ = atan(到束心距离 · pixel / dist)；
+      2) digitize 到 npt 个等距 2θ 分箱；
+      3) 每箱强度 = 箱内像素强度平均（bincount 累加 / 计数），
+         空箱填 NaN。
+    强度按存在的方位角归一化——曲线上看不到环被截断的失效，
+    与偏置摆法的扇形矩阵自洽（曲线 = 各扇区加权平均）。
+    """
+    tth_grid, idx, _ = _polar_bins(image, pixel_size_m, dist_m,
+                                   poni1_m, poni2_m, npt)
+    flat = idx.ravel()
+    counts = np.bincount(flat, minlength=npt)
+    sums = np.bincount(flat, weights=image.ravel().astype(np.float64),
+                       minlength=npt)
+    intensity = np.full(npt, np.nan)
+    alive = counts > 0
+    intensity[alive] = sums[alive] / counts[alive]
+    return tth_grid, intensity
+
+
+def _integrate_sectors_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m,
+                           n_sectors, npt):
+    """自研 numpy 扇形积分（2D），束心偏离探测器中心过大时使用。
+
+    与 _integrate_1d_diy 相同的径向分箱（共享 2θ 网格与箱号），再按
+    每个像素的方位角 χ 划分扇区：扇区 k 覆盖
+    [−180°+width·k, −180°+width·(k+1))。死角（箱内无像素）填 NaN。
+    束心在图像外时部分扇区整列死区，即部分环数据的真实形态。
+    返回 (tth_deg, I2d, chi_centers_deg)，I2d 形状 (npt, n_sectors)。
+    """
+    tth_grid, idx, chi_px = _polar_bins(image, pixel_size_m, dist_m,
+                                        poni1_m, poni2_m, npt)
+    width = 360.0 / n_sectors
+    I2d = np.full((npt, n_sectors), np.nan)
+    img64 = image.astype(np.float64)
+    for k in range(n_sectors):
+        c0 = -180.0 + width * k
+        sel = (chi_px >= c0) & (chi_px < c0 + width)
+        flat = idx[sel]
+        counts = np.bincount(flat, minlength=npt)
+        sums = np.bincount(flat, weights=img64[sel], minlength=npt)
+        col = np.full(npt, np.nan)
+        alive = counts > 0
+        col[alive] = sums[alive] / counts[alive]
+        I2d[:, k] = col
+    chi = np.linspace(-180.0 + width / 2.0, 180.0 - width / 2.0, n_sectors)
+    return tth_grid, I2d, chi
+
+
+def _covered_azimuth_labels(poni_px, image_shape, n_sectors):
+    """图像实际覆盖的方位角范围 → n_sectors 个等距扇区中心 χ（度）。
+
+    束心在图像内 → 整圈分箱（中心从 −180°+半宽到 180°−半宽）。
+    束心在图像外 → 只覆盖有限方位角跨度：矩形在图像外视角的张角
+    < 180°，四个角相对束心的 χ = atan2(corner_y − y0, corner_x − x0)
+    （约定同 integrate2d 返回值：0° 沿 +x 向右、逆时针为正）。以
+    "指向图像中心的方向"为基准展开到同一圈（±180° 断层可能穿过
+    图像方向，直接取 min/max 会取到背向图像的空半面），跨度 =
+    展开后最大 − 最小，等距取 n_sectors 个中心值——瀑布图 y 轴
+    标注真实覆盖的方位角，不假装整圈。
+    """
+    h, w = image_shape
+    x0, y0 = poni_px
+    if 0 < x0 < w and 0 < y0 < h:
+        return np.linspace(-180.0 + 180.0 / n_sectors,
+                           180.0 - 180.0 / n_sectors, n_sectors)
+    phi0 = float(np.degrees(np.arctan2(h / 2.0 - y0, w / 2.0 - x0)))
+    corners = np.array([[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]])
+    chi_c = np.degrees(np.arctan2(corners[:, 1] - y0, corners[:, 0] - x0))
+    d = (chi_c - phi0 + 180.0) % 360.0 - 180.0   # d ∈ (−180°, 180°]
+    chi_unw = phi0 + d
+    lo, hi = float(chi_unw.min()), float(chi_unw.max())
+    return np.linspace(lo, hi, n_sectors)
 
 
 def calibrate_and_integrate(

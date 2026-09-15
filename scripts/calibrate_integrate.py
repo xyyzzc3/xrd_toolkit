@@ -44,7 +44,10 @@ def main() -> None:
     parser.add_argument("--dist0", type=float, default=1600.0, help="initial detector distance in mm")
     parser.add_argument("--center", default=None,
                         help="initial ring center cx,cy in pixel; if not given, "
-                             "auto-localized with find_ring_center (<1 px accuracy)")
+                             "auto-localized with find_ring_center (<1 px accuracy). "
+                             "Pass it explicitly for off-center-beam (partial-ring) "
+                             "datasets: the auto-localizer needs full rings, and "
+                             "refinement is unreliable there (see README)")
     parser.add_argument("--max-rings", type=int, default=16, help="number of rings used for calibration")
     parser.add_argument("--range", dest="range_", default="auto",
                         help="2θ range for the plot and the *_auto trimmed txt: "
@@ -160,6 +163,12 @@ def main() -> None:
                     print(f"  {line}")
                 for line in info.get("warnings", []):
                     print(f"  WARNING: {line}")
+            cov = info.get("azimuth_coverage")
+            if cov is not None and cov < 0.95:
+                # 偏置摆法（部分环）提示：完整环变少，但 2θ 范围更宽
+                print(f"Partial-ring geometry: max azimuth coverage ≈ "
+                      f"{cov*360:.0f}° (off-center beam; fewer complete "
+                      f"rings but a wider 2θ range)")
         else:
             lo, hi = sel
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")

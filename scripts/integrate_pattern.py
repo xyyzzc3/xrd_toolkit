@@ -125,10 +125,10 @@ def main() -> None:
         # ---- 2θ 有效区间（默认 auto，与 sector_waterfall 同一套逻辑）----
         # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
         # auto：下界 = 材料专属标准（lmfp 第一峰 −0.3°；lab6 光环结束点
-        # −0.6°，约 1.0°）；上界 = 数据失效点自动检测（单曲线用几何
-        # 计算"80% 方位角仍在探测器内"的位置，与瀑布图实测 7.44° 一致）。
-        # 传入本次积分实际使用的 wavelength/dist/poni（可能被命令行
-        # 覆盖），保证区间计算与积分同一套几何。
+        # −0.6°，约 1.0°）；上界 = 数据失效点自动检测（单曲线无扇区
+        # 信息，用几何计算弧覆盖率跌破自身峰值 50% 的位置，与瀑布图
+        # 实测值一致）。传入本次积分实际使用的 wavelength/dist/poni
+        # （可能被命令行覆盖），保证区间计算与积分同一套几何。
         sel = parse_range_arg(args.range_)
         if sel == "full":
             lo = hi = None
@@ -153,6 +153,12 @@ def main() -> None:
                     print(f"  {line}")
                 for line in info.get("warnings", []):
                     print(f"  WARNING: {line}")
+            cov = info.get("azimuth_coverage")
+            if cov is not None and cov < 0.95:
+                # 偏置摆法（部分环）提示：完整环变少，但 2θ 范围更宽
+                print(f"Partial-ring geometry: max azimuth coverage ≈ "
+                      f"{cov*360:.0f}° (off-center beam; fewer complete "
+                      f"rings but a wider 2θ range)")
         else:
             lo, hi = sel
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")

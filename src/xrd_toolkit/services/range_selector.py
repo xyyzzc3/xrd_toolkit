@@ -10,16 +10,21 @@
 #     把整条尾部包含进区间）。
 # 下界（材料未知）→ 数据驱动兜底：缓坡爬升起点 − 0.3°。
 # 上界 = 数据失效点（自动检测，与材料无关）：环被方形探测器截断是
-# 纯几何效应，从某个 2θ 起多数数据开始失效——
-#   有扇区矩阵（36 条曲线）：统计每个 2θ 处存活扇区的比例，
-#     跌破 80% 的位置（两种材料实测同为 7.438°）；
+# 纯几何效应，从某个 2θ 起数据开始失效。失效判据用"弧覆盖率"——
+# 环上落在探测器内的方位角比例，失效点 = 覆盖率跌破自身峰值的
+# REL_COVERAGE_THRESHOLD（50%）的位置。峰值取决于束心摆法：
+#   居中摆法：峰值 100%（小半径处整环可见），判据即"覆盖率 < 50%"；
+#   偏置摆法（束心放探测器边缘/角落以看到更高 2θ 的环）：峰值只有
+#     50%（半环）或 25%（四分之一环），按各摆法自身峰值相对判定
+#     （绝对阈值在此摆法下从第一个 2θ 起就失效）；
+#   束心在图像外：覆盖率先升后降，从峰值之后才开始判定。
+#   有扇区矩阵（36 条曲线）：统计每个 2θ 处存活扇区的比例（实测）；
 #   单曲线脚本（integrate_1d 按存在的方位角归一化，曲线上看不到
-#     失效）：由几何直接计算"80% 方位角仍在探测器内"的位置
-#     （geometric_failure_point，与实测 7.438° 一致——失效本就是
-#     几何效应，两法互为印证）。
-#   无扇区信息且无束心坐标时退回完整环极限（7.163°）。
-# 质检：缓坡检测位置与第一已知峰对照、失效点与完整环极限对照打印；
-# 偏差异常输出 WARNING，区间始终按标准/检测结果（不随单份数据漂移）。
+#     失效）：由几何直接计算（geometric_failure_point，两法互为印证）。
+#   无扇区信息且无束心坐标时退回完整环极限（7.163°，仅居中摆法有意义）。
+# 质检：缓坡检测位置与第一已知峰对照、失效点与完整环极限对照（仅近
+# 居中摆法）打印；偏差异常输出 WARNING，区间始终按标准/检测结果
+# （不随单份数据漂移）。
 #
 # 材料表存晶格参数而非 2θ 的原因：文献 2θ 几乎都在 Cu Kα（λ=1.5406 Å）
 # 下测得，换仪器（本项目 λ=0.1223 Å 同步辐射）数值全部改变；d 值是
@@ -93,6 +98,59 @@ def material_peaks(material: str, wavelength_m: float, max_hkl: int = 4):
     return sorted((t, "".join(map(str, hkl))) for t, hkl in peaks.items())
 
 
+# ---- 弧覆盖率（失效判据的几何基础）----
+# 环被探测器截断后仍会留下残缺弧段，"数据失效"的判据是弧覆盖率：
+# 半径 r 的环上落在探测器内的方位角比例。覆盖率峰值取决于束心摆法
+# （居中 100%、束心在边缘 50%、在角落 25%、在图像外更低），失效点
+# = 覆盖率跌破自身峰值该比例的位置——相对判据对所有摆法统一适用。
+# 调整判据严格度只需修改此常量。
+REL_COVERAGE_THRESHOLD = 0.5
+
+
+def _coverage_profile(poni_px, image_shape, n_azim=720):
+    """半径格点及其弧覆盖率曲线 cov(r)（纯几何量，与图像内容无关）。
+
+    对每个半径 r：以束心为圆心、r 为半径的圆上均匀取 n_azim 个点，
+    统计落在探测器矩形内的比例。半径只取环可能与图像相交的范围：
+    从束心到最近边缘（环首次接触图像边界；束心在图像外时为 1）到
+    最远角（之后覆盖率恒为 0）。注意不能用"最近角"作起点——居中
+    摆法下最近角（对角线中点 1448 px）远于最近边缘（1024 px），
+    会漏掉覆盖率 = 1 的整段半径区间。
+    """
+    h, w = image_shape
+    x0, y0 = poni_px
+    corners = np.array([[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]])
+    d = np.hypot(corners[:, 0] - x0, corners[:, 1] - y0)
+    r_min = max(1.0, np.floor(min(x0, w - x0, y0, h - y0)))
+    r_grid = np.arange(r_min, np.ceil(d.max()) + 2.0)
+    phi = np.linspace(0.0, 2.0 * np.pi, n_azim, endpoint=False)
+    # 广播：一次计算全部半径 × 方位角的环上点坐标
+    x = x0 + r_grid[:, None] * np.cos(phi)[None, :]
+    y = y0 + r_grid[:, None] * np.sin(phi)[None, :]
+    inside = (x >= 0) & (x <= w) & (y >= 0) & (y <= h)
+    return r_grid, inside.mean(axis=1)
+
+
+def arc_coverage_fraction(poni_px, image_shape, r_px, n_azim=720) -> float:
+    """半径 r_px 的环的弧覆盖率（0~1）：环上落在探测器内的方位角比例。"""
+    h, w = image_shape
+    x0, y0 = poni_px
+    phi = np.linspace(0.0, 2.0 * np.pi, n_azim, endpoint=False)
+    x = x0 + r_px * np.cos(phi)
+    y = y0 + r_px * np.sin(phi)
+    return float(((x >= 0) & (x <= w) & (y >= 0) & (y <= h)).mean())
+
+
+def peak_azimuth_coverage(poni_px, image_shape) -> float:
+    """该摆法下弧覆盖率的最大值（0~1）。
+
+    居中摆法 1.0、束心在边缘 0.5、在角落 0.25、在图像外更低。
+    脚本据此提示"偏置摆法"（部分环模式），相对失效判据以此峰值为基准。
+    """
+    _, cov = _coverage_profile(poni_px, image_shape)
+    return float(cov.max())
+
+
 def complete_ring_limit(image_shape, pixel_size_m: float, dist_m: float,
                         poni_px=None) -> float:
     """完整环极限 2θ：环半径达到"束心到图像边缘最近距离"时的角度，
@@ -156,52 +214,54 @@ LO_STANDARDS = {
 }
 
 
-def detect_failure_end(tth, data, hi_geom, live_threshold=0.8):
+def detect_failure_end(tth, data, hi_geom, rel_threshold=REL_COVERAGE_THRESHOLD):
     """自动检测"数据大面积失效"的上界（扇区数据）。
 
     环被方形探测器截断是纯几何效应、与材料无关：从某个 2θ 起，指向
     图像边缘的扇区先被截断、指向角落的仍可见残缺环，存活比例随 2θ
-    单调下降（实测：7.3° 全部存活，7.44° 失去 20%，8.42° 失去一半）。
+    单调下降。存活比例的峰值 = 该摆法实测的最大覆盖（居中 100%、
+    半环 50%、四分之一环 25%），失效点 = 存活比例跌破峰值的
+    rel_threshold（50%）的位置——相对判据对所有摆法统一适用，
+    绝对阈值在偏置摆法下从第一个 2θ 起就失效。
 
     data = (n_sectors, n) 扇区矩阵：每扇区噪声线 = 该扇区 p90 的 5%；
     强度超过噪声线视为存活（死角处无积分值为 NaN，NaN 比较为 False，
-    视为失效）。从完整环极限前 0.3° 起扫描，首个跌破
-    live_threshold(80%) 的位置即失效点（两种材料实测同为 7.438°，
-    与 geometric_failure_point 的几何值一致——失效本是几何效应，
-    两法互为印证）。未检测到失效点（数据异常）→ 退回完整环极限。
+    视为失效）。从几何失效点前 1.0° 起扫描（居中数据实测失效点与
+    几何值相差 <0.5°，偏置摆法偏差可能更大，窗口放宽避免漏检）。
+    未检测到失效点（数据异常）→ 退回几何失效点。
     """
     alpha = 0.05 * np.nanpercentile(data, 90, axis=1)
     frac = (data > alpha[:, None]).mean(axis=0)
-    seg = tth >= hi_geom - 0.3
-    idx = np.flatnonzero(seg & (frac < live_threshold))
+    frac_peak = float(np.max(frac))
+    seg = tth >= hi_geom - 1.0
+    idx = np.flatnonzero(seg & (frac < rel_threshold * frac_peak))
     if len(idx) == 0:
         return hi_geom
     return float(tth[idx[0]])
 
 
 def geometric_failure_point(poni_px, image_shape, pixel_size_m, dist_m,
-                            live_threshold=0.8):
-    """几何精确的"数据失效点"：存活方位角比例跌破 80% 的 2θ。
+                            rel_threshold=REL_COVERAGE_THRESHOLD):
+    """几何精确的"数据失效点"：弧覆盖率跌破自身峰值一定比例的 2θ。
 
-    环被探测器截断是纯几何效应：给定束心与探测器尺寸，半径 r 的环上
-    落在探测器内的点的比例可精确计算。从完整环极限的半径起逐像素
-    外推，找到存活比例 <80% 的半径 → 2θ（与 detect_failure_end 的
-    实测值 7.438° 一致）。单曲线脚本（integrate_pattern /
-    calibrate_integrate）无扇区信息，使用该几何值；瀑布图使用实测值
-    并将两者对照打印。
+    环被截断是纯几何效应：由弧覆盖率曲线 cov(r)（_coverage_profile）
+    找覆盖率峰值（该摆法能达到的最大覆盖），失效点 = 峰值之后首个
+    cov < rel_threshold × 峰值 的半径 → 2θ。
+      居中摆法：峰值 100%，判据即绝对覆盖率阈值；
+      偏置摆法（束心在边缘/角落）：峰值 50%/25%，按自身峰值相对判定；
+      束心在图像外：cov(r) 先升后降，从峰值之后才开始判定。
+    与 detect_failure_end 的实测值一致（失效本是几何效应，两法互为
+    印证）。单曲线脚本（integrate_pattern / calibrate_integrate）无
+    扇区信息，使用该几何值；瀑布图使用实测值并将两者对照打印。
     """
-    h, w = image_shape
-    x0, y0 = poni_px
-    r_complete = min(x0, w - x0, y0, h - y0)
-    r_corner = np.hypot(max(x0, w - x0), max(y0, h - y0))
-    theta = np.linspace(0.0, 2.0 * np.pi, 3600, endpoint=False)
-    for r in np.arange(np.ceil(r_complete), r_corner + 1.0):
-        x = x0 + r * np.cos(theta)
-        y = y0 + r * np.sin(theta)
-        live = float(((x >= 0) & (x <= w) & (y >= 0) & (y <= h)).mean())
-        if live < live_threshold:
-            return float(np.degrees(np.arctan(r * pixel_size_m / dist_m)))
-    return float(np.degrees(np.arctan(r_complete * pixel_size_m / dist_m)))
+    r_grid, cov = _coverage_profile(poni_px, image_shape)
+    i_peak = int(np.argmax(cov))
+    below = np.flatnonzero(cov[i_peak:] < rel_threshold * cov[i_peak])
+    if len(below) == 0:
+        r_fail = r_grid[-1]   # 覆盖率始终高于阈值：数据延伸到最远角
+    else:
+        r_fail = r_grid[i_peak + below[0]]
+    return float(np.degrees(np.arctan(r_fail * pixel_size_m / dist_m)))
 
 
 def select_auto_range(tth, curve, material, wavelength_m, image_shape,
@@ -212,25 +272,34 @@ def select_auto_range(tth, curve, material, wavelength_m, image_shape,
       − 0.3°；lab6：光环结束点 − 0.6°，约 1.0°），同一材料的所有
       数据共用同一标准。材料未知 → 缓坡爬升起点 − PEAK_MARGIN_DEG
       （数据驱动兜底）。
-    上界：数据失效点自动检测——提供扇区矩阵 I2d 时用实测存活比例
-      <80%（实测 7.438°）；单曲线脚本用几何精确值
-      geometric_failure_point（与实测一致）；两者皆无时退回完整环
-      极限。扇区实测值与几何预期对照打印，偏差大时告警。
+    上界：数据失效点自动检测——失效判据为弧覆盖率跌破自身峰值的
+      50%（居中摆法峰值 100%、半环 50%、四分之一环 25%，相对判据
+      对所有摆法统一适用）。提供扇区矩阵 I2d 时用实测存活比例；
+      单曲线脚本用几何精确值 geometric_failure_point（与实测一致）；
+      两者皆无时退回完整环极限。扇区实测值与几何预期对照打印，
+      偏差大时告警。
     质检：缓坡检测位置与第一已知峰对照、失效点与完整环极限对照
-      打印；异常输出 WARNING，区间始终按标准/检测结果。
+      （仅近居中摆法）打印；异常输出 WARNING，区间始终按标准/检测结果。
     """
-    hi_geom = complete_ring_limit(image_shape, pixel_size_m, dist_m, poni_px)
+    hi_ring = complete_ring_limit(image_shape, pixel_size_m, dist_m, poni_px)
+    if poni_px is not None:
+        hi_geom = geometric_failure_point(poni_px, image_shape, pixel_size_m, dist_m)
+        cov_peak = peak_azimuth_coverage(poni_px, image_shape)
+    else:
+        hi_geom, cov_peak = hi_ring, None
     detected = detect_halo_end(tth, curve)
     if I2d is not None:
-        # 实测：扇区存活比例 <80%（数据驱动）
+        # 实测：扇区存活比例跌破自身峰值的 50%（数据驱动，所有摆法统一判据）
         hi = detect_failure_end(tth, I2d, hi_geom)
         hi_reason = (f"measured data-failure point {hi:.3f}° "
-                     f"(<80% of sectors alive)")
+                     f"(azimuth coverage < {REL_COVERAGE_THRESHOLD*100:.0f}% "
+                     f"of its maximum)")
     elif poni_px is not None:
-        # 单曲线脚本：无扇区信息，用几何精确值（与实测 7.438° 一致）
-        hi = geometric_failure_point(poni_px, image_shape, pixel_size_m, dist_m)
+        # 单曲线脚本：无扇区信息，用几何精确值（与实测一致）
+        hi = hi_geom
         hi_reason = (f"geometric data-failure point {hi:.3f}° "
-                     f"(<80% azimuth coverage)")
+                     f"(azimuth coverage < {REL_COVERAGE_THRESHOLD*100:.0f}% "
+                     f"of its maximum)")
     else:
         hi = hi_geom
         hi_reason = f"complete-ring limit {hi_geom:.3f}° (fallback)"
@@ -240,17 +309,21 @@ def select_auto_range(tth, curve, material, wavelength_m, image_shape,
         "checks": [],
         "n_known_peaks": 0,
         "warnings": [],
+        "azimuth_coverage": cov_peak,   # 脚本据此提示偏置摆法（居中 = 1.0）
     }
     if I2d is not None and poni_px is not None:
-        # 质检：实测失效点 vs 几何预期（应一致，失效是纯几何效应）
-        hi_exact = geometric_failure_point(poni_px, image_shape, pixel_size_m, dist_m)
+        # 质检：实测失效点 vs 几何预期。实测值按 10° 扇区量化（角区
+        # 扇区只要沾到残余弧段就算存活），系统性晚于连续覆盖率判据，
+        # 且量化偏差随覆盖率峰值下降而增大（居中实测 8.42° vs 几何
+        # 7.93° ≈ 0.5°；半环摆法 ≈ 1.0°）。容差按失效点本身缩放，
+        # 超出才告警（束心/掩膜错误会差出数度）。
         info["checks"].append(
             f"measured failure point {hi:.3f} deg vs geometric expectation "
-            f"{hi_exact:.3f} deg (delta = {abs(hi - hi_exact):.3f} deg)")
-        if abs(hi - hi_exact) > 0.2:
+            f"{hi_geom:.3f} deg (delta = {abs(hi - hi_geom):.3f} deg)")
+        if abs(hi - hi_geom) > max(0.8, 0.12 * hi_geom):
             info["warnings"].append(
                 f"measured data-failure point {hi:.3f} deg deviates from the "
-                f"geometric expectation {hi_exact:.3f} deg; keeping the measured "
+                f"geometric expectation {hi_geom:.3f} deg; keeping the measured "
                 f"value (check mask/beam center)")
     if material is not None:
         known = material_peaks(material, wavelength_m)
@@ -282,10 +355,20 @@ def select_auto_range(tth, curve, material, wavelength_m, image_shape,
                     f"detected halo end {detected:.3f} deg is inconsistent "
                     f"with the {material} first peak {first:.3f} deg; keeping "
                     f"the standard (check this dataset or the geometry)")
-        # 失效点 vs 完整环极限对照（失效点应略晚于极限，残缺环仍有残余信号）
-        info["checks"].append(
-            f"data failure point {hi:.3f} deg vs complete-ring limit "
-            f"{hi_geom:.3f} deg (delta = {hi - hi_geom:.3f} deg)")
+        # 失效点 vs 完整环极限对照：失效点应晚于极限（残缺环仍有残余
+        # 信号，50% 相对判据下约晚 1.2°）。该对照仅对近居中摆法有意义
+        # （完整环半径 > 100 px）；偏置摆法下完整环极限趋近 0 甚至无解，
+        # 跳过对照。
+        h, w = image_shape
+        if poni_px is not None:
+            x, y = poni_px
+            r_complete_px = min(x, w - x, y, h - y)
+        else:
+            r_complete_px = min(h, w) / 2.0
+        if r_complete_px > 100.0:
+            info["checks"].append(
+                f"data failure point {hi:.3f} deg vs complete-ring limit "
+                f"{hi_ring:.3f} deg (delta = {hi - hi_ring:.3f} deg)")
         _verify_against_material(tth, curve, lo, hi, material, wavelength_m, info)
     else:
         lo = max(0.0, detected - PEAK_MARGIN_DEG)

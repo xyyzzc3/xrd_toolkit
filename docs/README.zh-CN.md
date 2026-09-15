@@ -21,7 +21,7 @@ pip install -e .
 
 三个消费脚本（view_diffraction / integrate_pattern / sector_waterfall）还支持 `--config` 点名选择几何配置条目（默认 lmfp1_lab6）。交互模式下（不带 `--file`）选完数据文件后，会再弹一个配置菜单让你选一次（回车 = 默认条目）。新增批次：先用 calibrate_integrate.py 标定，脚本会在精修结果后打印一段可直接粘贴进 config.py `CONFIGS` 的条目模板，改好 key（如 lmfp2_lab6）后即可用 `--config` 取用。
 
-三个积分脚本（calibrate_integrate / integrate_pattern / sector_waterfall）都支持 `--range`：`full`（完整数据，txt 母版永远存这一版）、`auto`（默认，自动选区）、`lo,hi`（手动指定，如 1.3,7.3）。`auto` 的下界按材料专属标准选取（粉末样品：第一个已知峰 − 0.3°；LaB₆ 标样：检测到的光环结束点 − 0.6°，≈1.0°），上界自动检测"数据失效点"——环被方形探测器切掉、多数扇区死亡的位置（实测 ≈7.44°，与几何精确计算互相印证）。
+三个积分脚本（calibrate_integrate / integrate_pattern / sector_waterfall）都支持 `--range`：`full`（完整数据，txt 母版永远存这一版）、`auto`（默认，自动选区）、`lo,hi`（手动指定，如 1.3,7.3）。`auto` 的下界按材料专属标准选取（粉末样品：第一个已知峰 − 0.3°；LaB₆ 标样：检测到的光环结束点 − 0.6°，≈1.0°），上界自动检测"数据失效点"——环被方形探测器切掉的位置。失效判据是相对弧覆盖率：环上落在探测器内的方位角比例跌破自身峰值的 50%（居中摆法即"覆盖率 <50%"，约 7.9°；束心偏置摆法峰值只有 50%/25%，按各摆法自身峰值相对判定，失效点自动后移），实测值与几何精确计算互相印证。
 
 ```bash
 python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir outputs
@@ -45,7 +45,7 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--wavelength`：X 光波长（Å）
 - `--pixel`：探测器像素尺寸（µm）
 - `--dist0`：探测器距离初值（mm），脚本用 pyFAI 自动精修出精确值
-- `--center`：环心初值 cx,cy（像素，不传则自动定位，精度 <1 px）
+- `--center`：环心初值 cx,cy（像素，不传则自动定位，精度 <1 px）。偏置束心（部分环）数据必须显式传入：自动定位需要完整环，且该摆法下精修不可靠——距离/倾斜角请用居中标样图像标定
 - `--max-rings`：参与校准的环数（默认 16）
 - `--range`：2θ 区间——`full` / `auto`（默认，材料专属标准）/ `lo,hi` 度（如 1.3,7.3）；完整版 txt 永远保存
 
@@ -86,7 +86,7 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 │   ├── services/data_loader.py # 数据读取（fabio）
 │   ├── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
 │   └── services/range_selector.py # 自动 2θ 区间选择（材料专属标准）
-├── tests/                      # 测试（暂空，后续补）
+├── tests/                      # 合成图像单元测试（unittest）：部分环几何 + 自研积分回归护栏
 ├── environment.yml             # conda 环境定义（一键创建环境）
 ├── pyproject.toml              # 项目元信息与依赖
 └── README.md                   # 项目说明

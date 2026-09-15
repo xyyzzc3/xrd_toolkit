@@ -111,17 +111,20 @@ def main() -> None:
             **geom,
         )
         n = args.n_sectors
-        width = 360.0 / n
+        # 扇区宽度取自实际返回的 χ 标注：偏置摆法下 χ 跨度不足 360°，
+        # 每扇区宽度相应变窄（如半环摆法 36 扇区各 ~5°）
+        width = float(chi[1] - chi[0]) if n > 1 else 360.0
         print(f"Sectors: {n} (one per {width:.1f}°), {len(tth)} points per curve")
 
         # ---- 2θ 有效区间（默认 auto）----
         # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
         # auto：下界 = 材料专属标准（lmfp 第一峰 −0.3°；lab6 光环结束点
         # −0.6°，约 1.0°；同一材料所有数据共用同一标准）；上界 = 数据
-        # 失效点自动检测（36 条曲线存活比例跌破 80% 的位置，实测 7.44°）。
-        # 材料未知时下界退回缓坡检测。细节见 services/range_selector.py。
+        # 失效点自动检测（弧覆盖率跌破自身峰值的 50%，居中/偏置摆法
+        # 统一判据）。材料未知时下界退回缓坡检测。
+        # 细节见 services/range_selector.py。
         sel = parse_range_arg(args.range_)
-        mean_curve = np.nanmean(I2d, axis=1)   # 36 扇区平均曲线（区间检测用）
+        mean_curve = np.nanmean(I2d, axis=1)   # 扇区平均曲线（区间检测用）
         if sel == "full":
             lo = hi = None
             print("Range: full")
@@ -134,7 +137,7 @@ def main() -> None:
             lo, hi, info = select_auto_range(
                 tth, mean_curve, material, geom["wavelength_m"],
                 image.shape, geom["pixel_size_m"], geom["dist_m"],
-                I2d=I2d.T,    # 36 条扇区曲线 → 上界按存活比例 <80% 自动检测
+                I2d=I2d.T,    # 36 条扇区曲线 → 上界按弧覆盖率 <50% 峰值自动检测
                 poni_px=(geom["poni1_m"] / geom["pixel_size_m"],
                          geom["poni2_m"] / geom["pixel_size_m"]))
             print(f"Range: auto -> [{lo:.3f}, {hi:.3f}] deg "
@@ -146,6 +149,13 @@ def main() -> None:
                     print(f"  {line}")
                 for line in info.get("warnings", []):
                     print(f"  WARNING: {line}")
+            cov = info.get("azimuth_coverage")
+            if cov is not None and cov < 0.95:
+                # 偏置摆法（部分环）提示：覆盖率不足整圈，环变弧段，
+                # 各扇区信噪比随弧长缩短而下降
+                print(f"Partial-ring geometry: max azimuth coverage ≈ "
+                      f"{cov*360:.0f}° (off-center beam; noise per ring "
+                      f"increases as arcs shorten)")
         else:
             lo, hi = sel
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
@@ -164,7 +174,7 @@ def main() -> None:
             tth_trim, I2d_trim = None, None
             tth_plot, I2d_plot = tth, I2d
         for k in range(n):
-            c0 = -180 + width * k
+            c0 = chi[0] - width / 2.0 + width * k   # 扇区 k 的下边界（偏置摆法下非 −180°）
             # np.savetxt 会自动给 header 每行加 "# "，这里不重复写
             header = f"sector {k:02d}: chi = {chi[k]:.2f} deg (range [{c0:.0f}, {c0+width:.0f}))\n" \
                      f"columns: 2theta(deg)  intensity"
@@ -220,22 +230,32 @@ def main() -> None:
         print(f"Waterfall saved: {outdir / stem / 'waterfall.png'}")
 
         # ---- 强度一致性与峰位偏移统计 ----
-        # 统计使用选定区间内的数据（auto 已排除直射束晕区）
-        mean_curve = np.nanmean(I2d_plot, axis=1)                  # 36 扇区平均曲线
+        # 统计使用选定区间内的数据（auto 已排除直射束晕区），且只统计
+        # 有效扇区（最强峰窗口内有非零积分的扇区）——偏置摆法下部分
+        # 扇区整列死区（NaN/0），混入统计会污染均值与标准差。
+        mean_curve = np.nanmean(I2d_plot, axis=1)                  # 扇区平均曲线
         i0 = np.argmax(mean_curve)
         t0 = tth_plot[i0]
-        print(f"\nStrongest peak: 2θ = {t0:.4f}° (mean of 36 sectors)")
+        print(f"\nStrongest peak: 2θ = {t0:.4f}° (mean of {n} sectors)")
 
         win = (tth_plot > t0 - 0.15) & (tth_plot < t0 + 0.15)      # 最强峰 ±0.15° 窗口
-        peaks, positions = [], []
-        for k in range(n):
+        valid = np.array([np.nanmax(I2d_plot[win, k]) > 0
+                          for k in range(n)])
+        peaks = np.full(n, np.nan)
+        positions = np.full(n, np.nan)
+        for k in np.flatnonzero(valid):
             j = np.argmax(I2d_plot[win, k])
-            peaks.append(I2d_plot[win, k][j])
-            positions.append(tth_plot[win][j])
-        peaks = np.array(peaks); positions = np.array(positions)
-        print(f"Peak intensity per sector: mean {np.mean(peaks):.0f}, relative std {np.std(peaks)/np.mean(peaks)*100:.1f}%")
-        print(f"Peak position per sector: std {np.std(positions):.4f}°, max deviation {np.max(np.abs(positions-np.mean(positions))):.4f}°")
-        print(f"Weakest / strongest sector: χ={chi[np.argmin(peaks)]:.0f}° / χ={chi[np.argmax(peaks)]:.0f}°")
+            peaks[k] = I2d_plot[win, k][j]
+            positions[k] = tth_plot[win][j]
+        n_valid = int(valid.sum())
+        if n_valid == 0:
+            print("WARNING: no valid sectors in the peak window — "
+                  "statistics skipped")
+            continue
+        note = "" if n_valid == n else f" ({n_valid} valid sectors)"
+        print(f"Peak intensity per sector: mean {np.nanmean(peaks):.0f}, relative std {np.nanstd(peaks)/np.nanmean(peaks)*100:.1f}%{note}")
+        print(f"Peak position per sector: std {np.nanstd(positions):.4f}°, max deviation {np.nanmax(np.abs(positions-np.nanmean(positions))):.4f}°{note}")
+        print(f"Weakest / strongest sector: χ={chi[np.nanargmin(peaks)]:.0f}° / χ={chi[np.nanargmax(peaks)]:.0f}°")
 
 
 if __name__ == "__main__":
