@@ -174,12 +174,12 @@ def main() -> None:
         sample_dir.mkdir(parents=True, exist_ok=True)
         dat_path = sample_dir / "calibrated_2th.txt"
         png_path = sample_dir / "calibrated.png"
-        np.savetxt(dat_path, np.c_[tth, intensity], header="2theta(deg)  intensity")
+        np.savetxt(dat_path, np.c_[tth, intensity], fmt="%.6g", header="2theta(deg)  intensity")
         if lo is not None:
             keep = (tth >= lo) & (tth <= hi)
             tth_plot, intensity_plot = tth[keep], intensity[keep]
             np.savetxt(sample_dir / "calibrated_2th_auto.txt",
-                       np.c_[tth_plot, intensity_plot], header="2theta(deg)  intensity")
+                       np.c_[tth_plot, intensity_plot], fmt="%.6g", header="2theta(deg)  intensity")
         else:
             tth_plot, intensity_plot = tth, intensity
 

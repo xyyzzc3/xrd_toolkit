@@ -169,10 +169,10 @@ def main() -> None:
             header = f"sector {k:02d}: chi = {chi[k]:.2f} deg (range [{c0:.0f}, {c0+width:.0f}))\n" \
                      f"columns: 2theta(deg)  intensity"
             np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg.txt",
-                       np.c_[tth, I2d[:, k]], header=header)
+                       np.c_[tth, I2d[:, k]], fmt="%.6g", header=header)
             if tth_trim is not None:
                 np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg_auto.txt",
-                           np.c_[tth_trim, I2d_trim[:, k]], header=header)
+                           np.c_[tth_trim, I2d_trim[:, k]], fmt="%.6g", header=header)
         print(f"36 two-column txt files saved to: {sec_dir}/"
               + (", plus 36 *_auto.txt trimmed copies" if tth_trim is not None else ""))
 
