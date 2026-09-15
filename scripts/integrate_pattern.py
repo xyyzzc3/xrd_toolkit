@@ -7,7 +7,7 @@
 "全角度积分" = 对 0°~360° 所有方位角上的像素积分（每个 2θ 环一整圈都算），
 而不是只取某一条剖面线（那是 view_diffraction.py 做的事）。
 
-几何参数默认用选中配置条目（--config）的标定值（默认 lmfp_exp1：同一批
+几何参数默认用选中配置条目（--config）的标定值（默认 lmfp1_lab6：同一批
 实验、同一个仪器，几何通用，不需要对每个文件重新标定）；多批实验时用
 --config 切换（交互模式下选完文件会再弹配置菜单）。
 
@@ -48,11 +48,11 @@ def main() -> None:
                         help=f"Geometry config name from config.py (default: {DEFAULT_CONFIG}); "
                              "without --file an interactive menu lets you pick instead")
     parser.add_argument("--dist", type=float, default=None,
-                        help="override detector distance in mm (default: from the selected config; lmfp_exp1: 1595.80)")
+                        help="override detector distance in mm (default: from the selected config; lmfp1_lab6: 1595.80)")
     parser.add_argument("--poni", default=None,
-                        help="override PONI as cx,cy in pixel (default: from the selected config; lmfp_exp1: 1045.2,1022.0)")
+                        help="override PONI as cx,cy in pixel (default: from the selected config; lmfp1_lab6: 1045.2,1022.0)")
     parser.add_argument("--wavelength", type=float, default=None,
-                        help="override wavelength in Angstrom (default: from the selected config; lmfp_exp1: 0.1223)")
+                        help="override wavelength in Angstrom (default: from the selected config; lmfp1_lab6: 0.1223)")
     parser.add_argument("--range", dest="range_", default="auto",
                         help="2θ range for the plots and the *_auto trimmed txt: "
                              "full, auto (default: per-material standard range), or "
