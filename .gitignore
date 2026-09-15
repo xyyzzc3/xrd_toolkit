@@ -3,9 +3,8 @@
 data/*
 !data/.gitkeep
 outputs/
-# 有意不再整体入库（保护实验数据隐私）。已提交的 example_lab6/、example_sample/
-# 不受影响（.gitignore 只管未跟踪的新文件）；脚本按数据文件名新生成的文件夹
-# （带运行编号）自动忽略，不会误提交
+# outputs/ 是脚本的本地工作区（按数据文件名分文件夹，带运行编号），不上传
+# （保护实验数据隐私）；README 展示用的精选图统一放在 showcase/ 里提交
 __pycache__/
 *.pyc
 *.egg-info/

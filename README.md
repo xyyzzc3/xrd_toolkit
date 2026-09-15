@@ -16,21 +16,21 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="outputs/example_lab6/image.png" width="100%"><br>
+      <img src="showcase/lab6/image.png" width="100%"><br>
       <sub>2D diffraction image (log scale) — cross marks the auto-localized ring center</sub>
     </td>
     <td align="center" width="50%">
-      <img src="outputs/example_lab6/profile.png" width="100%"><br>
+      <img src="showcase/lab6/profile.png" width="100%"><br>
       <sub>Radial intensity profile through the center</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="outputs/example_lab6/calibrated.png" width="100%"><br>
+      <img src="showcase/lab6/calibrated.png" width="100%"><br>
       <sub>Calibrated 1D powder pattern (red dashed = theoretical LaB₆ positions)</sub>
     </td>
     <td align="center" width="50%">
-      <img src="outputs/example_lab6/waterfall.png" width="100%"><br>
+      <img src="showcase/lab6/waterfall.png" width="100%"><br>
       <sub>36-sector waterfall plot — azimuthal uniformity check; the staircase right edge marks where each sector's ring is clipped by the detector</sub>
     </td>
   </tr>
@@ -145,7 +145,8 @@ Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integr
 ```
 .
 ├── data/                          # raw XRD images (.tif), not tracked by git
-├── outputs/                       # example figures & integrated data (per dataset)
+├── outputs/                       # script outputs, one folder per dataset (local only, not tracked)
+├── showcase/                      # curated example figures shown in the README (tracked)
 ├── scripts/
 │   ├── view_diffraction.py        # 2D viewer (image + line profile + auto center)
 │   ├── calibrate_integrate.py     # LaB₆ geometric calibration + azimuthal integration
