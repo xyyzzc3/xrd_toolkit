@@ -95,16 +95,16 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 二维衍射图（对数色标，黑边白芯小十字标记自动定位的环圆心，白色虚线为剖面线取样方向，标题注明圆心坐标）：
 
-<img src="../showcase/lab6/image.png" width="60%">
+<img src="../showcase/lab6/diffraction_image.png" width="60%">
 
 过圆心的强度剖面（横轴为到圆心的距离，单位像素）：
 
-<img src="../showcase/lab6/profile.png" width="60%">
+<img src="../showcase/lab6/radial_profile.png" width="60%">
 
 校准后的 1D 图谱（红虚线为 LaB₆ 理论峰位）：
 
-<img src="../showcase/lab6/calibrated.png" width="60%">
+<img src="../showcase/lab6/calibrated_pattern.png" width="60%">
 
 36 扇区瀑布图（原强度堆叠，每条曲线按方位角沿 Y 轴错开、画到自己强度变 0 处，右端阶梯即探测器切环位置）：
 
-<img src="../showcase/lab6/waterfall.png" width="60%">
+<img src="../showcase/lab6/sector_waterfall.png" width="60%">
