@@ -1,38 +1,36 @@
-"""XRD 图像处理：对读进来的 2D 强度数组做各种计算。
+"""XRD 图像处理：对 2D 强度数组的计算。
 
-文件顺序按"先定圆心（find_ring_center），再划线（line_profile）"
-排列，与人读代码时的逻辑顺序一致。
+文件顺序按调用依赖排列：先定圆心（find_ring_center），
+再画剖面线（line_profile）。
 """
 import numpy as np
 
 
 def find_ring_center(image: np.ndarray):
-    """自动定位衍射环圆心（= 直射束落点），亚像素精度，无需任何参数。
+    """自动定位衍射环圆心（= 直射束落点），亚像素精度，无需参数。
 
-    原理（类比"对折找中心"）：
-        粉末衍射图关于圆心是中心对称的——物理上由 Friedel 定律保证：
-        每个衍射信号（环、甚至单晶斑点）都有一个"穿过圆心的对跖点"，
-        两者强度相同。所以把整张图绕几何中心旋转 180° 后，得到的图
-        与原图只差一个平移，且平移量 = 圆心偏移几何中心的 2 倍。
-        用 FFT 互相关找到这个平移量，除以 2 即得圆心。
+    原理：粉末衍射图关于圆心中心对称（Friedel 定律保证：每个衍射
+    信号在穿过圆心的对跖点强度相同）。将图像绕几何中心旋转 180°
+    后与原图只差一个平移，平移量 = 圆心偏移几何中心的 2 倍；
+    用 FFT 互相关求该平移量，除以 2 即得圆心。
 
-    三步（每步都有实测依据，见纠错点记录）：
-        1. 裁剪最亮的 0.1% 像素。强单晶亮斑会互相"假配对"，在相关
-           面上制造假峰（LMFP 数据实测假峰比真峰还高）；裁剪后亮斑
-           变成平顶，假峰消失，环的结构成为相关面的主导。
-        2. 原图与 180° 旋转图做互相关（FFT）。相关峰位置 = 2×偏移，
-           峰可以出现在任何位置，所以哪怕圆心偏移几百像素也能找到。
-        3. 峰附近 5×5 最小二乘二次拟合，把整数峰位细化到亚像素
-           （峰是"山"不是"台阶"，真正的峰顶在两格之间）。
+    步骤：
+        1. 裁剪最亮的 0.1% 像素。强单晶亮斑之间的"假配对"会在相关
+           面制造假峰（LMFP 数据实测假峰高于真峰）；裁剪后亮斑变为
+           平顶、假峰消失，环的结构主导相关面。
+        2. 原图与 180° 旋转图 FFT 互相关。相关峰位置 = 2×偏移，
+           峰可出现在任意位置，圆心偏移数百像素也可定位。
+        3. 峰附近 5×5 最小二乘二次拟合，将整数峰位细化到亚像素
+           （相关峰为连续峰形，真实峰顶位于像素之间）。
 
     实测精度：lab6 → (1022.2, 1021.7)，LMFP → (1021.3, 1021.9)，
     与标定值 B = (1022.0, 1022.3) 相差 < 1 px（约 0.05% 图像宽度）。
 
-    当前策略（2026-09-16 用户拍板）：本函数只作校准脚本的初值，
-    其余环节一律用 config 里的校准值，不重新自动定位。
+    使用策略：本函数仅作校准脚本的环心初值，其余环节一律使用
+    config.py 中的校准值，不重复自动定位。
 
     参数：
-        image —— 2D numpy 数组，image[行][列] = 该像素的强度
+        image —— 2D numpy 数组，image[行][列] = 该像素强度
 
     返回：
         (cy, cx) —— 圆心（行, 列），与 line_profile 的 center 顺序一致
@@ -45,11 +43,11 @@ def find_ring_center(image: np.ndarray):
     f = np.clip(f, 0, cap)
 
     # 2) 绕几何中心旋转 180°：np.rot90(f, 2) 绕的正是阵列中心
-    #    ((w-1)/2, (h-1)/2) = 几何中心 C，正是我们要的旋转轴
+    #    ((w-1)/2, (h-1)/2) = 几何中心 C
     g = np.rot90(f, 2)
 
     # 3) 互相关：corr[k] = Σ_p f[p]·g[p−k]。
-    #    先去均值（减掉背景平台，避免直流分量盖住相关峰），
+    #    先去均值（减掉背景平台，避免直流分量淹没相关峰），
     #    fftshift 后平移量 0 在数组正中心 (h//2, w//2)。
     corr = np.fft.fftshift(np.fft.ifft2(
         np.fft.fft2(f - f.mean()) * np.conj(np.fft.fft2(g - g.mean()))
@@ -59,8 +57,8 @@ def find_ring_center(image: np.ndarray):
     sy = float(iy - cy0)              # 纵向平移量（整数部分）
     sx = float(ix - cx0)              # 横向平移量
 
-    # 4) 亚像素细化：把峰附近 5×5 小块的"行和 / 列和"各拟一条二次曲线
-    #    （最小二乘，5 个点求 3 个系数），顶点位置就是小数部分。
+    # 4) 亚像素细化：把峰附近 5×5 小块的"行和 / 列和"各拟合一条二次
+    #    曲线（最小二乘，5 点求 3 系数），顶点位置即小数部分。
     def fit_axis(patch_sums: np.ndarray) -> float:
         idx = np.arange(-2, 3, dtype=np.float64)
         a, b, _ = np.linalg.lstsq(
@@ -84,10 +82,10 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     """沿过圆心、与水平方向成 angle_deg 的直线采样强度。
 
     参数：
-        image     —— 2D numpy 数组，image[行][列] = 该像素的强度
-        center    —— 圆心 (行, 列)，必传。调用方负责给校准值
+        image     —— 2D numpy 数组，image[行][列] = 该像素强度
+        center    —— 圆心 (行, 列)，必传。调用方传入校准值
                      （view_diffraction 传选中配置的 beam_center）；
-                     自动定位只保留在校准脚本里做初值（2026-09-16 拍板）
+                     自动定位仅保留在校准脚本中作初值
         angle_deg —— 直线与水平方向的夹角（度），0 = 水平线
 
     返回：
@@ -100,13 +98,13 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     h, w = image.shape
     cy, cx = center             # 注意：center 是 (行, 列) = (y, x)
 
-    # np.radians 负责"角度 → 弧度"的换算。
+    # 角度 → 弧度
     theta = np.radians(angle_deg)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
-    # 直线方程：x = cx + t·cosθ, y = cy + t·sinθ（t 是沿直线的距离）
-    # 先算出 t 的合法范围——保证采样点不出图像边界。
-    # 圆心不居中时两侧能走的距离不同，硬截断会让边缘像素被重复采样。
+    # 直线方程：x = cx + t·cosθ, y = cy + t·sinθ（t 为沿直线的距离）。
+    # 先求 t 的合法范围，保证采样点不越出图像边界。圆心不居中时两侧
+    # 采样范围不同，硬截断会让边缘像素被重复采样。
     t_min, t_max = -float(np.hypot(h, w)), float(np.hypot(h, w))
     for c, lo_edge, hi_edge in (
             (cos_t, -cx, w - 1 - cx),   # x 方向约束：0 ≤ x ≤ w-1
@@ -123,8 +121,7 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     # 采样点序列：t_min 到 t_max，间隔 1 像素
     t = np.arange(np.ceil(t_min), np.floor(t_max) + 1, dtype=np.float64)
 
-    # 向量化：t 是数组，
-    # xs = cx + t * cos_t 是"对这一串里的每个数同时计算"。
+    # 向量化：对数组逐元素同时计算
     xs = cx + t * cos_t
     ys = cy + t * sin_t
 
@@ -135,7 +132,7 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
     fx = xs - x0
     fy = ys - y0
 
-    # np.clip：把坐标夹在合法范围内（0 ~ w-1），防止越界报错
+    # 坐标限制在图像范围内，防止越界
     x0c = np.clip(x0, 0, w - 1)
     y0c = np.clip(y0, 0, h - 1)
     x1c = np.clip(x0 + 1, 0, w - 1)

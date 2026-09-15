@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""全角度积分：把 2D 衍射图像变成标准 1D 粉末衍射谱（两列 txt）。
+"""全角度积分：2D 衍射图像 → 标准 1D 粉末衍射谱（两列 txt）。
 
-这就是常规 XRD 粉末衍射的标准格式：横坐标 2θ（度），纵坐标强度。
-后续所有分析（寻峰、拟合、PDF 计算）都基于这张 1D 谱。
+输出标准 XRD 粉末衍射格式：横坐标 2θ（度），纵坐标强度，
+供后续寻峰、拟合、PDF 分析使用。
 
-"全角度积分" = 对 0°~360° 所有方位角上的像素积分（每个 2θ 环一整圈都算），
-而不是只取某一条剖面线（那是 view_diffraction.py 做的事）。
+"全角度积分" = 对 0°~360° 全部方位角积分（每个 2θ 环一整圈），
+区别于 view_diffraction.py 的单条剖面线采样。
 
-几何参数默认用选中配置条目（--config）的标定值（默认 lmfp1_lab6：同一批
-实验、同一个仪器，几何通用，不需要对每个文件重新标定）；多批实验时用
---config 切换（交互模式下选完文件会再弹配置菜单）。
+几何参数默认使用选中配置条目（--config）的标定值（默认 lmfp1_lab6；
+同一批实验、同一仪器，几何通用，无需逐文件重新标定）；多批实验用
+--config 切换（交互模式下选完文件会再显示配置菜单）。
 
 用法示例：
     python scripts/integrate_pattern.py --file data/xxx.tif
@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 点名 / 菜单选择）
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 指定 / 菜单选择）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -64,8 +64,8 @@ def main() -> None:
                              "is then fixed by that material's known peak positions")
     args = parser.parse_args()
 
-    # --config 名字先校验：写错立即报错退出（argparse 风格：打印用法 +
-    # error 行、退出码 2），不用等到选完文件、读了图才发现
+    # --config 名称先行校验：出错时以 argparse 风格退出（用法 + 错误行、
+    # 退出码 2），无需等到选完文件才发现
     if args.config is not None:
         config_name = args.config
         try:
@@ -75,17 +75,17 @@ def main() -> None:
     else:
         config_name = cfg = None
 
-    # 决定要跑哪些文件：给了 --file 就跑指定的；没给就弹交互菜单（同 view_diffraction），
-    # 菜单支持多选（如 1,2）→ 循环里逐个处理，输出各自进 outputs/{数据名}/ 不会互相覆盖
+    # 未指定 --file 时弹出交互菜单（同 view_diffraction），支持多选
+    # （如 1,2）；各文件输出到 outputs/{数据名}/，互不覆盖
     if args.file:
         file_list = [Path(args.file)]
     else:
         file_list = interactive_pick_files(Path(args.datadir))
 
-    # 几何配置三选一（2026-09-16 用户拍板"交互式"）：
-    #   1. --config 点名（命令行 / 脚本用，上面已校验过）
-    #   2. 交互模式下（没带 --file）选完数据文件，再弹菜单选一次配置
-    #   3. 其余情况用默认条目 DEFAULT_CONFIG（PyCharm 运行配置靠它）
+    # 几何配置解析顺序：
+    #   1. --config 指定（已校验）
+    #   2. 交互模式（未带 --file）：选完数据文件后再显示配置菜单
+    #   3. 其余情况使用 DEFAULT_CONFIG（PyCharm 运行配置依赖此默认值）
     if cfg is None:
         if args.file is None:
             config_name = pick_config(CONFIGS, DEFAULT_CONFIG)
@@ -109,7 +109,7 @@ def main() -> None:
         image = load_diffraction_image(str(path))
         print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
 
-        # 全角度方位角积分：azimuth_range=(-180, 180) 表示 0°~360° 一整圈
+        # 0°~360° 全方位角积分
         tth, intensity = integrate_1d(
             image,
             pixel_size_m=geom["pixel_size_m"],
@@ -122,14 +122,13 @@ def main() -> None:
             npt=args.npt,
         )
 
-        # ---- 2θ 有效区间选择（可选，默认 auto，与 sector_waterfall 同一套逻辑）----
-        # txt 永远保存完整版（数据母版）；区间只影响图和另存的 _auto 裁剪版。
-        # auto（A+A 方案，2026-09-16 拍板）：下界 = 材料专属标准
-        # （lmfp 第一峰 −0.3°；lab6 光环结束点 −0.6°，≈1.0°）；
-        # 上界 = 数据失效点自动检测（单曲线：几何算"80% 方位角仍在
-        # 探测器内"的精确位置，与瀑布图实测 7.44° 互相印证）。
-        # 注意传的是本次积分实际用的 wavelength/dist/poni（用户可能用
-        # 命令行覆盖过），保证区间计算和积分用的是同一套几何。
+        # ---- 2θ 有效区间（默认 auto，与 sector_waterfall 同一套逻辑）----
+        # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
+        # auto：下界 = 材料专属标准（lmfp 第一峰 −0.3°；lab6 光环结束点
+        # −0.6°，约 1.0°）；上界 = 数据失效点自动检测（单曲线用几何
+        # 计算"80% 方位角仍在探测器内"的位置，与瀑布图实测 7.44° 一致）。
+        # 传入本次积分实际使用的 wavelength/dist/poni（可能被命令行
+        # 覆盖），保证区间计算与积分同一套几何。
         sel = parse_range_arg(args.range_)
         if sel == "full":
             lo = hi = None
@@ -158,9 +157,8 @@ def main() -> None:
             lo, hi = sel
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
 
-        # 标准两列 txt：第一列 2θ（度），第二列强度。完整版永远保存，
-        # 选了区间时另存一份 *_auto.txt（裁剪版），两个都留
-        # 输出按样品分文件夹：outputs/{数据名}/，文件名不带数据名前缀
+        # 标准两列 txt（2θ, 强度）。完整版始终保存，选定区间时另存
+        # *_auto.txt 裁剪版；输出按样品分文件夹（outputs/{数据名}/）
         outdir = Path(args.outdir)
         stem = path.stem
         sample_dir = outdir / stem
@@ -176,7 +174,7 @@ def main() -> None:
         else:
             tth_plot, intensity_plot = tth, intensity
 
-        # 出图（对数纵轴 + 线性各存一张，对数能看清弱峰）
+        # 出图：线性 + 对数纵轴各一张（对数便于观察弱峰）
         for log, suffix in ((False, ""), (True, "_log")):
             fig, ax = plt.subplots(figsize=(10, 5))
             ax.plot(tth_plot, intensity_plot, "b-", lw=0.8)

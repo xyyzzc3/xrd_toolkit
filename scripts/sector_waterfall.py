@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """扇形积分 + 瀑布图：把 0°~360° 分成 36 个扇区（每 10° 一个）分别积分。
 
-观察目标：
-  - 不同角度的衍射图谱是否有差异？
-  - 强度是否一致？
-  - 峰位是否偏移？
+用途：
+  - 检查各方位角衍射谱的强度一致性；
+  - 检查峰位是否随方位角偏移；
+  - 可视化探测器边缘对衍射环的截断几何。
 
 输出（按样品分文件夹 outputs/{stem}/）：
   - sectors/ 下 36 个两列 txt（2θ, intensity），每个扇区一个；
-    完整版永远保存，选了 --range 时另存 *_auto.txt 裁剪版
+    完整版始终保存，指定 --range 时另存 *_auto.txt 裁剪版
   - waterfall.png（原强度堆叠瀑布：36 条沿 Y 轴错开，每条画到自己
-    强度变 0 的位置——右端阶梯展示"环被探测器切掉"的几何）
+    强度变 0 的位置——右端阶梯展示探测器对环的截断几何）
 
 χ 角约定（pyFAI，实测验证）：χ=0° 沿探测器水平方向（图像 +x 向右），
 逆时针为正（图像上方 = +90°）。integrate2d 从 -180° 分箱，sector_00
@@ -36,7 +36,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 点名 / 菜单选择）
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 指定 / 菜单选择）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_sectors
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -66,8 +66,8 @@ def main() -> None:
     parser.add_argument("--outdir", default="outputs", help="output directory")
     args = parser.parse_args()
 
-    # --config 名字先校验：写错立即报错退出（argparse 风格：打印用法 +
-    # error 行、退出码 2），不用等到选完文件、读了图才发现
+    # --config 名称先行校验：出错时以 argparse 风格退出（用法 + 错误行、
+    # 退出码 2），无需等到选完文件才发现
     if args.config is not None:
         config_name = args.config
         try:
@@ -77,17 +77,17 @@ def main() -> None:
     else:
         config_name = cfg = None
 
-    # 决定要跑哪些文件：给了 --file 就跑指定的；没给就弹交互菜单（同 view_diffraction），
-    # 菜单支持多选（如 1,2）→ 循环里逐个处理，输出各自进 outputs/{数据名}/ 不会互相覆盖
+    # 未指定 --file 时弹出交互菜单（同 view_diffraction），支持多选
+    # （如 1,2）；各文件输出到 outputs/{数据名}/，互不覆盖
     if args.file:
         file_list = [Path(args.file)]
     else:
         file_list = interactive_pick_files(Path(args.datadir))
 
-    # 几何配置三选一（2026-09-16 用户拍板"交互式"）：
-    #   1. --config 点名（命令行 / 脚本用，上面已校验过）
-    #   2. 交互模式下（没带 --file）选完数据文件，再弹菜单选一次配置
-    #   3. 其余情况用默认条目 DEFAULT_CONFIG（PyCharm 运行配置靠它）
+    # 几何配置解析顺序：
+    #   1. --config 指定（已校验）
+    #   2. 交互模式（未带 --file）：选完数据文件后再显示配置菜单
+    #   3. 其余情况使用 DEFAULT_CONFIG（PyCharm 运行配置依赖此默认值）
     if cfg is None:
         if args.file is None:
             config_name = pick_config(CONFIGS, DEFAULT_CONFIG)
@@ -97,7 +97,7 @@ def main() -> None:
             cfg = get_config()
     print(f"Using geometry config: {config_name}")
 
-    geom = cfg["geometry"]   # 扇形积分直接 **geom 展开 7 个几何键
+    geom = cfg["geometry"]   # 直接展开配置条目的 7 个几何键
 
     for path in file_list:
         image = load_diffraction_image(str(path))
@@ -114,14 +114,12 @@ def main() -> None:
         width = 360.0 / n
         print(f"Sectors: {n} (one per {width:.1f}°), {len(tth)} points per curve")
 
-        # ---- 2θ 有效区间选择（可选，默认 auto）----
-        # txt 永远保存完整版（数据母版）；区间只影响图和另存的 _auto 裁剪版。
-        # auto（A+A 方案，2026-09-16 拍板）：下界 = 材料专属标准
-        # （lmfp 第一峰 −0.3°；lab6 光环结束点 −0.6°，≈1.0°；缓坡
-        # 完整包进来，同一材料所有数据同一个标准，w1 与 w2 各用各的）；
-        # 上界 = 数据失效点自动检测（36 条曲线存活比例跌破 80% 的
-        # 位置，实测 7.44°）。材料未知 → 下界退回缓坡检测。
-        # 细节见 services/range_selector.py。
+        # ---- 2θ 有效区间（默认 auto）----
+        # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
+        # auto：下界 = 材料专属标准（lmfp 第一峰 −0.3°；lab6 光环结束点
+        # −0.6°，约 1.0°；同一材料所有数据共用同一标准）；上界 = 数据
+        # 失效点自动检测（36 条曲线存活比例跌破 80% 的位置，实测 7.44°）。
+        # 材料未知时下界退回缓坡检测。细节见 services/range_selector.py。
         sel = parse_range_arg(args.range_)
         mean_curve = np.nanmean(I2d, axis=1)   # 36 扇区平均曲线（区间检测用）
         if sel == "full":
@@ -153,7 +151,7 @@ def main() -> None:
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
 
         # ---- 保存 36 个两列 txt（输出按样品分文件夹：outputs/{数据名}/sectors/）----
-        # 完整版永远保存；选了区间时另存一份 *_auto.txt（裁剪版），两个都留
+        # 完整版始终保存；选定区间时另存 *_auto.txt 裁剪版
         outdir = Path(args.outdir)
         stem = path.stem
         sec_dir = outdir / stem / "sectors"
@@ -177,28 +175,25 @@ def main() -> None:
         print(f"36 two-column txt files saved to: {sec_dir}/"
               + (", plus 36 *_auto.txt trimmed copies" if tth_trim is not None else ""))
 
-        # ---- 每条曲线截止到自己的"零强度"点（2026-09-16 用户要求）----
-        # 死掉的扇区 = 环弧被探测器边缘切光，积分值是严格的 0（实测：
-        # 死亡前一刻还有几百、下一格直接 0）。每条曲线画到自己的第一个
-        # 0；没死的继续画到 hi（"现在这个位置"）。右端呈阶梯状，直观
-        # 展示"环被方形探测器切掉"的几何：指向边缘的扇区先死。
+        # ---- 每条曲线画到自身首个零强度点 ----
+        # 环弧被探测器边缘截断后积分值为 0（实测：截断前一刻仍有数百、
+        # 下一格直接为 0），故每条曲线画到自身的第一个 0；未截断的
+        # 曲线画到 hi。右端呈阶梯状，直观展示方形探测器对环的截断
+        # 几何：指向边缘的扇区先被截断。
         colors = plt.cm.viridis(np.linspace(0, 1, n))
-        curves = []              # [(tth_cut, I_cut, k), ...] 每条曲线自己的作图段
+        curves = []              # [(tth_cut, I_cut, k), ...] 每条曲线的作图段
         for k in range(n):
             v = I2d_plot[:, k]
             dead = ~np.isfinite(v) | (v == 0)
             end = int(np.argmax(dead)) if dead.any() else len(v)
             curves.append((tth_plot[:end], v[:end], k))
 
-        # ---- 瀑布图 1：36 条曲线沿 Y 轴错开的堆叠瀑布（原强度）----
-        # 设计（2026-09-16 用户要求：瀑布图 = 36 条曲线沿 Y 轴错开，
-        # 每条画到自己强度变 0 的位置，用原强度不开根号）：
-        #   行间距自适应（用户要求：可以重叠、行间距可以不一样，只要
-        #   每 10° 扇区都分得开）：每行高度 = 该行原强度峰值 * X，
-        #   行内刚好放下自己的峰——弱扇区行矮、强扇区行高，再弱的
-        #   扇区也有自己的行高，峰不会被压扁；相邻行允许峰顶轻轻
-        #   探进上一行（X < 1）。每行基线画网格线 + 标 χ 值，36 条
-        #   一眼就能对回各自的 10° 扇区。
+        # ---- 瀑布图：36 条原强度曲线沿 Y 轴错开堆叠 ----
+        # 每条曲线画到自身首个零强度点，使用原强度（不取根号）。
+        # 行间距自适应：每行高度 = 该行峰值 × 0.7（偏移系数），
+        # 弱扇区行矮、强扇区行高，各行峰形不会被压扁；相邻行允许
+        # 峰顶部分探入上一行。每行基线标 χ 值，曲线可对应回各自的
+        # 10° 扇区。
         I_pos = np.clip(I2d_plot, 0.0, None)
         heights = np.maximum(I_pos.max(axis=0), 0.05 * np.nanmax(I_pos))
         offsets = np.zeros(n)
@@ -223,8 +218,8 @@ def main() -> None:
 
         print(f"Waterfall saved: {outdir / stem / 'waterfall.png'}")
 
-        # ---- 回答观察问题：强度一致性 + 峰位偏移 ----
-        # 统计用选定区间内的数据（auto 时已去掉直射束晕区，无需再 mask 0.4°）
+        # ---- 强度一致性与峰位偏移统计 ----
+        # 统计使用选定区间内的数据（auto 已排除直射束晕区）
         mean_curve = np.nanmean(I2d_plot, axis=1)                  # 36 扇区平均曲线
         i0 = np.argmax(mean_curve)
         t0 = tth_plot[i0]

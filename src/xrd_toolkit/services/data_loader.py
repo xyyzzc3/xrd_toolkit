@@ -17,10 +17,10 @@ def load_diffraction_image(path: str) -> np.ndarray:
             （行 = 探测器纵向，列 = 探测器横向）
 
     备注：
-        fabio 是衍射领域的标准读取库（pyFAI 生态），打开文件时
-        自己判断格式，我们不用管文件是 .edf 还是 .tif。
+        fabio 是衍射领域标准读取库（pyFAI 生态），按文件内容自动
+        识别格式（.edf / .tif / .cbf）。
     """
     image = fabio.open(path)
 
-    # 把整数数组转成浮点数，防止后续整数除法截断小数
+    # 转成浮点数，防止后续整数除法截断小数
     return image.data.astype(np.float64)

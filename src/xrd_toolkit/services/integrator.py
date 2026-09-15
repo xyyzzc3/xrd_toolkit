@@ -1,12 +1,9 @@
-# 2D 衍射图像 → 1D 衍射图谱：方位角积分 + LaB6 几何校准（基于 pyFAI）。
+# 2D 衍射图像 → 1D 衍射图谱：方位角积分 + LaB₆ 几何校准（基于 pyFAI）。
 #
-# 背景知识（类比）：
-#   2D 探测器上的一圈圈衍射环，其实是"一个圆锥被平面切开"的截面——
-#   每个 (hkl) 晶面族把 X 光散射成一个以入射束为轴的圆锥（半角 2θ），
-#   探测器平面切过所有圆锥，就得到一组圆环。
-#   "方位角积分" = 把每个半径上的所有像素强度平均起来，
-#   把"一圈圈的圆环"压缩成"一条强度曲线"（横轴 2θ，纵轴强度），
-#   这就是 X 射线粉末衍射课上最常见的 1D 图谱。
+# 背景：每个 (hkl) 晶面族把 X 光散射成以入射束为轴的圆锥（半角 2θ），
+# 探测器平面截过所有圆锥得到一组圆环（Debye–Scherrer 环）。方位角
+# 积分把每个半径上的像素强度取平均，将二维环压缩为一维曲线
+# I(2θ)——标准粉末衍射谱。
 import numpy as np
 from pyFAI.calibrant import get_calibrant
 from pyFAI.detectors import Detector
@@ -14,8 +11,8 @@ from pyFAI.goniometer import Geometry, GeometryRefinement, SingleGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
 
-# pyFAI 自带校准样品数据库（calibrant），LaB6 的标准 d 值在包里就有：
-#   d = a / sqrt(h^2 + k^2 + l^2)，a = 4.1568 Å（NIST 标准值）
+# pyFAI 内置信标数据库（calibrant），LaB₆ 标准 d 值：
+#   d = a / sqrt(h² + k² + l²)，a = 4.1568 Å（NIST 标准值）
 LAB6_NAME = "LaB6"
 
 
@@ -36,7 +33,7 @@ def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarra
             长度 n_rings 的 2θ 数组（度）
     """
     cal = get_calibrant(LAB6_NAME)
-    # 注意：cal.dspacing 的单位是"埃"（1e-10 米），不是米！
+    # cal.dspacing 单位为埃（1e-10 m）
     d_angstrom = np.asarray(cal.dspacing[:n_rings])
     wavelength_a = wavelength_m * 1e10
     return np.degrees(2 * np.arcsin(wavelength_a / (2 * d_angstrom)))
@@ -53,11 +50,11 @@ def calibrate_lab6(
     """
     用 LaB6 标样自动校准探测器几何（pyFAI GeometryRefinement）。
 
-    原理（两步走）：
-      1) extract_cp：按"初始几何"预测每个环的 2θ 位置，再在预测位置
-         附近搜索图像上的真实峰位，得到几千个"控制点"（像素坐标 + 环序号）；
-      2) refine2：最小二乘精修距离、环心、倾斜角，让所有控制点的
-         实测 2θ 尽量贴近理论 2θ。
+    原理（两步）：
+      1) extract_cp：按初始几何预测每个环的 2θ 位置，在预测位置附近
+         搜索图像上的真实峰位，得到若干控制点（像素坐标 + 环序号）；
+      2) refine2：最小二乘精修距离、环心、倾斜角，使各控制点的实测
+         2θ 逼近理论 2θ。
 
     参数：
         image : np.ndarray
@@ -85,21 +82,21 @@ def calibrate_lab6(
             rot3_deg     倾斜角 3（度，refine2 不精修，保持 0）
             residual_deg 全部控制点的 2θ 残差 RMS（度）
 
-    备注（纠错点记录）：
-        - calibrant 的波长"设一次就锁死"，之后不能再改；换波长必须
-          重新 get_calibrant 创建新对象。
+    备注（pyFAI 接口注意事项）：
+        - calibrant 的波长一经设置不可再改；换波长必须重新
+          get_calibrant 创建新对象。
         - extract_cp 返回 ControlPoints 对象，getList() 才是 N×3 数组，
-          第三列是"环序号"（0 开始），不是 2θ。
-        - GeometryRefinement 的 tth() 方法输入的是"像素坐标"，不是米。
+          第三列为环序号（从 0 开始），不是 2θ。
+        - GeometryRefinement.tth() 的输入为像素坐标，不是米。
     """
-    # 校准剂：pyFAI 自带的 LaB6 数据（核验：d1 = 4.1568 Å ≈ a）
+    # pyFAI 内置 LaB₆ 校准数据（d1 = 4.1568 Å ≈ a）
     cal = get_calibrant(LAB6_NAME)
     cal.wavelength = wavelength_m
 
     det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m, max_shape=image.shape)
 
-    # 环心初值：不传时自动定位。find_ring_center 返回 (行, 列)，
-    # 而校准要用 (cx, cy)，交换顺序。
+    # 环心初值：未指定时自动定位。find_ring_center 返回 (行, 列)，
+    # 校准需要 (cx, cy)，交换顺序。
     if center0_px is None:
         cy, cx = find_ring_center(image)
         center0_px = (cx, cy)
@@ -137,7 +134,7 @@ def calibrate_lab6(
         sub = control_points[control_points[:, 2] == ring]
         if len(sub) == 0:
             continue
-        measured = np.degrees(ref.tth(sub[:, 0], sub[:, 1]))  # 像素坐标输入！
+        measured = np.degrees(ref.tth(sub[:, 0], sub[:, 1]))  # 输入为像素坐标
         residuals.append(measured - tth_theo[ring])
     residual_deg = float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
 
@@ -184,22 +181,20 @@ def integrate_1d(
         npt : int
             1D 曲线采样点数（默认 3000）
 
-    备注（纠错点记录）：
-        物理/几何参数全部必传、没有默认值——由脚本从 config.py 的
-        CONFIGS 注册表选中条目后取出来传进来。
-        以前函数签名里也抄了一份默认值（dist=1.59579 等），和 config 是
-        两份独立数据，改一处忘了另一处就会静默用旧值；必传参数让这种
-        错误变成一眼可见的 TypeError。
+    备注：
+        物理/几何参数全部必传、无默认值——由脚本从 config.py 的
+        CONFIGS 选中条目取出后显式传入。若在函数签名中复制一份默认值，
+        会与 config 形成两份独立数据，更新不同步时静默使用旧值；
+        必传参数将此类错误转化为显式的 TypeError。
 
     返回：
         (tth_deg, intensity) : tuple
             tth_deg     1D 曲线的 2θ 坐标（度）
             intensity   对应强度（numpy 数组）
 
-    备注（纠错点记录）：
-        integrate1d 的默认输出单位是 q（nm^-1），不是 2θ！
-        一定要显式传 unit="2th_deg"，否则 x 轴会变成 0~90 的 q 值，
-        看起来像"图谱坏了"，其实只是单位没指定。
+    备注：
+        integrate1d 默认输出单位为 q（nm⁻¹）而非 2θ，必须显式传
+        unit="2th_deg"，否则 x 轴为 q 值（0~90）。
     """
     ai = AzimuthalIntegrator(
         dist=dist_m,
@@ -231,18 +226,17 @@ def integrate_sectors(
     """
     扇形积分：把 0°~360° 方位角分成 n_sectors 个扇区，各自独立积分。
 
-    用途：检查衍射环的"方位均匀性"——
-      - 如果样品是理想粉末（晶粒随机取向），36 条曲线应该几乎一样；
-      - 如果有大晶粒/择优取向，某些扇区的强度会明显偏高；
-      - 如果探测器几何有扭曲，各扇区的峰位会互相错开。
+    用途：检查衍射环的方位均匀性——
+      - 理想粉末（晶粒随机取向）：各扇区曲线应几乎一致；
+      - 大晶粒 / 择优取向：部分扇区强度明显偏高；
+      - 探测器几何失真：各扇区峰位互相错开。
 
-    实现上用一个技巧：pyFAI 的 integrate2d 一次调用同时输出
-    "径向（2θ）× 方位角（χ）"二维矩阵，它的第 2 维就是方位角分箱，
-    比循环调 36 次 integrate1d 更快也更简单。
+    实现：pyFAI 的 integrate2d 一次调用输出径向（2θ）× 方位角（χ）
+    二维矩阵，第 2 维即方位角分箱，无需循环调用 36 次 integrate1d。
 
-    χ 角约定（用合成图像实测验证过）：χ = 0° 沿探测器水平方向
-    （图像 +x 轴，向右），逆时针为正（图像上方 = +90°，下方 = -90°）。
-    integrate2d 默认从 -180° 起分箱：χ[0] = -175°（[-180°, -170°)），
+    χ 角约定（合成图像验证）：χ = 0° 沿探测器水平方向（图像 +x 轴，
+    向右），逆时针为正（图像上方 = +90°，下方 = −90°）。
+    integrate2d 默认从 −180° 起分箱：χ[0] = −175°（[−180°, −170°)），
     χ = 0° 落在 ±5° 两个分箱（sector 17/18）。
 
     参数：
@@ -293,7 +287,7 @@ def calibrate_and_integrate(
     npt: int = 3000,
 ) -> tuple:
     """
-    一条龙：先校准几何，再用校准结果做方位角积分。
+    先校准几何，再用校准结果做方位角积分。
 
     参数与 calibrate_lab6 / integrate_1d 相同。
 
