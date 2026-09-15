@@ -22,6 +22,12 @@ def interactive_pick_files(datadir: Path) -> list[Path]:
         1,3     → 跑第 1 和第 3 个
         all     → 全部跑
     """
+    # 目录不存在时给出友好提示（而不是 FileNotFoundError 的 traceback）
+    if not datadir.is_dir():
+        print(f"Data directory not found: {datadir}/ "
+              f"(create it and put .tif/.edf/.cbf files inside)")
+        raise SystemExit(1)
+
     # 遍历目录并筛选支持扩展名的文件：suffix 为扩展名（含点），
     # .lower() 兼容大写后缀；sorted 保证编号顺序稳定
     files = sorted(p for p in datadir.iterdir() if p.suffix.lower() in SUPPORTED_EXTS)

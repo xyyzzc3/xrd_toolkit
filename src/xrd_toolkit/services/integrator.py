@@ -271,7 +271,11 @@ def integrate_sectors(
     if i2d.shape[0] != npt and i2d.shape[1] == npt:
         i2d = i2d.T
     chi_centers_deg = np.asarray(chi, dtype=float)
-    if len(chi_centers_deg) != n_sectors:
+    # 束心在图像内时 pyFAI 返回覆盖 -180°~180° 的整圈分箱；束心在图像外
+    # 时只返回图像实际覆盖的方位角范围（长度仍为 n_sectors，数值不对应
+    # 全局扇区），此时退回均匀分箱，保证文件名/表头的扇区标注正确
+    if len(chi_centers_deg) != n_sectors or \
+            chi_centers_deg.max() - chi_centers_deg.min() < 350.0:
         chi_centers_deg = np.linspace(-180 + 180 / n_sectors,
                                       180 - 180 / n_sectors, n_sectors)
     return tth_deg, i2d, chi_centers_deg
