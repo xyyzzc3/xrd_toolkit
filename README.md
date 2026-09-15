@@ -16,34 +16,37 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="outputs/week2_lab6/image.png" width="100%"><br>
+      <img src="outputs/lab6-00024/image.png" width="100%"><br>
       <sub>2D diffraction image (log scale) — cross marks the auto-localized ring center</sub>
     </td>
     <td align="center" width="50%">
-      <img src="outputs/week2_lab6/profile.png" width="100%"><br>
+      <img src="outputs/lab6-00024/profile.png" width="100%"><br>
       <sub>Radial intensity profile through the center</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="outputs/week2_lab6/calibrated.png" width="100%"><br>
+      <img src="outputs/lab6-00024/calibrated.png" width="100%"><br>
       <sub>Calibrated 1D powder pattern (red dashed = theoretical LaB₆ positions)</sub>
     </td>
     <td align="center" width="50%">
-      <img src="outputs/week2_lab6/waterfall.png" width="100%"><br>
-      <sub>36-sector waterfall plot — azimuthal uniformity check</sub>
+      <img src="outputs/lab6-00024/waterfall.png" width="100%"><br>
+      <sub>36-sector waterfall plot — azimuthal uniformity check; the staircase right edge marks where each sector's ring is clipped by the detector</sub>
     </td>
   </tr>
 </table>
+
+Figures generated from the LaB₆ calibration dataset `lab6-00024` (sister dataset: `LMFP_1_atten0-00029`).
 
 </details>
 
 ## Highlights
 
 - **Automatic ring-center localization** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center. Fully automatic on any new dataset, accuracy < 1 px.
-- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (ring center auto-localized as the initial value).
+- **Geometric calibration with a LaB₆ standard** — pyFAI `GeometryRefinement` refines detector distance and PONI from known LaB₆ peak positions (NIST SRM 660, a = 4.156 Å). Example result: detector distance refined to 1595.80 mm (reference calibration stored in `src/xrd_toolkit/config.py`).
 - **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ, intensity), ready for peak finding, profile fitting, and PDF analysis.
-- **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; waterfall plots reveal preferred orientation or large-grain spotiness.
+- **Automatic 2θ range selection** — `--range auto` (default) picks the interval with one standard per material: lower bound from the material's standard (LMFP: first known peak − 0.3°; LaB₆: detected halo end − 0.6° ≈ 1.0°), upper bound auto-detected where the data starts failing (sectors dying as rings get clipped by the detector edge, ≈ 7.44° — cross-checked against an exact geometric expectation). The full-range txt master copy is always saved.
+- **Sector-wise integration** — the pattern is split into N azimuthal sectors (default 36) and integrated separately; the stacked raw-intensity waterfall (one curve per sector, each drawn until its own intensity drops to zero) reveals preferred orientation or large-grain spotiness and visualizes the detector-clipping geometry.
 - **Shared interactive CLI** — one file-selection menu (`xrd_toolkit/cli.py`) reused by all four scripts: number selection, `1,2` multi-select, or `all`.
 
 ## Quick start
@@ -100,6 +103,7 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--dist0`: initial detector distance (mm) — refined automatically by pyFAI
 - `--center`: initial ring center `cx,cy` in pixels (default: auto-localized, < 1 px accuracy)
 - `--max-rings`: number of LaB₆ rings used for calibration (default 16)
+- `--range`: 2θ range — `full`, `auto` (default, per-material standard), or `lo,hi` degrees (e.g. 1.3,7.3); the full txt is always saved
 - `--outdir`: output directory (default `outputs/`)
 
 Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`.
@@ -113,7 +117,7 @@ Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azim
 python scripts/integrate_pattern.py --file data/xxx.tif
 ```
 
-Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.80 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`.
+Integrates 0°–360° with the calibrated geometry (defaults to the reference calibration, e.g. 1595.80 mm) and writes a two-column txt (2θ(deg), intensity) + PNG. Override with `--dist`, `--poni`, `--wavelength`; `--range full/auto/lo,hi` controls the 2θ interval of the plot and the `_auto` trimmed txt (full txt always saved).
 
 </details>
 
@@ -124,7 +128,7 @@ Integrates 0°–360° with the calibrated geometry (defaults to the reference c
 python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 ```
 
-Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus two waterfall plots (√intensity / normalized) for checking ring uniformity — large grains or preferred orientation show up as intensity concentrated in a few sectors.
+Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integrates each sector separately, and writes per-sector two-column txt files under `outputs/{dataset_name}/sectors/` plus a raw-intensity stacked waterfall plot (36 curves offset along the Y axis with adaptive row spacing; each curve is drawn until its own intensity drops to zero, so the staircase right edge marks where each sector's ring is clipped by the detector). Large grains or preferred orientation show up as intensity concentrated in a few sectors. Supports `--range full/auto/lo,hi`.
 
 </details>
 
@@ -153,7 +157,8 @@ Splits the 0°–360° azimuth into N sectors (default 36, one per 10°), integr
 │   ├── core/processor.py          # image processing (line profiles, auto ring-center localization)
 │   └── services/
 │       ├── data_loader.py         # image I/O (fabio)
-│       └── integrator.py          # geometry refinement + 1D integration (pyFAI)
+│       ├── integrator.py          # geometry refinement + 1D integration (pyFAI)
+│       └── range_selector.py      # automatic 2θ range selection (per-material standards)
 ├── tests/                         # unit tests (reserved, to be added)
 ├── docs/                          # Chinese README (original)
 ├── environment.yml                # conda environment (one-command setup)
