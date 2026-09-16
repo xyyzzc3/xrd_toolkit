@@ -6,8 +6,9 @@
     python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --dist0 1600
     python scripts/calibrate_integrate.py          # 不带 --file：交互菜单选文件（可多选）
 
-不带 --center 时自动定位环心作初值（find_ring_center，亚像素精度 <1 px），
-换任何新数据都不用先手动量圆心。
+不带 --center 时自动定位环心作初值：以取点拟合（fit_center_from_rings，
+完整环/部分环均适用）为主，FFT 法（find_ring_center，亚像素精度 <1 px）
+作兜底并打印交叉验证差距。换任何新数据都不用先手动量圆心。
 
 标定完成后会打印一段可直接粘贴进 config.py CONFIGS 的条目模板
 （脚本不直接写配置文件，配置登记需人工复核）。
@@ -26,7 +27,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
-from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
+from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings  # 自动定位环心（校准初值）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -44,10 +45,9 @@ def main() -> None:
     parser.add_argument("--dist0", type=float, default=1600.0, help="initial detector distance in mm")
     parser.add_argument("--center", default=None,
                         help="initial ring center cx,cy in pixel; if not given, "
-                             "auto-localized with find_ring_center (<1 px accuracy). "
-                             "Pass it explicitly for off-center-beam (partial-ring) "
-                             "datasets: the auto-localizer needs full rings, and "
-                             "refinement is unreliable there (see README)")
+                             "auto-localized by multi-ring point fitting "
+                             "(fit_center_from_rings, works for full and partial "
+                             "rings; find_ring_center FFT as fallback)")
     parser.add_argument("--max-rings", type=int, default=16, help="number of rings used for calibration")
     parser.add_argument("--range", dest="range_", default="auto",
                         help="2θ range for the plot and the *_auto trimmed txt: "
@@ -77,9 +77,11 @@ def main() -> None:
         print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
         print(f"Parameters: λ={args.wavelength} Å, pixel={args.pixel} µm, dist0={args.dist0} mm")
 
-        # 环心初值：指定 --center 时使用输入值，否则自动定位
-        # （find_ring_center）。注意自动定位返回 (行, 列)，校准需要
-        # (cx, cy)，交换顺序。
+        # 环心初值：指定 --center 时使用输入值，否则自动定位——
+        # 取点拟合（fit_center_from_rings）为主：各方位角剖面寻峰取点，
+        # 解共同圆心，完整环/半环/偏置摆法都适用；失败（取不到足够
+        # 点）时退回 FFT（find_ring_center），并打印两者差距作交叉验证。
+        # 注意自动定位返回 (行, 列)，校准需要 (cx, cy)，交换顺序。
         #
         # 说明：初值圆心会轻微影响精修落点——环接近正圆时 rot1/rot2
         # 与 PONI 近似简并，自动定位 (1022.2, 1021.7) 与手动 (1024, 1024)
@@ -89,8 +91,25 @@ def main() -> None:
             cx, cy = (float(v) for v in args.center.split(","))
             print(f"  Ring center initial (manual): ({cx}, {cy}) px")
         else:
-            cy, cx = find_ring_center(image)
-            print(f"  Ring center initial (auto): ({cx:.2f}, {cy:.2f}) px")
+            fit = fit_center_from_rings(image)
+            if fit is None:
+                cy, cx = find_ring_center(image)
+                print(f"  Ring center (fit): failed (too few ring points) "
+                      f"-> FFT fallback: ({cx:.2f}, {cy:.2f}) px")
+            else:
+                cy, cx = fit["cy"], fit["cx"]
+                print(f"  Ring center (fit): ({cx:.2f}, {cy:.2f}) px "
+                      f"[{fit['n_points']} points from {len(fit['ring_radii'])} rings, "
+                      f"residual {fit['residual_px']:.2f} px]")
+                # 交叉验证：FFT 与取点拟合互相独立，两者一致才可信。
+                # FFT 依赖对跖配对、要求完整环；偏置摆法下差异偏大
+                # 属正常（此时以取点拟合为准）。
+                cy_f, cx_f = find_ring_center(image)
+                delta = np.hypot(cx_f - cx, cy_f - cy)
+                print(f"  Ring center (FFT cross-check): ({cx_f:.2f}, {cy_f:.2f}) px "
+                      f"— delta {delta:.2f} px (< 3 px: consistent; "
+                      f"FFT needs full rings, larger deltas are expected "
+                      f"for partial-ring data)")
 
         # 校准 → 积分
         tth, intensity, geometry = calibrate_and_integrate(

@@ -1,7 +1,8 @@
 """XRD 图像处理：对 2D 强度数组的计算。
 
-文件顺序按调用依赖排列：先定圆心（find_ring_center），
-再画剖面线（line_profile）。
+文件顺序按调用依赖排列：先定圆心（find_ring_center），再画剖面线
+（line_profile），最后是复用剖面线的取点拟合圆心
+（fit_center_from_rings）。
 """
 import numpy as np
 
@@ -150,3 +151,266 @@ def line_profile(image: np.ndarray, center, angle_deg: float = 0.0):
                  + i01 * (1 - fx) * fy
                  + i11 * fx * fy)
     return t, intensity
+
+
+def _profile_peaks(t, profile, max_rings, rel_thresh=0.25):
+    """径向剖面寻峰：平滑 → 局部极大 → 自适应阈值 → 平顶合并 → 亚像素细化。
+
+    平滑（盒宽 7）压噪声；局部背景用 151 px 宽中值滤波估计（远宽
+    于峰，不被峰抬高）；只保留强峰：超出局部背景的高度 ≥ 本剖面
+    最大超出高度的 rel_thresh（25%）——弱到只比背景高 2~24% 的外环
+    凸起对圆心拟合贡献很小且峰位不可靠，宁缺毋滥。
+
+    合并规则按"鞍点"而非固定距离：相邻候选峰之间的谷底若不低到
+    较矮峰的 50% 以下，说明是同一宽峰的平顶两端（1 px 环经盒平滑
+    后平顶可宽 6~8 px，固定距离合并会漏并），合并取高者；真正的
+    相邻环之间谷底回到背景，保留两峰。
+
+    亚像素细化在未平滑剖面上做：平滑平顶上没有峰位信息，取平滑
+    峰位 ±3 px 内原始剖面的最高点，再三点抛物线细化（对对称峰
+    精确落在中心，如 1 px 环只有 2 个非零采样点的凸起）。
+
+    返回 [(t_peak, height), ...] 按 t 升序，至多 max_rings 个。
+    """
+    from scipy.ndimage import median_filter   # 惰性导入：仅此函数需要
+
+    p = np.asarray(profile, dtype=np.float64)
+    n = len(p)
+    if n < 10:
+        return []
+    half = 3
+    s = np.convolve(p, np.ones(2 * half + 1) / (2 * half + 1), mode="same")
+    bg = median_filter(s, size=151, mode="nearest")
+    exc = s - bg                       # 超出局部背景的高度
+
+    # 全平剖面（如全黑图）：exc 处处为 0，直接返回，避免把每个点都当峰
+    top = float(np.max(exc))
+    if top <= 0:
+        return []
+    cand = [i for i in range(1, n - 1) if s[i] >= s[i - 1] and s[i] >= s[i + 1]]
+    if not cand:
+        return []
+    keep = [i for i in cand if exc[i] >= rel_thresh * top]
+
+    # 鞍点合并：谷底 ≥ 0.5×较矮峰 → 同一峰（平顶两端），保留较高者
+    merged = []
+    for i in keep:
+        if merged:
+            j = merged[-1]
+            valley = float(np.min(exc[j:i + 1]))
+            if valley > 0.5 * min(exc[j], exc[i]):
+                if exc[i] > exc[j]:
+                    merged[-1] = i
+                continue
+        merged.append(i)
+
+    # 亚像素细化：原始剖面 p 在平滑峰位 ±3 px 内取最高点 + 三点抛物线
+    out = []
+    for i in merged:
+        lo, hi = max(1, i - 3), min(n - 2, i + 3)
+        m = lo + int(np.argmax(p[lo:hi + 1]))
+        d = 0.0
+        denom = p[m - 1] - 2.0 * p[m] + p[m + 1]
+        if abs(denom) > 1e-12:
+            d = float(np.clip(0.5 * (p[m - 1] - p[m + 1]) / denom, -1.0, 1.0))
+        out.append((float(t[m]) + d, float(exc[i])))
+    return out[:max_rings]
+
+
+def fit_center_from_rings(image: np.ndarray, center0=None, n_azim=180,
+                          max_rings=16, r_min_px=0.0, rounds=2):
+    """多环取点反推圆心：取可见弧段上的点，最小二乘拟合共同圆心。
+
+    原理：所有衍射环是同心圆、共享一个圆心。沿各方位角取径向
+    剖面、在每条剖面上寻峰取点，再解"所有点到共同圆心 C 的距离
+    等于各自环半径"的最小二乘。只要求有可见环弧段——完整环、
+    半环、四分之一环、束心在图像外都适用（find_ring_center 的
+    FFT 对跖配对在半环上失效，本方法无此限制）。
+
+    解出的圆心 = 环的几何中心 = 直射束落点 B（探测器有倾斜时
+    B ≠ PONI，注意与 pyFAI 几何区分）。
+
+    步骤：
+      1) 从初值圆心向 n_azim 个方位角各取一条径向剖面（复用
+         line_profile，只用 t ≥ 0 一侧），寻峰取点
+         （_profile_peaks）；
+      2) 网格初值：束心到同一环各点的距离应相等——在覆盖图像
+         （含边距）的粗网格上，按距离聚类成环、以稳健残差估价，
+         取最优格点作初值圆心与环标签。可见弧段很短时圆拟合
+         有"远处伪解"简并（直接拟合会滑向图像外），网格搜索
+         避开此陷阱；
+      3) 最小二乘：min Σ (‖p − C‖ − r_环)²，未知数 = 共同圆心
+         C + 每环半径 r_k。scipy least_squares + soft_l1 稳健
+         损失——个别方位角漏峰/错编号产生的野点被自动降权
+         （单晶斑同理）；
+      4) EM 修正错标签：拟合后按"最近环半径"重分配每个点的
+         环序号再拟合。修正两类错标——近切线射线穿过同一环
+         两次（近侧/远侧两点同属一环却拿相邻序号）、部分方位
+         角漏峰导致的序号错位；
+      5) 用拟合出的圆心重新取剖面再拟合（共 rounds 轮，通常
+         2 轮收敛：更好的圆心 → 更锐的剖面 → 更准的峰位）。
+
+    参数：
+        image    —— 2D numpy 数组，image[行][列] = 该像素强度
+        center0  —— 初值圆心 (行, 列)；None 时用图像几何中心。
+                    初值只影响剖面采样位置（须穿得过环），圆心
+                    本身由网格搜索+拟合决定，初值远离真值也能
+                    收敛（剖面穿不过任何环时仍会失败）
+        n_azim   —— 剖面数，均匀覆盖 360°（默认 180，每 2° 一条）
+        max_rings—— 每剖面最多取多少个峰（默认 16）
+        r_min_px —— 跳过半径小于该值的峰（排除 beamstop 光晕区；
+                    默认 0。光晕本身以束心为中心对称，即使取到
+                    也不会系统性偏置圆心，只是多加噪声）
+        rounds   —— 取点→拟合迭代轮数（默认 2）
+
+    返回：
+        dict：cy, cx（圆心，行/列，与 find_ring_center 一致）、
+        residual_px（全部点的距离残差 RMS，像素）、n_points、
+        ring_radii（每环拟合半径，升序）。取不到足够点时返回
+        None（如实报告失败，由调用方兜底）。
+    """
+    h, w = image.shape
+    if center0 is None:
+        cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    else:
+        cy, cx = float(center0[0]), float(center0[1])
+
+    azims = np.linspace(0.0, 360.0, n_azim, endpoint=False)
+
+    def extract_points(cy, cx):
+        """从当前圆心向各方位角取剖面、寻峰，返回取到的点 (x, y)。"""
+        pts_x, pts_y = [], []
+        for phi in azims:
+            t, profile = line_profile(image, (cy, cx), float(phi))
+            pos = t >= r_min_px
+            t, profile = t[pos], profile[pos]
+            if len(t) < 20:
+                continue
+            peaks = _profile_peaks(t, profile, max_rings)
+            cos_p, sin_p = np.cos(np.radians(phi)), np.sin(np.radians(phi))
+            for tp, _ in peaks:
+                pts_x.append(cx + tp * cos_p)
+                pts_y.append(cy + tp * sin_p)
+        return (np.asarray(pts_x, dtype=np.float64),
+                np.asarray(pts_y, dtype=np.float64))
+
+    def _compact(labels):
+        """标签压缩去空号（EM 重分配可能腾空某环）。"""
+        uniq = np.unique(labels)
+        if len(uniq) == int(labels.max()) + 1:
+            return labels
+        remap = {old: new for new, old in enumerate(uniq)}
+        return np.asarray([remap[l] for l in labels], dtype=np.int64)
+
+    def fit_rings(pts_x, pts_y, labels, cy0, cx0):
+        """最小二乘：min Σ soft_l1(‖p−C‖ − r_环)，未知数 = C + 每环半径。
+
+        初值：当前圆心 + 每环点到当前圆心的距离中位数（中位数抗野点）。
+        """
+        from scipy.optimize import least_squares   # 惰性导入：仅此函数需要
+
+        k_rings = int(labels.max()) + 1
+        dist = np.hypot(pts_x - cx0, pts_y - cy0)
+        r0 = [float(np.median(dist[labels == k])) for k in range(k_rings)]
+        x0 = np.r_[cx0, cy0, r0]
+
+        def res(x):
+            d = np.hypot(pts_x - x[0], pts_y - x[1])
+            return d - x[2 + labels]
+
+        return least_squares(
+            res, x0, loss="soft_l1", f_scale=3.0,
+            bounds=([-w, -h] + [1e-6] * k_rings,
+                    [2.0 * w, 2.0 * h] + [np.inf] * k_rings))
+
+    def grid_init(pts_x, pts_y, pad=0.5, n_grid=11):
+        """网格搜索初值：找"点到候选圆心的距离聚成若干紧簇"的格点。
+
+        束心到同一环上各点的距离应严格相等（= 环半径），到不同环
+        的距离相差大。在覆盖图像（含 pad 边距，束心可能在图像外
+        一点）的 n_grid×n_grid 粗网格上：按距离 gap 聚类成环，
+        以 soft_l1 残差估价，取最优格点。可见弧段短时圆拟合存在
+        远处伪解，网格初值把它拉回真值盆地。返回 (cx, cy, labels)
+        或 None（每格点都凑不出 ≥2 环 × ≥3 点，如无环图像）。
+        """
+        gx = np.linspace(-pad * w, (1 + pad) * w, n_grid)
+        gy = np.linspace(-pad * h, (1 + pad) * h, n_grid)
+        best = None                       # (cost, cx, cy, labels)
+        for cxg in gx:
+            for cyg in gy:
+                d = np.hypot(pts_x - cxg, pts_y - cyg)
+                order = np.argsort(d)
+                ds = d[order]
+                # gap 分裂：相邻距离差 > max(4 px, 3% 距离) 处分环
+                gap = np.diff(ds)
+                splits = np.where(gap > np.maximum(4.0, 0.03 * ds[1:]))[0]
+                labs = np.zeros(len(ds), dtype=np.int64)
+                for s in splits:
+                    labs[s + 1:] += 1
+                k = int(labs.max()) + 1
+                counts = np.bincount(labs)
+                # 只让 ≥3 点的簇参与估价：1~2 点的野簇（图像边缘截断
+                # 产生的离群峰）不拒绝整个格点，也不进代价
+                keep = np.where(counts[labs] >= 3)[0]
+                if (len(np.unique(labs[keep])) < 2
+                        or len(keep) < max(12, 0.25 * len(ds))):
+                    continue                # 凑不出 ≥2 环，或大部分点是散的
+                med = np.array([np.median(ds[labs == j]) for j in range(k)])
+                z = (ds[keep] - med[labs[keep]]) / 3.0
+                cost = float(np.sum(2.0 * (np.sqrt(1.0 + z * z) - 1.0)))
+                if best is None or cost < best[0]:
+                    inv = np.empty_like(order)
+                    inv[order] = np.arange(len(order))
+                    best = (cost, float(cxg), float(cyg), labs[inv])
+        if best is None:
+            return None
+        return best[1], best[2], best[3]
+
+    pts_x = pts_y = None
+    for _ in range(rounds):
+        pts_x, pts_y = extract_points(cy, cx)
+        n_pts = len(pts_x)
+        if n_pts < 12:
+            return None                    # 点太少：拟合无意义
+
+        init = grid_init(pts_x, pts_y)
+        if init is None:
+            return None                    # 聚不出 ≥2 环：拟合无意义
+        cx, cy, labels = init
+
+        # EM 迭代：拟合 → 按"最近环半径"重分配标签 → 再拟合（2 轮）。
+        # 修正两类错标签：近切线射线穿过同一环两次（近侧/远侧两点
+        # 同属一环却拿相邻序号）、部分方位角漏峰导致的序号错位。
+        for _ in range(2):
+            k_rings = int(labels.max()) + 1
+            if k_rings < 2:
+                return None                # 环太少：拟合无意义
+            fit = fit_rings(pts_x, pts_y, labels, cy, cx)
+            cx, cy = float(fit.x[0]), float(fit.x[1])
+            d = np.hypot(pts_x - cx, pts_y - cy)
+            labels = np.abs(d[:, None] - fit.x[2:][None, :]).argmin(axis=1)
+            labels = _compact(labels)
+
+    # 合并半径近同的环：非真值格点上的 gap 聚类会把一个环拆成多个
+    # 伪簇（半径几乎相同的若干"环"），按环间距阈值合并后重算残差。
+    # 合并后只剩一个环 → 数据里没有多环结构，如实返回 None。
+    rs_sort = np.argsort(fit.x[2:])
+    rs = fit.x[2:][rs_sort]
+    bounds = ([0]
+              + list(np.where(np.diff(rs)
+                              > np.maximum(4.0, 0.03 * rs[1:]))[0] + 1)
+              + [len(rs)])
+    if len(bounds) - 1 < 2:
+        return None
+    radii = [float(np.mean(rs[bounds[i]:bounds[i + 1]]))
+             for i in range(len(bounds) - 1)]
+    group = np.empty(len(rs), dtype=np.int64)
+    for g, (lo, hi) in enumerate(zip(bounds[:-1], bounds[1:])):
+        group[lo:hi] = g
+    merged_label = group[np.argsort(rs_sort)]   # 原环序号 → 合并组
+    d = np.hypot(pts_x - cx, pts_y - cy)
+    r_of_label = np.asarray(radii)[merged_label[labels]]
+    residual = np.sqrt(np.mean((d - r_of_label) ** 2))
+    return {"cy": cy, "cx": cx, "residual_px": float(residual),
+            "n_points": int(n_pts), "ring_radii": radii}
+

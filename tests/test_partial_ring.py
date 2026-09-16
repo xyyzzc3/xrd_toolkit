@@ -121,13 +121,15 @@ class TestDiyIntegration(unittest.TestCase):
     """偏置摆法下自研积分的正确性（pyFAI 2026.x 缺陷的回归护栏）。"""
 
     def test_integrate_1d_off_center_peaks(self):
-        # 束心 (900, 900)（偏离探测器中心 ~175 px > 阈值）：两个完整
-        # 合成环。pyFAI 路径在此摆法下峰高衰减约 70 倍，自研路径应
-        # 峰位准确、峰高接近画入值。
-        img = _synthetic_rings(900.0, 900.0, (3.0, 5.0))
+        # 束心 (1148, 1024)（沿 x 轴偏离 124 px > 阈值）：两个完整
+        # 合成环。注意必须是"轴方向"偏离——实测 pyFAI 2026.x 的
+        # 径向分箱缺陷只在轴方向衰减（124 px 时峰高 <1%），45° 对角
+        # 方向即使偏离 500 px 也不衰减；本用例才真正踩中该缺陷。
+        # 自研路径应峰位准确、峰高接近画入值。
+        img = _synthetic_rings(1148.0, 1024.0, (3.0, 5.0))
         tth, curve = integrate_1d(img, PIXEL_M, 0.1223e-10, DIST_M,
-                                  poni1_m=900.0 * PIXEL_M,
-                                  poni2_m=900.0 * PIXEL_M,
+                                  poni1_m=1148.0 * PIXEL_M,
+                                  poni2_m=1024.0 * PIXEL_M,
                                   rot1_deg=0.0, rot2_deg=0.0, npt=3000)
         for t0 in (3.0, 5.0):
             win = (tth > t0 - 0.1) & (tth < t0 + 0.1)

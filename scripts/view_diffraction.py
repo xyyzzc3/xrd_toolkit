@@ -57,7 +57,7 @@ def process_one_file(path: Path, args, cfg: dict, outdir: Path) -> None:
     sub.mkdir(parents=True, exist_ok=True)
 
     # 圆心：默认使用选中配置条目（--config）的 beam_center（校准值，
-    # 同一仪器通用；自动定位 find_ring_center 仅保留给校准脚本作初值），
+    # 同一仪器通用；自动定位仅保留给校准脚本作初值），
     # 指定 --center 时以用户输入覆盖。
     # 注意坐标顺序：屏幕习惯 (x, y) = (列, 行)，数组下标为 data[行][列]；
     # beam_center 存储的正是 (行, 列)。

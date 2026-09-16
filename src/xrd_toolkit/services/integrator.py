@@ -9,7 +9,6 @@ from pyFAI.calibrant import get_calibrant
 from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry, GeometryRefinement, SingleGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-from xrd_toolkit.core.processor import find_ring_center  # 自动定位环心（校准初值）
 
 # pyFAI 内置信标数据库（calibrant），LaB₆ 标准 d 值：
 #   d = a / sqrt(h² + k² + l²)，a = 4.1568 Å（NIST 标准值）
@@ -71,7 +70,8 @@ def calibrate_lab6(
     pixel_size_m: float = 200e-6,
     wavelength_m: float = 0.1223e-10,
     dist0_m: float = 1.6,
-    center0_px: tuple = None,
+    *,
+    center0_px: tuple,
     max_rings: int = 16,
 ) -> dict:
     """
@@ -95,8 +95,9 @@ def calibrate_lab6(
         dist0_m : float
             探测器距离初值（米），本实验 ~1.6 m，精修后得到精确值
         center0_px : tuple
-            环心初值（像素，cx, cy）。不传时自动定位
-            （find_ring_center，亚像素精度 <1 px）
+            环心初值（像素，cx, cy），必传。由调用方提供：
+            校准脚本里用取点拟合（fit_center_from_rings，FFT 兜底）
+            自动定位，或 --center 显式指定；本模块不做自动定位
         max_rings : int
             参与校准的环数上限
 
@@ -126,12 +127,6 @@ def calibrate_lab6(
     cal.wavelength = wavelength_m
 
     det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m, max_shape=image.shape)
-
-    # 环心初值：未指定时自动定位。find_ring_center 返回 (行, 列)，
-    # 校准需要 (cx, cy)，交换顺序。
-    if center0_px is None:
-        cy, cx = find_ring_center(image)
-        center0_px = (cx, cy)
 
     # 偏置摆法提示：精修在部分环上不可靠（见常量注释），打印提示但
     # 继续执行（居中标样正常流程不会触发）
@@ -485,7 +480,8 @@ def calibrate_and_integrate(
     pixel_size_m: float = 200e-6,
     wavelength_m: float = 0.1223e-10,
     dist0_m: float = 1.6,
-    center0_px: tuple = None,
+    *,
+    center0_px: tuple,
     max_rings: int = 16,
     npt: int = 3000,
 ) -> tuple:
