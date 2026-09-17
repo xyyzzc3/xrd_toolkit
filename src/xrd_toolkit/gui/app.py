@@ -21,9 +21,10 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     点击安全；面板按「视图 + 文件」成对创建，同一视图可同时开多
     张不同文件的图）→ 点图面板设"编辑对象"，参数坞回放该面板
     的参数快照（点哪张图就显示哪张图作图时的参数）→ 数据 [应用]
-    用当前参数重算焦点面板；图像 [应用] 只改显示不重算（1D 显示
-    参数 = 对数纵轴/纵轴范围，用已有数据重画）；计算走
-    gui/tasks.py 后台线程，界面不卡。
+    用当前参数重算焦点面板；图像 [应用] 只改显示不重算——显示
+    参数（对数纵轴/纵轴范围/对比归一化）是全局风格，点一次 =
+    所有已打开的 1D/对比图用已有数据一起重画，切面板不回放；
+    计算走 gui/tasks.py 后台线程，界面不卡。
   - [对比]（工具栏，仅 1D）：把勾选的多个文件叠进同一张图（勾选
     数 >= 2），每文件一个后台任务、全部算完再一起画；面板键 =
     f"对比|{排序后的路径们}"，重复点击同一选择 = 复用同一面板并
@@ -209,6 +210,10 @@ def _snapshot_params(window: QMainWindow) -> dict:
     return snap
 
 
+_DISPLAY_PARAMS = {"对数纵轴", "纵轴自动", "纵轴下限", "纵轴上限",
+                   "对比归一化"}   # 1D 显示组：全局风格，不随焦点回放
+
+
 def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
     """把参数快照填回参数面板（只展示不计算）。
 
@@ -218,13 +223,16 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
       - 再填各输入框：用"当时真用的"值覆盖注册表几何值；
       - 最后处理自动对比度开关（blockSignals 防日志刷屏）：勾着 →
         静默按焦点图重算自动值展示；手动模式 → 回放快照里的值。
+
+    显示参数（_DISPLAY_PARAMS）跳过回放：它们是全局风格，[应用] 时
+    所有图一起重画；切面板若回放旧值会把用户刚改的显示设置冲掉。
     """
     idx = window.config_combo.findData(snap.get("config"))
     if idx >= 0:
         window.config_combo.setCurrentIndex(idx)
     auto = window.params.get("自动对比度")
     for name, value in snap.items():
-        if name == "config" or name == "自动对比度":
+        if name == "config" or name == "自动对比度" or name in _DISPLAY_PARAMS:
             continue
         w = window.params.get(name)
         if w is None:
@@ -638,14 +646,13 @@ def _apply_params(window: QMainWindow) -> None:
 
 
 def _apply_image_params(window: QMainWindow) -> None:
-    """[应用] 按钮（图像参数组）：把当前图像参数应用到编辑对象。
+    """[应用] 按钮（图像参数组）：把当前显示参数应用到所有已打开的图。
 
-    图像参数不参与积分、只影响图怎么显示：
-      - 1D 面板 → 按 1D 显示参数（对数纵轴/纵轴范围）用已有数据
-        重画，不重新积分；
-      - 2D/剖面 → 接线后改为"用当前对比度/剖面角重画"。
-    与数据 [应用] 一个套路：先改、点 [应用] 才落到这张图上，快照
-    随之刷新（切走再切回显示这组值）。
+    显示参数（对数纵轴/纵轴范围/对比归一化）是全局风格：改完点一次
+    [应用] = 所有 1D 面板 + 对比面板用已有数据一起重画（不重新积分），
+    不会出现"改了只动一张、别的图不动"的分裂状态。没算完的面板跳过。
+    2D/剖面尚未接线，其占位面板不参与；数据参数仍按焦点面板快照
+    （见 _apply_params）。显示参数切面板不回放（见 _DISPLAY_PARAMS）。
     """
     key = window.focus_panel
     if key is None:
@@ -657,25 +664,29 @@ def _apply_image_params(window: QMainWindow) -> None:
         window.focus_panel = None
         window.focus_label.setText("编辑对象：未选中图面板")
         return
-    dock.params_snapshot = _snapshot_params(window)
+    dock.params_snapshot = _snapshot_params(window)   # 数据参数快照照常刷新
+    redrawn = 0
+    for k, d in window.plot_docks.items():
+        view = k.split("|", 1)[0]
+        if view == "1D":
+            if getattr(d, "last_tth", None) is None:
+                continue   # 还没算完的面板：跳过，不误报
+            _draw_1d(window, d, d.last_tth, d.last_intensity)
+            redrawn += 1
+        elif view == "对比":
+            if not getattr(d, "compare_data", None):
+                continue
+            _redraw_compare(window, k)
+            redrawn += 1
+    if redrawn:
+        _log(window, f"[应用] 图像参数已重画 {redrawn} 张图")
     view = key.split("|", 1)[0]
-    if view == "1D":
-        if getattr(dock, "last_tth", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（积分完成后再试）")
-            return
-        _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
-        _log(window, f"[应用] 图像参数已重画编辑对象：{dock.windowTitle()}")
-    elif view == "对比":
-        if not getattr(dock, "compare_data", None):
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（对比完成后再试）")
-            return
-        _redraw_compare(window, key)
-        _log(window, f"[应用] 图像参数已重画编辑对象：{dock.windowTitle()}")
-    else:
+    if view not in ("1D", "对比"):
         _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
                      f"（{view} 视图尚未接线）")
+    elif redrawn == 0:
+        _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                     f"计算结果（积分完成后再试）")
 
 
 def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,

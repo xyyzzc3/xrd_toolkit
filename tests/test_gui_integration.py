@@ -1180,7 +1180,7 @@ class TestImageApply(unittest.TestCase):
             dock = _dock(w, "1D", "data/fake_b.tif")
             self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 15.0)
             log = w.log_text.toPlainText()
-            self.assertIn("[应用] 图像参数已重画编辑对象", log)
+            self.assertIn("[应用] 图像参数已重画 1 张图", log)
             # 1D 显示参数真的落到图上（对数纵轴生效），且没有重算
             self.assertEqual(
                 _axes(w, "1D", "data/fake_b.tif").get_yscale(), "log")
@@ -1198,6 +1198,59 @@ class TestImageApply(unittest.TestCase):
                              Qt.LeftButton)
             w.findChild(QPushButton, "apply_image_btn").click()
             self.assertIn("2D 视图尚未接线", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_apply_redraws_all_open_plots(self):
+        """显示参数是全局的：1D + 对比同开，焦点在 1D 上改参数 [应用]
+        → 两张图一起重画（修前只动焦点那张，对比不动）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
+                    > 0))
+                w.add_files(["data/fake_b.tif"])   # fake_a 仍勾着
+                w.compare_btn.click()
+                cax = [d for k, d in w.plot_docks.items()
+                       if k.startswith("对比|")][0].widget().axes_1d
+                self.assertTrue(_wait_until(lambda: len(cax.lines) >= 2))
+            # 焦点此时在对比面板；切到 1D 面板改参数 → 应用 → 两张都变
+            QTest.mouseClick(_dock(w, "1D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)
+            w.params["对数纵轴"].setChecked(True)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertEqual(
+                _axes(w, "1D", "data/fake_a.tif").get_yscale(), "log")
+            self.assertEqual(cax.get_yscale(), "log")
+            self.assertIn("[应用] 图像参数已重画 2 张图",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_display_params_survive_panel_switch(self):
+        """显示参数切面板不回放：改完不点 [应用]，切去别的面板再切回
+        → 设置还在（修前会被该面板的快照冲回旧值）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
+                    > 0))
+            w.params["对数纵轴"].setChecked(True)   # 改了，故意不点 [应用]
+            w.add_files(["data/fake_a.tif"])
+            _open_view(w, "2D")   # 开一张 2D 占位面板当"别的面板"
+            QTest.mouseClick(_dock(w, "2D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)   # 切走
+            QTest.mouseClick(_dock(w, "1D", "data/fake_b.tif").widget(),
+                             Qt.LeftButton)   # 切回
+            self.assertTrue(w.params["对数纵轴"].isChecked())
         finally:
             w.close()
 
@@ -1285,7 +1338,7 @@ class TestCompare(unittest.TestCase):
             self.assertFalse(dock.params_snapshot["对比归一化"])
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
-            self.assertIn("[应用] 图像参数已重画编辑对象",
+            self.assertIn("[应用] 图像参数已重画 1 张图",
                           w.log_text.toPlainText())
             # 只重画不重算
             self.assertEqual(w.log_text.toPlainText().count("开始对比"),
