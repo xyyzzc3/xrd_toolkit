@@ -724,5 +724,645 @@ class TestCollectGeometry(unittest.TestCase):
             w.close()
 
 
+class TestAutoContrast(unittest.TestCase):
+    """自动对比度：勾回自动 = 按编辑对象（焦点图）重算并填回；没
+    焦点图填占位默认；[恢复默认] 也会重算。"""
+
+    def _focus_1d(self, w):
+        """画一张 fake_a 的 1D 图并等它完成 → 编辑对象 = 该面板。"""
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_a.tif"])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
+        return w.focus_panel
+
+    def test_recheck_auto_restores_computed_values(self):
+        """改完手动对比度再勾回自动 → 按焦点图重算，数字跳回自动值。"""
+        w = create_window()
+        try:
+            self._focus_1d(w)   # 编辑对象 = fake_a 面板
+            auto = w.params["自动对比度"]
+            auto.setChecked(False)   # 手动模式
+            w.params["对比度下限"].setValue(5.0)
+            w.params["对比度上限"].setValue(200.0)
+            fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
+            with mock.patch.object(gui_app, "load_diffraction_image",
+                                   return_value=fake_image):
+                auto.setChecked(True)   # 勾回自动 → 按焦点图重算
+            self.assertAlmostEqual(
+                w.params["对比度下限"].value(),
+                float(np.percentile(fake_image, 1.0)), places=1)
+            self.assertAlmostEqual(
+                w.params["对比度上限"].value(),
+                float(np.percentile(fake_image, 99.9)), places=1)
+            self.assertFalse(w.params["对比度下限"].isEnabled())
+            self.assertFalse(w.params["对比度上限"].isEnabled())
+            self.assertIn("自动对比度：按 fake_a.tif 算得",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_recheck_auto_without_focus_fills_defaults(self):
+        """没有编辑对象时勾回自动 → 恢复占位默认值。"""
+        w = create_window()
+        try:
+            auto = w.params["自动对比度"]
+            auto.setChecked(False)
+            w.params["对比度下限"].setValue(5.0)
+            w.params["对比度上限"].setValue(200.0)
+            auto.setChecked(True)
+            self.assertEqual(w.params["对比度下限"].value(), 1.0)
+            self.assertEqual(w.params["对比度上限"].value(), 100000.0)
+            self.assertIn("没有编辑对象", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_reset_image_recomputes_auto(self):
+        """[恢复默认]：勾回自动并重算（不是填死的占位值），角度归零。"""
+        w = create_window()
+        try:
+            self._focus_1d(w)
+            w.params["自动对比度"].setChecked(False)
+            w.params["对比度下限"].setValue(5.0)
+            w.params["剖面角度 (°)"].setValue(45.0)
+            fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
+            with mock.patch.object(gui_app, "load_diffraction_image",
+                                   return_value=fake_image):
+                w.findChild(QPushButton, "reset_image_btn").click()
+            self.assertTrue(w.params["自动对比度"].isChecked())
+            self.assertAlmostEqual(
+                w.params["对比度下限"].value(),
+                float(np.percentile(fake_image, 1.0)), places=1)
+            self.assertEqual(w.params["剖面角度 (°)"].value(), 0.0)
+            self.assertIn("图像参数已恢复默认", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_auto_contrast_load_failure_falls_back(self):
+        """焦点图读取失败 → 填占位默认并记日志，不崩溃。"""
+        w = create_window()
+        try:
+            self._focus_1d(w)
+            w.params["自动对比度"].setChecked(False)
+            w.params["对比度下限"].setValue(5.0)
+            with mock.patch.object(gui_app, "load_diffraction_image",
+                                   side_effect=OSError("boom")):
+                w.params["自动对比度"].setChecked(True)
+            self.assertEqual(w.params["对比度下限"].value(), 1.0)
+            self.assertEqual(w.params["对比度上限"].value(), 100000.0)
+            self.assertIn("读取 fake_a.tif 失败", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+
+class TestParamSnapshot(unittest.TestCase):
+    """点哪张图，参数面板就显示哪张图作图时的参数（快照）。
+
+    快照在开图/重算时拍下：改参数 → [应用] → 快照跟着刷新。
+    重复点同一面板不冲掉正在改的值。
+    """
+
+    def _plot_fake(self, w, file, params):
+        """只勾这一个文件、改参数、出图并等完成 → 返回面板键。"""
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([file])
+            # 只留这一个对号（其余取消），点作图按钮才只画它
+            for i in range(w.file_list.count()):
+                item = w.file_list.item(i)
+                item.setCheckState(
+                    Qt.Checked if item.data(Qt.UserRole) == file
+                    else Qt.Unchecked)
+            for name, value in params.items():
+                w.params[name].setValue(value)
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", file).lines) > 0))
+        return f"1D|{file}"
+
+    def test_switch_focus_shows_each_panels_params(self):
+        """点 A 显示 A 的参数，点 B 显示 B 的参数（不是只能改不能看）。"""
+        w = create_window()
+        try:
+            key_a = self._plot_fake(
+                w, "data/fake_a.tif",
+                {"初始距离 (mm)": 1700.0, "2θ 上限 (°)": 7.0,
+                 "输出点数": 2500})
+            self.assertEqual(w.focus_panel, key_a)
+            # 完成时焦点 = A → 参数坞已回放 A 的快照
+            self.assertEqual(w.params["初始距离 (mm)"].value(), 1700.0)
+            self.assertEqual(w.params["2θ 上限 (°)"].value(), 7.0)
+            self.assertEqual(w.params["输出点数"].value(), 2500)
+            # 打开 B（参数不同）→ 焦点切 B，参数显示 B 的值
+            key_b = self._plot_fake(
+                w, "data/fake_b.tif",
+                {"初始距离 (mm)": 1800.0, "2θ 上限 (°)": 8.0})
+            self.assertEqual(w.focus_panel, key_b)
+            self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
+            self.assertEqual(w.params["2θ 上限 (°)"].value(), 8.0)
+            # 点回 A → 参数显示 A 的值（能看）
+            QTest.mouseClick(_dock(w, "1D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)
+            self.assertEqual(w.focus_panel, key_a)
+            self.assertEqual(w.params["初始距离 (mm)"].value(), 1700.0)
+            self.assertEqual(w.params["2θ 上限 (°)"].value(), 7.0)
+            self.assertEqual(w.params["输出点数"].value(), 2500)
+            # 配置条目也回放（注册表只有一条，至少不串台）
+            self.assertEqual(w.config_combo.currentData(), w.config_name)
+        finally:
+            w.close()
+
+    def test_apply_updates_snapshot(self):
+        """改参数 [应用] 后快照刷新：切走再切回显示新值。"""
+        w = create_window()
+        try:
+            self._plot_fake(w, "data/fake_a.tif",
+                            {"初始距离 (mm)": 1700.0})
+            w.params["初始距离 (mm)"].setValue(1800.0)
+            done_before = w.log_text.toPlainText().count("积分完成")
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.findChild(QPushButton, "apply_btn").click()
+                self.assertTrue(_wait_until(
+                    lambda: w.log_text.toPlainText().count("积分完成")
+                    > done_before))
+            # 快照已随 [应用] 同步刷新
+            self.assertEqual(
+                _dock(w, "1D", "data/fake_a.tif").params_snapshot
+                ["初始距离 (mm)"], 1800.0)
+            # 切到 B 再切回 A → 显示新值 1800
+            self._plot_fake(w, "data/fake_b.tif",
+                            {"初始距离 (mm)": 1900.0})
+            QTest.mouseClick(_dock(w, "1D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)
+            self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
+        finally:
+            w.close()
+
+    def test_same_panel_reclick_keeps_edits(self):
+        """重复点同一面板不冲掉正在改的值（跳过快照回放）。"""
+        w = create_window()
+        try:
+            key = self._plot_fake(w, "data/fake_a.tif",
+                                  {"初始距离 (mm)": 1700.0})
+            w.params["初始距离 (mm)"].setValue(1750.0)   # 未应用的编辑
+            QTest.mouseClick(_dock(w, "1D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)
+            self.assertEqual(w.focus_panel, key)
+            self.assertEqual(w.params["初始距离 (mm)"].value(), 1750.0)
+        finally:
+            w.close()
+
+    def test_manual_contrast_restored_from_snapshot(self):
+        """手动对比度也进快照：B 改了对比度，切回 A 显示 A 的状态。"""
+        w = create_window()
+        try:
+            # A 作图时自动对比度勾着
+            self._plot_fake(w, "data/fake_a.tif",
+                            {"初始距离 (mm)": 1700.0})
+            # 手动关自动、改对比度 → B 的快照 = 手动模式 + 这组值
+            w.params["自动对比度"].setChecked(False)
+            w.params["对比度下限"].setValue(123.0)
+            w.params["对比度上限"].setValue(456.0)
+            self._plot_fake(w, "data/fake_b.tif",
+                            {"初始距离 (mm)": 1800.0})
+            # 切回 A：A 的快照里自动是勾着的 → 自动开、输入框置灰
+            QTest.mouseClick(_dock(w, "1D", "data/fake_a.tif").widget(),
+                             Qt.LeftButton)
+            self.assertTrue(w.params["自动对比度"].isChecked())
+            self.assertFalse(w.params["对比度下限"].isEnabled())
+            # 再切回 B：手动模式 + 123/456 原样回放
+            QTest.mouseClick(_dock(w, "1D", "data/fake_b.tif").widget(),
+                             Qt.LeftButton)
+            self.assertFalse(w.params["自动对比度"].isChecked())
+            self.assertEqual(w.params["对比度下限"].value(), 123.0)
+            self.assertEqual(w.params["对比度上限"].value(), 456.0)
+        finally:
+            w.close()
+
+
+class TestPanelToggles(unittest.TestCase):
+    """[文件][参数][日志] 收起开关：收起给图让地方，再点展开；
+    用标题栏 × 关坞也会同步弹起按钮。"""
+
+    def setUp(self):
+        self.w = create_window()
+        self.w.show()   # 坞的 isVisible 依赖主窗口可见，offscreen 也能 show
+
+    def tearDown(self):
+        # 窗口可见时关窗会弹"未保存图"模态框（offscreen 没人点会挂住）；
+        # 关窗询问已有专门测试（TestClosePrompt），这里直接当作选"不保存"
+        with mock.patch.object(gui_app, "_confirm_close",
+                               return_value="discard"):
+            self.w.close()
+
+    def test_default_all_visible_and_checked(self):
+        """初始状态：三个开关都勾着、三个坞都可见。"""
+        for name, dock in (("文件", self.w.file_dock),
+                           ("参数", self.w.param_dock),
+                           ("日志", self.w.log_dock)):
+            self.assertTrue(self.w.panel_toggles[name].isChecked())
+            self.assertTrue(dock.isVisible())
+
+    def test_toggle_hides_and_restores_each_dock(self):
+        """点开关收起、再点展开，三个坞各试一遍。"""
+        for name, dock in (("文件", self.w.file_dock),
+                           ("参数", self.w.param_dock),
+                           ("日志", self.w.log_dock)):
+            self.w.panel_toggles[name].click()   # 收起
+            self.assertFalse(dock.isVisible())
+            self.assertFalse(self.w.panel_toggles[name].isChecked())
+            self.w.panel_toggles[name].click()   # 展开
+            self.assertTrue(dock.isVisible())
+            self.assertTrue(self.w.panel_toggles[name].isChecked())
+
+    def test_close_button_syncs_toggle(self):
+        """点标题栏 × 关坞 → 按钮自动弹起；再点按钮还能展开。"""
+        self.w.param_dock.close()   # 等价于标题栏 ×
+        self.assertFalse(self.w.param_dock.isVisible())
+        self.assertFalse(self.w.panel_toggles["参数"].isChecked())
+        self.w.panel_toggles["参数"].click()
+        self.assertTrue(self.w.param_dock.isVisible())
+
+    def test_all_hidden_plot_still_works(self):
+        """全收起来只剩绘图区，照常出图（开关不影响作图流程）。"""
+        for btn in self.w.panel_toggles.values():
+            btn.click()
+        for dock in (self.w.file_dock, self.w.param_dock, self.w.log_dock):
+            self.assertFalse(dock.isVisible())
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            self.w.add_files(["data/fake_b.tif"])
+            _open_view(self.w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(self.w, "1D", "data/fake_b.tif").lines)
+                > 0))
+        self.assertEqual(self.w.focus_panel, "1D|data/fake_b.tif")
+
+
+class Test1dDisplay(unittest.TestCase):
+    """1D 显示参数（图像参数组里的子分组）：对数纵轴 + 纵轴范围。
+    出图时直接生效；改后点图像 [应用] 用已有数据重画（不重算）。"""
+
+    def _plot_fake_b(self, w):
+        """画 fake_b 的 1D 图并等完成 → 返回坐标轴（强度 1/2/3）。"""
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_b.tif"])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
+        return _axes(w, "1D", "data/fake_b.tif")
+
+    def test_log_y_applied_at_plot(self):
+        """出图前勾上对数纵轴 → 曲线直接画在对数刻度上。"""
+        w = create_window()
+        try:
+            w.params["对数纵轴"].setChecked(True)
+            ax = self._plot_fake_b(w)
+            self.assertEqual(ax.get_yscale(), "log")
+        finally:
+            w.close()
+
+    def test_manual_ylim_applied(self):
+        """取消纵轴自动、手填范围 → 曲线按手填范围画。"""
+        w = create_window()
+        try:
+            w.params["纵轴自动"].setChecked(False)
+            w.params["纵轴下限"].setValue(10.0)
+            w.params["纵轴上限"].setValue(500.0)
+            ax = self._plot_fake_b(w)
+            self.assertEqual(ax.get_ylim(), (10.0, 500.0))
+            # 手动模式下输入框可用
+            self.assertTrue(w.params["纵轴下限"].isEnabled())
+        finally:
+            w.close()
+
+    def test_auto_ylim_uses_percentiles(self):
+        """默认自动 → 纵轴范围 = 曲线强度的 1%/99.9% 分位。"""
+        w = create_window()
+        try:
+            ax = self._plot_fake_b(w)   # 假强度 [1.0, 2.0, 3.0]
+            ylo, yhi = ax.get_ylim()
+            self.assertAlmostEqual(
+                ylo, float(np.percentile([1.0, 2.0, 3.0], 1.0)), places=2)
+            self.assertAlmostEqual(
+                yhi, float(np.percentile([1.0, 2.0, 3.0], 99.9)), places=2)
+            # 自动模式下输入框置灰（只读展示正在用的区间）
+            self.assertFalse(w.params["纵轴下限"].isEnabled())
+        finally:
+            w.close()
+
+    def test_reset_restores_1d_display(self):
+        """[恢复默认] 把 1D 显示参数也复位（对数关、纵轴自动开）。"""
+        w = create_window()
+        try:
+            w.params["对数纵轴"].setChecked(True)
+            w.params["纵轴自动"].setChecked(False)
+            w.findChild(QPushButton, "reset_image_btn").click()
+            self.assertFalse(w.params["对数纵轴"].isChecked())
+            self.assertTrue(w.params["纵轴自动"].isChecked())
+            self.assertFalse(w.params["纵轴下限"].isEnabled())
+        finally:
+            w.close()
+
+
+class TestLongNames(unittest.TestCase):
+    """长名称不破坏参数坞布局（两个长度问题）：
+    1. 编辑对象标题超长 → 单行缩略、不撑宽参数区，悬停看全名；
+    2. 几何配置灰色说明 → 单行缩略，不再换行被下一行控件遮住。
+    """
+
+    LONG = "data/very_long_sample_name_that_would_stretch_the_panel.tif"
+
+    def _plot_long(self, w):
+        """画一张长文件名的 1D 图并等完成（编辑对象 = 该面板）。"""
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([self.LONG])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", self.LONG).lines) > 0))
+
+    def test_long_focus_title_does_not_stretch_param_dock(self):
+        w = create_window()
+        try:
+            w.show()
+            width_before = w.param_dock.width()
+            self._plot_long(w)
+            title = f"1D_{Path(self.LONG).name}"
+            # 完整文字还在（text() 返回逻辑文字），悬停有全名提示
+            self.assertEqual(w.focus_label.text(), f"编辑对象：{title}")
+            self.assertEqual(w.focus_label.toolTip(), f"编辑对象：{title}")
+            # 参数坞不被撑宽（修前会被标题文字宽度撑到 ~600px）
+            self.assertLessEqual(w.param_dock.width(), width_before + 5)
+            # 显示层面是单行（不换行占两行）
+            one_line = w.focus_label.fontMetrics().height()
+            self.assertLessEqual(w.focus_label.height(), one_line + 4)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_config_label_single_line_not_occluded(self):
+        w = create_window()
+        try:
+            w.show()
+            label = w.config_label
+            # 悬停提示 = 完整批次备注
+            self.assertEqual(
+                label.toolTip(),
+                gui_app.CONFIGS[gui_app.DEFAULT_CONFIG]["label"])
+            # 单行：不换行（换行的第二行会被 QFormLayout 压到下一行
+            # 控件底下，即"被遮挡"）
+            one_line = label.fontMetrics().height()
+            self.assertLessEqual(label.height(), one_line + 4)
+            # 超长备注也不撑宽参数坞
+            width_before = w.param_dock.width()
+            label.setText("这是一个非常非常非常长的批次备注，用来验证灰色"
+                          "说明行在窄参数坞里是缩略显示而不是撑宽参数区")
+            self.assertLessEqual(w.param_dock.width(), width_before + 5)
+        finally:
+            w.close()   # 没画图，关窗不会弹询问
+
+
+class TestImageApply(unittest.TestCase):
+    """图像参数组的 [应用]：布局与数据参数组一致（恢复默认 + 应用
+    并排一行），作用 = 把当前图像参数记进编辑对象的快照（1D 视图
+    不使用图像参数，图上不变；2D/剖面接线后改为重画）。"""
+
+    def test_layout_matches_data_params(self):
+        """[恢复默认] + [应用] 并排同一行，结构与数据参数组完全同款。"""
+        w = create_window()
+        try:
+            reset_img = w.findChild(QPushButton, "reset_image_btn")
+            apply_img = w.findChild(QPushButton, "apply_image_btn")
+            reset_data = w.findChild(QPushButton, "reset_data_btn")
+            apply_data = w.findChild(QPushButton, "apply_btn")
+            for btn in (reset_img, apply_img, reset_data, apply_data):
+                self.assertIsNotNone(btn)
+            # QFormLayout.addRow(水平布局) 会把按钮收编进所属分组框，
+            # 同父 = 同一个小容器 = 并排同行；两组结构一致 = 同款布局
+            self.assertEqual(reset_img.parent(), apply_img.parent())
+            self.assertEqual(reset_data.parent(), apply_data.parent())
+            self.assertEqual(type(reset_img.parent()), type(reset_data.parent()))
+        finally:
+            w.close()
+
+    def test_apply_without_focus_prompts(self):
+        """没选图面板就点 [应用] → 日志提示先点图。"""
+        w = create_window()
+        try:
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertIn("先点击要更新的图面板",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_apply_updates_focus_snapshot_and_redraws(self):
+        """改图像参数 → [应用] → 快照更新 + 用已有数据重画（不重算）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
+                    > 0))
+            done_before = w.log_text.toPlainText().count("积分完成")
+            w.params["剖面角度 (°)"].setValue(15.0)
+            w.params["对数纵轴"].setChecked(True)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            # 快照同步刷新（切走再切回显示这组值，与数据 [应用] 一致）
+            dock = _dock(w, "1D", "data/fake_b.tif")
+            self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 15.0)
+            log = w.log_text.toPlainText()
+            self.assertIn("[应用] 图像参数已重画编辑对象", log)
+            # 1D 显示参数真的落到图上（对数纵轴生效），且没有重算
+            self.assertEqual(
+                _axes(w, "1D", "data/fake_b.tif").get_yscale(), "log")
+            self.assertEqual(log.count("积分完成"), done_before)
+        finally:
+            w.close()
+
+    def test_apply_on_unwired_view_logs_pending(self):
+        """编辑对象是 2D 占位面板 → [应用] 只记快照并提示尚未接线。"""
+        w = create_window()
+        try:
+            w.add_files(["data/fake_b.tif"])
+            _open_view(w, "2D")   # 2D 只开面板不计算（占位）
+            QTest.mouseClick(_dock(w, "2D", "data/fake_b.tif").widget(),
+                             Qt.LeftButton)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertIn("2D 视图尚未接线", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+
+def _fake_compare_compute(path_str, geom, npt):
+    """假积分（对比用）：同 tth 不同强度——fake_a 慢 0.2 s、最强峰 3，
+    其余文件最强峰 30。归一化开关的效果一眼可分。"""
+    if path_str.endswith("fake_a.tif"):
+        time.sleep(0.2)
+        return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
+    return np.array([0.5, 1.0, 8.5]), np.array([10.0, 20.0, 30.0])
+
+
+class TestCompare(unittest.TestCase):
+    """[对比] 按钮（仅 1D）：勾选 >= 2 个文件 → 每个文件后台各算各
+    的积分，曲线叠进同一张面板（自动分色 + 图例显示名）。同一勾选
+    集合重复点 = 复用面板刷新；"对比归一化到最强峰"只动显示层。"""
+
+    def _compare_axes(self, w):
+        """取唯一的对比面板坐标轴（面板键以 "对比|" 开头）。"""
+        keys = [k for k in w.plot_docks if k.startswith("对比|")]
+        self.assertEqual(len(keys), 1)
+        return w.plot_docks[keys[0]].widget().axes_1d
+
+    def _plot_compare(self, w):
+        """勾 fake_a + fake_b 点 [对比] 并等两条曲线到齐 → 返回坐标轴。"""
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            ax = self._compare_axes(w)
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        return ax
+
+    def test_compare_requires_two_checked_files(self):
+        """只勾一个文件点 [对比] → 提示至少两个，不开面板。"""
+        w = create_window()
+        try:
+            w.add_files(["data/fake_a.tif"])
+            w.compare_btn.click()
+            self.assertIn("对比至少勾选两个文件", w.log_text.toPlainText())
+            self.assertFalse(
+                [k for k in w.plot_docks if k.startswith("对比|")])
+        finally:
+            w.close()
+
+    def test_compare_two_files_one_panel_with_legend(self):
+        """两个文件 → 一张对比面板、两条曲线、图例 = 显示名。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            self.assertEqual(len(ax.lines), 2)
+            self.assertEqual([line.get_label() for line in ax.lines],
+                             ["fake_a.tif", "fake_b.tif"])
+            self.assertIsNotNone(ax.get_legend())
+            # 完成后对比面板成为编辑对象，日志报 2 条曲线
+            self.assertTrue(w.focus_panel.startswith("对比|"))
+            self.assertIn("对比完成：2 条曲线", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_normalize_on_by_default(self):
+        """默认勾"对比归一化到最强峰" → 每条曲线最强峰都是 1.0。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            self.assertTrue(w.params["对比归一化"].isChecked())
+            for line in ax.lines:
+                self.assertAlmostEqual(float(np.max(line.get_ydata())),
+                                       1.0, places=4)
+        finally:
+            w.close()
+
+    def test_normalize_off_shows_raw_values(self):
+        """关掉归一化点图像 [应用] → 按原始强度重画（不重算）。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            done_before = w.log_text.toPlainText().count("开始对比")
+            w.params["对比归一化"].setChecked(False)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            # 快照记下关归一化，fake_b 曲线回到原始强度（最强峰 30）
+            dock = [d for k, d in w.plot_docks.items()
+                    if k.startswith("对比|")][0]
+            self.assertFalse(dock.params_snapshot["对比归一化"])
+            ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
+            self.assertAlmostEqual(ymax, 30.0, places=4)
+            self.assertIn("[应用] 图像参数已重画编辑对象",
+                          w.log_text.toPlainText())
+            # 只重画不重算
+            self.assertEqual(w.log_text.toPlainText().count("开始对比"),
+                             done_before)
+        finally:
+            w.close()
+
+    def test_reclick_same_selection_reuses_panel(self):
+        """同一勾选集合重复点 [对比] → 还是那一张面板，重算刷新。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            dock_before = [d for k, d in w.plot_docks.items()
+                           if k.startswith("对比|")][0]
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.compare_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.log_text.toPlainText().count("对比完成") >= 2))
+            self.assertEqual(len([k for k in w.plot_docks
+                                  if k.startswith("对比|")]), 1)
+            self.assertIs(dock_before, w.plot_docks[w.focus_panel])
+            self.assertEqual(len(ax.lines), 2)
+            self.assertEqual(w.log_text.toPlainText().count("开始对比"),
+                             2)
+        finally:
+            w.close()
+
+    def test_compare_data_apply_reruns_all(self):
+        """对比面板是编辑对象时点数据 [应用] → 整组文件全部重算。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.findChild(QPushButton, "apply_btn").click()
+                self.assertTrue(_wait_until(
+                    lambda: w.log_text.toPlainText().count("对比完成") >= 2))
+            self.assertEqual(len(ax.lines), 2)
+            self.assertIn("[应用] 重算编辑对象", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_compare_one_file_fails_others_still_drawn(self):
+        """一个文件积分失败 → 日志报错、其余曲线照常画完。"""
+        def boom(path_str, geom, npt):
+            if path_str.endswith("fake_a.tif"):
+                raise ValueError("积分炸了")
+            return np.array([0.5, 1.0, 8.5]), np.array([10.0, 20.0, 30.0])
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=boom):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                ax = self._compare_axes(w)
+                self.assertTrue(_wait_until(
+                    lambda: "对比完成" in w.log_text.toPlainText()))
+            log = w.log_text.toPlainText()
+            self.assertIn("积分失败", log)
+            self.assertIn("对比完成：1 条曲线", log)
+            self.assertEqual(len(ax.lines), 1)
+            self.assertEqual(ax.lines[0].get_label(), "fake_b.tif")
+        finally:
+            w.close()
+
+    def test_compare_uses_1d_display_params(self):
+        """1D 显示参数（对数纵轴）对对比面板同样生效。"""
+        w = create_window()
+        try:
+            w.params["对数纵轴"].setChecked(True)
+            ax = self._plot_compare(w)
+            self.assertEqual(ax.get_yscale(), "log")
+        finally:
+            w.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,20 +5,32 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 
 架构说明：
   - 外窗口（QMainWindow）管三块固定坞：文件（左）/ 参数（右）/
-    日志（底）+ 顶部工具栏 + 状态行；
+    日志（底）+ 顶部工具栏 + 状态行；工具栏尾部有 [文件][参数]
+    [日志] 三个收起开关（也可用各坞标题栏的 ×），全收起来就只剩
+    绘图区，看图视野最大；
   - Qt 的中央区不接受停靠，所以中央再嵌一个内层 QMainWindow 专门
     管理图面板坞——嵌套是标准做法（PyCharm / Spyder 同款）；
   - 框架阶段的占位动作统一写日志区 + 状态行提示"尚未实现"；
     实现功能时只替换动作背后的处理，框架结构不变；
   - 文件进列表两种方式：拖文件（tif/edf/cbf）到窗口任意位置，或
     点 [打开] 选文件；
-  - 已接线（1D 闭环）：交互模型 = 文件列表以对号选择（点行 = 单
-    选，点对号方块 / Ctrl+点行 = 多选；背景高亮跟随当前行）→ 点
-    击视图按钮对每个对号文件各开面板并算该视图（多选 = 批量，一
-    次出多张图；按钮是纯动作不是开关，重复点击安全；面板按
-    「视图 + 文件」成对创建，同一视图可同时开多张不同文件的图）
-    → 点图面板设"编辑对象" → [应用] 用当前参数重算焦点面板；
-    计算走 gui/tasks.py 后台线程，界面不卡。
+  - 已接线（1D 闭环）：交互模型 = 文件列表以对号选择（点行 = 只
+    加选不取消，取消只能用对号方块；选入/拖入默认全勾；重复文件
+    弹窗覆盖/改名）→ 点击视图按钮对每个对号文件各开面板并算该
+    视图（多选 = 批量，一次出多张图；按钮是纯动作不是开关，重复
+    点击安全；面板按「视图 + 文件」成对创建，同一视图可同时开多
+    张不同文件的图）→ 点图面板设"编辑对象"，参数坞回放该面板
+    的参数快照（点哪张图就显示哪张图作图时的参数）→ 数据 [应用]
+    用当前参数重算焦点面板；图像 [应用] 只改显示不重算（1D 显示
+    参数 = 对数纵轴/纵轴范围，用已有数据重画）；计算走
+    gui/tasks.py 后台线程，界面不卡。
+  - [对比]（工具栏，仅 1D）：把勾选的多个文件叠进同一张图（勾选
+    数 >= 2），每文件一个后台任务、全部算完再一起画；面板键 =
+    f"对比|{排序后的路径们}"，重复点击同一选择 = 复用同一面板并
+    重算；颜色自动循环（C0/C1/...），图例 = 显示名；"对比归一化
+    到最强峰"（默认开，1D 显示组）= 每条曲线除以自己的最强峰，
+    曝光差很多的文件也看得清彼此峰形；1D 显示参数（对数/纵轴
+    范围）对对比面板同样生效。
   - [保存] 是主动操作：弹窗勾选要保存的已出图面板 → 逐个选文件
     名存 PNG；另外关闭窗口时若有尚未保存的图会弹窗询问
     （保存后关闭 / 不保存直接关 / 取消留在程序里）。
@@ -38,6 +50,7 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 import sys
 from pathlib import Path
 
+import numpy as np
 import matplotlib
 
 matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt 后端
@@ -54,8 +67,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QInputDialog, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
-    QDockWidget, QApplication)
+    QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QToolBar,
+    QVBoxLayout, QWidget, QDockWidget, QApplication)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG  # 几何配置注册表（下拉框数据源）
 from xrd_toolkit.gui.tasks import BackgroundTask  # 后台线程任务（积分等耗时计算）
@@ -127,7 +140,8 @@ class _FocusMarker(QObject):
     装在图面板控件上；只"监听"不"拦截"——eventFilter 返回 False，
     鼠标事件照常传给画布/标签。参数坞顶部的"编辑对象"标签随点击
     更新（显示"视图_文件名"，多张图一眼分清在编辑哪张），[应用]
-    就作用在这个焦点面板上。
+    就作用在这个焦点面板上；同时参数坞回放该面板的参数快照——
+    点哪张图，旁边的参数就显示哪张图作图时的参数（能看也能改）。
     """
 
     def __init__(self, window: QMainWindow, key: str, title: str):
@@ -142,10 +156,111 @@ class _FocusMarker(QObject):
         return False   # 不消费事件
 
 
+class _ElideLabel(QLabel):
+    """宽度受限的单行标签：文字超宽时打省略号，绝不撑宽父布局。
+
+    用在参数坞的长名称行（编辑对象标题 / 几何配置说明）：窄坞下
+    缩略显示，悬停有完整提示；把坞拖宽自动多显示几个字。text()
+    仍返回完整文字（缩略只是显示层面，程序与测试读 text() 不受
+    影响）。横向尺寸策略设 Ignored = "布局给多宽就显示多宽，
+    不按文字宽度反过来要地方"——正是它治住"名字太长撑大参数区"。
+    """
+
+    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self._mode = mode
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setToolTip(text)
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self.setToolTip(text)
+        self._refresh()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if self.width() <= 0:
+            super().setText(self._full)   # 布局还没定宽：先显示全量
+            return
+        super().setText(self.fontMetrics().elidedText(
+            self._full, self._mode, self.width()))
+
+
+def _snapshot_params(window: QMainWindow) -> dict:
+    """拍下参数面板当前状态：配置条目 + 各控件值 + 自动对比度开关。
+
+    每张面板在开图/重算时拍一张快照挂在 dock.params_snapshot 上 =
+    "这张图是用什么参数画的"；点选面板时参数坞回放快照（既能看也
+    能改，改完 [应用] 重算并刷新快照）。
+    """
+    snap = {"config": window.config_name}
+    for name, w in window.params.items():
+        if isinstance(w, QCheckBox):
+            snap[name] = w.isChecked()
+        else:
+            snap[name] = w.value()
+    return snap
+
+
+def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
+    """把参数快照填回参数面板（只展示不计算）。
+
+    顺序讲究：
+      - 先切几何配置：触发 _apply_config，同步 window.config（PONI/
+        倾斜角取该条目注册表值，[应用] 依赖它）；
+      - 再填各输入框：用"当时真用的"值覆盖注册表几何值；
+      - 最后处理自动对比度开关（blockSignals 防日志刷屏）：勾着 →
+        静默按焦点图重算自动值展示；手动模式 → 回放快照里的值。
+    """
+    idx = window.config_combo.findData(snap.get("config"))
+    if idx >= 0:
+        window.config_combo.setCurrentIndex(idx)
+    auto = window.params.get("自动对比度")
+    for name, value in snap.items():
+        if name == "config" or name == "自动对比度":
+            continue
+        w = window.params.get(name)
+        if w is None:
+            continue
+        if isinstance(w, QCheckBox):
+            w.setChecked(value)
+        else:
+            w.setValue(value)
+    if auto is not None:
+        auto.blockSignals(True)
+        auto.setChecked(snap.get("自动对比度", True))
+        auto.blockSignals(False)
+        window.params["对比度下限"].setEnabled(not auto.isChecked())
+        window.params["对比度上限"].setEnabled(not auto.isChecked())
+        if auto.isChecked():
+            _apply_auto_contrast(window, silent=True)   # 焦点图的自动值
+        else:
+            window.params["对比度下限"].setValue(snap.get("对比度下限", 1.0))
+            window.params["对比度上限"].setValue(
+                snap.get("对比度上限", 100000.0))
+
+
 def _set_focus(window: QMainWindow, key: str, title: str) -> None:
-    """把参数面板的编辑对象切到某面板（点面板 / 计算完成时调用）。"""
+    """把参数面板的编辑对象切到某面板（点面板 / 计算完成时调用）。
+
+    切过去的同时回放该面板的参数快照——点哪张图，旁边就显示哪张
+    图的参数。重复点同一面板直接返回：不冲掉用户正在改的值。
+    """
+    if window.focus_panel == key:
+        return
     window.focus_panel = key
     window.focus_label.setText(f"编辑对象：{title}")
+    dock = window.plot_docks.get(key)
+    snap = getattr(dock, "params_snapshot", None)
+    if snap is not None:
+        _load_params_snapshot(window, snap)
 
 
 class _PressRecorder(QObject):
@@ -198,7 +313,11 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """
     dock = QDockWidget("文件", window)
     dock.setObjectName("file_dock")
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+    # 可移动/可浮动/可关闭：收起文件列给图让地方（工具栏 [文件] 开关
+    # 或标题栏 × 都能收，visibilityChanged 双向同步按钮状态）
+    dock.setFeatures(QDockWidget.DockWidgetMovable
+                     | QDockWidget.DockWidgetFloatable
+                     | QDockWidget.DockWidgetClosable)
 
     content = QWidget()
     lay = QVBoxLayout(content)
@@ -483,6 +602,10 @@ def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
     if name != "1D":
         _log(window, f"{name} 视图尚未接线（面板占位）")
         return
+    # 开工前先刷新参数快照：这张图 = 这组参数画的，点选面板时回放
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        dock.params_snapshot = _snapshot_params(window)
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     window.status_text.setText(f"正在积分 {path.name}…")
@@ -508,25 +631,76 @@ def _apply_params(window: QMainWindow) -> None:
         return
     view = key.split("|", 1)[0]
     _log(window, f"[应用] 重算编辑对象：{dock.windowTitle()}")
+    if view == "对比":
+        _run_compare(window, key)   # 一组文件全部重算
+        return
     _run_view(window, view, dock.panel_file, key)
 
 
+def _apply_image_params(window: QMainWindow) -> None:
+    """[应用] 按钮（图像参数组）：把当前图像参数应用到编辑对象。
+
+    图像参数不参与积分、只影响图怎么显示：
+      - 1D 面板 → 按 1D 显示参数（对数纵轴/纵轴范围）用已有数据
+        重画，不重新积分；
+      - 2D/剖面 → 接线后改为"用当前对比度/剖面角重画"。
+    与数据 [应用] 一个套路：先改、点 [应用] 才落到这张图上，快照
+    随之刷新（切走再切回显示这组值）。
+    """
+    key = window.focus_panel
+    if key is None:
+        _log(window, "先点击要更新的图面板（如 1D），再点 [应用]")
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        _log(window, "编辑对象的面板已不存在")
+        window.focus_panel = None
+        window.focus_label.setText("编辑对象：未选中图面板")
+        return
+    dock.params_snapshot = _snapshot_params(window)
+    view = key.split("|", 1)[0]
+    if view == "1D":
+        if getattr(dock, "last_tth", None) is None:
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（积分完成后再试）")
+            return
+        _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
+        _log(window, f"[应用] 图像参数已重画编辑对象：{dock.windowTitle()}")
+    elif view == "对比":
+        if not getattr(dock, "compare_data", None):
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（对比完成后再试）")
+            return
+        _redraw_compare(window, key)
+        _log(window, f"[应用] 图像参数已重画编辑对象：{dock.windowTitle()}")
+    else:
+        _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
+                     f"（{view} 视图尚未接线）")
+
+
 def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
-           key: str) -> None:
+           key: str, on_done=None, on_error=None) -> None:
     """启动后台积分任务；引用挂在 window._tasks 防垃圾回收，结束移除。
 
     task 变量在闭包外定义、闭包内只引用：done/error 回调在任务结束
     时才被调用，那时 task 早已完成赋值。
+
+    单文件面板走默认回调（_on_integration_done 画一张图）；对比
+    面板传入 on_done/on_error——一个面板有多个任务，各自把结果
+    画到同一张图上、出错时各自计数。
     """
     task = None
 
     def done(result):
         window._tasks.remove(task)
-        _on_integration_done(window, key, task, result)
+        (on_done or _on_integration_done)(window, key, task, result)
 
     def error(msg):
         window._tasks.remove(task)
-        _on_integration_error(window, path, msg)
+        if on_error is not None:
+            on_error(msg)
+        else:
+            _on_integration_error(window, path, msg)
 
     task = BackgroundTask(_compute_integration, str(path), geom, npt,
                           on_done=done, on_error=error)
@@ -549,6 +723,10 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
         return
     dock = window.plot_docks[key]
     tth, intensity = result
+    # 结果留在面板上：图像参数 [应用] 只改显示时，用已有数据重画，
+    # 不用重新积分
+    dock.last_tth = tth
+    dock.last_intensity = intensity
     _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
     _draw_1d(window, dock, tth, intensity)
     _log(window, f"积分完成：{dock.panel_display}（{len(tth)} 点，"
@@ -564,7 +742,8 @@ def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
     """在指定的 1D 面板画出积分曲线（只允许主线程调用）。
 
     x 轴范围跟随参数坞的 2θ 上下限（看图范围，不参与计算）；
-    面板显示的是全范围数据，用户可以自由改范围重画。
+    显示样式跟随 1D 显示参数（对数纵轴 / 纵轴范围）。积分完成与
+    图像参数 [应用] 都会走这里——后者只改显示、不重新积分。
     """
     ax = dock.widget().axes_1d
     ax.clear()
@@ -573,6 +752,21 @@ def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
     hi = window.params["2θ 上限 (°)"].value()
     if lo < hi:
         ax.set_xlim(lo, hi)
+    # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）
+    log_y = window.params["对数纵轴"].isChecked()
+    if log_y:
+        ax.set_yscale("log")
+    # 纵轴范围：自动 = 按曲线 1%/99.9% 分位；手动 = 手填上下限。
+    # 对数轴画不出 ≤0 的范围，手动值也兜底抬高
+    if window.params["纵轴自动"].isChecked():
+        ylo, yhi = _auto_y_range(intensity, log_y)
+    else:
+        ylo = window.params["纵轴下限"].value()
+        yhi = window.params["纵轴上限"].value()
+        if log_y:
+            ylo = max(ylo, 1e-6)
+    if ylo < yhi:
+        ax.set_ylim(ylo, yhi)
     ax.set_xlabel("2θ (deg)")
     ax.set_ylabel("Intensity (a.u.)")
     ax.set_title(f"{dock.panel_display}: full azimuthal integration")
@@ -582,26 +776,98 @@ def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
 
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
+_CONTRAST_FALLBACK = (1.0, 100000.0)   # 没有焦点图时的自动对比度占位默认
+
+
+def _auto_y_range(intensity, log_scale: bool) -> tuple:
+    """1D 曲线自动纵轴范围：取 1%/99.9% 分位，掐掉极端强/弱值。
+
+    与自动对比度同一套路（见 _auto_contrast_values），只是对象从
+    图像像素换成曲线强度。对数纵轴时只取正值参与分位（对数轴画
+    不出 ≤0 的范围）；没有有效数值时回退占位默认。
+    """
+    arr = np.asarray(intensity, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if log_scale:
+        finite = finite[finite > 0]
+    if finite.size == 0:
+        return _CONTRAST_FALLBACK
+    return float(np.percentile(finite, 1.0)), float(np.percentile(finite, 99.9))
+
+
+def _auto_contrast_values(image) -> tuple:
+    """自动对比度：取全体像素的 1%/99.9% 分位，掐掉极端亮暗值。
+
+    与 CLI view_diffraction 的默认 vmin/vmax 语义一致。返回 (lo, hi)；
+    图像没有有效数值时报 ValueError。
+    """
+    arr = np.asarray(image, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        raise ValueError("图像没有有效数值")
+    return float(np.percentile(finite, 1.0)), float(np.percentile(finite, 99.9))
+
+
+def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
+    """按编辑对象（焦点图）重算自动对比度，填进置灰的输入框。
+
+    输入框在自动模式下只是"程序正在用的区间"的展示（只读）。没有
+    焦点图或读取失败时填占位默认。2D 面板真正画图时用
+    _auto_contrast_values 从内存里的图像直接算，与这里的展示一致。
+    """
+    lo, hi = _CONTRAST_FALLBACK
+    path = None
+    if window.focus_panel is not None:
+        dock = window.plot_docks.get(window.focus_panel)
+        if dock is not None:
+            # 对比面板没有 panel_file（一组文件）：占位默认即可
+            path = getattr(dock, "panel_file", None)
+    loaded = False
+    if path is not None:
+        try:
+            image = load_diffraction_image(str(path))
+            lo, hi = _auto_contrast_values(image)
+            loaded = True
+        except Exception as err:
+            _log(window, f"自动对比度：读取 {path.name} 失败（{err}），"
+                         f"恢复占位默认值")
+    window.params["对比度下限"].setValue(lo)
+    window.params["对比度上限"].setValue(hi)
+    if not silent:
+        if loaded:
+            _log(window, f"自动对比度：按 {path.name} 算得 {lo:.1f} ~ {hi:.1f}")
+        elif path is None:
+            _log(window, "自动对比度：没有编辑对象，恢复占位默认值")
+
+
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
     """参数坞：两个分组（QGroupBox）——数据参数 / 图像参数。
 
     数据参数 = 参与计算的（几何配置 + 积分区间 + 点数），改它们
-    会改变积分/校准的结果；图像参数 = 只看图不参与计算的（对比度
-    + 剖面线角度）。对照 CLI：数据参数来自 integrate/calibrate 脚本，
-    图像参数来自 view_diffraction 的 --vmin/--vmax/--angle。
+    会改变积分/校准的结果；图像参数 = 只看图不参与计算的，组内
+    分两个区：2D/剖面视图（对比度 + 剖面线角度，接线后生效）+
+    "1D 显示" 子分组（对数纵轴 + 纵轴范围，随 [应用] 重画曲线）。
+    对照 CLI：数据参数来自 integrate/calibrate 脚本，图像参数来自
+    view_diffraction 的 --vmin/--vmax/--angle。
     """
     dock = QDockWidget("参数", window)
     dock.setObjectName("param_dock")
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+    # 同文件坞：可移动/可浮动/可关闭，收起参数列给图让地方
+    dock.setFeatures(QDockWidget.DockWidgetMovable
+                     | QDockWidget.DockWidgetFloatable
+                     | QDockWidget.DockWidgetClosable)
 
     content = QWidget()
     lay = QVBoxLayout(content)
 
     # 编辑对象：参数坞当前作用在哪个图面板上。点图面板（_FocusMarker）
     # 或某视图计算完成（_on_integration_done）时更新；[应用] 重算它。
-    window.focus_label = QLabel("编辑对象：未选中图面板")
+    # 编辑对象标题 = 文件名直出，可能很长：_ElideLabel 单行缩略，
+    # 中间打省略号保留首尾（重名条目的区分后缀在尾部），悬停看
+    # 全名，不撑宽参数坞
+    window.focus_label = _ElideLabel("编辑对象：未选中图面板",
+                                     Qt.ElideMiddle)
     window.focus_label.setStyleSheet("color: gray;")
-    window.focus_label.setWordWrap(True)
     lay.addWidget(window.focus_label)
 
     # ── 数据参数组 ──
@@ -623,8 +889,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.config_combo.setItemData(
             window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
 
-    window.config_label = QLabel(CONFIGS[DEFAULT_CONFIG]["label"])
-    window.config_label.setWordWrap(True)          # 长备注自动换行，不撑宽
+    # 说明行也换 _ElideLabel：自动换行模式下第二行会被 QFormLayout
+    # 按一行高布局、压在下一行控件底下（"被遮挡"）。改单行缩略 +
+    # 悬停全名：多长的备注都只占一行，不撑宽也不被遮
+    window.config_label = _ElideLabel(
+        CONFIGS[DEFAULT_CONFIG]["label"], Qt.ElideRight)
     window.config_label.setStyleSheet("color: gray;")
 
     field = QWidget()   # 下拉框 + 说明行装进一个字段（表格行内竖排）
@@ -694,10 +963,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     img_box = QGroupBox("图像参数")
     form2 = QFormLayout(img_box)
 
-    # 自动对比度（默认开）：vmin/vmax 按数据 1%/99.9% 分位数自定，
-    # 与 view_diffraction 的默认行为一致；取消勾选后手填两个输入框
-    # （对应 --vmin/--vmax 的"指定时覆盖自动值"语义）。自动模式下
-    # 输入框置灰，信号一响立刻同步。
+    # 组内分区：上面的对比度/剖面角只对二维视图有意义（接线后
+    # 生效）；下面的 "1D 显示" 子分组管曲线图自己的显示参数
+    cap_2d = QLabel("2D/剖面视图（接线后生效）")
+    cap_2d.setStyleSheet("color: gray;")
+    form2.addRow(cap_2d)
+
+    # 自动对比度（默认开）：显示区间按编辑对象（焦点图）数据的
+    # 1%/99.9% 分位自定，与 view_diffraction 的默认行为一致；取消勾
+    # 选后手填两个输入框（对应 --vmin/--vmax 的"指定时覆盖自动值"
+    # 语义）。自动模式下输入框置灰 = 只读展示程序正在用的区间；
+    # 勾回自动 = 立刻按焦点图重算并填回（恢复默认对比度）。
     auto = QCheckBox("自动对比度")
     auto.setChecked(True)
     window.params["自动对比度"] = auto
@@ -706,40 +982,100 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     add_float(form2, "对比度下限", 0.0, 1e9, 1.0, decimals=1)
     add_float(form2, "对比度上限", 0.0, 1e9, 100000.0, decimals=1)
 
-    def sync_contrast(checked):
+    def sync_contrast(checked, silent=False):
         window.params["对比度下限"].setEnabled(not checked)
         window.params["对比度上限"].setEnabled(not checked)
+        if checked:
+            _apply_auto_contrast(window, silent=silent)
 
     auto.toggled.connect(sync_contrast)
-    sync_contrast(True)   # 初始状态：自动开 → 两个输入框置灰
+    sync_contrast(True, silent=True)   # 初始状态：自动开 → 输入框置灰（不刷日志）
 
     angle = add_float(form2, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1)
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
 
-    # 看图参数：改动即时重画，不需要 [应用]（2D/剖面面板接线后生效）
-    hint = QLabel("改动即时生效（2D/剖面接线后）")
+    # 看图参数：不参与计算，只影响图怎么显示；点 [应用] 落到编辑
+    # 对象（快照跟着更新）
+    hint = QLabel("只看图不参与计算，点 [应用] 生效")
     hint.setStyleSheet("color: gray;")
     hint.setWordWrap(True)
     form2.addRow(hint)
+
+    # ── 1D 显示（子分组）：曲线图自己的显示参数 ──
+    # 对数纵轴：主峰与弱峰强度差几个数量级，对数刻度把弱峰"抬
+    # 起来"（XRD 软件行规）。纵轴范围与对比度同套路：自动 = 按
+    # 曲线 1%/99.9% 分位，取消勾选手填；自动模式输入框置灰 =
+    # 只读展示正在用的区间
+    sub_1d = QGroupBox("1D 显示")
+    form3 = QFormLayout(sub_1d)
+
+    log_y = QCheckBox("对数纵轴")
+    window.params["对数纵轴"] = log_y
+    form3.addRow(log_y)
+
+    auto_y = QCheckBox("纵轴自动")
+    auto_y.setChecked(True)
+    window.params["纵轴自动"] = auto_y
+    form3.addRow(auto_y)
+
+    add_float(form3, "纵轴下限", 0.0, 1e9, 1.0, decimals=1)
+    add_float(form3, "纵轴上限", 0.0, 1e9, 100000.0, decimals=1)
+
+    # 对比归一化：叠图时每条曲线除以自己的最强峰——曝光时间/衰减
+    # 不同的文件强度差很多，不归一会被强者压扁（默认开）
+    cmp_norm = QCheckBox("对比归一化到最强峰")
+    cmp_norm.setChecked(True)
+    window.params["对比归一化"] = cmp_norm
+    form3.addRow(cmp_norm)
+
+    def sync_ylim(checked):
+        window.params["纵轴下限"].setEnabled(not checked)
+        window.params["纵轴上限"].setEnabled(not checked)
+
+    auto_y.toggled.connect(sync_ylim)
+    sync_ylim(True)   # 初始状态：自动开 → 输入框置灰
+
+    form2.addRow(sub_1d)
 
     img_defaults = {
         "对比度下限": 1.0,
         "对比度上限": 100000.0,
         "剖面角度 (°)": 0.0,
+        "对数纵轴": False,
+        "纵轴自动": True,
+        "对比归一化": True,
     }
     btn_reset_img = QPushButton("恢复默认")
     btn_reset_img.setObjectName("reset_image_btn")
 
     def reset_image():
-        auto.setChecked(True)   # 触发 sync_contrast，输入框自动置灰
-        for name, value in img_defaults.items():
-            window.params[name].setValue(value)
+        if not auto.isChecked():
+            auto.setChecked(True)   # 触发 sync_contrast → 按焦点图重算自动值
+        else:
+            _apply_auto_contrast(window)   # 已勾着 toggled 不响，手动重算
+        window.params["剖面角度 (°)"].setValue(img_defaults["剖面角度 (°)"])
+        window.params["对数纵轴"].setChecked(img_defaults["对数纵轴"])
+        window.params["纵轴自动"].setChecked(img_defaults["纵轴自动"])
+        window.params["对比归一化"].setChecked(img_defaults["对比归一化"])
         _log(window, "图像参数已恢复默认")
 
     btn_reset_img.clicked.connect(reset_image)
-    form2.addRow(btn_reset_img)
+
+    # [恢复默认] + [应用] 并排：与数据参数组同款布局。
+    # [应用] 把当前图像参数应用到编辑对象（见 _apply_image_params）
+    btn_apply_img = QPushButton("应用")
+    btn_apply_img.setObjectName("apply_image_btn")
+    btn_apply_img.clicked.connect(lambda: _apply_image_params(window))
+
+    btn_row2 = QHBoxLayout()
+    btn_row2.addWidget(btn_reset_img)
+    btn_row2.addWidget(btn_apply_img)
+    form2.addRow(btn_row2)
 
     lay.addWidget(img_box)
+    # 底部弹簧：坞比内容高时的多余空间全留白在底部——否则会被
+    # QBoxLayout 分给顶部标题行，把它竖向拉成一条粗灰带
+    lay.addStretch(1)
 
     dock.setWidget(content)
     window.addDockWidget(Qt.RightDockWidgetArea, dock)
@@ -793,7 +1129,8 @@ def _build_status(window: QMainWindow) -> None:
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = [校准] 模式开关 + 作图按钮 + 日志开关。"""
+    """工具栏 = [校准] 模式开关 + 作图按钮（2D/剖面/1D/瀑布 + 对比）+
+    面板开关（文件/参数/日志）。"""
     tb = QToolBar("主工具栏", window)
     tb.setMovable(False)
     window.addToolBar(tb)
@@ -820,15 +1157,30 @@ def _build_toolbar(window: QMainWindow) -> None:
         btn.clicked.connect(
             lambda checked=False, n=name: _plot_view(window, n))
 
+    # [对比]：把勾选文件的 1D 曲线叠到一张图（见 _plot_compare）。
+    # 同为纯动作：重复点击 = 刷新那张对比面板
+    btn_compare = QPushButton("对比")
+    tb.addWidget(btn_compare)
+    window.compare_btn = btn_compare   # 登记按钮（测试用）
+    btn_compare.clicked.connect(lambda: _plot_compare(window))
+
     tb.addSeparator()
 
-    # 日志开关：日志坞可被关闭，用这个勾选按钮重新打开
-    btn_log = QPushButton("日志")
-    btn_log.setCheckable(True)
-    btn_log.setChecked(True)
-    tb.addWidget(btn_log)
-    window.log_dock.visibilityChanged.connect(btn_log.setChecked)
-    btn_log.toggled.connect(window.log_dock.setVisible)
+    # 面板开关：[文件][参数][日志] 三个勾选按钮，收起/展开对应坞。
+    # 全收起来 = 中央只剩绘图区，看图视野最大。双向同步：按钮点
+    # 击 → 坞显隐；坞被标题栏 × 关掉 → 按钮自动弹起（visibilityChanged
+    # 信号），下次点按钮还能再展开。
+    window.panel_toggles = {}   # 登记按钮（测试与后续接线用）
+    for name, dock in (("文件", window.file_dock),
+                       ("参数", window.param_dock),
+                       ("日志", window.log_dock)):
+        btn = QPushButton(name)
+        btn.setCheckable(True)
+        btn.setChecked(True)
+        tb.addWidget(btn)
+        window.panel_toggles[name] = btn
+        dock.visibilityChanged.connect(btn.setChecked)
+        btn.toggled.connect(dock.setVisible)
 
 
 def _on_mode(window: QMainWindow, calibrating: bool) -> None:
@@ -933,12 +1285,173 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock.panel_item = item   # 面板绑定自己的列表条目（重名条目各自成图）
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
+            dock.params_snapshot = _snapshot_params(window)   # 开图时的参数快照
             dock.setWidget(_build_view_widget(window, name, key, title))
             window.plot_docks[key] = dock
             window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
             _log(window, f"打开{name}面板：{display}")
         dock.setVisible(True)
         _run_view(window, name, path, key)
+
+
+# ══ 对比面板（1D 多文件叠图）════════════════════════════════
+def _compare_title(displays) -> str:
+    """对比面板标题：两个文件 = A vs B；更多 = A 等 N 个文件。"""
+    if len(displays) == 2:
+        return f"对比_{displays[0]}_vs_{displays[1]}"
+    return f"对比_{displays[0]} 等 {len(displays)} 个文件"
+
+
+def _redraw_compare(window: QMainWindow, key: str) -> None:
+    """用面板已有的曲线数据按当前 1D 显示参数重画整张对比图。
+
+    与 _draw_1d 同套路：坐标范围随参数（2θ 上下限 / 对数纵轴 /
+    纵轴范围），只是画多条曲线 + 图例。归一化到最强峰只动显示
+    数据（原始结果原样保留在 compare_data）。
+    """
+    dock = window.plot_docks[key]
+    ax = dock.widget().axes_1d
+    ax.clear()
+    normalize = window.params["对比归一化"].isChecked()
+    shown_curves = []   # 实际画上去的曲线（归一化是显示层处理）
+    # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
+    # 颜色序号稳定
+    for i, (path, display) in enumerate(dock.compare_files):
+        if display not in dock.compare_data:
+            continue   # 这条还没算成（本函数只在全部到齐后调用）
+        tth, raw = dock.compare_data[display]
+        shown = np.asarray(raw, dtype=float)
+        if normalize:
+            peak = float(np.nanmax(shown)) if shown.size else 0.0
+            if peak > 0:
+                shown = shown / peak
+        shown_curves.append(shown)
+        ax.plot(tth, shown, f"C{i}", lw=0.8, label=display)
+    xlo = window.params["2θ 下限 (°)"].value()
+    xhi = window.params["2θ 上限 (°)"].value()
+    if xlo < xhi:
+        ax.set_xlim(xlo, xhi)
+    log_y = window.params["对数纵轴"].isChecked()
+    if log_y:
+        ax.set_yscale("log")
+    if window.params["纵轴自动"].isChecked():
+        if not shown_curves:
+            pass   # 一条曲线都没算成：空图，纵轴交给 matplotlib 默认
+        else:
+            ylo, yhi = _auto_y_range(np.concatenate(shown_curves), log_y)
+            if ylo < yhi:
+                ax.set_ylim(ylo, yhi)
+    else:
+        ylo = window.params["纵轴下限"].value()
+        yhi = window.params["纵轴上限"].value()
+        if log_y:
+            ylo = max(ylo, 1e-6)
+        if ylo < yhi:
+            ax.set_ylim(ylo, yhi)
+    ax.set_xlabel("2θ (deg)")
+    ax.set_ylabel("Intensity (a.u.)")
+    ax.set_title(f"{dock.panel_display}: full azimuthal integration")
+    if dock.compare_data:
+        ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    dock.widget().draw()
+    dock.figure_saved = False   # 重画 = 新内容还没存盘
+
+
+def _finish_compare(window: QMainWindow, key: str) -> None:
+    """对比面板全部曲线到齐：整图重画 → 成为编辑对象 → 记日志。"""
+    dock = window.plot_docks[key]
+    _redraw_compare(window, key)
+    _set_focus(window, key, dock.panel_display)
+    _log(window, f"对比完成：{len(dock.compare_data)} 条曲线")
+
+
+def _run_compare(window: QMainWindow, key: str) -> None:
+    """对对比面板的每个文件各起一个后台积分，结果画到同一张图。
+
+    代次（gen）防过期：重复点 [对比] 或数据 [应用] 时旧代任务
+    全部作废。快照开工前拍下（与单文件面板一致）。
+    """
+    dock = window.plot_docks[key]
+    dock.params_snapshot = _snapshot_params(window)
+    dock.compare_gen += 1
+    gen = dock.compare_gen
+    dock.compare_pending = len(dock.compare_files)
+    dock.compare_data = {}
+    dock.curve_count = 0   # 第几条曲线（颜色序号 = 图例顺序）
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    dock.widget().axes_1d.clear()
+
+    def finish_one(path, display, result):
+        """单文件结果到位：存原始数据、画一条曲线；全齐后收尾。"""
+        if dock.compare_gen != gen:
+            return   # 旧代次结果，静默丢弃（整图已由新代次重画）
+        tth, intensity = result
+        dock.compare_data[display] = (tth, intensity)
+        dock.curve_count += 1
+        dock.compare_pending -= 1
+        if dock.compare_pending == 0:
+            _finish_compare(window, key)
+
+    def fail_one(path, display, msg):
+        if dock.compare_gen != gen:
+            return
+        dock.compare_pending -= 1
+        _log(window, f"对比：{display} 积分失败 — {msg}")
+        if dock.compare_pending == 0:
+            _finish_compare(window, key)
+
+    for path, display in dock.compare_files:
+        # 默认参数绑定防闭包晚绑定（循环变量到回调执行时已走到末尾）
+        def spawn_one(path=path, display=display):
+            def done(window_, key_, task, result):
+                finish_one(path, display, result)
+
+            def error(msg):
+                fail_one(path, display, msg)
+
+            window.status_text.setText(f"正在积分 {path.name}…")
+            _spawn(window, path, geom, npt, key,
+                   on_done=done, on_error=error)
+
+        spawn_one()
+    _log(window, f"开始对比 {len(dock.compare_files)} 个文件（后台线程）")
+
+
+def _plot_compare(window: QMainWindow) -> None:
+    """[对比] 按钮：把勾选文件的 1D 曲线叠到同一张面板上。
+
+    只做 1D。勾选 ≥2 个文件，每个文件后台各算各的积分，结果陆续
+    画进同一张图（一个文件一条曲线，自动分色 + 图例显示名），
+    全部完成后该面板成为编辑对象。同一勾选集合重复点 = 复用同一
+    张面板刷新；换集合 = 新开一张。面板键 = "对比|排序后的路径串"
+    （与单文件面板 "1D|路径" 并存，互不干扰）。
+    """
+    checked = [window.file_list.item(i)
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if len(checked) < 2:
+        _log(window, "对比至少勾选两个文件（勾上的文件叠到一张图）")
+        return
+    files = [(Path(item.data(Qt.UserRole)), item.text()) for item in checked]
+    key = "对比|" + ",".join(sorted(str(p) for p, _ in files))
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        title = _compare_title([d for _, d in files])
+        dock = QDockWidget(title, window.inner)
+        dock.setObjectName("plot_compare")
+        dock.panel_display = title   # 标题/日志/默认存盘名用
+        dock.figure_saved = False
+        dock.compare_files = files   # 面板绑定这组文件（重算用）
+        dock.compare_gen = 0
+        dock.params_snapshot = _snapshot_params(window)
+        dock.setWidget(_build_view_widget(window, "1D", key, title))
+        window.plot_docks[key] = dock
+        window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
+        _log(window, f"打开对比面板：{len(files)} 个文件叠一张图")
+    dock.setVisible(True)
+    _run_compare(window, key)
 
 
 def _arrange(window: QMainWindow, mode: str) -> None:
@@ -1060,8 +1573,8 @@ def create_window() -> QMainWindow:
     window.focus_panel = None
 
     _build_center(window)
-    file_dock = _build_file_dock(window)
-    param_dock = _build_param_dock(window)
+    window.file_dock = _build_file_dock(window)
+    window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     _build_status(window)
     _build_toolbar(window)
@@ -1092,7 +1605,7 @@ def create_window() -> QMainWindow:
 
     # 初始尺寸：文件列/参数列默认收到最窄（各自内容的最小宽度），
     # 需要时用户自己拖宽；日志高 140（都可拖动）
-    for d in (file_dock, param_dock):
+    for d in (window.file_dock, window.param_dock):
         window.resizeDocks([d], [d.minimumSizeHint().width()], Qt.Horizontal)
     window.resizeDocks([window.log_dock], [140], Qt.Vertical)
 
