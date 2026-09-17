@@ -1353,6 +1353,31 @@ class TestCompare(unittest.TestCase):
         finally:
             w.close()
 
+    def test_compare_three_files(self):
+        """三个文件也能叠：三条曲线、图例齐全、标题 = A 等 3 个文件。"""
+        def fake3(path_str, geom, npt):
+            scale = {"fake_a.tif": 1, "fake_b.tif": 10,
+                     "fake_c.tif": 100}[Path(path_str).name]
+            return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0]) * scale
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=fake3):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif",
+                             "data/fake_c.tif"])
+                w.compare_btn.click()
+                ax = self._compare_axes(w)
+                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+            self.assertEqual([line.get_label() for line in ax.lines],
+                             ["fake_a.tif", "fake_b.tif", "fake_c.tif"])
+            self.assertIn("等 3 个文件", ax.get_title())
+            self.assertIn("对比完成：3 条曲线", w.log_text.toPlainText())
+            # 颜色循环不重样（前三条 = C0/C1/C2）
+            self.assertEqual(len({line.get_color() for line in ax.lines}), 3)
+        finally:
+            w.close()
+
     def test_compare_uses_1d_display_params(self):
         """1D 显示参数（对数纵轴）对对比面板同样生效。"""
         w = create_window()
