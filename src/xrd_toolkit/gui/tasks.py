@@ -17,6 +17,13 @@
 """
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+# 模块级引用：线程没真正结束前，任务对象不许被 Python 回收。
+# 调用方在回调里会把 task 从自己的列表移除（window._tasks），但
+# 此刻线程事件循环往往还没退出（quit 是排队送达的）；包装对象若
+# 先被 GC，C++ 的 QThread 会在运行中被销毁 → Qt 直接 abort。等
+# finished 送达（事件循环处理）再放手，这个窗口期就安全了。
+_live_tasks = set()
+
 
 class _Worker(QObject):
     """在后台线程里跑一个函数；结果/报错通过信号送回主线程。"""
@@ -43,12 +50,14 @@ class _Worker(QObject):
 class BackgroundTask(QObject):
     """一个后台任务：QThread + _Worker 的组合，替调用方管好清理。
 
-    三个清理连接（Qt 文档标准做法）：
+    清理连接（Qt 文档标准做法）：
       worker.done/error → thread.quit     函数跑完就让线程事件循环退出
       worker.done/error → worker.deleteLater  工作对象随线程销毁
       thread.finished → thread.deleteLater 线程对象自己销毁
-    调用方只需把 task 对象挂在窗口上（如 window._tasks 列表），
-    防垃圾回收；结束回调里移除即可。
+      thread.finished → self._release     线程真结束后才允许任务被回收
+    调用方照常把 task 挂在自己的列表里（如 window._tasks，回调里
+    移除）——挂住是为了防回收，_live_tasks 负责补上回调移除后到
+    线程真正退出前的窗口期。
     """
 
     done = Signal(object)     # 转发 _Worker.done（测试监听用）
@@ -56,6 +65,7 @@ class BackgroundTask(QObject):
 
     def __init__(self, fn, *args, on_done=None, on_error=None):
         super().__init__()
+        _live_tasks.add(self)   # 线程结束前保持存活（见模块说明）
         self._thread = QThread()
         self._worker = _Worker(fn, *args)
         self._worker.moveToThread(self._thread)
@@ -68,8 +78,13 @@ class BackgroundTask(QObject):
         self._worker.done.connect(self._worker.deleteLater)
         self._worker.error.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.finished.connect(self._release)
         self._on_done_cb = on_done
         self._on_error_cb = on_error
+
+    def _release(self):
+        """线程事件循环已退出 → 允许任务对象被回收。"""
+        _live_tasks.discard(self)
 
     def start(self):
         self._thread.start()

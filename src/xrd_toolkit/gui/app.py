@@ -10,18 +10,30 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     管理图面板坞——嵌套是标准做法（PyCharm / Spyder 同款）；
   - 框架阶段的占位动作统一写日志区 + 状态行提示"尚未实现"；
     实现功能时只替换动作背后的处理，框架结构不变；
-  - 已接线（1D 闭环）：交互模型 = 选文件只选中（不算）→ 勾选
-    视图按钮打开面板并算该视图 → 点图面板设"编辑对象" → [应用]
-    用当前参数重算焦点视图；计算走 gui/tasks.py 后台线程，界面不卡。
+  - 文件进列表两种方式：拖文件（tif/edf/cbf）到窗口任意位置，或
+    点 [打开] 选文件；
+  - 已接线（1D 闭环）：交互模型 = 文件列表以对号选择（点行 = 单
+    选，点对号方块 / Ctrl+点行 = 多选；背景高亮跟随当前行）→ 点
+    击视图按钮对每个对号文件各开面板并算该视图（多选 = 批量，一
+    次出多张图；按钮是纯动作不是开关，重复点击安全；面板按
+    「视图 + 文件」成对创建，同一视图可同时开多张不同文件的图）
+    → 点图面板设"编辑对象" → [应用] 用当前参数重算焦点面板；
+    计算走 gui/tasks.py 后台线程，界面不卡。
+  - [保存] 是主动操作：弹窗勾选要保存的已出图面板 → 逐个选文件
+    名存 PNG；另外关闭窗口时若有尚未保存的图会弹窗询问
+    （保存后关闭 / 不保存直接关 / 取消留在程序里）。
 
 窗口上的公共接口（供后续页面接线与测试使用）：
   window.log(text)        写日志区 + 状态行
   window.add_files(paths) 把文件加进左侧列表
-  window.plot_docks       {视图名: QDockWidget}
+  window.plot_docks       {面板键: QDockWidget}，键 = f"{视图}|{路径}"，
+                          重复文件改名条目再补 |显示名 区分；标题 =
+                          f"{视图}_{显示名}"（如 1D_lab6-00024.tif）
+  window.focus_panel      参数面板编辑对象 = 面板键（点图/计算完成时设定）
   window.params           参数面板控件字典
   window.config_name      当前选中的配置条目 key（如 lmfp1_lab6）
   window.config           完整条目 dict（label / geometry / beam_center）
-  window.canvas_1d / axes_1d  1D 面板的 matplotlib 画布 / 坐标轴
+  1D 面板的画布/坐标轴在面板控件上：dock.widget().axes_1d
 """
 import sys
 from pathlib import Path
@@ -29,14 +41,21 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt 后端
+# 图标题取自文件显示名（重复文件改名可输入中文）→ 字体回退链补上
+# macOS 中文字体，缺字形时逐字体回退，标题不会渲染成方框。
+# 注意要设 font.family 直接给列表：实测 qtagg 后端下 font.sans-serif
+# 列表不触发回退（Agg 可以），中文仍会变方框
+matplotlib.rcParams["font.family"] = [
+    "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import QEvent, QObject, Qt, QSize, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-    QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QMainWindow, QPlainTextEdit, QPushButton,
-    QSpinBox, QToolBar, QVBoxLayout, QWidget, QDockWidget, QApplication)
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QInputDialog, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QPlainTextEdit, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
+    QDockWidget, QApplication)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG  # 几何配置注册表（下拉框数据源）
 from xrd_toolkit.gui.tasks import BackgroundTask  # 后台线程任务（积分等耗时计算）
@@ -44,10 +63,51 @@ from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
 
 FILE_FILTER = "衍射图像 (*.tif *.edf *.cbf);;所有文件 (*)"
-VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（视图开关的顺序）
+VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
+SUPPORTED_SUFFIXES = (".tif", ".edf", ".cbf")   # 拖放只认这三种
 
 
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
+def _dropped_paths(event) -> list:
+    """从拖放事件提取本地文件路径（只留支持的类型 tif/edf/cbf）。"""
+    paths = []
+    for url in event.mimeData().urls():
+        if url.isLocalFile():
+            p = url.toLocalFile()
+            if p.lower().endswith(SUPPORTED_SUFFIXES):
+                paths.append(p)
+    return paths
+
+
+class _MainWindow(QMainWindow):
+    """顶层窗口：接受拖入文件（拖到窗口任意位置 = 加进文件列表）。
+
+    至少拖进一个支持类型的文件才"接住"（光标变 +）；子控件默认
+    不接拖放（日志区显式关掉了文本拖放），事件会冒泡到顶层窗口
+    ——一个入口覆盖整个窗口面。drop_callback 由 create_window 接
+    到 add_files 上。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.drop_callback = None
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if self.drop_callback and _dropped_paths(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        paths = _dropped_paths(event)
+        if paths and self.drop_callback:
+            self.drop_callback(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+
 def _log(window: QMainWindow, text: str) -> None:
     """统一反馈出口：写日志区（累积）+ 状态行（常驻"就绪"，消息
     替换它 5 秒后自动恢复——状态栏永远有内容，不会隐形）。"""
@@ -62,28 +122,53 @@ def _log(window: QMainWindow, text: str) -> None:
 
 
 class _FocusMarker(QObject):
-    """事件过滤器：点击图面板时把参数面板的编辑对象切到该视图。
+    """事件过滤器：点击图面板时把参数面板的编辑对象切到该面板。
 
     装在图面板控件上；只"监听"不"拦截"——eventFilter 返回 False，
     鼠标事件照常传给画布/标签。参数坞顶部的"编辑对象"标签随点击
-    更新，[应用] 就作用在这个焦点视图上。
+    更新（显示"视图_文件名"，多张图一眼分清在编辑哪张），[应用]
+    就作用在这个焦点面板上。
     """
 
-    def __init__(self, window: QMainWindow, name: str):
+    def __init__(self, window: QMainWindow, key: str, title: str):
         super().__init__(window)   # 挂在窗口上，随窗口销毁
         self._window = window
-        self._name = name
+        self._key = key
+        self._title = title
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
-            _set_focus(self._window, self._name)
+            _set_focus(self._window, self._key, self._title)
         return False   # 不消费事件
 
 
-def _set_focus(window: QMainWindow, name: str) -> None:
-    """把参数面板的编辑对象切到某视图（点面板 / 计算完成时调用）。"""
-    window.focus_view = name
-    window.focus_label.setText(f"编辑对象：{name}")
+def _set_focus(window: QMainWindow, key: str, title: str) -> None:
+    """把参数面板的编辑对象切到某面板（点面板 / 计算完成时调用）。"""
+    window.focus_panel = key
+    window.focus_label.setText(f"编辑对象：{title}")
+
+
+class _PressRecorder(QObject):
+    """记录鼠标按下时命中的文件项与对号状态（装在列表视口上）。
+
+    用途：区分"点对号方块"（Qt 在弹起时自动切换对号，itemChanged
+    先到）与"点行其他位置"（对号不动）——itemClicked 据此决定手势：
+    点行 = 只勾不取消（加选），方块 = 勾上/取消。
+    """
+
+    def __init__(self, window: QMainWindow, lst: QListWidget):
+        super().__init__(window)   # 挂在窗口上，随窗口销毁
+        self._window = window
+        self._list = lst
+        window._press_item = None
+        window._press_state = None
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            item = self._list.itemAt(event.position().toPoint())
+            self._window._press_item = item
+            self._window._press_state = item.checkState() if item else None
+        return False   # 不消费事件
 
 
 # ══ 左侧：文件列 ═══════════════════════════════════════════
@@ -100,7 +185,17 @@ class NarrowList(QListWidget):
 
 
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
-    """文件坞：打开（多选）/ 保存 + 勾选式文件列表。"""
+    """文件坞：打开（多选）/ 保存 / 删除 + 以对号为选择的文件列表。
+
+    选择 = 对号，两种手势：
+      - 点行 = 加选：勾上这一行，其他对号不动；已勾的行再点没
+        反应（不取消）；
+      - 点对号方块 = 勾上/取消这一行（取消对号的唯一途径）。
+    背景高亮跟随最后点的那行（且必须是对号行，没对号就不高亮），
+    作图按钮对所有对号文件各开一张图，删除删所有对号文件。
+    itemChanged 统一刷新标签和日志；itemClicked 靠 _PressRecorder
+    记着的按下状态区分方块/行体手势。
+    """
     dock = QDockWidget("文件", window)
     dock.setObjectName("file_dock")
     dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -114,15 +209,45 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_open = QPushButton("打开")
     btn_save = QPushButton("保存")
     btn_delete = QPushButton("删除")
+    btn_save.setObjectName("save_btn")
+    btn_delete.setObjectName("delete_btn")
     btns.addWidget(btn_open, 0, 0, 1, 2)   # 打开占满第一行
     btns.addWidget(btn_save, 1, 0)
     btns.addWidget(btn_delete, 1, 1)
     lay.addLayout(btns)
 
     window.file_list = NarrowList()   # 覆盖了 minimumSizeHint，可以收窄
-    # 支持按住 Shift/Ctrl 选多行，配合"删除"批量移除
-    window.file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+    # 对号 = 选中（可多选）。用系统默认的选中样式：背景高亮 + 白字
+    # （可读）。之前压掉背景导致"白字配白底"看不见字——背景高亮
+    # 必须保留，且始终跟随对号集合（对号是唯一的选择表达）
+    window.file_list.setSelectionMode(QAbstractItemView.SingleSelection)
     lay.addWidget(window.file_list)
+
+    def on_item_changed(item):
+        """对号状态变了 → 状态行标签 + 背景高亮同步；勾上时记日志。"""
+        if item.checkState() == Qt.Checked:
+            _log(window, f"已选中 {item.text()}（点击视图按钮开始计算）")
+        _sync_current_to_checks(window)
+        _refresh_file_label(window)
+
+    def on_item_clicked(item):
+        """手势区分：
+          - 点对号方块：Qt 已自动切换（勾上/取消），无需再动；
+          - 点行：只勾上这一行（加选），其他对号不动；已勾的行再
+            点没反应。取消对号只能用对号方块。
+        """
+        square = (window._press_item is item
+                  and item.checkState() != window._press_state)
+        if square:
+            return   # Qt 已切换，itemChanged 已同步
+        if item.checkState() == Qt.Unchecked:
+            item.setCheckState(Qt.Checked)   # → itemChanged 同步高亮/标签/日志
+
+    window.file_list.itemChanged.connect(on_item_changed)
+    window.file_list.itemClicked.connect(on_item_clicked)
+    # 记录鼠标按下时命中的条目与对号状态（区分方块点击/行体点击）
+    window.file_list.viewport().installEventFilter(
+        _PressRecorder(window, window.file_list))
 
     def open_dialog():
         paths, _ = QFileDialog.getOpenFileNames(
@@ -131,16 +256,24 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             window.add_files(paths)
 
     def delete_selected():
-        items = window.file_list.selectedItems()
-        if not items:
-            _log(window, "未选中要删除的文件")
+        checked = [window.file_list.item(i)
+                   for i in range(window.file_list.count())
+                   if window.file_list.item(i).checkState() == Qt.Checked]
+        if not checked:
+            _log(window, "没有选中要删除的文件")
             return
-        for it in items:
+        # 屏蔽信号：移除过程中 Qt 会把当前项挪到相邻行，别让
+        # 中间状态触发登记/日志
+        window.file_list.blockSignals(True)
+        for it in checked:
             window.file_list.takeItem(window.file_list.row(it))
-        _log(window, f"已删除 {len(items)} 个文件")
+        window.file_list.blockSignals(False)
+        window.file_list.setCurrentRow(-1)
+        _refresh_file_label(window)   # 状态行跟随剩余对号集合
+        _log(window, f"已删除 {len(checked)} 个文件")
 
     btn_open.clicked.connect(open_dialog)
-    btn_save.clicked.connect(lambda: _log(window, "保存 — 尚未实现"))
+    btn_save.clicked.connect(lambda: _save_figures(window))
     btn_delete.clicked.connect(delete_selected)
 
     dock.setWidget(content)
@@ -148,25 +281,126 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     return dock
 
 
-def add_files(window: QMainWindow, paths) -> None:
-    """把文件加进左侧列表（勾选式；单选看单张、多选批量）。
+def _unique_display_name(window: QMainWindow, name: str) -> str:
+    """给重复文件起不重名的显示名："xxx.tif" → "xxx (1).tif" → "xxx (2).tif"…"""
+    taken = {window.file_list.item(i).text()
+             for i in range(window.file_list.count())}
+    p = Path(name)
+    n = 1
+    while f"{p.stem} ({n}){p.suffix}" in taken:
+        n += 1
+    return f"{p.stem} ({n}){p.suffix}"
 
-    添加后把当前项移到最后一个新文件：打开文件立即"选中"，自动
-    触发积分（_on_file_selected），不用再手动点一下。注意程序化
-    addItem 不会自动设当前项——不设的话 currentItemChanged 永不
-    触发，链子断了。
+
+def _ask_duplicate(window: QMainWindow, name: str) -> str:
+    """同一文件再次加入时的询问弹窗。返回 "overwrite" / "rename" / "cancel"。
+
+    窗口没显示（测试环境）时不弹模态框，默认 "overwrite"（保留原
+    条目）——与 _confirm_close 的可见性护栏同理，防测试挂死。
     """
-    from pathlib import Path
+    if not window.isVisible():
+        return "overwrite"
+    box = QMessageBox(window)
+    box.setWindowTitle("文件已存在")
+    box.setText(f"{name} 已经在文件列表里了。")
+    box.setInformativeText(
+        "覆盖 = 保留原条目；改名 = 弹输入框起个新名字（预填编号名，"
+        "可自己改）；取消 = 这次不加。")
+    btn_overwrite = box.addButton("覆盖", QMessageBox.AcceptRole)
+    btn_rename = box.addButton("改名", QMessageBox.ActionRole)
+    btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
+    box.setDefaultButton(btn_overwrite)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is btn_rename:
+        return "rename"
+    if clicked is btn_overwrite:
+        return "overwrite"
+    return "cancel"
+
+
+def _ask_rename(window: QMainWindow, default_name: str):
+    """改名输入框：预填默认编号名，用户可以改成自己想要的名字。
+
+    返回用户输入（去首尾空格）；取消或输入为空 → None。窗口没显示
+    （测试环境）不弹模态框，直接返回默认名（防挂死）。
+    """
+    if not window.isVisible():
+        return default_name
+    text, ok = QInputDialog.getText(
+        window, "改名", "给这个重复文件起个新名字：", text=default_name)
+    text = text.strip()
+    if not ok or not text:
+        return None
+    return text
+
+
+def add_files(window: QMainWindow, paths) -> None:
+    """把文件加进左侧列表；一批新加的文件全部打对号（选中）。
+
+    对号是唯一的选择表达：一起选入/拖入的文件默认全部勾上，点一次
+    作图按钮就批量出图。重复文件（同一路径再次加入）弹窗询问：
+      - 覆盖 = 保留原条目（新条目跳过，原条目勾上）；
+      - 改名 = 弹输入框起新名字（预填 "xxx (1).tif"，可自己改；
+        输入的名字已被占用会要求换一个）再开一条（同文件两条条目）；
+      - 取消 = 这次不加。
+    列表里永远不出现重名。
+    """
+    existing = {}   # 绝对路径 → 已有条目（重复检测按真实路径）
+    for i in range(window.file_list.count()):
+        item = window.file_list.item(i)
+        existing[Path(item.data(Qt.UserRole)).resolve()] = item
+
+    added = []   # 本批真正新加的条目
+    window.file_list.blockSignals(True)   # 批量加：结束后统一同步/记日志
     for p in paths:
         p = Path(p)
+        old = existing.get(p.resolve())
+        if old is not None:   # 重复文件
+            choice = _ask_duplicate(window, p.name)
+            if choice == "overwrite":
+                old.setCheckState(Qt.Checked)   # 保留原条目并勾上
+                _log(window, f"{p.name} 已在列表中（覆盖：保留原条目）")
+            elif choice == "rename":
+                new_name = None
+                default_name = _unique_display_name(window, p.name)
+                while True:
+                    answer = _ask_rename(window, default_name)
+                    if answer is None:
+                        break   # 取消 → 这次不加
+                    if any(window.file_list.item(i).text() == answer
+                           for i in range(window.file_list.count())):
+                        _log(window, f"显示名 {answer} 已被占用，请换一个")
+                        default_name = answer   # 重开输入框保留用户输入
+                        continue
+                    new_name = answer
+                    break
+                if new_name is None:
+                    _log(window, f"已跳过重复文件 {p.name}")
+                    continue
+                item = QListWidgetItem(new_name)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setData(Qt.UserRole, str(p))
+                window.file_list.addItem(item)
+                item.setCheckState(Qt.Checked)
+                added.append(item)
+                _log(window, f"{p.name} 已在列表中（改名加入：{new_name}）")
+            else:
+                _log(window, f"已跳过重复文件 {p.name}")
+            continue
         item = QListWidgetItem(p.name)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)          # 默认勾上
         item.setData(Qt.UserRole, str(p))       # 全路径藏在 UserRole
         window.file_list.addItem(item)
-    if paths:
-        window.file_list.setCurrentRow(window.file_list.count() - 1)
-    _log(window, f"已添加 {len(paths)} 个文件")
+        item.setCheckState(Qt.Checked)          # 新文件默认选中
+        existing[p.resolve()] = item
+        added.append(item)
+    window.file_list.blockSignals(False)
+    if added:
+        window.file_list.setCurrentItem(added[-1])   # 高亮最后新条目
+        _log(window, f"已添加 {len(added)} 个文件")
+    _sync_current_to_checks(window)
+    _refresh_file_label(window)
 
 
 # ══ 文件 → 1D 闭环：选文件 → 后台积分 → 1D 面板出图 ══════════
@@ -200,55 +434,85 @@ def _compute_integration(path_str: str, geom: dict, npt: int) -> tuple:
     return tth, intensity
 
 
-def _on_file_selected(window: QMainWindow, current, previous) -> None:
-    """文件列表选中变化 → 只登记当前文件，不计算。
+def _sync_current_to_checks(window: QMainWindow) -> None:
+    """高亮跟随对号：当前项必须是对号行；没对号就不高亮。
 
-    算哪个视图由工具栏的视图开关决定（勾选 = 打开面板并计算），
-    文件选择本身保持轻快——这也是"反应迟钝"问题的根源：以前每次
-    点选都触发一次完整积分。
+    防"看起来选中了其实没勾"的假象——比如点对号方块取消勾选时，
+    Qt 会先把那行设为当前项，不纠正就会留下一行无对号的高亮。
     """
-    if current is None:
-        window.file_label.setText("未打开文件")
+    current = window.file_list.currentItem()
+    if current is not None and current.checkState() == Qt.Checked:
         return
-    path = Path(current.data(Qt.UserRole))
-    window.file_label.setText(path.name)
-    _log(window, f"已选中 {path.name}（勾选视图按钮开始计算）")
+    for i in range(window.file_list.count()):
+        item = window.file_list.item(i)
+        if item.checkState() == Qt.Checked:
+            window.file_list.setCurrentItem(item)
+            return
+    window.file_list.setCurrentRow(-1)
 
 
-def _run_view(window: QMainWindow, name: str) -> None:
-    """按视图名对当前文件跑对应的计算（后台线程）。
+def _refresh_file_label(window: QMainWindow) -> None:
+    """状态行文件标签跟随对号集合：0 个 = 未打开 / 1 个 = 文件名 /
+    N 个 = 已选 N 个文件。"""
+    checked = [window.file_list.item(i)
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if not checked:
+        window.file_label.setText("未打开文件")
+    elif len(checked) == 1:
+        window.file_label.setText(checked[0].text())
+    else:
+        window.file_label.setText(f"已选 {len(checked)} 个文件")
+
+
+def _on_file_selected(window: QMainWindow, current, previous) -> None:
+    """文件列表选中变化 → 只刷新状态行标签，不计算。
+
+    算哪个视图由工具栏的作图按钮决定（点击 = 对每个对号文件开
+    面板并计算），文件选择本身保持轻快——这也是"反应迟钝"问题
+    的根源：以前每次点选都触发一次完整积分。
+    """
+    _refresh_file_label(window)
+
+
+def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
+    """对 (视图, 文件) 面板跑对应的计算（后台线程）。
 
     1D = 全角度积分；其余视图尚未接线（面板保持占位）。
     """
     if name != "1D":
         _log(window, f"{name} 视图尚未接线（面板占位）")
         return
-    item = window.file_list.currentItem()
-    if item is None:
-        _log(window, "没有选中的文件")
-        return
-    path = Path(item.data(Qt.UserRole))
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     window.status_text.setText(f"正在积分 {path.name}…")
     _log(window, f"开始积分 {path.name}（后台线程）")
-    _spawn(window, path, geom, npt)
+    _spawn(window, path, geom, npt, key)
 
 
 def _apply_params(window: QMainWindow) -> None:
-    """[应用] 按钮：用当前参数重算焦点视图。
+    """[应用] 按钮：用当前参数重算焦点面板。
 
-    焦点视图 = 参数坞顶部"编辑对象"（点图面板或计算完成时设定）；
+    焦点面板 = 参数坞顶部"编辑对象"（点图面板或计算完成时设定）；
     没选焦点时提示用户先点图。
     """
-    if window.focus_view is None:
+    key = window.focus_panel
+    if key is None:
         _log(window, "先点击要更新的图面板（如 1D），再点 [应用]")
         return
-    _log(window, f"[应用] 重算焦点视图：{window.focus_view}")
-    _run_view(window, window.focus_view)
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        _log(window, "编辑对象的面板已不存在")
+        window.focus_panel = None
+        window.focus_label.setText("编辑对象：未选中图面板")
+        return
+    view = key.split("|", 1)[0]
+    _log(window, f"[应用] 重算编辑对象：{dock.windowTitle()}")
+    _run_view(window, view, dock.panel_file, key)
 
 
-def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int) -> None:
+def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
+           key: str) -> None:
     """启动后台积分任务；引用挂在 window._tasks 防垃圾回收，结束移除。
 
     task 变量在闭包外定义、闭包内只引用：done/error 回调在任务结束
@@ -258,7 +522,7 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int) -> None:
 
     def done(result):
         window._tasks.remove(task)
-        _on_integration_done(window, path, result)
+        _on_integration_done(window, key, task, result)
 
     def error(msg):
         window._tasks.remove(task)
@@ -266,26 +530,28 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int) -> None:
 
     task = BackgroundTask(_compute_integration, str(path), geom, npt,
                           on_done=done, on_error=error)
+    window._latest_task[key] = task   # 每面板只认最新任务（防旧结果覆盖）
     window._tasks.append(task)
     task.start()
 
 
-def _on_integration_done(window: QMainWindow, path: Path, result) -> None:
-    """积分完成（主线程）：结果仍属于当前文件才画，过期结果丢弃。
+def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
+    """面板的计算完成（主线程）：画进它自己的面板。
 
-    用户可能等待期间点了别的文件（A 没算完就点了 B）——A 的结果
-    回来时列表当前项已是 B，画 A 会让面板和选中状态对不上，直接
-    丢弃并如实记日志。
+    每个面板绑定自己的文件，结果永远画回自己的面板；唯一的过期
+    情况是同一面板连点两次开了两个任务——先开的晚到会被丢弃
+    （每面板只认最新任务，旧结果不得覆盖新图）。
     """
-    item = window.file_list.currentItem()
-    current = item.data(Qt.UserRole) if item else None
-    if current != str(path):
-        _log(window, f"已忽略 {path.name} 的过期结果（当前文件已切换）")
+    if window._latest_task.get(key) is not task:
+        dock = window.plot_docks[key]
+        _log(window, f"已忽略 {dock.panel_display} 的过期结果"
+                     f"（同一面板已有更新的计算）")
         return
+    dock = window.plot_docks[key]
     tth, intensity = result
-    _set_focus(window, "1D")   # 最新生成的图成为参数面板的编辑对象
-    _draw_1d(window, path, tth, intensity)
-    _log(window, f"积分完成：{path.name}（{len(tth)} 点，"
+    _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
+    _draw_1d(window, dock, tth, intensity)
+    _log(window, f"积分完成：{dock.panel_display}（{len(tth)} 点，"
                  f"2θ {tth.min():.3f}~{tth.max():.3f}°）")
 
 
@@ -294,13 +560,13 @@ def _on_integration_error(window: QMainWindow, path: Path, msg: str) -> None:
     _log(window, f"积分失败：{path.name} — {msg}")
 
 
-def _draw_1d(window: QMainWindow, path: Path, tth, intensity) -> None:
-    """在 1D 面板画出积分曲线（只允许主线程调用）。
+def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
+    """在指定的 1D 面板画出积分曲线（只允许主线程调用）。
 
     x 轴范围跟随参数坞的 2θ 上下限（看图范围，不参与计算）；
     面板显示的是全范围数据，用户可以自由改范围重画。
     """
-    ax = window.axes_1d
+    ax = dock.widget().axes_1d
     ax.clear()
     ax.plot(tth, intensity, "b-", lw=0.8)
     lo = window.params["2θ 下限 (°)"].value()
@@ -309,9 +575,10 @@ def _draw_1d(window: QMainWindow, path: Path, tth, intensity) -> None:
         ax.set_xlim(lo, hi)
     ax.set_xlabel("2θ (deg)")
     ax.set_ylabel("Intensity (a.u.)")
-    ax.set_title(f"{path.name}: full azimuthal integration")
+    ax.set_title(f"{dock.panel_display}: full azimuthal integration")
     ax.grid(alpha=0.3)
-    window.canvas_1d.draw()
+    dock.widget().draw()
+    dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
@@ -506,6 +773,9 @@ def _build_log_dock(window: QMainWindow) -> QDockWidget:
     window.log_text = QPlainTextEdit()
     window.log_text.setReadOnly(True)
     window.log_text.setMaximumBlockCount(5000)   # 只留最近 5000 行，防涨爆
+    # 文本编辑器默认接受拖放：不关掉的话，文件拖到日志区会被它
+    # 吞掉（塞成文字），到不了顶层窗口的"拖入文件"入口
+    window.log_text.setAcceptDrops(False)
     dock.setWidget(window.log_text)
     window.addDockWidget(Qt.BottomDockWidgetArea, dock)
     return dock
@@ -523,14 +793,14 @@ def _build_status(window: QMainWindow) -> None:
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = [校准] 模式开关 + 视图开关 + 日志开关。"""
+    """工具栏 = [校准] 模式开关 + 作图按钮 + 日志开关。"""
     tb = QToolBar("主工具栏", window)
     tb.setMovable(False)
     window.addToolBar(tb)
 
     # 模式开关：[校准] 可勾选。按下 = 校准工作台（几何参数 +
     # 点图微调束心），弹起 = 默认的分析工作台。原来的 [图像] 按钮
-    # 已删：outputs 摊成四个视图开关后，它只剩空壳
+    # 已删：outputs 摊成四个作图按钮后，它只剩空壳
     btn_calib = QPushButton("校准")
     btn_calib.setCheckable(True)   # 默认弹起 = 分析工作台
     tb.addWidget(btn_calib)
@@ -538,14 +808,17 @@ def _build_toolbar(window: QMainWindow) -> None:
 
     tb.addSeparator()
 
-    # 视图开关：[2D][剖面][1D][瀑布]——勾选 = 对应图面板的开关
-    window.view_buttons = {}   # 登记按钮，供面板可见性同步使用
+    # 作图按钮：[2D][剖面][1D][瀑布]——点一下 = 打开面板 + 计算
+    # 该视图并出图。纯动作不是开关：点几下算几下，重复点击安全；
+    # 面板的开/关只由 × 和拖动管理（勾选式的第二次点击会关面板，
+    # 让人误以为"画不了"）
+    window.view_buttons = {}   # 登记按钮（测试与后续接线用）
     for name in VIEW_NAMES:
         btn = QPushButton(name)
-        btn.setCheckable(True)
         tb.addWidget(btn)
         window.view_buttons[name] = btn
-        btn.toggled.connect(lambda on, n=name: _toggle_plot(window, n, on))
+        btn.clicked.connect(
+            lambda checked=False, n=name: _plot_view(window, n))
 
     tb.addSeparator()
 
@@ -605,54 +878,67 @@ def _build_center(window: QMainWindow) -> None:
     inner.statusBar().addPermanentWidget(arrange_box)
 
 
-def _build_view_widget(window: QMainWindow, name: str) -> QWidget:
+def _build_view_widget(window: QMainWindow, name: str, key: str,
+                       title: str) -> QWidget:
     """按视图名创建面板内容：1D = matplotlib 画布，其余暂为占位标签。
 
-    画布与坐标轴挂在 window.canvas_1d / window.axes_1d 上，供
-    _draw_1d 使用；以后 2D/剖面/瀑布接线时在此函数里加分支。
-    每个面板都装 _FocusMarker：点它即成为参数面板的编辑对象。
+    每张面板内容独立（自己的画布/坐标轴，挂在控件上供 _draw_1d
+    使用）；以后 2D/剖面/瀑布接线时在此函数里加分支。每个面板都
+    装 _FocusMarker：点它即成为参数面板的编辑对象。
     """
     if name == "1D":
         fig = Figure(figsize=(5, 3), tight_layout=True)
         canvas = FigureCanvasQTAgg(fig)
-        window.canvas_1d = canvas
-        window.axes_1d = fig.add_subplot(111)
+        canvas.axes_1d = fig.add_subplot(111)
         widget = canvas
     else:
-        placeholder = QLabel(f"{name} — 面板占位")
+        placeholder = QLabel(f"{title} — 尚未接线")
         placeholder.setAlignment(Qt.AlignCenter)
         widget = placeholder
-    widget.installEventFilter(_FocusMarker(window, name))
+    widget.installEventFilter(_FocusMarker(window, key, title))
     return widget
 
 
-def _toggle_plot(window: QMainWindow, name: str, on: bool) -> None:
-    """视图开关：勾选 = 打开面板（首次打开顺带计算该视图），
-    取消勾选 = 隐藏面板（内容保留，重新勾选不再重算；要重算点
-    [应用]）。
+def _plot_view(window: QMainWindow, name: str) -> None:
+    """工具栏作图按钮的动作：对每个对号文件开面板（或复用）并计算。
 
-    面板是 QDockWidget：拖标题栏换位、拖出窗口浮动、× 关闭。
-    用户用 × 关掉面板时 visibilityChanged 会把按钮勾掉，两者同步。
+    支持批量：勾选几个文件（选入/拖入即全勾），点一下视图按钮 =
+    一次开出多张图。面板按「视图 + 文件条目」成对创建：同一文件
+    重复点 = 刷新那张图；面板标题 = 视图_显示名（如 1D_lab6-
+    00024.tif），多张图一眼分清。重复文件改名加入的条目显示名不同
+    （xxx (1).tif），面板键补显示名区分，各自成图、互不当过期。
+    按钮是纯动作不是开关——点一下算一下，重复点击安全；面板的
+    开/关只由 × 和拖动管理。
     """
-    dock = window.plot_docks.get(name)
-    if dock is None:
-        dock = QDockWidget(name, window.inner)
-        dock.setObjectName(f"plot_{name}")
-        dock.setWidget(_build_view_widget(window, name))
-        window.plot_docks[name] = dock
-        window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
-        dock.show()   # 显式显示：不依赖停靠系统自动显示
-        dock.visibilityChanged.connect(
-            lambda v: _sync_toggle(window, name, v))
-        _log(window, f"打开{name}面板")
-        _run_view(window, name)   # 勾选视图 = 选择要算的内容
-    else:
-        dock.setVisible(on)
-
-
-def _sync_toggle(window: QMainWindow, name: str, visible: bool) -> None:
-    """面板可见性与工具栏勾选按钮保持同步（用户点 × 关面板时）。"""
-    window.view_buttons[name].setChecked(visible)
+    checked = [window.file_list.item(i)
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if not checked:
+        _log(window, "没有选中的文件")
+        return
+    for item in checked:
+        path = Path(item.data(Qt.UserRole))
+        display = item.text()
+        key = f"{name}|{path}"
+        dock = window.plot_docks.get(key)
+        if dock is not None and getattr(dock, "panel_item", None) is not item:
+            # 同路径的另一条目（重复文件改名加入）→ 键补显示名区分
+            key = f"{name}|{path}|{display}"
+            dock = window.plot_docks.get(key)
+        if dock is None:
+            title = f"{name}_{display}"
+            dock = QDockWidget(title, window.inner)
+            dock.setObjectName(f"plot_{name}")
+            dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）
+            dock.panel_item = item   # 面板绑定自己的列表条目（重名条目各自成图）
+            dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
+            dock.figure_saved = False   # 有没有存过盘（关窗询问用）
+            dock.setWidget(_build_view_widget(window, name, key, title))
+            window.plot_docks[key] = dock
+            window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
+            _log(window, f"打开{name}面板：{display}")
+        dock.setVisible(True)
+        _run_view(window, name, path, key)
 
 
 def _arrange(window: QMainWindow, mode: str) -> None:
@@ -678,12 +964,88 @@ def _arrange(window: QMainWindow, mode: str) -> None:
     _log(window, f"已{mode} {len(docks)} 个面板")
 
 
+# ══ 保存：勾选已输出的图 → 逐个选文件名存 PNG ═══════════════
+def _save_figures(window: QMainWindow) -> bool:
+    """[保存] 按钮与关窗询问共用：弹窗勾选要保存的图 → 逐个选文件名存 PNG。
+
+    返回 False = 流程被取消（关窗时应留在程序里），True = 完成。
+    目前只有 1D 面板有真图（figure）；占位面板不参与。
+    """
+    panels = [d for d in window.plot_docks.values()
+              if getattr(d.widget(), "figure", None) is not None]
+    if not panels:
+        _log(window, "没有已输出的图可保存")
+        return True
+    chosen = _choose_panels(window, panels)
+    if not chosen:
+        _log(window, "已取消保存")
+        return False
+    for dock in chosen:
+        default = str(Path("outputs") / f"{dock.windowTitle()}.png")
+        name, _ = QFileDialog.getSaveFileName(
+            window, f"保存 {dock.windowTitle()}", default, "PNG 图片 (*.png)")
+        if not name:
+            continue
+        if not name.lower().endswith(".png"):
+            name += ".png"
+        dock.widget().figure.savefig(name)
+        dock.figure_saved = True
+        _log(window, f"已保存 {dock.windowTitle()} → {name}")
+    return True
+
+
+def _choose_panels(window: QMainWindow, panels) -> list:
+    """弹窗勾选要保存的面板（默认全勾）；确定 = 勾选列表，取消 = 空列表。"""
+    dlg = QDialog(window)
+    dlg.setWindowTitle("保存哪些图")
+    lay = QVBoxLayout(dlg)
+    lay.addWidget(QLabel("勾选要保存的图："))
+    lst = QListWidget()
+    for d in panels:
+        it = QListWidgetItem(d.windowTitle())
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked)   # 默认全勾
+        lst.addItem(it)
+    lay.addWidget(lst)
+    row = QHBoxLayout()
+    ok = QPushButton("确定")
+    cancel = QPushButton("取消")
+    row.addWidget(ok)
+    row.addWidget(cancel)
+    lay.addLayout(row)
+    ok.clicked.connect(dlg.accept)
+    cancel.clicked.connect(dlg.reject)
+    if dlg.exec() != QDialog.Accepted:
+        return []
+    return [panels[i] for i in range(lst.count())
+            if lst.item(i).checkState() == Qt.Checked]
+
+
+def _confirm_close(window: QMainWindow, n_unsaved: int) -> str:
+    """关窗时询问未保存的图怎么处理；返回 "save" / "discard" / "cancel"。
+
+    窗口从未显示过（测试等非交互场景）不弹框，直接按"不保存"关，
+    免得模态对话框把测试挂死；真实使用中窗口显示过，正常弹框。
+    """
+    if not window.isVisible():
+        return "discard"
+    ans = QMessageBox.question(
+        window, "关闭 XRD Toolkit",
+        f"有 {n_unsaved} 张图尚未保存，要保存后再关闭吗？",
+        QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+        QMessageBox.Save)
+    return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(
+        ans, "cancel")
+
+
 # ══ 主窗口组装 ════════════════════════════════════════════
 def create_window() -> QMainWindow:
     """组装主框架：文件坞 + 参数坞 + 日志坞 + 工具栏 + 中央面板区。"""
-    window = QMainWindow()
+    window = _MainWindow()
     window.setWindowTitle("XRD Toolkit")
     window.resize(1200, 800)
+    # 拖文件进窗口任意位置 = 加进文件列表（拖放事件冒泡到顶层窗口）
+    window.drop_callback = lambda paths: add_files(window, paths)
 
     window._status_timer = None   # _log 里的状态栏恢复计时器（懒创建）
     window.log = lambda text: _log(window, text)
@@ -692,8 +1054,10 @@ def create_window() -> QMainWindow:
     # 后台任务簿：进行中的积分任务挂在这里防垃圾回收（结束回调里
     # 移除）；关窗口时逐一 discard（等待后台函数返回，防线程悬空）
     window._tasks = []
-    # 焦点视图：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
-    window.focus_view = None
+    # 每面板的最新任务：同面板连点两次时，先开的晚到会被丢弃
+    window._latest_task = {}
+    # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
+    window.focus_panel = None
 
     _build_center(window)
     file_dock = _build_file_dock(window)
@@ -706,8 +1070,20 @@ def create_window() -> QMainWindow:
     window.file_list.currentItemChanged.connect(
         lambda cur, prev: _on_file_selected(window, cur, prev))
 
-    # 关窗口前等后台任务收尾：直接销毁运行中的线程 Qt 会 abort
+    # 关窗口：有未保存的图先询问（保存 / 不保存 / 取消），再等后台
+    # 任务收尾——直接销毁运行中的线程 Qt 会 abort
     def on_close(event):
+        unsaved = [d for d in window.plot_docks.values()
+                   if getattr(d.widget(), "figure", None) is not None
+                   and not getattr(d, "figure_saved", False)]
+        if unsaved:
+            choice = _confirm_close(window, len(unsaved))
+            if choice == "cancel":
+                event.ignore()   # 取消 → 留在程序里
+                return
+            if choice == "save" and not _save_figures(window):
+                event.ignore()   # 保存流程被取消 → 留在程序里
+                return
         for task in window._tasks:
             task.discard()
         event.accept()

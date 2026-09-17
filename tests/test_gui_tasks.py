@@ -69,6 +69,7 @@ class TestBackgroundTask(unittest.TestCase):
         task.start()
         self.assertTrue(_wait_until(lambda: results))
         self.assertEqual(results, [5])
+        self.assertTrue(_wait_until(lambda: not task._thread.isRunning()))
 
     def test_fn_runs_in_worker_thread_not_main(self):
         """后台函数确实在别的线程执行（界面线程不能被它占用）。"""
@@ -83,6 +84,9 @@ class TestBackgroundTask(unittest.TestCase):
         task.start()
         self.assertTrue(_wait_until(lambda: "done" in seen))
         self.assertNotEqual(seen["tid"], main_tid, "函数应跑在后台线程")
+        # 等线程真正退出再放手：直接放手曾撞上 GC 抢先销毁运行中
+        # 的 QThread → Qt abort（tasks.py 的 _live_tasks 也是防这个）
+        self.assertTrue(_wait_until(lambda: not task._thread.isRunning()))
 
 
 class TestDiscard(unittest.TestCase):
