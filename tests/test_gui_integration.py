@@ -56,8 +56,8 @@ from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QLabel, QPushButton, QScrollArea,
-    QSplitter, QVBoxLayout)
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSplitter, QVBoxLayout)
 
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui.app import create_window
@@ -1287,24 +1287,19 @@ class TestLongNames(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_config_label_single_line_not_occluded(self):
+    def test_config_combo_carries_full_label_as_tooltip(self):
+        """几何配置说明行已删除（与用户讨论定稿：不单独占一行）——
+        完整批次备注改为挂在配置下拉框各项的悬停提示上
+        （悬停闭合下拉框 = 显示当前项的提示）。"""
         w = create_window()
         try:
             w.show()
-            label = w.config_label
-            # 悬停提示 = 完整批次备注
+            combo = w.config_combo
+            idx = combo.currentIndex()
+            self.assertEqual(combo.itemData(idx), gui_app.DEFAULT_CONFIG)
             self.assertEqual(
-                label.toolTip(),
+                combo.itemData(idx, Qt.ToolTipRole),
                 gui_app.CONFIGS[gui_app.DEFAULT_CONFIG]["label"])
-            # 单行：不换行（换行的第二行会被 QFormLayout 压到下一行
-            # 控件底下，即"被遮挡"）
-            one_line = label.fontMetrics().height()
-            self.assertLessEqual(label.height(), one_line + 4)
-            # 超长备注也不撑宽参数坞
-            width_before = w.param_dock.width()
-            label.setText("这是一个非常非常非常长的批次备注，用来验证灰色"
-                          "说明行在窄参数坞里是缩略显示而不是撑宽参数区")
-            self.assertLessEqual(w.param_dock.width(), width_before + 5)
         finally:
             w.close()   # 没画图，关窗不会弹询问
 
@@ -1312,9 +1307,9 @@ class TestLongNames(unittest.TestCase):
 class TestParamDockSplitLayout(unittest.TestCase):
     """参数坞上下对半分结构：编辑对象名固定在最上方，下面
     QSplitter 竖切两半（数据参数上 / 图像参数下，初始等高）；
-    两半各自一个 QScrollArea（内容放不下时滚动），按钮竖排一列
-    （[应用] 在上、[恢复默认] 在下）固定在各区最下方——在滚动区
-    之外，滚动时按钮不跟着走。"""
+    两半各自一个 QScrollArea（内容放不下时滚动），按钮并排一行
+    （[恢复默认] 在左、[应用] 在右，各占一半宽度）固定在各区最
+    下方——在滚动区之外，滚动时按钮不跟着走。"""
 
     def test_split_structure(self):
         w = create_window()
@@ -1355,13 +1350,16 @@ class TestParamDockSplitLayout(unittest.TestCase):
                     scroll.widget().findChild(QPushButton, apply_name))
                 self.assertIsNone(
                     scroll.widget().findChild(QPushButton, reset_name))
-                # 布局顺序：滚动区在上、按钮列垫底（竖排：[应用] 在上）
+                # 布局顺序：滚动区在上、按钮行垫底（并排：
+                # [恢复默认] 在左、[应用] 在右，各占一半宽度）
                 v = half.layout()
                 self.assertIs(v.itemAt(0).widget(), scroll)
-                btn_col = v.itemAt(1)
-                self.assertIsInstance(btn_col, QVBoxLayout)
-                self.assertIs(btn_col.itemAt(0).widget(), apply)
-                self.assertIs(btn_col.itemAt(1).widget(), reset)
+                btn_row = v.itemAt(1)
+                self.assertIsInstance(btn_row, QHBoxLayout)
+                self.assertIs(btn_row.itemAt(0).widget(), reset)
+                self.assertIs(btn_row.itemAt(1).widget(), apply)
+                self.assertEqual(btn_row.stretch(0), 1)
+                self.assertEqual(btn_row.stretch(1), 1)
         finally:
             w.close()
 
@@ -1403,16 +1401,25 @@ class TestParamFormPolish(unittest.TestCase):
         finally:
             w.close()
 
-    def test_section_captions_and_short_checkbox(self):
+    def test_section_captions_and_normalize_combo(self):
         w = create_window()
         try:
             captions = {lb.text() for lb in w.param_dock.findChildren(QLabel)}
             self.assertIn("标定几何", captions)
             self.assertIn("积分设置", captions)
             self.assertIn("2D/剖面视图（接线后生效）", captions)
-            # 复选框名称精简（键仍是"对比归一化"，快照回放不认字面）
-            box = w.params["对比归一化"]
-            self.assertEqual(box.text(), "归一化到最强峰")
+            # 归一化四选一下拉框（键仍是"对比归一化"，快照回放认 data
+            # 不认字面）：各自最强峰 / 全图最强峰 / 指定数据… / 不归一化
+            combo = w.params["对比归一化"]
+            self.assertEqual(
+                [combo.itemText(i) for i in range(combo.count())],
+                ["各自最强峰", "全图最强峰", "指定数据…", "不归一化"])
+            self.assertEqual(
+                [combo.itemData(i) for i in range(combo.count())],
+                ["each", "global", "file", "off"])
+            self.assertEqual(combo.currentData(), "each")
+            # "指定数据" 未选中时，旁边的目标文件下拉框置灰
+            self.assertFalse(w.params["归一化目标"].isEnabled())
         finally:
             w.close()
 
@@ -1845,12 +1852,19 @@ class TestCompare(unittest.TestCase):
         finally:
             w.close()
 
-    def test_normalize_on_by_default(self):
-        """默认勾"对比归一化到最强峰" → 每条曲线最强峰都是 1.0。"""
+    def _set_norm_mode(self, w, mode):
+        """把归一化下拉框切到某模式（按 data 找条目，找不到就失败）。"""
+        combo = w.params["对比归一化"]
+        idx = combo.findData(mode)
+        self.assertGreaterEqual(idx, 0, f"模式 {mode} 应在下拉框里")
+        combo.setCurrentIndex(idx)
+
+    def test_normalize_each_on_by_default(self):
+        """默认 = 各自最强峰 → 每条曲线最强峰都是 1.0。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
-            self.assertTrue(w.params["对比归一化"].isChecked())
+            self.assertEqual(w.params["对比归一化"].currentData(), "each")
             for line in ax.lines:
                 self.assertAlmostEqual(float(np.max(line.get_ydata())),
                                        1.0, places=4)
@@ -1858,17 +1872,17 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_normalize_off_shows_raw_values(self):
-        """关掉归一化点图像 [应用] → 按原始强度重画（不重算）。"""
+        """切到不归一化点图像 [应用] → 按原始强度重画（不重算）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
             done_before = w.log_text.toPlainText().count("开始对比")
-            w.params["对比归一化"].setChecked(False)
+            self._set_norm_mode(w, "off")
             w.findChild(QPushButton, "apply_image_btn").click()
             # 快照记下关归一化，fake_b 曲线回到原始强度（最强峰 30）
             dock = [d for k, d in w.plot_docks.items()
                     if k.startswith("对比|")][0]
-            self.assertFalse(dock.params_snapshot["对比归一化"])
+            self.assertEqual(dock.params_snapshot["对比归一化"], "off")
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
             self.assertIn("[应用] 图像参数已重画：",
@@ -1876,6 +1890,71 @@ class TestCompare(unittest.TestCase):
             # 只重画不重算
             self.assertEqual(w.log_text.toPlainText().count("开始对比"),
                              done_before)
+        finally:
+            w.close()
+
+    def test_normalize_global_divides_by_strongest_of_all(self):
+        """全图最强峰 → 所有曲线除以全部曲线里最高的峰。
+        fake_a 最强峰 3、fake_b 最强峰 30 → 除数 30：
+        fake_a 峰 0.1、fake_b 峰 1.0。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            self._set_norm_mode(w, "global")
+            w.findChild(QPushButton, "apply_image_btn").click()
+            peaks = sorted(float(np.max(line.get_ydata()))
+                           for line in ax.lines)
+            self.assertEqual(len(peaks), 2)
+            self.assertAlmostEqual(peaks[0], 3.0 / 30.0, places=4)
+            self.assertAlmostEqual(peaks[1], 1.0, places=4)
+        finally:
+            w.close()
+
+    def test_normalize_file_divides_by_chosen_file(self):
+        """指定数据 → 所有曲线除以目标文件的最强峰；目标下拉框 =
+        对比面板的文件列表。选 fake_a（峰 3）→ fake_a 峰 1.0、
+        fake_b 峰 30/3 = 10.0。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            # 对比面板成为焦点后，目标下拉框已按它的文件列表填充
+            target = w.params["归一化目标"]
+            self.assertEqual(
+                [str(target.itemData(i)) for i in range(target.count())],
+                ["data/fake_a.tif", "data/fake_b.tif"])
+            self._set_norm_mode(w, "file")
+            self.assertTrue(target.isEnabled(), "指定数据模式应启用目标下拉框")
+            # 条目 data = 字符串路径，按字符串找
+            target.setCurrentIndex(target.findData("data/fake_a.tif"))
+            w.findChild(QPushButton, "apply_image_btn").click()
+            dock = [d for k, d in w.plot_docks.items()
+                    if k.startswith("对比|")][0]
+            self.assertEqual(str(dock.params_snapshot["归一化目标"]),
+                             "data/fake_a.tif")
+            peaks = sorted(float(np.max(line.get_ydata()))
+                           for line in ax.lines)
+            self.assertEqual(len(peaks), 2)
+            self.assertAlmostEqual(peaks[0], 1.0, places=4)    # fake_a 3/3
+            self.assertAlmostEqual(peaks[1], 10.0, places=4)   # fake_b 30/3
+        finally:
+            w.close()
+
+    def test_norm_mode_survives_reclick(self):
+        """重复点 [对比]（重算）= 显示参数保留：归一化模式还是
+        "不归一化"，重画后仍按原始强度。"""
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            self._set_norm_mode(w, "off")
+            w.findChild(QPushButton, "apply_image_btn").click()
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.compare_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.log_text.toPlainText().count("对比完成") >= 2))
+            self.assertEqual(w.params["对比归一化"].currentData(), "off")
+            ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
+            self.assertAlmostEqual(ymax, 30.0, places=4)
         finally:
             w.close()
 
@@ -2485,9 +2564,10 @@ class TestFreeResize(unittest.TestCase):
 
 
 class TestResizeGrips(unittest.TestCase):
-    """自装抓手：内容四边 5px 抓取带 + 四角 16px 抓取区 + 右下角
-    可见把手（▙）；悬停换方向光标，按住拖 = 拉伸容器（子窗口/弹出
-    窗口都可用），拖完照常记"拖过"比例。"""
+    """自装抓手：内容四边 8px 抓取带 + 四角 24px 抓取区 + 右下角
+    可见把手（▙）；悬停换方向光标（应用级覆盖光标，macOS 上部件级
+    setCursor 会被带过期坐标的合成事件打回原形），按住拖 = 拉伸
+    容器（子窗口/弹出窗口都可用），拖完照常记"拖过"比例。"""
 
     def _open_one(self, w, view="1D", path_str="data/fake_b.tif"):
         with mock.patch.object(gui_app, "_compute_integration",
@@ -2506,25 +2586,33 @@ class TestResizeGrips(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
-            canvas = content.canvas
+            # 方向光标 = 应用级覆盖光标（macOS 上部件级 setCursor 会被
+            # 带过期坐标的合成事件打回原形，见 _PanelGripFilter docstring）
             # 右边缘中部（避开右下角把手）→ 水平双箭头
             self.assertTrue(_hover_until(
                 content, QPoint(content.width() - 3, 200),
-                lambda: canvas.cursor().shape() == Qt.SizeHorCursor))
-            # 画布中央 → 普通箭头
+                lambda: QApplication.overrideCursor() is not None
+                and QApplication.overrideCursor().shape() == Qt.SizeHorCursor))
+            # 画布中央 → 撤销覆盖光标（回到普通箭头）
             self.assertTrue(_hover_until(
                 content, QPoint(300, 200),
-                lambda: canvas.cursor().shape() == Qt.ArrowCursor))
-            # 右下角被把手挡着（把手盖在画布上）：把手自带斜向光标
+                lambda: QApplication.overrideCursor() is None))
+            # 右下角被把手挡着（把手盖在画布上）→ 角区斜向双箭头
             grip = content._resize_grip
             self.assertTrue(_hover_until(
                 content, QPoint(content.width() - 5, content.height() - 5),
-                lambda: grip.cursor().shape() == Qt.SizeFDiagCursor))
+                lambda: QApplication.overrideCursor() is not None
+                and QApplication.overrideCursor().shape()
+                == Qt.SizeFDiagCursor))
             # 顶边抓取带落在工具栏条上：真实落点 = 工具栏 → 垂直双箭头
             self.assertTrue(_hover_until(
                 content, QPoint(250, 2),
-                lambda: content.toolbar.cursor().shape() == Qt.SizeVerCursor))
+                lambda: QApplication.overrideCursor() is not None
+                and QApplication.overrideCursor().shape() == Qt.SizeVerCursor))
         finally:
+            # 弹空覆盖光标栈：别把方向光标留给后面的测试
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
             w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
             w.close()
 
@@ -2904,7 +2992,8 @@ class TestGestures(unittest.TestCase):
                          f"放大镜应已{'点亮' if on else '熄灭'}")
 
     def test_magnifier_toggle_switches_mode(self):
-        """放大镜 = 开关：点亮 = ZOOM 模式 + 按钮亮起，再点熄灭。"""
+        """放大镜 = 纯开关：点亮点灭只翻转按钮，mpl 模式永远停在 NONE
+        （框选放大已删除，不再切 ZOOM 模式）。"""
         w = create_window()
         try:
             self._open_1d(w)
@@ -2914,8 +3003,11 @@ class TestGestures(unittest.TestCase):
             self.assertFalse(action.isChecked())
             self._magnifier(w, "data/fake_b.tif", True)
             self.assertTrue(action.isChecked(), "点亮后按钮应亮起")
+            self.assertEqual(content.toolbar.mode.name, "NONE",
+                             "点亮放大镜不应切进 mpl 框选模式")
             self._magnifier(w, "data/fake_b.tif", False)
             self.assertFalse(action.isChecked(), "熄灭后按钮应熄灭")
+            self.assertEqual(content.toolbar.mode.name, "NONE")
         finally:
             w.close()
 
@@ -2944,8 +3036,8 @@ class TestGestures(unittest.TestCase):
         finally:
             w.close()
 
-    def test_pan_yields_to_magnifier(self):
-        """放大镜点亮 = 左键归 mpl 框选缩放，平移手势不记录起点。"""
+    def test_pan_always_records_start(self):
+        """左键拖 = 平移（框选放大已删除）：放大镜点不点亮都记平移起点。"""
         w = create_window()
         try:
             dock = self._open_1d(w)
@@ -2953,12 +3045,13 @@ class TestGestures(unittest.TestCase):
             ax = _axes(w, "1D", "data/fake_b.tif")
             self._magnifier(w, "data/fake_b.tif", True)
             gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
-            self.assertIsNone(getattr(dock, "_pan_start", None),
-                              "放大镜点亮时不应记录平移起点")
+            self.assertIsNotNone(getattr(dock, "_pan_start", None),
+                                 "放大镜点亮时左键拖也应是平移")
+            dock._pan_start = None
             self._magnifier(w, "data/fake_b.tif", False)
             gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
             self.assertIsNotNone(getattr(dock, "_pan_start", None),
-                                 "放大镜熄灭后平移应恢复")
+                                 "放大镜熄灭时左键拖同样是平移")
         finally:
             w.close()
 

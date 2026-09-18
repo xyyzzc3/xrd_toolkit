@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
@@ -93,6 +94,9 @@ class TestConfigSwitch(unittest.TestCase):
         w = create_window()
         try:
             w.config_combo.addItem(self.FAKE_KEY, self.FAKE_KEY)
+            w.config_combo.setItemData(w.config_combo.count() - 1,
+                                       CONFIGS[self.FAKE_KEY]["label"],
+                                       Qt.ToolTipRole)
             w.config_combo.setCurrentIndex(w.config_combo.count() - 1)
             self.assertEqual(w.config_name, self.FAKE_KEY)
             self.assertAlmostEqual(
@@ -102,10 +106,15 @@ class TestConfigSwitch(unittest.TestCase):
             self.assertAlmostEqual(
                 w.params["像素尺寸 (µm)"].value(), 150.0, places=3)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
-            # 下拉框只放短 key，完整备注在下方说明行随选择更新
+            # 下拉框只放短 key，完整备注挂在条目的悬停提示上（说明行
+            # 已删除——与用户讨论定稿，见 test_gui_integration 的
+            # test_config_combo_carries_full_label_as_tooltip）
             self.assertEqual(
                 w.config_combo.currentText(), self.FAKE_KEY)
-            self.assertEqual(w.config_label.text(), "测试条目")
+            idx = w.config_combo.currentIndex()
+            self.assertEqual(
+                w.config_combo.itemData(idx, Qt.ToolTipRole),
+                CONFIGS[self.FAKE_KEY]["label"])
         finally:
             w.close()
 

@@ -31,18 +31,19 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
   - [对比]（工具栏，仅 1D）：把勾选的多个文件叠进同一张图（勾选
     数 >= 2），每文件一个后台任务、全部算完再一起画；面板键 =
     f"对比|{排序后的路径们}"，重复点击同一选择 = 复用同一面板并
-    重算；颜色自动循环（C0/C1/...），图例 = 显示名；"对比归一化
-    到最强峰"（默认开，1D 显示组）= 每条曲线除以自己的最强峰，
-    曝光差很多的文件也看得清彼此峰形；1D 显示参数（对数/纵轴
-    范围）对对比面板同样生效。
+    重算；颜色自动循环（C0/C1/...），图例 = 显示名；对比归一化
+    （1D 显示组，下拉框四选一：各自最强峰（默认）/全图最强峰/
+    指定数据的最强峰/不归一化）只动显示层，曝光差很多的文件也
+    看得清彼此峰形；1D 显示参数（对数/纵轴范围）对对比面板同样
+    生效。
   - 图面板布局与比例（与用户讨论定稿）：每张图 = MDI 里的独立
     子窗口，手动缩放完全自由（拖成什么样就什么样，不再有普通
     拖/Shift 拖之分）；每拖一次 = 记住当前画布比例
     （_canvas_pref/_dragged），没拖过 = 默认画布 5:3（500×300）。
     开新图以默认大小左上角小错位级联（24px 一档、6 档循环回起点，
     下面几张的标题栏露出来）、完全不动旧图。macOS 原生样式的
-    子窗口边框几乎不可见 → 不靠边框：内容四边各留 5px 抓取带、
-    四角各留 16px 抓取区（右下角有可见把手 ▙），悬停换方向光标、
+    子窗口边框几乎不可见 → 不靠边框：内容四边各留 8px 抓取带、
+    四角各留 24px 抓取区（右下角有可见把手 ▙），悬停换方向光标、
     按住拖 = 拉伸容器（_PanelGripFilter）。横排/竖排按钮 =
     纯摆位置：按类型分层（类型顺序 = 开图先后），横排每类一行、
     竖排每类一列，图保持各自大小绝不缩放；摆图前先把滚动归零
@@ -59,15 +60,16 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     关闭面板（子窗口 × 或弹出窗口 ×）= 关闭即遗忘：从登记表移除、
     状态全丢，重开 = 全新默认面板；关软件时的保存询问只列当时
     还开着的面板。
-  - 面板工具栏精简为 [Home][Zoom][Customize][Save]：拖 = 平移；
-    滚轮（触摸板两指滚动）= 只滚动绘图区（看别的图，再也不会误
-    缩图）；放大镜按钮 = 开关（点亮/熄灭状态可见 + 日志提示）：
-    点亮 = 滚轮以光标为中心缩放（每格 10%——25% 连乘几下图就飞
-    了）+ 左键拖框放大（mpl 自带），熄灭 = 滚轮滚动 + 左键平移。
-    双击不回全图（Home 就是回首页）：Home = 回到最近一次画好的
-    视图——滚轮缩放绕过 mpl 手势、自己补记账（_wheel_zoom 懒
-    记账）；程序重画（开图/应用/恢复默认/对比刷新）会把"家"刷新
-    成新画的视图（_refresh_home）。Customize = matplotlib 轴属性
+  - 面板工具栏精简为 [Home][Zoom][Customize][Save]：左键拖 =
+    平移（放大镜点不点亮都是）；滚轮（触摸板两指滚动）= 只滚动
+    绘图区（看别的图，再也不会误缩图）；放大镜按钮 = 开关（点亮/
+    熄灭状态可见 + 日志提示）：点亮 = 滚轮以光标为中心缩放（每格
+    10%——25% 连乘几下图就飞了），熄灭 = 滚轮滚动。框选放大已
+    删除（画框后再缩小会出 bug，且与滚轮缩放重复；删掉后放大镜
+    只是纯开关，mpl 模式永远停在 NONE）。双击不回全图（Home 就是
+    回首页）：Home = 回到最近一次画好的视图——滚轮缩放绕过 mpl
+    手势、自己补记账（_wheel_zoom 懒记账）；程序重画（开图/应用/
+    恢复默认/对比刷新）会把"家"刷新成新画的视图（_refresh_home）。Customize = matplotlib 轴属性
     对话框，里面改的归用户（_snapshot_canvas 等保护记账）：标题/
     轴标签/曲线样式（颜色线型线宽标记图例名）/纵轴刻度，重画
     一律不覆盖；只有参数面板里又改了一遍（显示名 → 标题、
@@ -110,6 +112,7 @@ matplotlib.rcParams["font.family"] = [
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import QEvent, QObject, Qt, QSize, QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
@@ -294,6 +297,8 @@ def _snapshot_params(window: QMainWindow) -> dict:
     for name, w in window.params.items():
         if isinstance(w, QCheckBox):
             snap[name] = w.isChecked()
+        elif isinstance(w, QComboBox):
+            snap[name] = w.currentData()   # 下拉框记 data（文本只是显示名）
         else:
             snap[name] = w.value()
     return snap
@@ -311,7 +316,10 @@ _DISPLAY_DEFAULTS = {
     "纵轴自动": True,
     "纵轴下限": 1.0,
     "纵轴上限": 100000.0,
-    "对比归一化": True,
+    # 对比归一化 = 模式（each 各自最强峰 / global 全图最强峰 /
+    # file 指定数据 / off 不归一化），"归一化目标" = file 模式用哪个文件
+    "对比归一化": "each",
+    "归一化目标": "",
     "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
     "视图 2θ 上限 (°)": None,
 }
@@ -345,12 +353,18 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
     base = base or {}
     snap = {"config": window.config_name}
     for name, w in window.params.items():
+        if isinstance(w, QCheckBox):
+            value = w.isChecked()
+        elif isinstance(w, QComboBox):
+            value = w.currentData()   # 下拉框记 data（文本只是显示名）
+        else:
+            value = w.value()
         if name in _DISPLAY_PARAMS:
-            snap[name] = w.isChecked() if isinstance(w, QCheckBox) else w.value()
+            snap[name] = value
         elif name in base:
             snap[name] = base[name]
         else:
-            snap[name] = w.isChecked() if isinstance(w, QCheckBox) else w.value()
+            snap[name] = value
     return snap
 
 
@@ -371,6 +385,8 @@ def _panel_param(window: QMainWindow, dock, name: str,
         return default
     if isinstance(w, QCheckBox):
         return w.isChecked()
+    if isinstance(w, QComboBox):
+        return w.currentData()
     return w.value()
 
 
@@ -408,6 +424,10 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
             continue
         if isinstance(w, QCheckBox):
             w.setChecked(value)
+        elif isinstance(w, QComboBox):
+            idx = w.findData(value)
+            if idx >= 0:
+                w.setCurrentIndex(idx)   # data 不在列表里就保持原样（下方兜底）
         else:
             w.setValue(value)
     # 视图 2θ 范围跟随积分范围时：输入框显示"正在用的视图" =
@@ -443,6 +463,26 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
         window.params["纵轴上限"].setEnabled(not auto_y.isChecked())
         if auto_y.isChecked():
             _apply_auto_ylim(window, silent=True)
+    # 归一化目标下拉框按焦点对比面板的文件列表重建（面板里有几个
+    # 文件列表就是什么样；焦点不是对比面板 = 保持原样），建完再按
+    # 快照值回选——列表重建会丢掉旧选中。只在"指定数据"模式可用
+    norm_target = window.params.get("归一化目标")
+    if norm_target is not None:
+        dock = window.plot_docks.get(window.focus_panel)
+        files = getattr(dock, "compare_files", None)
+        if files:
+            norm_target.blockSignals(True)
+            norm_target.clear()
+            for path, display in files:
+                # data 存字符串路径：findData 对 Path 不按 Python 相等
+                # 比较（Path 不是 Qt 认识的类型），字符串才找得回
+                norm_target.addItem(display, str(path))
+            idx = norm_target.findData(str(snap.get("归一化目标", "")))
+            norm_target.setCurrentIndex(idx if idx >= 0 else 0)
+            norm_target.blockSignals(False)
+        mode = window.params.get("对比归一化")
+        if mode is not None:
+            norm_target.setEnabled(mode.currentData() == "file")
 
 
 def _set_focus(window: QMainWindow, key: str, title: str) -> None:
@@ -1197,16 +1237,18 @@ def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
 class _SlimToolbar(NavigationToolbar2QT):
     """只留 [Home][Zoom][Customize][Save] 的精简工具栏（过滤父类工具清单）。
 
-    放大/平移改成鼠标手势（拖 = 平移），放大镜按钮当开关：点亮 =
-    滚轮（触摸板两指滚动）以光标为中心缩放（每格 10%）+ 左键拖框
-    放大（mpl 自带框选）；熄灭 = 滚轮还给绘图区滚动、左键 = 平移。
-    抓手/前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
+    放大/平移改成鼠标手势（拖 = 平移，放大镜点不点亮都是），放大镜
+    按钮当开关（与用户讨论定稿）：点亮 = 滚轮（触摸板两指滚动）以
+    光标为中心缩放（每格 10%）；熄灭 = 滚轮还给绘图区滚动。框选
+    放大已删除（画框后再缩小会出 bug，且与滚轮缩放重复）。抓手/
+    前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
     一个入口；Customize = matplotlib 自带的轴属性对话框（改范围/
     刻度/标题，范围改动经 xlim_changed 自动同步写回参数）；Save =
     本面板另存为图片。父类 __init__ 按 toolitems 表逐个建按钮，
     覆盖成只含这四个的表即可；放大镜 QAction mpl 自带 checkable，
-    点击自动亮灭翻转（mode 同步切 ZOOM/NONE），toggled 信号接
-    日志提示。
+    点击自动亮灭翻转——把 mpl 的 triggered→zoom() 断开，按钮就
+    只当纯开关（mode 永远停在 NONE，不再进框选模式），toggled
+    信号接日志提示。
 
     Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
     关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
@@ -1220,15 +1262,17 @@ class _SlimToolbar(NavigationToolbar2QT):
         super().__init__(canvas, parent)
         self._window = window
         self._panel_key = key
-        # 放大镜开关状态写日志：QAction 点击自带亮灭翻转，mpl 的
-        # zoom() 同步切模式（点亮 = ZOOM、熄灭 = NONE）
+        # 放大镜按钮只当纯开关：断开 mpl 的 zoom()（会切框选模式），
+        # 点击只剩亮灭翻转；toggled 信号写日志
+        self._actions["zoom"].triggered.disconnect()
         self._actions["zoom"].toggled.connect(self._log_zoom_toggle)
 
     def _log_zoom_toggle(self, on: bool) -> None:
         if self._window is not None:
             _log(self._window,
                  f"放大镜已{'开启' if on else '关闭'}："
-                 f"{'滚轮缩放 + 左键框选放大' if on else '滚轮滚动 + 左键平移'}")
+                 f"{'滚轮以光标为中心缩放' if on else '滚轮滚动绘图区'}，"
+                 f"左键拖 = 平移")
 
     def save_figure(self, *args):
         if self._window is not None and self._panel_key is not None:
@@ -1268,10 +1312,13 @@ def _save_panel(window: QMainWindow, key: str) -> None:
 
 
 def _magnifier_on(dock) -> bool:
-    """该面板的放大镜（mpl 缩放模式）是否点亮。"""
+    """该面板的放大镜开关是否点亮（只管滚轮：点亮 = 滚轮缩放，
+    熄灭 = 滚轮滚动；左键拖在任何时候都是平移）。"""
     toolbar = getattr(_content(dock), "toolbar", None)
-    return (toolbar is not None
-            and getattr(toolbar.mode, "name", "") == "ZOOM")
+    if toolbar is None:
+        return False
+    action = toolbar._actions.get("zoom")
+    return bool(action is not None and action.isChecked())
 
 
 def _pan_press(window: QMainWindow, key: str, event) -> None:
@@ -1279,8 +1326,8 @@ def _pan_press(window: QMainWindow, key: str, event) -> None:
     dock = window.plot_docks.get(key)
     if dock is None or event.inaxes is None or event.button != 1:
         return
-    if _magnifier_on(dock):
-        return   # 放大镜点亮：左键归 mpl 框选缩放（拖框放大），平移让位
+    # 左键拖 = 平移（放大镜点不点亮都是——框选放大已删除，与用户
+    # 讨论定稿：框选会带来画框后再缩小出 bug，且与滚轮缩放重复）
     dock._pan_start = (event.x, event.y)
     dock._pan_limits = (event.inaxes.get_xlim(), event.inaxes.get_ylim())
 
@@ -1543,18 +1590,49 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     里的序号（决定颜色/图例顺序）。画图（_redraw_compare）与自动
     纵轴（_apply_auto_ylim）共用这一份数据——两边口径一致，置灰框
     显示的区间才跟图对得上。
+
+    归一化四模式（与用户讨论定稿）：
+      each   各自最强峰：每条曲线除以自己的最强峰（默认）
+      global 全图最强峰：所有曲线除以全部曲线里最高的峰
+      file   指定数据：所有曲线除以"归一化目标"那个文件的最强峰
+      off    不归一化（原样画原始强度）
+    旧快照里的 True/False 兼容（True = each、False = off）。
     """
-    normalize = _panel_param(window, dock, "对比归一化", True)
-    curves = []
+    mode = _panel_param(window, dock, "对比归一化", "each")
+    if isinstance(mode, bool):   # 旧快照兼容：True = 各自最强峰
+        mode = "each" if mode else "off"
+    target_path = _panel_param(window, dock, "归一化目标", "") \
+        if mode == "file" else ""
+    # 先把原始数据全收起来：global/file 的除数要等所有曲线到齐才算
+    raw_curves = []
     for i, (path, display) in enumerate(dock.compare_files):
         if display not in dock.compare_data:
             continue   # 这条还没算成（本函数只在全部到齐后调用）
         tth, raw = dock.compare_data[display]
-        shown = np.asarray(raw, dtype=float)
-        if normalize:
-            peak = float(np.nanmax(shown)) if shown.size else 0.0
+        raw_curves.append((tth, np.asarray(raw, dtype=float), display,
+                           i, path))
+    divisor = 1.0
+    if mode == "global":
+        divisor = max((float(np.nanmax(r)) if r.size else 0.0
+                       for _, r, _, _, _ in raw_curves), default=0.0)
+    elif mode == "file":
+        # 按路径找目标文件的最强峰（快照记字符串路径）；找不到
+        # （快照过期防御）= 除数保持 1.0 = 不归一化
+        for _, r, _, _, p in raw_curves:
+            if str(p) == str(target_path):
+                divisor = float(np.nanmax(r)) if r.size else 0.0
+                break
+    if divisor <= 0:
+        divisor = 1.0
+    curves = []
+    for tth, raw, display, i, _ in raw_curves:
+        shown = raw
+        if mode == "each":
+            peak = float(np.nanmax(raw)) if raw.size else 0.0
             if peak > 0:
-                shown = shown / peak
+                shown = raw / peak
+        elif mode != "off":
+            shown = raw / divisor   # global/file 共享同一个除数
         curves.append((tth, shown, display, i))
     return curves
 
@@ -1597,8 +1675,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     会改变积分/校准的结果；图像参数 = 只看图不参与计算的，组内
     分两个区：2D/剖面视图（对比度 + 剖面线角度，接线后生效）+
     "1D 显示" 小节（对数纵轴 + 纵轴范围，随 [应用] 重画曲线）。
-    两块各自独立滚动（内容放不下时自动出滚动条），[应用] 在上、
-    [恢复默认] 在下竖排一列，固定在各区最下方，不随滚动走。
+    两块各自独立滚动（内容放不下时自动出滚动条），[恢复默认]
+    在左、[应用] 在右并排（通栏宽一分为二），固定在各区最下方，
+    不随滚动走。
     排版约定（为窄排版）：单位放在输入框后缀里（标签不带括号单
     位）；成对的上下限并排一行（中间 ~ 连接，转盘限宽到数值能
     完整显示的底限）；小节用全宽灰色小标题（"1D 显示"不套子分组
@@ -1650,9 +1729,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     data_scroll.setWidget(data_fields)
     data_v.addWidget(data_scroll, 1)
 
-    # 几何配置选择器：下拉框只显示短 key（如 lmfp1_lab6）——长备注
-    # 挤进下拉框会撑宽参数坞；完整批次备注放在下方灰色说明行
-    # （随选择更新）+ 悬停提示。key 藏在 itemData 里给程序用。
+    # 几何配置选择器：下拉框只显示短 key（如 lmfp1_lab6），完整
+    # 批次备注走悬停提示（鼠标长放显示，不单独占一行——与用户
+    # 讨论定稿）。key 藏在 itemData 里给程序用。
     # 选中即把该条目的标定几何填进下方三个输入框；完整条目（含
     # beam_center）挂在 window.config，后续 2D/剖面接线时直接取用。
     # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没
@@ -1665,25 +1744,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.config_combo.setItemData(
             window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
 
-    # 说明行也换 _ElideLabel：自动换行模式下第二行会被 QFormLayout
-    # 按一行高布局、压在下一行控件底下（"被遮挡"）。改单行缩略 +
-    # 悬停全名：多长的备注都只占一行，不撑宽也不被遮
-    window.config_label = _ElideLabel(
-        CONFIGS[DEFAULT_CONFIG]["label"], Qt.ElideRight)
-    window.config_label.setStyleSheet("color: gray;")
-
-    field = QWidget()   # 下拉框 + 说明行装进一个字段（表格行内竖排）
-    box = QVBoxLayout(field)
-    box.setContentsMargins(0, 0, 0, 0)
-    box.setSpacing(2)
-    box.addWidget(window.config_combo)
-    box.addWidget(window.config_label)
-
     window.config_combo.setCurrentIndex(
         window.config_combo.findData(DEFAULT_CONFIG))
     window.config_combo.currentIndexChanged.connect(
         lambda i: _apply_config(window, i))
-    form.addRow("几何配置", field)
+    form.addRow("几何配置", window.config_combo)
 
     window.params = {}
     def add_caption(form, text):
@@ -1788,10 +1853,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     btn_reset_data.clicked.connect(reset_data)
 
-    btn_col = QVBoxLayout()
+    btn_col = QHBoxLayout()
     btn_col.setSpacing(4)
-    btn_col.addWidget(btn_apply)      # [应用] 在上（主按钮），[恢复默认] 在下
-    btn_col.addWidget(btn_reset_data)
+    # 通栏宽一分为二（与用户讨论定稿）：[恢复默认] 在左、[应用] 在右
+    btn_col.addWidget(btn_reset_data, 1)
+    btn_col.addWidget(btn_apply, 1)
     data_v.addLayout(btn_col)   # 按钮列固定在数据区最下方（滚动区之外）
 
     splitter.addWidget(data_box)
@@ -1886,13 +1952,36 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
               label="纵轴范围", decimals=1,
               tooltip="取消自动后手填的纵轴区间（下限 ~ 上限）")
 
-    # 对比归一化：叠图时每条曲线除以自己的最强峰——曝光时间/衰减
-    # 不同的文件强度差很多，不归一会被强者压扁（默认开）
-    cmp_norm = QCheckBox("归一化到最强峰")
-    cmp_norm.setChecked(True)
-    cmp_norm.setToolTip("每条曲线除以自己的最强峰：强度差很大的曲线叠图也能比")
+    # 对比归一化（与用户讨论定稿：下拉框四选一）——叠图时强度差
+    # 很大的文件不归一会被强者压扁。四种模式：
+    #   each   各自最强峰：每条曲线除以自己的最强峰（默认）
+    #   global 全图最强峰：所有曲线除以全部曲线里最高的峰
+    #   file   指定数据：所有曲线除以旁边下拉框选的文件的最强峰
+    #   off    不归一化（原样画原始强度）
+    # 归一化只动显示层，原始结果原样保留在 compare_data。
+    cmp_norm = QComboBox()
+    for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
+                       ("指定数据…", "file"), ("不归一化", "off")):
+        cmp_norm.addItem(text, data)
+    cmp_norm.setToolTip("叠图归一化：各自最强峰 / 全图最强峰 / "
+                        "指定数据的最强峰 / 不归一化")
     window.params["对比归一化"] = cmp_norm
-    form2.addRow(cmp_norm)
+    norm_target = QComboBox()
+    norm_target.setToolTip("以哪个文件的最强峰归一化（列表 = 对比面板的文件）")
+    window.params["归一化目标"] = norm_target
+    norm_row = QWidget()
+    norm_lay = QHBoxLayout(norm_row)
+    norm_lay.setContentsMargins(0, 0, 0, 0)
+    norm_lay.setSpacing(2)
+    norm_lay.addWidget(cmp_norm, 1)     # 同一行：模式在左、目标文件在右
+    norm_lay.addWidget(norm_target, 1)
+    form2.addRow(norm_row)
+
+    def sync_norm_target(*_):
+        norm_target.setEnabled(cmp_norm.currentData() == "file")
+
+    cmp_norm.currentIndexChanged.connect(sync_norm_target)
+    sync_norm_target()   # 初始 = 各自最强峰 → 目标下拉框置灰
 
     def sync_ylim(checked):
         window.params["纵轴下限"].setEnabled(not checked)
@@ -1909,7 +1998,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "剖面角度 (°)": 0.0,
         "对数纵轴": False,
         "纵轴自动": True,
-        "对比归一化": True,
+        "对比归一化": "each",
+        "归一化目标": "",
     }
     btn_reset_img = QPushButton("恢复默认")
     btn_reset_img.setObjectName("reset_image_btn")
@@ -1922,7 +2012,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["剖面角度 (°)"].setValue(img_defaults["剖面角度 (°)"])
         window.params["对数纵轴"].setChecked(img_defaults["对数纵轴"])
         window.params["纵轴自动"].setChecked(img_defaults["纵轴自动"])
-        window.params["对比归一化"].setChecked(img_defaults["对比归一化"])
+        window.params["对比归一化"].setCurrentIndex(
+            window.params["对比归一化"].findData(img_defaults["对比归一化"]))
+        window.params["归一化目标"].setCurrentIndex(0)
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
         # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉
@@ -1938,16 +2030,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     btn_reset_img.clicked.connect(reset_image)
 
-    # [应用] + [恢复默认] 竖排一列（应用在上）：与数据参数组同款
-    # 布局。[应用] 把当前图像参数应用到编辑对象（见 _apply_image_params）
+    # [恢复默认] 左 [应用] 右并排：与数据参数组同款布局。[应用]
+    # 把当前图像参数应用到编辑对象（见 _apply_image_params）
     btn_apply_img = QPushButton("应用")
     btn_apply_img.setObjectName("apply_image_btn")
     btn_apply_img.clicked.connect(lambda: _apply_image_params(window))
 
-    btn_col2 = QVBoxLayout()
+    btn_col2 = QHBoxLayout()
     btn_col2.setSpacing(4)
-    btn_col2.addWidget(btn_apply_img)      # [应用] 在上（主按钮），[恢复默认] 在下
-    btn_col2.addWidget(btn_reset_img)
+    # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
+    btn_col2.addWidget(btn_reset_img, 1)
+    btn_col2.addWidget(btn_apply_img, 1)
     img_v.addLayout(btn_col2)   # 按钮列固定在图像区最下方（滚动区之外）
 
     splitter.addWidget(img_box)
@@ -1992,7 +2085,7 @@ def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None
     geom = cfg["geometry"]
     window.config_name = key
     window.config = cfg   # 完整条目（label / geometry / beam_center）
-    window.config_label.setText(cfg["label"])   # 说明行随选择更新
+    # （几何配置完整备注现在只走下拉框的悬停提示，不再单独写说明行）
     window.params["像素尺寸 (µm)"].setValue(geom["pixel_size_m"] * 1e6)
     window.params["波长 (Å)"].setValue(geom["wavelength_m"] * 1e10)
     window.params["初始距离 (mm)"].setValue(geom["dist_m"] * 1e3)
@@ -2169,6 +2262,11 @@ def _close_panel(window: QMainWindow, key: str) -> None:
     dock = window.plot_docks.pop(key, None)
     if dock is None:
         return
+    # 覆盖光标可能还挂在抓手过滤器名下（关面板时鼠标可能正停在
+    # 抓取区上，来不及收 Leave）：主动撤销，别把方向光标留下
+    grip_filter = getattr(_content(dock), "_grip_filter", None)
+    if grip_filter is not None:
+        grip_filter._release_cursor()
     if isinstance(dock, QMdiSubWindow):
         if dock in window.mdi.subWindowList():
             window.mdi.removeSubWindow(dock)
@@ -2458,8 +2556,9 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     与 _draw_1d 同套路：坐标范围随参数（2θ 上下限 / 对数纵轴 /
     纵轴范围），只是画多条曲线 + 图例。显示参数同样只读本面板快照
     （_panel_param），不读参数坞控件——各算完到齐收尾时焦点可能还
-    在别的面板上，读控件会把别的图的设置画到这张图上。归一化到
-    最强峰只动显示数据（原始结果原样保留在 compare_data）。
+    在别的面板上，读控件会把别的图的设置画到这张图上。对比归一化
+    只动显示数据（原始结果原样保留在 compare_data，见
+    _compare_shown_curves 的四模式）。
     """
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -2651,15 +2750,25 @@ class _PanelGripFilter(QObject):
 
     macOS 原生样式画的 MDI 子窗口边框几乎不可见（用户实测：没有
     拉伸光标、抓不到边）→ 不靠边框了，自己给图装"抓手"：内容四
-    边各留 5px 抓取带、四角各留 16px 抓取区，悬停换方向光标，按住
+    边各留 8px 抓取带、四角各留 24px 抓取区，悬停换方向光标，按住
     左键拖 = 直接改容器（子窗口/弹出窗口）几何。装到事件落点控件
     上（画布/占位内容/把手，见 _install_resize_grip 的原因说明）；
     不消费普通区域的鼠标事件——平移/悬停取点照旧。拖完画布尺寸
     变化照常走 _on_canvas_resized 记"拖过"。位置判定统一换算到
     内容坐标：把手/画布的事件都按同一套几何算。
+
+    光标用 QApplication.setOverrideCursor（全局覆盖光标）而不是
+    各部件 setCursor：每部件光标在 macOS 上不可靠——真机探针抓
+    到"设上后被带过期坐标的合成事件打回箭头"（窗口激活/布局变
+    动时系统会补发幽灵鼠标事件，坐标还是旧位置，判出来不在抓
+    取区就把光标改回去了；旧版怪罪 QToolBar 丢光标其实是同一个
+    现象）。覆盖光标 = 应用级、设上立刻生效、不走部件光标矩形那
+    套机制；同一时刻最多挂一个（换区先弹后挂），鼠标离开抓手落
+    点控件（Leave）或面板关闭时主动撤销。带过期坐标的事件一律
+    忽略：不动光标状态。
     """
 
-    CORNER, EDGE = 16, 5
+    CORNER, EDGE = 24, 8
     _CURSORS = {
         "left": Qt.SizeHorCursor, "right": Qt.SizeHorCursor,
         "top": Qt.SizeVerCursor, "bottom": Qt.SizeVerCursor,
@@ -2675,6 +2784,7 @@ class _PanelGripFilter(QObject):
         self._grip = grip
         self._zone = None      # 当前悬停区（控制光标）
         self._drag = None      # (起点全局坐标, 起点几何, 抓取区名)
+        self._cursor_override = False   # 覆盖光标是否挂在本过滤器名下
 
     @classmethod
     def _zone_at(cls, w, h, x, y):
@@ -2718,12 +2828,39 @@ class _PanelGripFilter(QObject):
         if dock is not None:
             dock.setGeometry(x, y, w, h)
 
+    def _set_zone_cursor(self, zone):
+        """换应用级覆盖光标：换区先弹旧栈再挂新的（同一时刻最多一个）。
+
+        挂 = QApplication.setOverrideCursor：应用级、设上立刻生效，
+        不走各部件光标矩形那套机制（macOS 上部件光标会被带过期坐
+        标的合成事件打回原形，见类 docstring）。
+        """
+        if self._cursor_override:
+            QApplication.restoreOverrideCursor()
+            self._cursor_override = False
+        self._zone = zone
+        if zone is not None:
+            QApplication.setOverrideCursor(QCursor(self._CURSORS[zone]))
+            self._cursor_override = True
+
+    def _release_cursor(self):
+        """撤销本过滤器挂的覆盖光标（Leave / 面板关闭时调用）。"""
+        if self._cursor_override:
+            QApplication.restoreOverrideCursor()
+            self._cursor_override = False
+        self._zone = None
+
     def eventFilter(self, obj, event):
         et = event.type()
         if et == QEvent.Type.Resize and obj is self._content:
             # 把手钉在右下角（内容变尺寸时跟随）
             self._grip.move(self._content.width() - self._grip.width() - 2,
                             self._content.height() - self._grip.height() - 2)
+            return False
+        if et == QEvent.Type.Leave:
+            # 鼠标离开抓手落点控件：撤销覆盖光标（离开后可能直接
+            # 跨到别的面板，让它重新判）
+            self._release_cursor()
             return False
         if et not in (QEvent.Type.MouseMove, QEvent.Type.Enter,
                       QEvent.Type.MouseButtonPress,
@@ -2732,30 +2869,25 @@ class _PanelGripFilter(QObject):
         # 事件可能落在子部件（画布/把手）上：统一换算到内容坐标判区
         gpos = event.globalPosition().toPoint()
         pos = self._content.mapFromGlobal(gpos)
-        zone = self._zone_at(self._content.width(), self._content.height(),
-                             pos.x(), pos.y())
+        inside = (0 <= pos.x() < self._content.width()
+                  and 0 <= pos.y() < self._content.height())
+        zone = (self._zone_at(self._content.width(), self._content.height(),
+                              pos.x(), pos.y()) if inside else None)
         if et in (QEvent.Type.MouseMove, QEvent.Type.Enter):
             if self._drag is not None:
                 if et == QEvent.Type.MouseMove:
                     self._apply_drag(gpos)
                 return True   # 拖拽中：吃下事件，不传给画布平移
+            if not inside:
+                # 过期坐标的合成事件（窗口激活/布局变动时 macOS 补发
+                # 的幽灵事件）：忽略，不动光标状态——否则判出来的区
+                # 是 None，会把刚设上的方向光标打回箭头
+                return False
             if zone != self._zone or et == QEvent.Type.Enter:
-                self._zone = zone
-                # 方向光标直接设在落点控件上：画布被 mpl 设过自己的
-                # 光标，靠内容级继承会被它盖住；把手自带固定斜向光标
-                if obj is not self._grip:
-                    cur = self._CURSORS[zone] if zone else Qt.ArrowCursor
-                    if isinstance(obj, QToolBar):
-                        # QToolBar 会丢弃自己的光标（探针实证：setCursor
-                        # 后立刻读回是对的，事件循环一转就没了）——
-                        # 设到内容上让它继承（内容自己的光标只露在
-                        # 工具栏条上，画布被自己的光标盖着不冲突）
-                        self._content.setCursor(cur)
-                    else:
-                        obj.setCursor(cur)
+                self._set_zone_cursor(zone)
             return False   # 悬停不拦截：画布取点照旧
         if et == QEvent.Type.MouseButtonPress:
-            if (zone is not None
+            if (inside and zone is not None
                     and event.button() == Qt.LeftButton):
                 self._drag = (gpos.x(), gpos.y(), *_dock_geo(self._window,
                                                              self._key),
@@ -2790,17 +2922,17 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     条上（含坐标标签），也各挂一份（按钮是它的子部件，按到按钮
     仍各司其职，不会误拉伸）。mouseTracking 打开：悬停换光标需
     要鼠标移动事件（按住拖动期间的移动事件有隐式鼠标抓取，把手
-    不开也照常拖）。光标机制：过滤器把方向光标直接设在落点控件
-    上——画布被 mpl 设过自己的光标，靠内容级继承会被它盖住；
-    QToolBar 反过来会丢弃自己的光标（探针实证），它的方向光标
-    设到内容上让它继承；右下角被把手挡着，把手自带 SizeFDiag
-    光标，按住把手拖 = 右下角拉伸（按压位置会换算回内容坐标判区）。
+    不开也照常拖）。光标机制：过滤器挂应用级覆盖光标
+    （QApplication.setOverrideCursor，macOS 上部件级 setCursor 会
+    被带过期坐标的合成事件打回原形，见 _PanelGripFilter 类
+    docstring）；把手自带 SizeFDiag 光标，按住把手拖 = 右下角
+    拉伸（按压位置会换算回内容坐标判区）。
     """
     grip = QLabel("▙", content)
     grip.setCursor(Qt.SizeFDiagCursor)
     grip.setStyleSheet("color: #808080; background: transparent;")
-    grip.setFixedSize(16, 16)
-    grip.move(max(content.width() - 18, 0), max(content.height() - 18, 0))
+    grip.setFixedSize(18, 18)
+    grip.move(max(content.width() - 20, 0), max(content.height() - 20, 0))
     content.setMouseTracking(True)
     filt = _PanelGripFilter(window, key, content, grip)
     canvas = getattr(content, "canvas", None)
@@ -2813,7 +2945,7 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
         targets.append(canvas)
     toolbar = getattr(content, "toolbar", None)
     if toolbar is not None:
-        # 内容上边 5px 抓取带落在工具栏条上：也挂一份（按钮是它的
+        # 内容上边 8px 抓取带落在工具栏条上：也挂一份（按钮是它的
         # 子部件，按到按钮仍各司其职，不会误拉伸）
         toolbar.setMouseTracking(True)
         targets.append(toolbar)
@@ -2825,6 +2957,7 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     for target in targets:
         target.installEventFilter(filt)
     content._resize_grip = grip
+    content._grip_filter = filt   # 关面板时用来撤销覆盖光标
 
 
 class _PanelResizeFilter(QObject):
