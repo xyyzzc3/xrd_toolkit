@@ -21,8 +21,13 @@
   - 自装抓手：内容四边 5px 抓取带 + 四角 16px 抓取区 + 右下角
     把手（▙），悬停换方向光标、按住拖 = 拉伸容器；
   - 横排/竖排 = 按类型分层摆位置（开图先后排序）不缩放，溢出靠
-    QMdiArea 滚动条兜底；点面板窗口任何位置 = 选中该面板；滚轮
-    缩放每格 10%；
+    QMdiArea 滚动条兜底；摆图前滚动自动归零（滚动状态下的 move
+    会混入滚动偏移、图越排越漂）；点面板窗口任何位置 = 选中该
+    面板；滚轮 = 只滚动绘图区；放大镜开关点亮时滚轮以光标为中心
+    缩放每格 10% + 左键拖框放大，熄灭时左键 = 平移；总缩放 =
+    Ctrl+滚轮 / 底部 − 100% + 按钮，绘图区全体同比缩放
+    （50%–200%），弹出去的不参与、平铺不碰它；新图左上角
+    24px 小错位级联（6 档循环）、按当前总缩放开；
   - 关闭面板 = 关闭即遗忘：重开全新默认，关窗询问只算开着的图，
     在飞任务/旧代对比结果迟到即作废。
 
@@ -48,7 +53,7 @@ from types import SimpleNamespace
 import numpy as np
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QLabel, QPushButton, QScrollArea,
@@ -2122,8 +2127,9 @@ class TestPlotFixedSize(unittest.TestCase):
 
 
 class TestZoomToolbar(unittest.TestCase):
-    """D：每个 1D 面板带自己的精简工具栏 [Home][Customize][Save]；
-    放大/平移改手势，放大镜/抓手/前进后退/子图按钮退休；占位面板没有。"""
+    """D：每个 1D 面板带自己的精简工具栏 [Home][Zoom][Customize][Save]；
+    放大镜 = 开关（点亮滚轮缩放/拖框放大，熄灭滚轮滚动/拖平移），
+    抓手/前进后退/子图按钮退休；占位面板没有。"""
 
     def test_toolbar_present_on_1d(self):
         w = create_window()
@@ -2137,9 +2143,9 @@ class TestZoomToolbar(unittest.TestCase):
             widget = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
             self.assertIsInstance(widget.toolbar, NavigationToolbar2QT)
             names = [t[0] for t in widget.toolbar.toolitems if t[0]]
-            self.assertEqual(names, ["Home", "Customize", "Save"],
-                             "工具栏应精简为 Home/Customize/Save")
-            for gone in ("Zoom", "Pan", "Back", "Forward", "Subplots"):
+            self.assertEqual(names, ["Home", "Zoom", "Customize", "Save"],
+                             "工具栏应精简为 Home/Zoom/Customize/Save")
+            for gone in ("Pan", "Back", "Forward", "Subplots"):
                 self.assertNotIn(gone, names, f"{gone} 按钮应已砍掉")
         finally:
             w.close()
@@ -2876,7 +2882,8 @@ class TestViewLimitSync(unittest.TestCase):
 
 
 class TestGestures(unittest.TestCase):
-    """手势：拖 = 平移、滚轮 = 以光标为中心缩放（放大镜/抓手退休）。"""
+    """手势：左键拖 = 平移；滚轮 = 只滚动绘图区；放大镜点亮时滚轮
+    以光标为中心缩放（每格 10%）+ 左键拖框放大，熄灭时让位。"""
 
     def _open_1d(self, w):
         with mock.patch.object(gui_app, "_compute_integration",
@@ -2888,14 +2895,82 @@ class TestGestures(unittest.TestCase):
             self.assertTrue(drawn)
         return _dock(w, "1D", "data/fake_b.tif")
 
-    def test_wheel_zoom_centers_on_cursor(self):
-        """滚轮向上：光标点钉在原地，范围按每格 10% 向光标收拢。"""
+    def _magnifier(self, w, display, on):
+        """点放大镜开关（触发 QAction = 用户点按钮），断言模式到位。"""
+        content = gui_app._content(_dock(w, "1D", display))
+        content.toolbar._actions["zoom"].trigger()
+        QApplication.processEvents()
+        self.assertEqual(gui_app._magnifier_on(_dock(w, "1D", display)), on,
+                         f"放大镜应已{'点亮' if on else '熄灭'}")
+
+    def test_magnifier_toggle_switches_mode(self):
+        """放大镜 = 开关：点亮 = ZOOM 模式 + 按钮亮起，再点熄灭。"""
+        w = create_window()
+        try:
+            self._open_1d(w)
+            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            action = content.toolbar._actions["zoom"]
+            self.assertTrue(action.isCheckable(), "放大镜按钮应可亮灭")
+            self.assertFalse(action.isChecked())
+            self._magnifier(w, "data/fake_b.tif", True)
+            self.assertTrue(action.isChecked(), "点亮后按钮应亮起")
+            self._magnifier(w, "data/fake_b.tif", False)
+            self.assertFalse(action.isChecked(), "熄灭后按钮应熄灭")
+        finally:
+            w.close()
+
+    def test_wheel_ignored_until_magnifier_on(self):
+        """放大镜熄灭 = 滚轮不缩图（事件穿透给绘图区滚动）；点亮才缩放。"""
         w = create_window()
         try:
             self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
             ax.set_xlim(1.0, 8.0)
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            self.assertEqual(ax.get_xlim(), (1.0, 8.0),
+                             "放大镜熄灭时滚轮不应改范围")
+            self._magnifier(w, "data/fake_b.tif", True)
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            xlo, xhi = ax.get_xlim()
+            self.assertAlmostEqual(xlo, 4.0 - 3.0 / 1.1, places=3,
+                                   msg="点亮后滚轮应缩放")
+            self.assertAlmostEqual(xhi, 4.0 + 4.0 / 1.1, places=3)
+            self._magnifier(w, "data/fake_b.tif", False)
+            ax.set_xlim(1.0, 8.0)
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            self.assertEqual(ax.get_xlim(), (1.0, 8.0),
+                             "再熄灭后滚轮应再次失效")
+        finally:
+            w.close()
+
+    def test_pan_yields_to_magnifier(self):
+        """放大镜点亮 = 左键归 mpl 框选缩放，平移手势不记录起点。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            self._magnifier(w, "data/fake_b.tif", True)
+            gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
+            self.assertIsNone(getattr(dock, "_pan_start", None),
+                              "放大镜点亮时不应记录平移起点")
+            self._magnifier(w, "data/fake_b.tif", False)
+            gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
+            self.assertIsNotNone(getattr(dock, "_pan_start", None),
+                                 "放大镜熄灭后平移应恢复")
+        finally:
+            w.close()
+
+    def test_wheel_zoom_centers_on_cursor(self):
+        """放大镜点亮时滚轮向上：光标点钉在原地，范围按每格 10% 向光标收拢。"""
+        w = create_window()
+        try:
+            self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            ax.set_xlim(1.0, 8.0)
+            self._magnifier(w, "data/fake_b.tif", True)
             gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             xlo, xhi = ax.get_xlim()
             # 系数 1.1（每格 10%）：两侧各收拢 1/1.1
@@ -2914,8 +2989,9 @@ class TestGestures(unittest.TestCase):
             w.close()
 
     def test_wheel_zoom_log_axis_never_freezes(self):
-        """对数纵轴连续缩小：下限一路走低且始终 > 0（加性缩放会把
-        下限算到 0 以下 → matplotlib 忽略整次设置，纵轴卡死）。"""
+        """放大镜点亮时对数纵轴连续缩小：下限一路走低且始终 > 0
+        （加性缩放会把下限算到 0 以下 → matplotlib 忽略整次设置，
+        纵轴卡死）。"""
         w = create_window()
         try:
             self._open_1d(w)
@@ -2923,6 +2999,7 @@ class TestGestures(unittest.TestCase):
             ax = _axes(w, "1D", "data/fake_b.tif")
             ax.set_yscale("log")
             ax.set_ylim(0.5, 3.0)
+            self._magnifier(w, "data/fake_b.tif", True)
             prev_lo = 0.5
             for _ in range(6):
                 gui_app._wheel_zoom(
@@ -2957,6 +3034,308 @@ class TestGestures(unittest.TestCase):
             ylo, yhi = ax.get_ylim()
             self.assertGreater(ylo, 1.0, "向下拖图 → 数据范围应上移")
             self.assertGreater(yhi, 3.0)
+        finally:
+            w.close()
+
+
+class TestTileScrollReset(unittest.TestCase):
+    """回归：绘图区滚动状态下点横排/竖排，Qt 会把滚动偏移混进子
+    窗口 move 坐标——图被多推一段、灰区越排越多（探针实证：横滚
+    628 时再排列，桌面多出 628px）。修复 = 摆图前滚动归零。"""
+
+    def _open_six(self, w):
+        for i in range(3):
+            gui_app._open_plot_panel(w, "1D", f"1D|fake{i}.tif", f"1D_{i}")
+        for i in range(3):
+            gui_app._open_plot_panel(w, "2D", f"2D|fake{i}.tif", f"2D_{i}")
+        for _ in range(10):
+            QApplication.processEvents()
+
+    @staticmethod
+    def _scroll(w):
+        h = w.mdi.horizontalScrollBar()
+        v = w.mdi.verticalScrollBar()
+        return h.value(), h.maximum(), v.value(), v.maximum()
+
+    def test_arrange_after_scrolling_resets_and_never_drifts(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_six(w)
+            w.arrange_buttons["横排"].click()
+            for _ in range(10):
+                QApplication.processEvents()
+            _, hmax1, _, _ = self._scroll(w)
+            self.assertGreater(hmax1, 0, "两行三列应溢出视口出滚动条")
+            # 用户滚到右下角看第 6 张图
+            w.mdi.horizontalScrollBar().setValue(hmax1)
+            w.mdi.verticalScrollBar().setValue(
+                w.mdi.verticalScrollBar().maximum())
+            for _ in range(10):
+                QApplication.processEvents()
+            # 滚动状态下点竖排：视图应归零、布局不漂移
+            w.arrange_buttons["竖排"].click()
+            for _ in range(10):
+                QApplication.processEvents()
+            hv, _, vv, _ = self._scroll(w)
+            self.assertEqual((hv, vv), (0, 0),
+                             "排列后视图应回到左上角（滚动归零）")
+            # 再横排：桌面最大值应与第一次横排一致（无灰区增长）
+            w.arrange_buttons["横排"].click()
+            for _ in range(10):
+                QApplication.processEvents()
+            _, hmax2, _, vmax2 = self._scroll(w)
+            self.assertEqual((hmax2, vmax2), (hmax1, 44),
+                             "反复排列后滚动范围不应增长（回归：滚动偏移混入 move）")
+        finally:
+            w.hide()
+            w.close()
+
+
+class TestCascadeCap(unittest.TestCase):
+    """新图落点 = 左上角小错位级联：24px 一档、6 档循环回起点
+    （下面几张的标题栏露出来，永远待在左上角区域）。"""
+
+    def test_seventh_panel_cycles_back_to_origin(self):
+        w = create_window()
+        try:
+            subs = []
+            for i in range(7):
+                subs.append(gui_app._open_plot_panel(
+                    w, "1D", f"1D|fake{i}.tif", f"fake{i}"))
+            for _ in range(10):
+                QApplication.processEvents()
+            # 24px 一档：第 2 张在 (40,40)，第 6 张在 (136,136)
+            self.assertEqual((subs[1].x(), subs[1].y()), (40, 40))
+            self.assertEqual((subs[5].x(), subs[5].y()), (136, 136))
+            # 6 档循环：第 7 张回到第 1 张的落点
+            self.assertEqual((subs[6].x(), subs[6].y()),
+                             (subs[0].x(), subs[0].y()),
+                             "第 7 张应循环回左上角起点")
+        finally:
+            w.close()
+
+
+class TestAreaZoom(unittest.TestCase):
+    """总缩放：Ctrl+滚轮（视口过滤器 / 图上方 mpl 层拦截）与底部
+    − 100% + 按钮，绘图区全体围绕视口中心同比缩放（50%–200%，
+    每格 10%）；弹出去的不参与、平铺不碰它；新开/收回的图按当前
+    总缩放落位；缩放不记成"用户拖过"。"""
+
+    def _open_two(self, w):
+        a = gui_app._open_plot_panel(w, "1D", "1D|a.tif", "a")
+        b = gui_app._open_plot_panel(w, "2D", "2D|b.tif", "b")
+        for _ in range(10):
+            QApplication.processEvents()
+        return a, b
+
+    def _ctrl_wheel(self, target, pos, delta=120):
+        """构造真实 QWheelEvent（Ctrl 按住）投给目标部件。"""
+        ev = QWheelEvent(
+            QPointF(pos), QPointF(pos), QPoint(0, 0), QPoint(0, delta),
+            Qt.NoButton, Qt.ControlModifier, Qt.ScrollPhase.ScrollUpdate,
+            False, Qt.MouseEventNotSynthesized,
+            QPointingDevice.primaryPointingDevice())
+        QApplication.sendEvent(target, ev)
+        QApplication.processEvents()
+
+    def test_apply_scales_subs_around_center(self):
+        """全体同比缩放：尺寸 ×k、位置围绕视口中心缩放、比例记忆不碰。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            a, b = self._open_two(w)
+            geo = {d: (d.x(), d.y(), d.width(), d.height()) for d in (a, b)}
+            # 锚点 = 缩放动手时的视口中心（缩放会触发滚动条出现/
+            # 消失，事后量视口会和动手时差 18px）
+            cx = w.mdi.viewport().width() / 2
+            cy = w.mdi.viewport().height() / 2
+            gui_app._apply_area_zoom(w, 1.1)
+            for _ in range(10):
+                QApplication.processEvents()
+            for d, (x, y, wd, ht) in geo.items():
+                self.assertEqual(d.width(), round(wd * 1.1),
+                                 "总缩放后宽度应 ×1.1")
+                self.assertEqual(d.height(), round(ht * 1.1),
+                                 "总缩放后高度应 ×1.1")
+                self.assertEqual(d.x(), round(cx + (x - cx) * 1.1),
+                                 "位置应围绕视口中心缩放")
+                self.assertEqual(d.y(), round(cy + (y - cy) * 1.1),
+                                 "位置应围绕视口中心缩放")
+                self.assertFalse(getattr(d, "_dragged", False),
+                                 "程序性缩放不应记成用户拖过")
+            self.assertEqual(w.zoom_label.text(), "110%")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_ctrl_wheel_on_viewport_zooms(self):
+        """Ctrl+滚轮（灰底上）= 总缩放每格 10%。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_two(w)
+            self._ctrl_wheel(w.mdi.viewport(), QPoint(50, 50))
+            self.assertAlmostEqual(w._area_zoom, 1.1, places=6,
+                                   msg="Ctrl+滚轮向上应放大 10%")
+            self._ctrl_wheel(w.mdi.viewport(), QPoint(50, 50), delta=-120)
+            self.assertAlmostEqual(w._area_zoom, 1.0, places=6,
+                                   msg="Ctrl+滚轮向下应缩小回 100%")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_ctrl_wheel_over_canvas_zooms_once(self):
+        """光标在图上方 Ctrl+滚轮 = 总缩放（mpl 层拦截），且 accept
+        掉 Qt 事件——否则传播到视口过滤器会再缩一次（双倍）。"""
+        w = create_window()
+        try:
+            a, _ = self._open_two(w)
+            ax = gui_app._content(a).axes_1d
+            ax.set_xlim(1.0, 8.0)
+            accepted = []
+            gui = SimpleNamespace(
+                modifiers=lambda: Qt.ControlModifier,
+                angleDelta=lambda: QPoint(0, 120),
+                accept=lambda: accepted.append(True))
+            gui_app._wheel_zoom(
+                w, "1D|a.tif",
+                SimpleNamespace(inaxes=ax, guiEvent=gui,
+                                xdata=4.0, ydata=2.0))
+            self.assertAlmostEqual(w._area_zoom, 1.1, places=6,
+                                   msg="图上方 Ctrl+滚轮应触发总缩放")
+            self.assertEqual(accepted, [True],
+                             "应 accept 掉 Qt 事件防止传播到视口再缩一次")
+            self.assertEqual(ax.get_xlim(), (1.0, 8.0),
+                             "Ctrl+滚轮不应缩放图本身（放大镜也没点亮）")
+        finally:
+            w.close()
+
+    def test_clamp_50_200(self):
+        """总缩放夹逼在 50%–200%。"""
+        w = create_window()
+        try:
+            self._open_two(w)
+            gui_app._apply_area_zoom(w, 0.01)
+            self.assertAlmostEqual(w._area_zoom, 0.5, places=6)
+            self.assertEqual(w.zoom_label.text(), "50%")
+            gui_app._apply_area_zoom(w, 99.0)
+            self.assertAlmostEqual(w._area_zoom, 2.0, places=6)
+            self.assertEqual(w.zoom_label.text(), "200%")
+        finally:
+            w.close()
+
+    def test_buttons_step_10_percent(self):
+        """底部 − / + 按钮：每点一次 10%。"""
+        w = create_window()
+        try:
+            self._open_two(w)
+            w.zoom_buttons["+"].click()
+            QApplication.processEvents()
+            self.assertAlmostEqual(w._area_zoom, 1.1, places=6)
+            w.zoom_buttons["−"].click()
+            QApplication.processEvents()
+            self.assertAlmostEqual(w._area_zoom, 1.0, places=6)
+        finally:
+            w.close()
+
+    def test_new_panel_opens_at_current_zoom(self):
+        """新图按当前总缩放开（和周围的图大小一致）。"""
+        w = create_window()
+        try:
+            w.show()   # 显示后布局才会激活（隐藏窗口的 resize 不挤画布）
+            w.resize(1400, 900)
+            a, _ = self._open_two(w)
+            gui_app._apply_area_zoom(w, 0.8)
+            for _ in range(10):
+                QApplication.processEvents()
+            p = gui_app._open_plot_panel(w, "1D", "1D|c.tif", "c")
+            for _ in range(10):
+                QApplication.processEvents()
+            # 契约 = 新图和周围已缩放的图一样大；画布被标题栏/工具栏
+            # 壳吃掉固定高度，不会正好是 500×0.8，所以与邻居对比
+            self.assertEqual((p.width(), p.height()), (a.width(), a.height()),
+                             msg="新图子窗口应和周围已缩放的图一样大")
+            canvas = gui_app._content(p).canvas
+            canvas_a = gui_app._content(a).canvas
+            self.assertEqual((canvas.width(), canvas.height()),
+                             (canvas_a.width(), canvas_a.height()),
+                             msg="新图画布应和周围图一致")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_dock_back_lands_at_current_zoom(self):
+        """弹出的图收回时按当前总缩放落位。"""
+        w = create_window()
+        try:
+            w.show()   # 见 test_new_panel_opens_at_current_zoom
+            w.resize(1400, 900)
+            a, _ = self._open_two(w)
+            ref = gui_app._open_plot_panel(w, "1D", "1D|ref.tif", "ref")
+            for _ in range(10):
+                QApplication.processEvents()
+            gui_app._toggle_pop_out(w, "1D|a.tif")
+            for _ in range(10):
+                QApplication.processEvents()
+            gui_app._apply_area_zoom(w, 0.8)
+            for _ in range(10):
+                QApplication.processEvents()
+            gui_app._toggle_pop_out(w, "1D|a.tif")
+            for _ in range(10):
+                QApplication.processEvents()
+            sub = _dock(w, "1D", "a.tif")
+            canvas2 = gui_app._content(sub).canvas
+            canvas_ref = gui_app._content(ref).canvas
+            # 收回 = 按当前总缩放落位：弹出时 100%、收回时 80%，
+            # 应和没弹出过的 1D 邻居 ref 一致（弹出时的画布已带
+            # 100% 缩放，直接乘 80% 会双重缩，见 _pop_zoom）
+            self.assertEqual((sub.width(), sub.height()),
+                             (ref.width(), ref.height()),
+                             msg="收回的子窗口应和周围的图一样大")
+            self.assertEqual((canvas2.width(), canvas2.height()),
+                             (canvas_ref.width(), canvas_ref.height()),
+                             msg="收回的画布应和周围的图一致")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_popped_window_not_touched(self):
+        """总缩放只动绘图区里的图，弹出的独立窗口大小不变。"""
+        w = create_window()
+        try:
+            a, b = self._open_two(w)
+            gui_app._toggle_pop_out(w, "1D|a.tif")
+            for _ in range(10):
+                QApplication.processEvents()
+            floated = w.plot_docks["1D|a.tif"]
+            fw, fh = floated.width(), floated.height()
+            bw = b.width()
+            gui_app._apply_area_zoom(w, 0.5)
+            for _ in range(10):
+                QApplication.processEvents()
+            self.assertEqual((floated.width(), floated.height()), (fw, fh),
+                             "弹出窗口不应被总缩放带动")
+            self.assertEqual(b.width(), round(bw * 0.5),
+                             "绘图区内的图应被缩放")
+        finally:
+            w.close()
+
+    def test_tile_keeps_zoom(self):
+        """平铺不碰总缩放（各管各的）。"""
+        w = create_window()
+        try:
+            self._open_two(w)
+            gui_app._apply_area_zoom(w, 1.1)
+            w.arrange_buttons["横排"].click()
+            for _ in range(10):
+                QApplication.processEvents()
+            self.assertAlmostEqual(w._area_zoom, 1.1, places=6,
+                                   msg="平铺不应重置总缩放")
+            self.assertEqual(w.zoom_label.text(), "110%")
         finally:
             w.close()
 

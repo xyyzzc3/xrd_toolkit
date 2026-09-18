@@ -39,23 +39,32 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     子窗口，手动缩放完全自由（拖成什么样就什么样，不再有普通
     拖/Shift 拖之分）；每拖一次 = 记住当前画布比例
     （_canvas_pref/_dragged），没拖过 = 默认画布 5:3（500×300）。
-    开新图以默认大小级联摆放、完全不动旧图。macOS 原生样式的
+    开新图以默认大小左上角小错位级联（24px 一档、6 档循环回起点，
+    下面几张的标题栏露出来）、完全不动旧图。macOS 原生样式的
     子窗口边框几乎不可见 → 不靠边框：内容四边各留 5px 抓取带、
     四角各留 16px 抓取区（右下角有可见把手 ▙），悬停换方向光标、
     按住拖 = 拉伸容器（_PanelGripFilter）。横排/竖排按钮 =
     纯摆位置：按类型分层（类型顺序 = 开图先后），横排每类一行、
-    竖排每类一列，图保持各自大小绝不缩放；行比视口宽/层总高
-    比视口高 → QMdiArea 滚动条兜底（宁可滚动也不压扁），弹出
-    去的窗口不参与。每张 1D/对比面板工具栏末尾有 [弹出]/[收回]：
-    把面板搬进独立 OS 窗口再收回来（状态跟着走）。点窗口任何
-    地方（标题栏/边框/图/工具栏）都选中该面板（选中子窗口 =
-    选中参数，不必点图本体）。关闭面板（子窗口 × 或弹出窗口
-    ×）= 关闭即遗忘：从登记表移除、状态全丢，重开 = 全新默认
-    面板；关软件时的保存询问只列当时还开着的面板。
-  - 面板工具栏精简为 [Home][Customize][Save]：拖 = 平移、滚轮
-    （触摸板两指滚动）= 以光标为中心缩放（每格 10%——25% 连乘
-    几下图就飞了），不再有放大镜/抓手/前进后退/子图按钮，双击
-    也不回全图（Home 就是回首页）；Customize = matplotlib 轴
+    竖排每类一列，图保持各自大小绝不缩放；摆图前先把滚动归零
+    （QMdiArea 滚动状态下 move 会混入滚动偏移、图越排越漂，
+    探针实证）；行比视口宽/层总高比视口高 → QMdiArea 滚动条
+    兜底（宁可滚动也不压扁），弹出去的窗口不参与。总缩放 =
+    绘图区全体同比缩放（50%–200%，每格 10%）：Ctrl+滚轮（Excel
+    习惯）或底部条 − 100% + 按钮，围绕视口中心缩放；只动绘图
+    区里的图，弹出去的窗口不参与（各管各的），平铺也不碰它；
+    新开/收回的图按当前总缩放落位（和周围的图大小一致）。每张
+    1D/对比面板工具栏末尾有 [弹出]/[收回]：把面板搬进独立 OS
+    窗口再收回来（状态跟着走）。点窗口任何地方（标题栏/边框/图/
+    工具栏）都选中该面板（选中子窗口 = 选中参数，不必点图本体）。
+    关闭面板（子窗口 × 或弹出窗口 ×）= 关闭即遗忘：从登记表移除、
+    状态全丢，重开 = 全新默认面板；关软件时的保存询问只列当时
+    还开着的面板。
+  - 面板工具栏精简为 [Home][Zoom][Customize][Save]：拖 = 平移；
+    滚轮（触摸板两指滚动）= 只滚动绘图区（看别的图，再也不会误
+    缩图）；放大镜按钮 = 开关（点亮/熄灭状态可见 + 日志提示）：
+    点亮 = 滚轮以光标为中心缩放（每格 10%——25% 连乘几下图就飞
+    了）+ 左键拖框放大（mpl 自带），熄灭 = 滚轮滚动 + 左键平移。
+    双击不回全图（Home 就是回首页）；Customize = matplotlib 轴
     属性对话框。缩放/平移/Home/改范围都会实时同步写回参数面板：
     视图 2θ 范围（只看图不参与计算，与数据组的积分 2θ 范围互不
     干扰）+ 纵轴窗口（自动纵轴随之关掉——用户手动定的窗口由
@@ -1077,15 +1086,18 @@ def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
 
 # ══ 面板工具栏与手势（拖 = 平移 / 滚轮 = 缩放）═════════════
 class _SlimToolbar(NavigationToolbar2QT):
-    """只留 [Home][Customize][Save] 的精简工具栏（过滤父类工具清单）。
+    """只留 [Home][Zoom][Customize][Save] 的精简工具栏（过滤父类工具清单）。
 
-    放大/平移改成鼠标手势（拖 = 平移、滚轮 = 以光标为中心缩放），
-    放大镜/抓手按钮退休；子图按钮对单轴图无用；前进/后退砍掉。
-    Home = 回首页（回到最初画出的视图），双击回全图不再绑——
-    回首页只有这一个入口；Customize = matplotlib 自带的轴属性
-    对话框（改范围/刻度/标题，范围改动经 xlim_changed 自动同步
-    写回参数）；Save = 本面板另存为图片。父类 __init__ 按
-    toolitems 表逐个建按钮，覆盖成只含这三个的表即可。
+    放大/平移改成鼠标手势（拖 = 平移），放大镜按钮当开关：点亮 =
+    滚轮（触摸板两指滚动）以光标为中心缩放（每格 10%）+ 左键拖框
+    放大（mpl 自带框选）；熄灭 = 滚轮还给绘图区滚动、左键 = 平移。
+    抓手/前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
+    一个入口；Customize = matplotlib 自带的轴属性对话框（改范围/
+    刻度/标题，范围改动经 xlim_changed 自动同步写回参数）；Save =
+    本面板另存为图片。父类 __init__ 按 toolitems 表逐个建按钮，
+    覆盖成只含这四个的表即可；放大镜 QAction mpl 自带 checkable，
+    点击自动亮灭翻转（mode 同步切 ZOOM/NONE），toggled 信号接
+    日志提示。
 
     Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
     关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
@@ -1093,12 +1105,21 @@ class _SlimToolbar(NavigationToolbar2QT):
     """
 
     toolitems = [t for t in NavigationToolbar2QT.toolitems
-                 if t[0] in ("Home", "Customize", "Save")]
+                 if t[0] in ("Home", "Zoom", "Customize", "Save")]
 
     def __init__(self, canvas, parent=None, window=None, key=None):
         super().__init__(canvas, parent)
         self._window = window
         self._panel_key = key
+        # 放大镜开关状态写日志：QAction 点击自带亮灭翻转，mpl 的
+        # zoom() 同步切模式（点亮 = ZOOM、熄灭 = NONE）
+        self._actions["zoom"].toggled.connect(self._log_zoom_toggle)
+
+    def _log_zoom_toggle(self, on: bool) -> None:
+        if self._window is not None:
+            _log(self._window,
+                 f"放大镜已{'开启' if on else '关闭'}："
+                 f"{'滚轮缩放 + 左键框选放大' if on else '滚轮滚动 + 左键平移'}")
 
     def save_figure(self, *args):
         if self._window is not None and self._panel_key is not None:
@@ -1137,11 +1158,20 @@ def _save_panel(window: QMainWindow, key: str) -> None:
     _log(window, f"已保存 {dock.windowTitle()} → {name}")
 
 
+def _magnifier_on(dock) -> bool:
+    """该面板的放大镜（mpl 缩放模式）是否点亮。"""
+    toolbar = getattr(_content(dock), "toolbar", None)
+    return (toolbar is not None
+            and getattr(toolbar.mode, "name", "") == "ZOOM")
+
+
 def _pan_press(window: QMainWindow, key: str, event) -> None:
     """按住左键在图上按下：记起点像素与当时的显示范围，准备平移。"""
     dock = window.plot_docks.get(key)
     if dock is None or event.inaxes is None or event.button != 1:
         return
+    if _magnifier_on(dock):
+        return   # 放大镜点亮：左键归 mpl 框选缩放（拖框放大），平移让位
     dock._pan_start = (event.x, event.y)
     dock._pan_limits = (event.inaxes.get_xlim(), event.inaxes.get_ylim())
 
@@ -1185,16 +1215,34 @@ def _pan_release(window: QMainWindow, key: str, event) -> None:
 
 
 def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
-    """滚轮（触摸板两指滚动）= 以光标为中心缩放。
+    """滚轮 = 以光标为中心缩放——只在放大镜点亮时生效（与用户讨论定稿）。
 
+    放大镜熄灭时滚轮事件穿透给 QMdiArea 兜底滚动（滚轮 = 滚动
+    绘图区看别的图，再也不会误缩图）。点亮后：
     光标对着的那个数据点缩放前后钉在原地（像地图应用）：上下限
     按比例向光标收拢/张开。范围变化自动同步写回参数（缩放会动
     纵轴 → 纵轴自动随之关掉，纵轴窗口由用户接管）。
+    Ctrl+滚轮 = 总缩放（Excel 习惯），优先级最高、放大镜点不点亮
+    都生效：画布把 Qt 层滚轮事件吃进 mpl 事件（guiEvent），到不
+    了视口上的总缩放过滤器——在图上方 Ctrl+滚轮在这里拦截，并把
+    Qt 事件 accept 掉，否则未消费的事件传播到视口会再缩一次（双倍）。
     """
     dock = window.plot_docks.get(key)
-    ax = getattr(event, "inaxes", None)
-    if dock is None or ax is None or event.xdata is None or event.ydata is None:
+    if dock is None:
         return
+    gui = getattr(event, "guiEvent", None)
+    if gui is not None and gui.modifiers() & Qt.ControlModifier:
+        delta = gui.angleDelta().y()
+        if delta != 0:
+            _apply_area_zoom(window, window._area_zoom
+                             * (1.1 if delta > 0 else 1.0 / 1.1))
+        gui.accept()   # 防事件再传播到视口过滤器（会缩两次）
+        return
+    ax = getattr(event, "inaxes", None)
+    if ax is None or event.xdata is None or event.ydata is None:
+        return
+    if not _magnifier_on(dock):
+        return   # 放大镜熄灭：滚轮只滚动绘图区，不缩图
     # 每格 10%（1.25 = 25% 太猛：触摸板两指一滑是连续好多小格事件，
     # 连乘几下图就飞了；与用户讨论定为 10%）
     factor = 1.0 / 1.1 if event.button == "up" else 1.1
@@ -2035,6 +2083,10 @@ def _build_center(window: QMainWindow) -> None:
     mdi.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     mdi.setStyleSheet("QMdiArea { background-color: #c8c8c8; }")
     window.mdi = mdi
+    # Ctrl+滚轮 = 总缩放（Excel 习惯）：过滤器装在视口上管灰底/
+    # 标题栏上的 Ctrl+滚轮，普通滚轮穿透给 QMdiArea 自己滚动；
+    # 光标在图上方的那条路在 _wheel_zoom 的 mpl 层拦截
+    mdi.viewport().installEventFilter(_AreaZoomFilter(window))
     window.plot_docks = {}
     # 当前面板布局方向（横排/竖排按钮设定）："row" = 一行 /
     # "column" = 一列
@@ -2043,6 +2095,10 @@ def _build_center(window: QMainWindow) -> None:
     # 面板关过重开后，旧代迟到结果不会串进新图（对比面板的
     # compare_gen 归零漏洞由它补上）
     window._panel_epoch = {}
+    # 总缩放（50%–200%，每格 10%）：Ctrl+滚轮 / 底部 − + 按钮驱动，
+    # 绘图区所有子窗口围绕视口中心整体同比缩放（像 Excel 缩放
+    # 工作表）；弹出去的独立窗口不参与
+    window._area_zoom = 1.0
 
     window.mode_label = QLabel("分析模式 — 待实现")   # 默认：分析工作台
     window.mode_label.setAlignment(Qt.AlignCenter)
@@ -2060,6 +2116,27 @@ def _build_center(window: QMainWindow) -> None:
         btn.clicked.connect(
             lambda checked=False, n=name: _arrange(window, n))
 
+    # 总缩放控件（Excel 式 − 100% +）：放在横排/竖排右边
+    zoom_box = QWidget()
+    zrow = QHBoxLayout(zoom_box)
+    zrow.setContentsMargins(0, 0, 0, 0)
+    zrow.setSpacing(2)
+    window.zoom_label = QLabel("100%")
+    window.zoom_label.setMinimumWidth(40)
+    window.zoom_label.setAlignment(Qt.AlignCenter)
+    window.zoom_buttons = {}   # 登记按钮（测试用）
+    for name in ("−", "+"):
+        btn = QPushButton(name)
+        btn.setFlat(True)
+        window.zoom_buttons[name] = btn
+        factor = 1.0 / 1.1 if name == "−" else 1.1
+        btn.clicked.connect(
+            lambda checked=False, f=factor:
+            _apply_area_zoom(window, window._area_zoom * f))
+    zrow.addWidget(window.zoom_buttons["−"])
+    zrow.addWidget(window.zoom_label)
+    zrow.addWidget(window.zoom_buttons["+"])
+
     strip = QWidget()
     srow = QHBoxLayout(strip)
     srow.setContentsMargins(4, 2, 4, 2)
@@ -2067,6 +2144,7 @@ def _build_center(window: QMainWindow) -> None:
     srow.addWidget(window.mode_label)
     srow.addStretch(1)
     srow.addWidget(arrange_box)
+    srow.addWidget(zoom_box)
 
     center = QWidget()
     lay = QVBoxLayout(center)
@@ -2159,9 +2237,13 @@ def _open_plot_panel(window: QMainWindow, name: str, key: str,
 
     开局几何：画布默认 500×300（真 5:3，内容 sizeHint 自带），
     子窗口显式 resize(sizeHint())——QMdiSubWindow 不会自动适配内容
-    （探针验证），不显式设会以极小尺寸裁剪内容。级联位置只按子
-    窗口计数（弹出的窗口不算），开新图完全不动旧图——这正是
-    "图不再连在一起"的核心。
+    （探针验证），不显式设会以极小尺寸裁剪内容。初始尺寸按当前
+    总缩放比例开（和周围的图大小一致）。落点 = 左上角小错位级联
+    （像扑克牌发牌：下面几张的标题栏露出来，一眼知道叠着几张）：
+    24px 一档、6 档循环回起点，永远待在绘图区左上角区域——旧的
+    一路向右下角排（10 档不循环）会让图堆越滚越远。级联只数子
+    窗口（弹出的不算），开新图完全不动旧图——这正是"图不再连
+    在一起"的核心。
     """
     sub = _PlotSubWindow(window, key)
     sub.setObjectName(f"plot_{name}")
@@ -2180,10 +2262,14 @@ def _open_plot_panel(window: QMainWindow, name: str, key: str,
     # 不会串进新面板
     window._panel_epoch[key] = window._panel_epoch.get(key, 0) + 1
     window.plot_docks[key] = sub
-    sub.resize(sub.sizeHint())   # 必须显式设（见 docstring）
+    z = window._area_zoom
+    hint = sub.sizeHint()
+    sub.resize(max(60, round(hint.width() * z)),   # 必须显式设（见 docstring）
+               max(40, round(hint.height() * z)))
     n = sum(1 for d in window.plot_docks.values()
             if isinstance(d, QMdiSubWindow))
-    sub.move(16 + 24 * ((n - 1) % 10), 16 + 24 * ((n - 1) % 10))
+    off = 16 + 24 * ((n - 1) % 6)   # 左上角小错位：6 档循环（见 docstring）
+    sub.move(round(off * z), round(off * z))
     sub.show()
     _settle(window)
     # 开局引发的画布尺寸事件已全部消化：把最终实际画布尺寸记下，
@@ -2651,6 +2737,9 @@ def _on_canvas_resized(window: QMainWindow, key: str) -> None:
       - 每拖一次 = _canvas_pref 记成当前画布尺寸、_dragged = True
         ——之后开新图不动它、横排/竖排平铺按它等比摆放，这就是
         "拖过就永远按拖成的比例缩放"的记忆载体；
+      - 比例记忆是缩放无关值：总缩放 80% 时拖成 400×240 的画布，
+        记 500×300——Ctrl+滚轮回到 100% 时面板正好是拖成的比例，
+        不会把总缩放误记成"用户拖过"（记忆 ÷ 当前总缩放）；
       - 程序自己的布局变化不算拖动：_layouting（平铺）与面板级
         _settling（开局/弹出/收回）举旗期间直接跳过；旗外还有
         _last_canvas 预期值兜底——与预期一致的迟到事件同样跳过，
@@ -2669,7 +2758,8 @@ def _on_canvas_resized(window: QMainWindow, key: str) -> None:
             or now == getattr(dock, "_last_canvas", None)):
         return
     dock._last_canvas = now
-    dock._canvas_pref = now
+    z = getattr(window, "_area_zoom", 1.0)
+    dock._canvas_pref = (now[0] / z, now[1] / z)
     dock._dragged = True
 
 
@@ -2697,6 +2787,71 @@ def _panel_extra(dock) -> tuple:
     return 0, 0
 
 
+def _apply_area_zoom(window: QMainWindow, new: float) -> None:
+    """总缩放：绘图区所有子窗口围绕视口中心整体同比缩放（50%–200%）。
+
+    像 Excel 缩放工作表：所有图一起变大变小、相对位置不变，每张
+    图自己的比例记忆（_canvas_pref）是缩放无关值（见
+    _on_canvas_resized），总缩放不碰它。只动 MDI 里的子窗口——
+    弹出去的独立窗口各管各的（与平铺同理）。先滚动归零再动手：
+    QMdiArea 在滚动状态下会把滚动偏移混进子窗口 move 坐标
+    （平铺踩过的同一个坑，见 _tile_panels）。面板 _settling 举
+    旗：程序性尺寸变化不记成"用户拖过"。
+    """
+    new = min(2.0, max(0.5, new))
+    if abs(new - window._area_zoom) < 1e-9:
+        return
+    mdi = window.mdi
+    mdi.horizontalScrollBar().setValue(0)
+    mdi.verticalScrollBar().setValue(0)
+    QApplication.processEvents()
+    subs = [d for d in window.plot_docks.values()
+            if isinstance(d, QMdiSubWindow)]
+    k = new / window._area_zoom
+    cx = mdi.viewport().width() / 2   # 滚动已归零：锚点 = 视口中心
+    cy = mdi.viewport().height() / 2
+    for d in subs:
+        d._settling = True
+        d.move(round(cx + (d.x() - cx) * k), round(cy + (d.y() - cy) * k))
+        d.resize(max(60, round(d.width() * k)),
+                 max(40, round(d.height() * k)))
+    window._area_zoom = new
+    _settle(window)
+    for d in subs:
+        canvas = getattr(_content(d), "canvas", None)
+        if canvas is not None:
+            d._last_canvas = (canvas.width(), canvas.height())
+        d._settling = False
+    window.zoom_label.setText(f"{round(new * 100)}%")
+    _log(window, f"总缩放 {round(new * 100)}%")
+
+
+class _AreaZoomFilter(QObject):
+    """装在 QMdiArea 视口上的事件过滤器：Ctrl+滚轮 = 总缩放。
+
+    普通滚轮不管（穿透给 QMdiArea 自己滚动看图）；Ctrl+滚轮吃下
+    、每格 10%（Excel 的 Ctrl+滚轮缩放工作表习惯）。管灰底/标题
+    栏上的 Ctrl+滚轮；光标在图上方的那条路在 _wheel_zoom 的
+    mpl 层拦截（画布把滚轮事件吃进 mpl 事件，到不了这里）。
+    """
+
+    def __init__(self, window: QMainWindow):
+        super().__init__(window.mdi.viewport())   # 以视口为父：不被 GC
+        self._window = window
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.Wheel
+                and event.modifiers() & Qt.ControlModifier):
+            delta = event.angleDelta().y()
+            if delta == 0:
+                return True   # Ctrl+横向滚轮：吃掉，别误触缩放
+            factor = 1.1 if delta > 0 else 1.0 / 1.1
+            _apply_area_zoom(self._window,
+                             self._window._area_zoom * factor)
+            return True
+        return False
+
+
 def _tile_panels(window: QMainWindow, subs, orient: str) -> None:
     """平铺 = 纯摆位置：按类型分层，图保持各自大小，绝不缩放。
 
@@ -2706,6 +2861,12 @@ def _tile_panels(window: QMainWindow, subs, orient: str) -> None:
     平铺根本不碰尺寸，"拖过 = 永远按拖成比例"从此不需要任何
     保护代码，_layouting 旗标也随之退役）。
 
+    摆图前先把滚动归零：QMdiArea 在滚动状态下会把滚动偏移混进
+    子窗口 move 坐标（探针实证：横滚 628 时再排列，桌面多出
+    628px 灰区、图整体向右下漂移，每排一次漂一次）——归零后
+    坐标精确落在 (4,4) 起步，排完视图自然从左上角开始展示。
+    平铺不碰总缩放（各管各的）。
+
     分组：按面板键第一段（2D/剖面/1D/瀑布/对比各算一类），类型
     顺序 = 开图先后（plot_docks 的键序）。横排 = 每类一行（顶
     对齐，行内从左往右）；竖排 = 每类一列（左对齐，列内从上往
@@ -2714,6 +2875,9 @@ def _tile_panels(window: QMainWindow, subs, orient: str) -> None:
     """
     if not subs:
         return
+    window.mdi.horizontalScrollBar().setValue(0)
+    window.mdi.verticalScrollBar().setValue(0)
+    QApplication.processEvents()
     groups = {}
     for d in subs:
         groups.setdefault(d.panel_key.split("|", 1)[0], []).append(d)
@@ -2770,8 +2934,10 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
     弹出（探针验证顺序）：先建浮动窗口、把内容改挂过去（addWidget
     自带改挂），再删旧子窗口——顺序反了内容会被连带销毁。状态经
     白名单 _copy_panel_attrs 搬家（vars() 整体拷会砸坏 PySide6
-    信号）。壳尺寸（标题栏 + 边框）在弹出时量好记下，收回时按
-    "内容尺寸 + 壳"原样恢复。
+    信号）。壳尺寸（标题栏 + 边框）在弹出时量好记下；收回时按
+    "内容尺寸 + 壳"×（当前总缩放 / 弹出时总缩放）恢复——内容的
+    画布在弹出时已带当时的缩放，直接乘当前缩放会双重缩（探针
+    实证：80% 弹出 100% 收回会落位 406 而不是 508）。
     收回：浮动壳用 deleteLater 而不是 close()——close() 会触发
     _close_panel 把面板登记抹掉；子窗口回到主窗口左上角。
     """
@@ -2791,6 +2957,7 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(content)   # 先改挂内容，再删旧子窗口
         floated._shell = (dock.width() - cw, dock.height() - ch)
+        floated._pop_zoom = window._area_zoom   # 收回时折算用（见 docstring）
         floated._object_name = dock.objectName()
         _copy_panel_attrs(dock, floated)
         window.plot_docks[key] = floated
@@ -2821,8 +2988,11 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
         _copy_panel_attrs(floated, sub)
         window.plot_docks[key] = sub
         floated.deleteLater()   # 不用 close()：close 会触发 _close_panel 抹掉登记
-        sub.resize(max(cw + ew, 60), max(ch + eh, 40))
-        sub.move(16, 16)
+        z = window._area_zoom
+        k = z / getattr(floated, "_pop_zoom", 1.0)   # 内容带弹出时缩放，折算回当前
+        sub.resize(max(round((cw + ew) * k), 60),   # 按当前总缩放落位：
+                   max(round((ch + eh) * k), 40))   # 和周围的图大小一致
+        sub.move(round(16 * z), round(16 * z))
         sub.show()
         _settle(window)
         canvas = getattr(content, "canvas", None)
