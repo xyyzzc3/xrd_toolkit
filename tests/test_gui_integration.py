@@ -32,7 +32,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from types import SimpleNamespace
+
 import numpy as np
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt, QUrl
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
@@ -2000,6 +2003,299 @@ class TestArrangeModeClose(unittest.TestCase):
                                    return_value="discard"):
                 self.assertTrue(w.close())   # 关窗 = 等完 1.5s 收尾
         finally:
+            w.close()
+
+
+def _hover_event(ax, xdata):
+    """构造一个像真鼠标停在 (xdata, 线上 y) 处的 matplotlib 事件。
+
+    x/y 填像素坐标（经 transData 换算），模拟画布真实派发的
+    motion_notify_event；这样 _hover_motion 里的选线逻辑走真路径。
+    """
+    xd = ax.lines[0].get_xdata()
+    ydata = float(np.interp(xdata, xd, ax.lines[0].get_ydata()))
+    px, py = ax.transData.transform((xdata, ydata))
+    return SimpleNamespace(inaxes=ax, xdata=xdata, ydata=ydata, x=px, y=py)
+
+
+class TestPlotFixedSize(unittest.TestCase):
+    """A：新面板固定 5:3 开局，不继承上次挤过的旧尺寸。"""
+
+    def test_new_panel_opens_fixed_ratio(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                drawn = _wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+                self.assertTrue(drawn)
+            QApplication.processEvents()
+            dock = _dock(w, "1D", "data/fake_b.tif")
+            self.assertGreater(dock.width(), 350,
+                               "新面板应有接近 500px 的固定宽度")
+            self.assertLess(dock.width(), 750)
+            # 高度/宽度 ≈ 3/5（标题栏算在坞里，给 ±0.15 容差）
+            ratio = dock.height() / dock.width()
+            self.assertGreater(ratio, 0.5, f"新面板比例走样：{ratio:.2f}")
+            self.assertLess(ratio, 0.75, f"新面板比例走样：{ratio:.2f}")
+        finally:
+            w.hide()   # 窗口显示过关窗会弹"保存询问"模态框（offscreen 挂死）
+            w.close()
+
+
+class TestZoomToolbar(unittest.TestCase):
+    """D：每个 1D 面板带自己的缩放工具栏；占位面板没有。"""
+
+    def test_toolbar_present_on_1d(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                _wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+            widget = _dock(w, "1D", "data/fake_b.tif").widget()
+            self.assertIsInstance(widget.toolbar, NavigationToolbar2QT)
+            names = [t[0] for t in widget.toolbar.toolitems if t[0]]
+            for tool in ("Zoom", "Pan", "Home"):
+                self.assertIn(tool, names,
+                              f"缩放工具栏应有 {tool} 工具")
+        finally:
+            w.close()
+
+    def test_placeholder_has_no_toolbar(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "2D")
+                _wait_until(lambda: "2D|data/fake_b.tif" in w.plot_docks)
+            widget = _dock(w, "2D", "data/fake_b.tif").widget()
+            self.assertIsInstance(widget, QLabel, "占位面板仍是标签")
+            self.assertFalse(hasattr(widget, "toolbar"),
+                             "占位面板不应有缩放工具栏")
+        finally:
+            w.close()
+
+
+class TestHoverDot(unittest.TestCase):
+    """E：鼠标悬停 = 曲线上出白边点 + 状态栏实时坐标；离开清空。"""
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_b.tif"])
+            _open_view(w, "1D")
+            _wait_until(
+                lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+        return _dock(w, "1D", "data/fake_b.tif")
+
+    def test_hover_shows_marker_and_coords(self):
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
+            marker = dock.hover_marker
+            self.assertIsNotNone(marker, "悬停后应出现取点标记")
+            self.assertTrue(marker.get_visible())
+            # 吸附最近真实数据点：假积分 x=[0.5, 1.0, 8.5] → 0.6 归 0.5
+            self.assertEqual(list(marker.get_xdata()), [0.5])
+            self.assertEqual(list(marker.get_ydata()), [1.0])
+            # 状态栏坐标 = 面板名 + 2θ + 强度
+            text = w.coord_label.text()
+            self.assertIn("fake_b.tif", text)
+            self.assertIn("2θ = 0.5°", text)
+            self.assertIn("强度 = 1", text)
+        finally:
+            w.close()
+
+    def test_hover_clears_on_leave(self):
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
+            gui_app._hover_leave(w, key)
+            self.assertFalse(dock.hover_marker.get_visible(),
+                             "离开后取点标记应藏起来")
+            self.assertEqual(w.coord_label.text(), "",
+                             "离开后坐标标签应清空（标签本身常驻）")
+        finally:
+            w.close()
+
+    def test_marker_recreated_after_redraw(self):
+        """重算/[应用] 会 ax.clear() 掉旧标记 → 下次悬停懒重建。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
+            old = dock.hover_marker
+            tth, it = np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
+            gui_app._draw_1d(w, dock, tth, it)
+            self.assertIsNot(old.axes, ax, "重画后旧标记应与旧轴断开")
+            gui_app._hover_motion(w, key, _hover_event(ax, 1.0))
+            self.assertIs(dock.hover_marker.axes, ax,
+                          "再次悬停应在当前轴上重建标记")
+            self.assertEqual(list(dock.hover_marker.get_xdata()), [1.0])
+        finally:
+            w.close()
+
+    def test_compare_hover_shows_filename(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                key = next(k for k in w.plot_docks
+                           if k.startswith("对比|"))
+                dock = w.plot_docks[key]
+                _wait_until(
+                    lambda: len(dock.widget().axes_1d.lines) >= 2)
+            ax = dock.widget().axes_1d
+            gui_app._hover_motion(w, key, _hover_event(ax, 0.5))
+            text = w.coord_label.text()
+            self.assertIn("fake_a.tif", text,
+                          "对比图坐标前缀 = 曲线（文件）名")
+            marker = dock.hover_marker
+            self.assertEqual(marker.get_color(),
+                             ax.lines[0].get_color(),
+                             "取点颜色 = 所选曲线的颜色")
+        finally:
+            w.close()
+
+
+class TestArrangeGrid(unittest.TestCase):
+    """C：横排/竖排重排 = 每格 5:3 的格子，不再把图挤变形。"""
+
+    def _open_two(self, w):
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            _open_view(w, "1D")
+            both = _wait_until(
+                lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
+                and len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+            self.assertTrue(both)
+
+    def _check_grid_ratio(self, w, mode):
+        w.arrange_buttons[mode].click()
+        QApplication.processEvents()
+        docks = [d for d in w.plot_docks.values() if d.isVisible()]
+        self.assertEqual(len(docks), 2)
+        for d in docks:
+            ratio = d.height() / d.width()
+            self.assertGreater(ratio, 0.45,
+                               f"{mode}后面板被挤扁：{ratio:.2f}")
+            self.assertLess(ratio, 0.85,
+                            f"{mode}后面板被拉长：{ratio:.2f}")
+        self.assertIn(f"已{mode} 2 个面板", w.log_text.toPlainText())
+        return docks
+
+    def test_row_arrange_keeps_ratio(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_two(w)
+            docks = self._check_grid_ratio(w, "横排")
+            # 一行格子：两个面板顶边对齐、互不重叠
+            self.assertAlmostEqual(docks[0].geometry().top(),
+                                   docks[1].geometry().top(), delta=2)
+        finally:
+            w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
+            w.close()
+
+    def test_column_arrange_keeps_ratio(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_two(w)
+            docks = self._check_grid_ratio(w, "竖排")
+            # 一列格子：左边对齐、上下不重叠
+            self.assertAlmostEqual(docks[0].geometry().left(),
+                                   docks[1].geometry().left(), delta=2)
+        finally:
+            w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
+            w.close()
+
+
+class TestShiftAspect(unittest.TestCase):
+    """B：Shift + 拖边 = 5:3 等比例缩放（纯函数 + 半集成两层验证）。"""
+
+    def test_aspect_math_round_trip(self):
+        """宽↔高换算来回一趟误差 ≤1px（容差 2px 判定才不会打转）。"""
+        for w_px in (100, 457, 500, 800, 1234):
+            h = gui_app._aspect_height(w_px)
+            self.assertEqual(round(w_px * 3 / 5), h)
+            self.assertLessEqual(abs(gui_app._aspect_width(h) - w_px), 1)
+
+    def test_plain_resize_is_free_stretch(self):
+        """没按 Shift：普通拖动不碰比例（自由拉伸）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                _wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+            dock = _dock(w, "1D", "data/fake_b.tif")
+            before = (dock.width(), dock.height())
+            gui_app._on_dock_resized(
+                w, dock, modifiers=Qt.KeyboardModifier.NoModifier)
+            self.assertEqual((dock.width(), dock.height()), before)
+        finally:
+            w.close()
+
+    def test_shift_resize_enforces_ratio(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            with mock.patch.object(gui_app, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                both = _wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
+                    and len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
+                self.assertTrue(both)
+            QApplication.processEvents()
+            d1 = _dock(w, "1D", "data/fake_a.tif")
+            # 人为改窄（模拟用户拖竖把手后的尺寸），并伪造"拖动前"
+            # 的记录（上一帧宽度 300 → 本次 400 = 宽变了），让处理
+            # 函数认出是"宽变了"这一分支
+            w.inner.resizeDocks([d1], [400], Qt.Horizontal)
+            QApplication.processEvents()
+            d1._last_size = (300, d1.height())
+            gui_app._on_dock_resized(
+                w, d1, modifiers=Qt.KeyboardModifier.ShiftModifier)
+            QApplication.processEvents()
+            # 画布内容（不含标题栏）应回到 5:3
+            ratio = d1.widget().height() / d1.width()
+            self.assertGreater(ratio, 0.45, f"Shift 后画布仍扁：{ratio:.2f}")
+            self.assertLess(ratio, 0.75, f"Shift 后画布仍长：{ratio:.2f}")
+            # Shift 动态上限已登记；下一次普通拖动把它解除 → 自由拉伸
+            self.assertIsNotNone(d1._shift_cap)
+            gui_app._on_dock_resized(
+                w, d1, modifiers=Qt.KeyboardModifier.NoModifier)
+            self.assertIsNone(d1._shift_cap)
+            self.assertEqual(d1.maximumHeight(), 16777215)
+        finally:
+            w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
             w.close()
 
 

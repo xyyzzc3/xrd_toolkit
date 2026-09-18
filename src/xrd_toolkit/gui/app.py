@@ -63,7 +63,7 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 # 列表不触发回退（Agg 可以），中文仍会变方框
 matplotlib.rcParams["font.family"] = [
     "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import QEvent, QObject, Qt, QSize, QTimer
 from PySide6.QtWidgets import (
@@ -82,6 +82,9 @@ from xrd_toolkit.services.integrator import integrate_1d
 FILE_FILTER = "衍射图像 (*.tif *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
 SUPPORTED_SUFFIXES = (".tif", ".edf", ".cbf")   # 拖放只认这三种
+
+PLOT_ASPECT_W, PLOT_ASPECT_H = 5, 3   # 图面板目标宽高比（5:3，看图最舒服）
+PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板打开时的固定尺寸（= 5:3）
 
 
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
@@ -901,6 +904,76 @@ def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
+# ══ 悬停取点（鼠标放曲线上 = 出点 + 状态栏坐标）═════════════
+def _hover_motion(window: QMainWindow, key: str, event) -> None:
+    """鼠标在曲线上移动时：选最近的那条线、吸附最近的真实数据点，
+    画一个白边圆点，状态栏右侧实时显示该点坐标。
+
+    选线按像素距离：把每条线在鼠标 x 处的 y 换算成屏幕像素再比
+    距离，纵轴对数、各线范围不同时也公平。圆点颜色 = 所选线的
+    颜色（对比图里一眼对上图例），白边保证点在线上也看得清。
+    点吸附最近真实数据点而不是鼠标原始位置——坐标报的是真的
+    算出来的值。ax.clear()（重算/[应用]）会连标记一起删掉，懒
+    重建：发现标记已不在当前坐标轴上就重画一个。
+    """
+    dock = window.plot_docks.get(key)
+    ax = getattr(event, "inaxes", None)
+    if dock is None or ax is None:
+        _hover_leave(window, key)
+        return
+    lines = [ln for ln in ax.lines if len(ln.get_xdata()) > 1]
+    if not lines:
+        _hover_leave(window, key)
+        return
+    # 选线：数据坐标换算成像素坐标后比距离（对数轴/范围差异下仍公平）
+    line, best_d2 = None, None
+    for ln in lines:
+        xd = ln.get_xdata()
+        if xd.size < 2 or not (xd[0] <= event.xdata <= xd[-1]):
+            continue   # 鼠标不在该线的 x 范围里，直接跳过
+        yline = float(np.interp(event.xdata, xd, ln.get_ydata()))
+        px, py = ax.transData.transform((event.xdata, yline))
+        d2 = (px - event.x) ** 2 + (py - event.y) ** 2
+        if best_d2 is None or d2 < best_d2:
+            line, best_d2 = ln, d2
+    if line is None:
+        _hover_leave(window, key)
+        return
+    # 吸附最近真实数据点
+    xd = line.get_xdata()
+    i = int(np.argmin(np.abs(xd - event.xdata)))
+    x, y = float(xd[i]), float(line.get_ydata()[i])
+    # 白边圆点（ax.clear() 会删掉它 → 不在当前轴上就重建）
+    marker = getattr(dock, "hover_marker", None)
+    if marker is None or marker.axes is not ax:
+        marker = ax.plot([], [], "o", ms=7, mec="white", mew=1.0,
+                         zorder=5)[0]
+        dock.hover_marker = marker
+    marker.set_color(line.get_color())
+    marker.set_data([x], [y])
+    marker.set_visible(True)
+    ax.figure.canvas.draw_idle()
+    # 坐标前缀 = 曲线名（对比图 = 文件名）；1D 没设图例名时
+    # matplotlib 会默认给 _childN，不算数 → 回退面板标题
+    name = line.get_label()
+    if not name or name.startswith("_child"):
+        name = dock.panel_display
+    window.coord_label.setText(f"{name}　2θ = {x:.4g}°, 强度 = {y:.4g}")
+
+
+def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
+    """鼠标离开曲线/坐标轴：藏起圆点、清空坐标标签（常驻标签留空）。"""
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        marker = getattr(dock, "hover_marker", None)
+        if marker is not None:
+            marker.set_data([], [])
+            marker.set_visible(False)
+            if marker.axes is not None:   # ax.clear() 后标记已与轴断开
+                marker.axes.figure.canvas.draw_idle()
+    window.coord_label.setText("")
+
+
 # ══ 右侧：参数面板 ═════════════════════════════════════════
 _CONTRAST_FALLBACK = (1.0, 100000.0)   # 没有焦点图时的自动对比度占位默认
 _YLIM_FALLBACK = (1.0, 100000.0)   # 曲线无有效数值时的纵轴占位（任意但安全）
@@ -1451,10 +1524,14 @@ def _build_log_dock(window: QMainWindow) -> QDockWidget:
 
 def _build_status(window: QMainWindow) -> None:
     """状态行（两层之二）：左侧常驻文字（"就绪"/瞬时消息）+
-    右侧常驻当前文件。用常驻 QLabel 而不是 showMessage——
-    后者超时清空后状态栏会变成看不见的细条。"""
+    右侧常驻当前文件 + 常驻坐标标签。用常驻 QLabel 而不是
+    showMessage——后者超时清空后状态栏会变成看不见的细条。
+    坐标标签常驻（鼠标没悬停在曲线上时是空文字，悬停时才显示，
+    见 _hover_motion），这样出字时状态栏不会整体跳动。"""
     window.status_text = QLabel("就绪")
     window.statusBar().addWidget(window.status_text)
+    window.coord_label = QLabel("")   # 鼠标悬停时实时显示曲线坐标
+    window.statusBar().addPermanentWidget(window.coord_label)
     window.file_label = QLabel("未打开文件")
     window.statusBar().addPermanentWidget(window.file_label)
 
@@ -1577,7 +1654,29 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
         fig = Figure(figsize=(5, 3), tight_layout=True)
         canvas = FigureCanvasQTAgg(fig)
         canvas.axes_1d = fig.add_subplot(111)
-        widget = canvas
+        # 每张面板自己的缩放工具栏（放大镜/抓手/回首页），只作用
+        # 于本面板的图。工具栏放画布上方，面板标题栏不动
+        toolbar = NavigationToolbar2QT(canvas, canvas)
+        # 容器 = 工具栏 + 画布竖排。把画布原有属性挂到容器上
+        # （axes_1d / figure / draw），其余代码仍按 dock.widget()
+        # 直取，不必改调用点
+        widget = QWidget()
+        box = QVBoxLayout(widget)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        box.addWidget(toolbar)
+        box.addWidget(canvas)
+        widget.axes_1d = canvas.axes_1d
+        widget.figure = fig
+        widget.canvas = canvas
+        widget.toolbar = toolbar
+        widget.draw = canvas.draw   # dock.widget().draw() 仍直接落到画布
+        # 悬停取点：鼠标移动 → 曲线上出点 + 状态栏出坐标；
+        # 移出坐标轴 → 清空（细节见 _hover_motion/_hover_leave）
+        canvas.mpl_connect("motion_notify_event",
+                           lambda ev, k=key: _hover_motion(window, k, ev))
+        canvas.mpl_connect("axes_leave_event",
+                           lambda ev, k=key: _hover_leave(window, k, ev))
     else:
         placeholder = QLabel(f"{title} — 尚未接线")
         placeholder.setAlignment(Qt.AlignCenter)
@@ -1627,6 +1726,25 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock.setWidget(_build_view_widget(window, name, key, title))
             window.plot_docks[key] = dock
             window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
+            # 固定 5:3 开局：Qt 分栏记得上次拖过的尺寸，新面板会
+            # 继承"这个位置"的旧大小（上次挤过就一直挤）→ 显式把
+            # 新面板设回 500×300。独苗面板纵向没有分栏、Qt 会把它
+            # 拽满绘图区高度 → 用高度上限钉住 300（见 _set_grid_cap）；
+            # 有伴时分栏成形，纵向 resizeDocks 对竖链/"行+新面板"
+            # 都生效，全体纵向统一到 300
+            others = [d for d in window.plot_docks.values()
+                      if d is not dock and d.isVisible()]
+            _clear_grid_caps(window)   # 旧网格上限作废，统一重新配
+            window.inner.resizeDocks([dock], [PLOT_OPEN_W],
+                                     Qt.Horizontal)
+            if others:
+                visible = others + [dock]
+                window.inner.resizeDocks(visible,
+                                         [PLOT_OPEN_H] * len(visible),
+                                         Qt.Vertical)
+            else:
+                _set_grid_cap(window, dock, PLOT_OPEN_H)
+            _hook_dock_resize(window, dock)   # Shift 拖边 = 等比例缩放
             _log(window, f"打开{name}面板：{display}")
         dock.setVisible(True)
         _run_view(window, name, path, key)
@@ -1789,6 +1907,19 @@ def _plot_compare(window: QMainWindow) -> None:
         dock.setWidget(_build_view_widget(window, "1D", key, title))
         window.plot_docks[key] = dock
         window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
+        # 与单文件面板同款：固定 5:3 开局（见 _plot_view 同段注释）
+        others = [d for d in window.plot_docks.values()
+                  if d is not dock and d.isVisible()]
+        _clear_grid_caps(window)
+        window.inner.resizeDocks([dock], [PLOT_OPEN_W], Qt.Horizontal)
+        if others:
+            visible = others + [dock]
+            window.inner.resizeDocks(visible,
+                                     [PLOT_OPEN_H] * len(visible),
+                                     Qt.Vertical)
+        else:
+            _set_grid_cap(window, dock, PLOT_OPEN_H)
+        _hook_dock_resize(window, dock)
         _log(window, f"打开对比面板：{len(files)} 个文件叠一张图")
     else:
         # 复用面板：文件显示名可能变过（删除重加/改名）→ 绑定刷新，
@@ -1802,27 +1933,155 @@ def _plot_compare(window: QMainWindow) -> None:
     _run_compare(window, key)
 
 
-def _arrange(window: QMainWindow, mode: str) -> None:
-    """一键重排所有已打开的面板：横排成一行 / 竖排成一列。
+def _aspect_height(width: int) -> int:
+    """5:3 比例下给定宽度应配的高度（取整 + 下限兜底）。"""
+    return max(round(width * PLOT_ASPECT_H / PLOT_ASPECT_W), 60)
 
-    用 splitDockWidget 依次把每个面板排到前一个旁边（横）或下面
-    （竖），再用 resizeDocks 均分空间。每次点击都会重新确立布局，
-    之前怎么摆的都归位。
+
+def _aspect_width(height: int) -> int:
+    """5:3 比例下给定高度应配的宽度（取整 + 下限兜底）。"""
+    return max(round(height * PLOT_ASPECT_W / PLOT_ASPECT_H), 100)
+
+
+def _set_grid_cap(window: QMainWindow, dock: QDockWidget,
+                  content_h: float) -> None:
+    """把面板高度上限钉在 content_h（按坞整体算，内容会矮掉标题栏
+    那十几像素，视觉上仍是 5:3）。
+
+    上限是 Qt 坞区唯一对横向链/独苗面板也管用的高度手段（纵向
+    resizeDocks 只认竖链，横链和独苗都被忽略、面板被拽满整个
+    绘图区高度）。注意不能按「内容高 + 标题栏」补偿：开新面板时
+    坞还没布局，此刻量装饰厚度得到的是负数（控件预布局尺寸 − 0）。
+    上限不清会妨碍用户往后拖高 → 网格上限只在打开/重排时设，
+    下一次重排或开新面板时统一解除重设。
+    """
+    cap = int(content_h)
+    dock.setMaximumHeight(cap)
+    dock._grid_cap = cap
+
+
+def _clear_grid_caps(window: QMainWindow) -> None:
+    """解除所有面板的网格高度上限（重新排布/开新面板时调用）。"""
+    for d in window.plot_docks.values():
+        if getattr(d, "_grid_cap", None) is not None:
+            d.setMaximumHeight(16777215)   # QWIDGETSIZE_MAX
+            d._grid_cap = None
+
+
+class _AspectResizeFilter(QObject):
+    """挂在坞上的事件过滤器：坞尺寸一变就检查 Shift、做等比例修正。
+
+    Qt6 的坞区分栏不是 QSplitter（findChildren 找不到、信号挂不
+    上），但用户拖分栏把手时被拖的坞自己会收到 Resize 事件 →
+    改挂坞本身。真正的逻辑在 _on_dock_resized。
+    """
+
+    def __init__(self, window: QMainWindow, dock: QDockWidget):
+        super().__init__(dock)
+        self._window = window
+        self._dock = dock
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize and obj is self._dock:
+            _on_dock_resized(self._window, self._dock)
+        return False
+
+
+def _hook_dock_resize(window: QMainWindow, dock: QDockWidget) -> None:
+    """给坞挂尺寸事件过滤器（Shift 拖边 = 等比缩放的入口）。"""
+    dock.installEventFilter(_AspectResizeFilter(window, dock))
+
+
+def _on_dock_resized(window: QMainWindow, dock: QDockWidget,
+                     modifiers=None) -> None:
+    """坞被拖动后：按住 Shift = 等比缩放（挂坞 resizeEvent 的入口）。
+
+    一次拖动只改一个方向，按哪个方向变了分别处理：
+      - 宽变了（拖竖把手）→ 用动态上限把高配成内容 5:3。横链
+        不认纵向 resizeDocks，上限是唯一管用且对竖链也无害的
+        手段；上限记在 _shift_cap，松开 Shift 后的下一次普通
+        拖动把它解除，恢复自由拉伸。
+      - 高变了（拖横把手）→ 用横向 resizeDocks 把宽配成内容
+        5:3（宽度无装饰，任何链型都认）。
+    自己改尺寸也会触发 Resize → _aspect_enforcing 旗标挡住再入；
+    _last_size 记录上一次尺寸，用于分辨哪一维变了。
+    """
+    last = getattr(dock, "_last_size", None)
+    dock._last_size = (dock.width(), dock.height())
+    if modifiers is None:
+        modifiers = QApplication.keyboardModifiers()
+    if not modifiers & Qt.ShiftModifier:
+        # 普通拖动：解除 Shift 动态上限（网格上限 _grid_cap 保留）
+        if getattr(dock, "_shift_cap", None) is not None:
+            grid = getattr(dock, "_grid_cap", None)
+            dock.setMaximumHeight(grid if grid is not None
+                                  else 16777215)
+            dock._shift_cap = None
+        return
+    if last is None or getattr(window, "_aspect_enforcing", False):
+        return
+    w, h = dock.width(), dock.height()
+    lw, lh = last
+    window._aspect_enforcing = True
+    try:
+        if abs(w - lw) >= 1 and abs(h - lh) < 1:
+            chrome = dock.height() - dock.widget().height()
+            cap = _aspect_height(w) + chrome
+            if abs(h - cap) > 2:
+                # 高度修正双管齐下：竖链认纵向 resizeDocks，横链/
+                # 独苗认最大高度上限——谁管用用谁，另一手是空操作
+                dock.setMaximumHeight(cap)
+                dock._shift_cap = cap
+                window.inner.resizeDocks([dock], [cap], Qt.Vertical)
+        elif abs(h - lh) >= 1 and abs(w - lw) < 1:
+            target = _aspect_width(dock.widget().height())
+            if abs(w - target) > 2:
+                window.inner.resizeDocks([dock], [target], Qt.Horizontal)
+    finally:
+        window._aspect_enforcing = False
+
+
+def _arrange(window: QMainWindow, mode: str) -> None:
+    """一键重排所有已打开的面板：横排 = 一行格子 / 竖排 = 一列格子，
+    每格都保持 5:3，不再把图挤变形。
+
+    格子大小 = min(宽度够摊的, 高度够摊的 × 5/3)：两个方向谁先
+    顶到绘图区边缘就听谁的，格子永远不超区 → 多出来的空当露给
+    中央灰色底板（mode_label）。每次点击都重新确立布局，之前
+    怎么摆的都归位。
     """
     docks = [d for d in window.plot_docks.values() if d.isVisible()]
     if not docks:
         _log(window, "没有打开的面板")
         return
+    n = len(docks)
+    if mode == "竖排":
+        cols, rows = 1, n   # 一列格子
+    else:
+        cols, rows = n, 1   # 一行格子
+    # 绘图区可用高度要扣掉内层状态栏（横排/竖排按钮那条）
+    area_w = window.inner.width()
+    area_h = window.inner.height() - window.inner.statusBar().height()
+    cell_w = min(area_w / cols, area_h / rows * PLOT_ASPECT_W / PLOT_ASPECT_H)
+    cell_h = cell_w * PLOT_ASPECT_H / PLOT_ASPECT_W
+    _clear_grid_caps(window)   # 重排统一接管尺寸，旧上限作废
     for d in docks:
         window.inner.addDockWidget(Qt.RightDockWidgetArea, d)
         d.show()
     orient = Qt.Vertical if mode == "竖排" else Qt.Horizontal
     for prev, d in zip(docks, docks[1:]):
         window.inner.splitDockWidget(prev, d, orient)
-    size = (window.inner.height() if mode == "竖排"
-            else window.inner.width()) // len(docks)
-    window.inner.resizeDocks(docks, [max(size, 120)] * len(docks), orient)
-    _log(window, f"已{mode} {len(docks)} 个面板")
+    window.inner.resizeDocks(docks, [int(cell_w)] * n, Qt.Horizontal)
+    window.inner.resizeDocks(docks, [int(cell_h)] * n, Qt.Vertical)
+    if mode == "横排" or n == 1:
+        # 横链/独苗不认纵向 resizeDocks（行高被拽满整个绘图区）
+        # → 用高度上限把每格钉在 5:3。横链没有横把手、独苗没有
+        # 任何把手，用户拖不了它们的高度，上限不妨碍任何操作
+        # （见 _set_grid_cap）；竖排是竖链，纵向 resizeDocks 生效，
+        # 不设上限——用户拖横把手调高度不受限
+        for d in docks:
+            _set_grid_cap(window, d, cell_h)
+    _log(window, f"已{mode} {n} 个面板（每格 5:3）")
 
 
 # ══ 保存：勾选已输出的图 → 逐个选文件名存 PNG ═══════════════
