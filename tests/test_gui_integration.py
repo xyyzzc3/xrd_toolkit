@@ -61,6 +61,10 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui.app import create_window
+# 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
+# 打它的名字截不住别的模块里的裸名查找）
+from xrd_toolkit.gui import panel_state as gui_state
+from xrd_toolkit.gui import plot_views as gui_views
 
 _app = QApplication.instance() or QApplication([])
 
@@ -161,7 +165,7 @@ class TestSelectionOnly(unittest.TestCase):
     def test_selecting_file_does_not_run(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 w.add_files(["data/fake_b.tif"])
                 time.sleep(0.6)          # 给足"防抖级"时间
@@ -180,7 +184,7 @@ class TestViewButtonRuns(unittest.TestCase):
     def test_1d_click_computes_and_draws(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -210,7 +214,7 @@ class TestViewButtonRuns(unittest.TestCase):
         不算图，用户误以为"点击画图画不了"——回归保护。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -247,7 +251,7 @@ class TestViewButtonRuns(unittest.TestCase):
                     time.sleep(0.2)
                 return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
 
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=fake_ordered):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
                 self.assertEqual(w.file_label.text(), "已选 2 个文件")
@@ -294,7 +298,7 @@ class TestApplyAndFocus(unittest.TestCase):
     def test_apply_reruns_focused_view(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -311,7 +315,7 @@ class TestApplyAndFocus(unittest.TestCase):
     def test_apply_without_focus_hints(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 w.add_files(["data/fake_b.tif"])
                 w.findChild(QPushButton, "apply_btn").click()
@@ -339,7 +343,7 @@ class TestApplyAndFocus(unittest.TestCase):
         """同面板连点两次：先开的慢任务晚到 → 丢弃，不得覆盖新图。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 w.add_files(["data/fake_a.tif"])   # A 慢 0.2 s
                 _open_view(w, "1D")   # 任务 1（慢）
@@ -427,7 +431,7 @@ class TestFileCheckSelection(unittest.TestCase):
         """以对号为准：取消 B 的对号（点方块），作图只用对号文件 A。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
                 # 点 B 的对号方块取消 → 只剩 A 勾着
@@ -461,7 +465,7 @@ class TestFileCheckSelection(unittest.TestCase):
 
 def _draw_one_1d(w):
     """画一张 fake_b 的 1D 图（mock 积分），返回面板。"""
-    with mock.patch.object(gui_app, "_compute_integration",
+    with mock.patch.object(gui_views, "_compute_integration",
                            side_effect=_fake_compute):
         w.add_files(["data/fake_b.tif"])
         _open_view(w, "1D")
@@ -534,7 +538,7 @@ class TestSaveFigures(unittest.TestCase):
         不能当成"已全部保存"静默关掉）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -674,7 +678,7 @@ class TestDragDrop(unittest.TestCase):
         w = create_window()
         try:
             abs_b = str(Path("data/fake_b.tif").resolve())
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _drop_event(w, [abs_b])
                 _open_view(w, "1D")
@@ -816,7 +820,7 @@ class TestDuplicateFiles(unittest.TestCase):
         """改名条目与原条目各自成图：点 1D 出两张面板，互不当过期。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])
                 with mock.patch.object(gui_app, "_ask_duplicate",
@@ -876,7 +880,7 @@ class TestAutoContrast(unittest.TestCase):
 
     def _focus_1d(self, w):
         """画一张 fake_a 的 1D 图并等它完成 → 编辑对象 = 该面板。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif"])
             _open_view(w, "1D")
@@ -894,7 +898,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["对比度下限"].setValue(5.0)
             w.params["对比度上限"].setValue(200.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
-            with mock.patch.object(gui_app, "load_diffraction_image",
+            with mock.patch.object(gui_state, "load_diffraction_image",
                                    return_value=fake_image):
                 auto.setChecked(True)   # 勾回自动 → 按焦点图重算
             self.assertAlmostEqual(
@@ -934,7 +938,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["对比度下限"].setValue(5.0)
             w.params["剖面角度 (°)"].setValue(45.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
-            with mock.patch.object(gui_app, "load_diffraction_image",
+            with mock.patch.object(gui_state, "load_diffraction_image",
                                    return_value=fake_image):
                 w.findChild(QPushButton, "reset_image_btn").click()
             self.assertTrue(w.params["自动对比度"].isChecked())
@@ -953,7 +957,7 @@ class TestAutoContrast(unittest.TestCase):
             self._focus_2d(w)
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
-            with mock.patch.object(gui_app, "load_diffraction_image",
+            with mock.patch.object(gui_state, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 w.params["自动对比度"].setChecked(True)
             self.assertEqual(w.params["对比度下限"].value(), 1.0)
@@ -970,7 +974,7 @@ class TestAutoContrast(unittest.TestCase):
             self._focus_1d(w)
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
-            with mock.patch.object(gui_app, "load_diffraction_image",
+            with mock.patch.object(gui_state, "load_diffraction_image",
                                    side_effect=OSError("boom")) as load:
                 w.params["自动对比度"].setChecked(True)
             self.assertFalse(load.called)
@@ -991,7 +995,7 @@ class TestParamSnapshot(unittest.TestCase):
 
     def _plot_fake(self, w, file, params):
         """只勾这一个文件、改参数、出图并等完成 → 返回面板键。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files([file])
             # 只留这一个对号（其余取消），点作图按钮才只画它
@@ -1047,7 +1051,7 @@ class TestParamSnapshot(unittest.TestCase):
                             {"初始距离 (mm)": 1700.0})
             w.params["初始距离 (mm)"].setValue(1800.0)
             done_before = w.log_text.toPlainText().count("积分完成")
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
@@ -1160,7 +1164,7 @@ class TestPanelToggles(unittest.TestCase):
             btn.click()
         for dock in (self.w.file_dock, self.w.param_dock, self.w.log_dock):
             self.assertFalse(dock.isVisible())
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             self.w.add_files(["data/fake_b.tif"])
             _open_view(self.w, "1D")
@@ -1177,7 +1181,7 @@ class Test1dDisplay(unittest.TestCase):
 
     def _plot_fake_b(self, w):
         """画 fake_b 的 1D 图并等完成 → 返回坐标轴（强度 1/2/3）。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -1264,7 +1268,7 @@ class TestLongNames(unittest.TestCase):
 
     def _plot_long(self, w):
         """画一张长文件名的 1D 图并等完成（编辑对象 = 该面板）。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files([self.LONG])
             _open_view(w, "1D")
@@ -1486,7 +1490,7 @@ class TestImageApply(unittest.TestCase):
         """改图像参数 → [应用] → 快照更新 + 用已有数据重画（不重算）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1529,7 +1533,7 @@ class TestImageApply(unittest.TestCase):
         一张改了所有图都变）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -1563,7 +1567,7 @@ class TestImageApply(unittest.TestCase):
         图参数坞就显示哪张的设置（修前切面板不回放，参数跟图对不上）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")   # 两张都出图（默认线性）
@@ -1597,7 +1601,7 @@ class TestImageApply(unittest.TestCase):
         w = create_window()
         try:
             # A：先按默认出图，再改成手填范围并图像 [应用]
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -1617,7 +1621,7 @@ class TestImageApply(unittest.TestCase):
                 item.setCheckState(
                     Qt.Checked if item.data(Qt.UserRole) == "data/fake_b.tif"
                     else Qt.Unchecked)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -1642,7 +1646,7 @@ class TestImageApply(unittest.TestCase):
         手填，新开的对比图也跟着对数+手填）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1656,7 +1660,7 @@ class TestImageApply(unittest.TestCase):
             w.params["纵轴上限"].setValue(500.0)
             w.findChild(QPushButton, "apply_image_btn").click()
             # 新开对比图 → 显示参数是默认，不是上面的对数/手填
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])   # fake_b 仍勾着
                 w.compare_btn.click()
@@ -1684,7 +1688,7 @@ class TestImageApply(unittest.TestCase):
         参数坞当前值覆盖——看别的图时重算会把别的图的长相抄过来）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -1699,7 +1703,7 @@ class TestImageApply(unittest.TestCase):
             # 加一张 fake_b 两张都勾着重按 1D：重算两张。新开的 fake_b
             # 从默认（线性）起步，fake_a 保留自己的对数设置
             w.add_files(["data/fake_b.tif"])
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -1718,7 +1722,7 @@ class TestImageApply(unittest.TestCase):
         不改显示参数（参数坞同时改了数据和显示也互不串改）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1740,7 +1744,7 @@ class TestImageApply(unittest.TestCase):
             # 再改显示（对数关）只点数据 [应用] → 数据生效、显示仍是
             # 面板自己的旧设置（对数开）
             w.params["对数纵轴"].setChecked(False)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
@@ -1759,7 +1763,7 @@ class TestImageApply(unittest.TestCase):
         try:
             # fake_b 数据 = [10, 20, 30]（_fake_compare_compute）→ 自动
             # 区间是它的 1%/99.9% 分位，不是占位默认
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1780,7 +1784,7 @@ class TestImageApply(unittest.TestCase):
                 item.setCheckState(
                     Qt.Checked if item.data(Qt.UserRole) == "data/fake_a.tif"
                     else Qt.Unchecked)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -1821,7 +1825,7 @@ class TestCompare(unittest.TestCase):
 
     def _plot_compare(self, w):
         """勾 fake_a + fake_b 点 [对比] 并等两条曲线到齐 → 返回坐标轴。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compare_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
@@ -1956,7 +1960,7 @@ class TestCompare(unittest.TestCase):
             ax = self._plot_compare(w)
             self._set_norm_mode(w, "off")
             w.findChild(QPushButton, "apply_image_btn").click()
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 self.assertTrue(_wait_until(
@@ -1974,7 +1978,7 @@ class TestCompare(unittest.TestCase):
             ax = self._plot_compare(w)
             dock_before = [d for k, d in w.plot_docks.items()
                            if k.startswith("对比|")][0]
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 self.assertTrue(_wait_until(
@@ -1993,7 +1997,7 @@ class TestCompare(unittest.TestCase):
         w = create_window()
         try:
             ax = self._plot_compare(w)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
@@ -2012,7 +2016,7 @@ class TestCompare(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=boom):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
@@ -2036,7 +2040,7 @@ class TestCompare(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=fake3):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif",
                              "data/fake_c.tif"])
@@ -2059,7 +2063,7 @@ class TestCompare(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=all_boom):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
@@ -2076,7 +2080,7 @@ class TestCompare(unittest.TestCase):
         """旧一轮还在飞时重复点 [对比] → 旧结果全部作废，只收新代。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
@@ -2112,7 +2116,7 @@ class TestArrangeModeClose(unittest.TestCase):
         w = create_window()
         try:
             w.show()   # 面板要可见才参与重排（offscreen 下不 show 不可见）
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2149,7 +2153,7 @@ class TestArrangeModeClose(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")   # 任务立刻在后台开睡
@@ -2192,7 +2196,7 @@ class TestPlotFixedSize(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2222,7 +2226,7 @@ class TestZoomToolbar(unittest.TestCase):
     def test_toolbar_present_on_1d(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2241,7 +2245,7 @@ class TestZoomToolbar(unittest.TestCase):
     def test_placeholder_has_no_toolbar(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -2258,7 +2262,7 @@ class TestHoverDot(unittest.TestCase):
     """E：鼠标悬停 = 曲线上出白边点 + 状态栏实时坐标；离开清空。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -2324,7 +2328,7 @@ class TestHoverDot(unittest.TestCase):
     def test_compare_hover_shows_filename(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
@@ -2351,7 +2355,7 @@ class TestArrangeGrid(unittest.TestCase):
     5:3 不被缩放），同类型同行/列、顶/左对齐，放不下靠滚动条兜底。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -2416,7 +2420,7 @@ class TestTilingGroups(unittest.TestCase):
 
     def _open_mixed(self, w):
         """按开图先后：1D(fake_a) → 2D(fake_c) → 1D(fake_b)。"""
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif",
                          "data/fake_c.tif"])
@@ -2492,7 +2496,7 @@ class TestTilingGroups(unittest.TestCase):
             w.show()
             w.resize(1400, 900)
             # 三张同类型 1D 挤在同一行，窗口收窄后必然放不下
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif",
                              "data/fake_c.tif"])
@@ -2518,7 +2522,7 @@ class TestFreeResize(unittest.TestCase):
     记住当前画布比例；主窗口缩放不牵动子窗口。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -2579,7 +2583,7 @@ class TestResizeGrips(unittest.TestCase):
     容器（子窗口/弹出窗口都可用），拖完照常记"拖过"比例。"""
 
     def _open_one(self, w, view="1D", path_str="data/fake_b.tif"):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files([path_str])
             _open_view(w, view)
@@ -2708,7 +2712,7 @@ class TestCustomizeDialog(unittest.TestCase):
     摘掉 tight layout 引擎（否则 draw 时布局引擎把用户边距算回去）。"""
 
     def _open_one(self, w, path_str="data/fake_b.tif"):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files([path_str])
             _open_view(w, "1D")
@@ -2861,7 +2865,7 @@ class TestCustomizeDialog(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
-            with mock.patch.object(gui_app, "_open_customize_dialog") as m:
+            with mock.patch.object(gui_views, "_open_customize_dialog") as m:
                 content.toolbar._actions["edit_parameters"].trigger()
             m.assert_called_once_with(w, "1D|data/fake_b.tif")
         finally:
@@ -2876,7 +2880,7 @@ class TestWindowClickFocus(unittest.TestCase):
     实证），从落点沿 parentWidget 链向上找面板容器。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -2952,7 +2956,7 @@ class TestCanvasTrue53(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2974,7 +2978,7 @@ class TestCustomRatioMemory(unittest.TestCase):
     都保持同比例缩放；没拖过的按默认 5:3。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -2993,7 +2997,7 @@ class TestCustomRatioMemory(unittest.TestCase):
             self._open_two(w)
             d2 = _dock(w, "1D", "data/fake_b.tif")
             geo = d2.geometry()
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_c.tif"])
                 _open_view(w, "1D")
@@ -3059,7 +3063,7 @@ class TestViewLimitSync(unittest.TestCase):
     """缩放/平移写回参数：视图 2θ 范围 + 纵轴窗口（动纵轴才关自动）。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -3151,7 +3155,7 @@ class TestGestures(unittest.TestCase):
     以光标为中心缩放（每格 10%）+ 左键拖框放大，熄灭时让位。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -3365,7 +3369,7 @@ class TestCustomizeProtection(unittest.TestCase):
     才由参数接管。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif"])
             _open_view(w, "1D")
@@ -3793,7 +3797,7 @@ class TestPopOut(unittest.TestCase):
     弹出窗口 × = 关闭即遗忘；平铺只排主窗口内的子窗口。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -3873,7 +3877,7 @@ class TestPopOut(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -3901,7 +3905,7 @@ class TestPanelClose(unittest.TestCase):
     全新默认；在飞任务迟到结果静默丢弃、旧代结果不串新图。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_app, "_compute_integration",
+        with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -3940,7 +3944,7 @@ class TestPanelClose(unittest.TestCase):
             _resize_panel(w, _dock(w, "1D", "data/fake_a.tif"), 700, 400)
             _axes(w, "1D", "data/fake_a.tif").set_ylim(1.0, 2.0)
             gui_app._close_panel(w, key_a)
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")   # 文件仍在列表里，重新出图
                 self.assertTrue(_wait_until(
@@ -3970,7 +3974,7 @@ class TestPanelClose(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "1D")   # 后台开算（0.3s）
@@ -3994,7 +3998,7 @@ class TestPanelClose(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
@@ -4041,7 +4045,7 @@ class TestSavePromptExcludesClosed(unittest.TestCase):
     def test_close_prompt_counts_only_open_panels(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_app, "_compute_integration",
+            with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")

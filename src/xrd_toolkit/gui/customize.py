@@ -1,0 +1,173 @@
+"""Customize 自绘轴属性对话框（替换 mpl 自带子图配置器）。
+
+mpl 自带的 Qt 图选项编辑器是英文技术术语（Left/Bottom/hspace/
+wspace/Export values），hspace/wspace 对单图无用、字段还挤——
+自绘版只留单图面板真正用得上的：标题 / X 轴标签 / Y 轴标签 /
+纵轴刻度（线性/对数）/ 图边距（左/下/右/上）。表单标签左对齐
+（macOS 风格默认把表单整块水平居中，真机探针实测后显式设左）、
+按节分组、[恢复默认][取消][应用] 按钮行。
+
+"用户改的归用户"保护记账：这里改的标题/轴标签/刻度/曲线样式，
+重画一律不覆盖——见 plot_views 的 _snapshot_canvas /
+_apply_text_guards / _settle_scale。边距改过 = 摘掉 tight
+layout 引擎（fig.set_layout_engine(None)），否则每次 draw
+引擎都把用户边距算回去。
+"""
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGroupBox,
+    QHBoxLayout, QLineEdit, QMainWindow, QPushButton, QVBoxLayout)
+
+from xrd_toolkit.gui.panel_state import _content, _log, _panel_param
+
+
+def _open_customize_dialog(window: QMainWindow, key: str) -> None:
+    """Customize 按钮：自绘轴属性对话框（替换 mpl 自带子图配置器）。
+
+    内容 = 标题 / X 轴标签 / Y 轴标签 / 纵轴刻度（线性/对数）/
+    图边距（左/下/右/上）——单图面板真正用得上的字段。mpl 自带
+    的是英文技术术语（Left/Bottom/hspace/wspace/Export values），
+    hspace/wspace 对单图无用，字段还挤；自绘版：表单标签左对齐、
+    按节分组、[恢复默认][取消][应用] 按钮行（应用 = 生效并关闭，
+    与"用户改的归用户"保护记账配套，见 _snapshot_canvas）。
+
+    边距改动的坑：面板画布建在 tight_layout=True 的 Figure 上，
+    布局引擎每次 draw 都会把 subplots_adjust 的边距算回去——应用
+    时先把布局引擎摘掉（set_layout_engine(None)），边距由用户接管，
+    不再被程序重排。标题/轴标签/刻度改了重画不覆盖：_apply_text_guards
+    /_settle_scale 会认出"用户改过"（重画前快照与默认基准不符 =
+    用户为准）。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    content = _content(dock)
+    ax = getattr(content, "axes_1d", None)
+    fig = getattr(content, "figure", None)
+    if ax is None or fig is None:
+        return   # 占位面板还没有图
+    dlg = _build_customize_dialog(window, dock, ax, fig)
+    if dlg.exec() != QDialog.Accepted:
+        return   # 取消：图保持原样
+    _apply_customize(window, dock, ax, fig, dlg)
+
+
+def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
+    """搭 Customize 对话框并预填当前轴状态（供 _open_customize_dialog
+    与测试复用：测试可直改 _fields 再走 _apply_customize）。"""
+    dlg = QDialog(window)
+    dlg.setWindowTitle(f"Customize — {dock.panel_display}")
+    dlg.setMinimumWidth(460)
+    root = QVBoxLayout(dlg)
+    # 表单统一左对齐（用户点名要的）：macOS 风格默认把表单内容
+    # 整块水平居中（真机探针实测 formAlignment = AlignHCenter），
+    # 标签/输入框全停在对话框中间——formAlignment 显式设左，标签
+    # 列和输入框整块贴左；标签文本自身也设左对齐
+    label_align = Qt.AlignLeft | Qt.AlignVCenter
+    form_align = Qt.AlignLeft | Qt.AlignTop
+
+    text_box = QGroupBox("标题与轴标签")
+    text_form = QFormLayout(text_box)
+    text_form.setLabelAlignment(label_align)
+    text_form.setFormAlignment(form_align)
+    title = QLineEdit(ax.get_title())
+    title.setMinimumWidth(240)   # 标题输入框加长（列宽跟随变宽）
+    xlabel = QLineEdit(ax.get_xlabel())
+    ylabel = QLineEdit(ax.get_ylabel())
+    text_form.addRow("标题", title)
+    text_form.addRow("X 轴标签", xlabel)
+    text_form.addRow("Y 轴标签", ylabel)
+    root.addWidget(text_box)
+
+    scale_box = QGroupBox("纵轴刻度")
+    scale_form = QFormLayout(scale_box)
+    scale_form.setLabelAlignment(label_align)
+    scale_form.setFormAlignment(form_align)
+    scale = QComboBox()
+    scale.addItem("线性", "linear")
+    scale.addItem("对数", "log")
+    cur_scale = ax.get_yscale()
+    idx = scale.findData(cur_scale)
+    scale.setCurrentIndex(idx if idx >= 0 else 0)
+    scale_form.addRow("刻度", scale)
+    root.addWidget(scale_box)
+
+    margin_box = QGroupBox("图边距")
+    margin_form = QFormLayout(margin_box)
+    margin_form.setLabelAlignment(label_align)
+    margin_form.setFormAlignment(form_align)
+
+    def _spin(value):
+        s = QDoubleSpinBox()
+        s.setRange(0.0, 1.0)   # 边距 = 占图宽的分数；tight layout 会算出
+        # 0.96 这类大值，上限设 1 才装得下
+        s.setDecimals(3)
+        s.setSingleStep(0.005)
+        s.setKeyboardTracking(False)
+        s.setValue(value)
+        return s
+
+    sp = fig.subplotpars
+    fields = {
+        "left": _spin(sp.left), "bottom": _spin(sp.bottom),
+        "right": _spin(sp.right), "top": _spin(sp.top),
+    }
+    margin_form.addRow("左边距", fields["left"])
+    margin_form.addRow("下边距", fields["bottom"])
+    margin_form.addRow("右边距", fields["right"])
+    margin_form.addRow("上边距", fields["top"])
+    root.addWidget(margin_box)
+
+    btn_row = QHBoxLayout()
+    reset = QPushButton("恢复默认")
+    cancel = QPushButton("取消")
+    apply_btn = QPushButton("应用")
+    apply_btn.setDefault(True)
+    cancel.clicked.connect(dlg.reject)
+    apply_btn.clicked.connect(dlg.accept)
+    reset.clicked.connect(lambda: _reset_customize_fields(dock, dlg._fields))
+    btn_row.addWidget(reset)
+    btn_row.addStretch(1)
+    btn_row.addWidget(cancel)
+    btn_row.addWidget(apply_btn)
+    root.addLayout(btn_row)
+
+    dlg._fields = {"title": title, "xlabel": xlabel, "ylabel": ylabel,
+                   "scale": scale, **fields}
+    return dlg
+
+
+def _reset_customize_fields(dock, fields) -> None:
+    """[恢复默认]：各字段回到该面板的默认外观（只改对话框里的值，
+    点 [应用] 才生效）。"""
+    fields["title"].setText(f"{dock.panel_display}: full azimuthal integration")
+    fields["xlabel"].setText("2θ (deg)")
+    fields["ylabel"].setText("Intensity (a.u.)")
+    fields["scale"].setCurrentIndex(fields["scale"].findData("linear"))
+    for name, value in (("left", 0.125), ("bottom", 0.11),
+                        ("right", 0.9), ("top", 0.88)):
+        fields[name].setValue(value)
+
+
+def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
+    """把对话框字段写进轴 + 画布重画（[应用] 或测试直调）。
+
+    刻度换了自动纵轴就按新刻度重算（手动纵轴不动，由用户管）；
+    边距应用前先把 tight layout 引擎摘掉，否则 draw 时布局引擎
+    会把用户边距算回去（见 _open_customize_dialog 的 docstring）。
+    """
+    f = dlg._fields
+    ax.set_title(f["title"].text())
+    ax.set_xlabel(f["xlabel"].text())
+    ax.set_ylabel(f["ylabel"].text())
+    scale = f["scale"].currentData()
+    if scale != ax.get_yscale():
+        ax.set_yscale(scale)
+        if _panel_param(window, dock, "纵轴自动", True):
+            ax.relim()
+            ax.autoscale_view(scaley=True)
+    fig.set_layout_engine(None)   # 边距由用户接管：tight layout 退场
+    fig.subplots_adjust(left=f["left"].value(), bottom=f["bottom"].value(),
+                        right=f["right"].value(), top=f["top"].value())
+    _content(dock).draw()
+    _log(window, f"已应用 Customize 设置：{dock.windowTitle()}")
