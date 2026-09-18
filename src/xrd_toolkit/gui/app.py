@@ -1,4 +1,4 @@
-"""GUI 主程序：主框架（可停靠面板式工作区）与事件循环（PySide6）。
+"""GUI 主程序：主框架（MDI 子窗口式绘图区）与事件循环（PySide6）。
 
 入口：python -m xrd_toolkit.gui（__main__.py 转发到本文件的 main()）。
 create_window() 与 main() 分离：测试里可以只建窗口、不进事件循环。
@@ -8,8 +8,9 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     日志（底）+ 顶部工具栏 + 状态行；工具栏尾部有 [文件][参数]
     [日志] 三个收起开关（也可用各坞标题栏的 ×），全收起来就只剩
     绘图区，看图视野最大；
-  - Qt 的中央区不接受停靠，所以中央再嵌一个内层 QMainWindow 专门
-    管理图面板坞——嵌套是标准做法（PyCharm / Spyder 同款）；
+  - 中央绘图区 = QMdiArea：每张图一个子窗口（QMdiSubWindow），
+    各拖各的、互不牵连——旧的停靠分栏已按用户定稿撤掉（图之间
+    不再"连在一起"）；
   - 框架阶段的占位动作统一写日志区 + 状态行提示"尚未实现"；
     实现功能时只替换动作背后的处理，框架结构不变；
   - 文件进列表两种方式：拖文件（tif/edf/cbf）到窗口任意位置，或
@@ -34,6 +35,31 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     到最强峰"（默认开，1D 显示组）= 每条曲线除以自己的最强峰，
     曝光差很多的文件也看得清彼此峰形；1D 显示参数（对数/纵轴
     范围）对对比面板同样生效。
+  - 图面板布局与比例（与用户讨论定稿）：每张图 = MDI 里的独立
+    子窗口，手动缩放完全自由（拖成什么样就什么样，不再有普通
+    拖/Shift 拖之分）；每拖一次 = 记住当前画布比例
+    （_canvas_pref/_dragged），没拖过 = 默认画布 5:3（500×300）。
+    开新图以默认大小级联摆放、完全不动旧图。macOS 原生样式的
+    子窗口边框几乎不可见 → 不靠边框：内容四边各留 5px 抓取带、
+    四角各留 16px 抓取区（右下角有可见把手 ▙），悬停换方向光标、
+    按住拖 = 拉伸容器（_PanelGripFilter）。横排/竖排按钮 =
+    纯摆位置：按类型分层（类型顺序 = 开图先后），横排每类一行、
+    竖排每类一列，图保持各自大小绝不缩放；行比视口宽/层总高
+    比视口高 → QMdiArea 滚动条兜底（宁可滚动也不压扁），弹出
+    去的窗口不参与。每张 1D/对比面板工具栏末尾有 [弹出]/[收回]：
+    把面板搬进独立 OS 窗口再收回来（状态跟着走）。点窗口任何
+    地方（标题栏/边框/图/工具栏）都选中该面板（选中子窗口 =
+    选中参数，不必点图本体）。关闭面板（子窗口 × 或弹出窗口
+    ×）= 关闭即遗忘：从登记表移除、状态全丢，重开 = 全新默认
+    面板；关软件时的保存询问只列当时还开着的面板。
+  - 面板工具栏精简为 [Home][Customize][Save]：拖 = 平移、滚轮
+    （触摸板两指滚动）= 以光标为中心缩放（每格 10%——25% 连乘
+    几下图就飞了），不再有放大镜/抓手/前进后退/子图按钮，双击
+    也不回全图（Home 就是回首页）；Customize = matplotlib 轴
+    属性对话框。缩放/平移/Home/改范围都会实时同步写回参数面板：
+    视图 2θ 范围（只看图不参与计算，与数据组的积分 2θ 范围互不
+    干扰）+ 纵轴窗口（自动纵轴随之关掉——用户手动定的窗口由
+    用户接管）。
   - [保存] 是主动操作：弹窗勾选要保存的已出图面板 → 逐个选文件
     名存 PNG；另外关闭窗口时若有尚未保存的图会弹窗询问
     （保存后关闭 / 不保存直接关 / 取消留在程序里）。
@@ -41,14 +67,17 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 窗口上的公共接口（供后续页面接线与测试使用）：
   window.log(text)        写日志区 + 状态行
   window.add_files(paths) 把文件加进左侧列表
-  window.plot_docks       {面板键: QDockWidget}，键 = f"{视图}|{路径}"，
-                          重复文件改名条目再补 |显示名 区分；标题 =
-                          f"{视图}_{显示名}"（如 1D_lab6-00024.tif）
-  window.focus_panel      参数面板编辑对象 = 面板键（点图/计算完成时设定）
+  window.mdi              QMdiArea（绘图区，所有图子窗口的父场地）
+  window.plot_docks       {面板键: QMdiSubWindow 或 _FloatedWindow}，
+                          键 = f"{视图}|{路径}"，重复文件改名条目再补
+                          |显示名 区分；标题 = f"{视图}_{显示名}"
+                          （如 1D_lab6-00024.tif）；已关闭的面板不在
+                          登记表里
+  window.focus_panel      参数面板编辑对象 = 面板键（点窗口任意处/计算完成时设定）
   window.params           参数面板控件字典
   window.config_name      当前选中的配置条目 key（如 lmfp1_lab6）
   window.config           完整条目 dict（label / geometry / beam_center）
-  1D 面板的画布/坐标轴在面板控件上：dock.widget().axes_1d
+  1D 面板的画布/坐标轴在面板内容上：_content(dock).axes_1d
 """
 import sys
 from pathlib import Path
@@ -70,9 +99,9 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QInputDialog, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QToolBar, QVBoxLayout, QWidget, QDockWidget,
-    QApplication)
+    QMdiArea, QMdiSubWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QToolBar, QVBoxLayout,
+    QWidget, QDockWidget, QApplication)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG  # 几何配置注册表（下拉框数据源）
 from xrd_toolkit.gui.tasks import BackgroundTask  # 后台线程任务（积分等耗时计算）
@@ -83,8 +112,27 @@ FILE_FILTER = "衍射图像 (*.tif *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
 SUPPORTED_SUFFIXES = (".tif", ".edf", ".cbf")   # 拖放只认这三种
 
-PLOT_ASPECT_W, PLOT_ASPECT_H = 5, 3   # 图面板目标宽高比（5:3，看图最舒服）
-PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板打开时的固定尺寸（= 5:3）
+PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板默认画布尺寸（画布真 5:3，
+                                      # 面板总高 = 画布 + 工具栏 + 标题栏）
+
+# 面板状态属性的白名单：弹出/收回时整体搬家的"行李清单"。
+# 不能用 vars() 整体拷：PySide6 包装对象 vars() 里混着信号实例
+# （windowStateChanged/destroyed…），整体拷会把新容器的信号盖成
+# 旧容器的绑定信号（探针验证过）。
+_PANEL_ATTRS = (
+    "panel_file", "panel_item", "panel_display", "figure_saved",
+    "params_snapshot", "compare_files", "compare_gen", "compare_pending",
+    "compare_data", "_dragged", "_canvas_pref", "hover_marker",
+    "_pan_start", "_pan_limits", "last_tth", "last_intensity",
+    "_last_canvas", "_settling", "panel_key",
+)
+
+
+def _copy_panel_attrs(src, dst) -> None:
+    """按白名单把面板状态从旧容器搬到新容器（弹出/收回用）。"""
+    for name in _PANEL_ATTRS:
+        if hasattr(src, name):
+            setattr(dst, name, getattr(src, name))
 
 
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
@@ -141,25 +189,40 @@ def _log(window: QMainWindow, text: str) -> None:
     window._status_timer.start(5000)   # 重新计时
 
 
-class _FocusMarker(QObject):
-    """事件过滤器：点击图面板时把参数面板的编辑对象切到该面板。
+class _PanelClickTracker(QObject):
+    """应用级事件过滤器：点任何面板窗口内任何位置都选中该面板。
 
-    装在图面板控件上；只"监听"不"拦截"——eventFilter 返回 False，
-    鼠标事件照常传给画布/标签。参数坞顶部的"编辑对象"标签随点击
-    更新（显示"视图_文件名"，多张图一眼分清在编辑哪张），[应用]
-    就作用在这个焦点面板上；同时参数坞回放该面板的参数快照——
-    点哪张图，旁边的参数就显示哪张图作图时的参数（能看也能改）。
+    与用户讨论定稿：选中子窗口 = 选中参数，不必非点图本体（标题
+    栏、边框、图、工具栏都算）。为什么必须是应用级：探针实证
+    QWidget 的父过滤器收不到子部件事件（子部件 accept 后事件不
+    向上传播，matplotlib 画布恰恰会 accept 鼠标按下）——只有挂
+    在 QApplication 上的过滤器能看到一切。收到鼠标按下后从落点
+    逐级向上找面板容器（_PlotSubWindow / _FloatedWindow），且该
+    容器必须登记在本窗口 plot_docks 里（测试会同时开多个窗口，
+    各窗口的过滤器只认自己登记的面板，防止串窗）。只"监听"不
+    "拦截"：返回 False，事件照常传递。
     """
 
-    def __init__(self, window: QMainWindow, key: str, title: str):
+    def __init__(self, window: QMainWindow):
         super().__init__(window)   # 挂在窗口上，随窗口销毁
-        self._window = window
-        self._key = key
-        self._title = title
+        # 刻意不存 window 引用：QApplication 的过滤器表 → 过滤器 →
+        # window 会形成引用环，关掉的窗口永不回收（探针实测全套件
+        # 30 个窗口全存活）。窗口就是父对象，用时 self.parent() 取。
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.MouseButtonPress:
-            _set_focus(self._window, self._key, self._title)
+        if event.type() != QEvent.MouseButtonPress:
+            return False
+        window = self.parent()
+        if not isinstance(window, QMainWindow):
+            return False   # 窗口已销毁：过滤器随父摘除前的兜底
+        w = obj if isinstance(obj, QWidget) else None
+        while w is not None:
+            if isinstance(w, (_PlotSubWindow, _FloatedWindow)):
+                key = w.panel_key
+                if window.plot_docks.get(key) is w:
+                    _set_focus(window, key, w.windowTitle())
+                break
+            w = w.parentWidget()
         return False   # 不消费事件
 
 
@@ -231,6 +294,8 @@ _DISPLAY_DEFAULTS = {
     "纵轴下限": 1.0,
     "纵轴上限": 100000.0,
     "对比归一化": True,
+    "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
+    "视图 2θ 上限 (°)": None,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 
@@ -271,7 +336,7 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
     return snap
 
 
-def _panel_param(window: QMainWindow, dock: QDockWidget, name: str,
+def _panel_param(window: QMainWindow, dock, name: str,
                  default):
     """面板自己的参数值：优先快照（这张图作图时用的值）。
 
@@ -318,6 +383,8 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
     for name, value in snap.items():
         if name == "config" or name == "自动对比度":
             continue
+        if value is None:
+            continue   # 视图 2θ 范围没被用户动过 = 跟随积分范围（下方补填）
         w = window.params.get(name)
         if w is None:
             continue
@@ -325,6 +392,16 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
             w.setChecked(value)
         else:
             w.setValue(value)
+    # 视图 2θ 范围跟随积分范围时：输入框显示"正在用的视图" =
+    # 该面板快照里的积分范围（无快照值退回控件当前值，防御后路）
+    for name, fallback in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
+                           ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
+        box = window.params.get(name)
+        if box is None or snap.get(name) is not None:
+            continue
+        other = window.params.get(fallback)
+        if other is not None:
+            box.setValue(snap.get(fallback, other.value()))
     if auto is not None:
         auto.blockSignals(True)
         auto.setChecked(snap.get("自动对比度", True))
@@ -376,7 +453,6 @@ class _PressRecorder(QObject):
 
     def __init__(self, window: QMainWindow, lst: QListWidget):
         super().__init__(window)   # 挂在窗口上，随窗口销毁
-        self._window = window
         self._list = lst
         window._press_item = None
         window._press_state = None
@@ -384,8 +460,9 @@ class _PressRecorder(QObject):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
             item = self._list.itemAt(event.position().toPoint())
-            self._window._press_item = item
-            self._window._press_state = item.checkState() if item else None
+            window = self.parent()   # 不存 window 引用（同 _PanelClickTracker：防引用环）
+            window._press_item = item
+            window._press_state = item.checkState() if item else None
         return False   # 不消费事件
 
 
@@ -836,11 +913,14 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     （每面板只认最新任务，旧结果不得覆盖新图）。
     """
     if window._latest_task.get(key) is not task:
-        dock = window.plot_docks[key]
-        _log(window, f"已忽略 {dock.panel_display} 的过期结果"
-                     f"（同一面板已有更新的计算）")
+        dock = window.plot_docks.get(key)
+        if dock is not None:   # 面板还开着才记日志；关了静默丢弃
+            _log(window, f"已忽略 {dock.panel_display} 的过期结果"
+                         f"（同一面板已有更新的计算）")
         return
-    dock = window.plot_docks[key]
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已被关闭（关闭即遗忘）：迟到结果静默丢弃
     tth, intensity = result
     # 结果留在面板上：图像参数 [应用] 只改显示时，用已有数据重画，
     # 不用重新积分
@@ -860,47 +940,65 @@ def _on_integration_error(window: QMainWindow, path: Path, msg: str) -> None:
     _log(window, f"积分失败：{path.name} — {msg}")
 
 
-def _draw_1d(window: QMainWindow, dock: QDockWidget, tth, intensity) -> None:
+def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     """在指定的 1D 面板画出积分曲线（只允许主线程调用）。
 
-    x 轴范围跟随该面板快照里的 2θ 上下限（看图范围，不参与计算）；
-    显示样式跟随该面板自己的 1D 显示参数（对数纵轴 / 纵轴范围）——
-    每张图各记各的，画哪张就用哪张的设置（_panel_param），不看参数
-    坞控件当前值：控件此刻可能正显示别的面板的设置。积分完成与
-    图像参数 [应用] 都会走这里——后者只改显示、不重新积分。
+    x 轴范围：优先该面板快照里的"视图 2θ 范围"（缩放/平移实时
+    写回的显示窗口，只看图不参与计算）；没被用户动过（None）就
+    跟随数据组的积分 2θ 上下限。显示样式跟随该面板自己的 1D 显示
+    参数（对数纵轴 / 纵轴范围）——每张图各记各的，画哪张就用哪张
+    的设置（_panel_param），不看参数坞控件当前值：控件此刻可能正
+    显示别的面板的设置。积分完成与图像参数 [应用] 都会走这里——
+    后者只改显示、不重新积分。
+
+    全程举着 _setting_limits 旗标：画图里 set_xlim/set_ylim/clear
+    引发的范围变化是程序自己设的，不算用户改动，不触发同步写回
+    （否则 ax.clear() 会先把范围重置成 (0,1)，同步会写回错值）。
     """
-    ax = dock.widget().axes_1d
-    ax.clear()
-    ax.plot(tth, intensity, "b-", lw=0.8)
-    lo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
-    hi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
-    if lo < hi:
-        ax.set_xlim(lo, hi)
-    # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）
-    log_y = _panel_param(window, dock, "对数纵轴", False)
-    if log_y:
-        ax.set_yscale("log")
-    # 纵轴范围：自动 = 按曲线 1%/99.9% 分位；手动 = 手填上下限。
-    # 对数轴画不出 ≤0 的范围，手动值也兜底抬高。自动模式把算出的
-    # 区间填进置灰输入框（只读展示"程序正在用的区间"）——只有画的
-    # 正是焦点面板才填：否则会覆盖用户正在看的别面板参数
-    if _panel_param(window, dock, "纵轴自动", True):
-        ylo, yhi = _auto_y_range(intensity, log_y)
+    ax = _content(dock).axes_1d
+    window._setting_limits = True
+    try:
+        ax.clear()
+        ax.plot(tth, intensity, "b-", lw=0.8)
+        lo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
+        hi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
+        if lo is None or hi is None or not lo < hi:
+            lo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
+            hi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
+        if lo < hi:
+            ax.set_xlim(lo, hi)
+        # 视图范围框显示"正在看的窗口"——只有画的正是焦点面板才填
         if window.plot_docks.get(window.focus_panel) is dock:
-            window.params["纵轴下限"].setValue(ylo)
-            window.params["纵轴上限"].setValue(yhi)
-    else:
-        ylo = _panel_param(window, dock, "纵轴下限", 1.0)
-        yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
+            window.params["视图 2θ 下限 (°)"].setValue(lo)
+            window.params["视图 2θ 上限 (°)"].setValue(hi)
+        # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）
+        log_y = _panel_param(window, dock, "对数纵轴", False)
         if log_y:
-            ylo = max(ylo, 1e-6)
-    if ylo < yhi:
-        ax.set_ylim(ylo, yhi)
-    ax.set_xlabel("2θ (deg)")
-    ax.set_ylabel("Intensity (a.u.)")
-    ax.set_title(f"{dock.panel_display}: full azimuthal integration")
-    ax.grid(alpha=0.3)
-    dock.widget().draw()
+            ax.set_yscale("log")
+        # 纵轴范围：自动 = 按曲线 1%/99.9% 分位；手动 = 手填上下限。
+        # 对数轴画不出 ≤0 的范围，手动值也兜底抬高。自动模式把算出的
+        # 区间填进置灰输入框（只读展示"程序正在用的区间"）——只有画的
+        # 正是焦点面板才填：否则会覆盖用户正在看的别面板参数
+        if _panel_param(window, dock, "纵轴自动", True):
+            ylo, yhi = _auto_y_range(intensity, log_y)
+            if window.plot_docks.get(window.focus_panel) is dock:
+                window.params["纵轴下限"].setValue(ylo)
+                window.params["纵轴上限"].setValue(yhi)
+        else:
+            ylo = _panel_param(window, dock, "纵轴下限", 1.0)
+            yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
+            if log_y:
+                ylo = max(ylo, 1e-6)
+        if ylo < yhi:
+            ax.set_ylim(ylo, yhi)
+        ax.set_xlabel("2θ (deg)")
+        ax.set_ylabel("Intensity (a.u.)")
+        ax.set_title(f"{dock.panel_display}: full azimuthal integration")
+        ax.grid(alpha=0.3)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
@@ -920,6 +1018,9 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     ax = getattr(event, "inaxes", None)
     if dock is None or ax is None:
         _hover_leave(window, key)
+        return
+    if getattr(dock, "_pan_start", None) is not None:
+        _hover_leave(window, key)   # 正在按住左键平移：悬停点退场，别乱跳
         return
     lines = [ln for ln in ax.lines if len(ln.get_xdata()) > 1]
     if not lines:
@@ -972,6 +1073,216 @@ def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
             if marker.axes is not None:   # ax.clear() 后标记已与轴断开
                 marker.axes.figure.canvas.draw_idle()
     window.coord_label.setText("")
+
+
+# ══ 面板工具栏与手势（拖 = 平移 / 滚轮 = 缩放）═════════════
+class _SlimToolbar(NavigationToolbar2QT):
+    """只留 [Home][Customize][Save] 的精简工具栏（过滤父类工具清单）。
+
+    放大/平移改成鼠标手势（拖 = 平移、滚轮 = 以光标为中心缩放），
+    放大镜/抓手按钮退休；子图按钮对单轴图无用；前进/后退砍掉。
+    Home = 回首页（回到最初画出的视图），双击回全图不再绑——
+    回首页只有这一个入口；Customize = matplotlib 自带的轴属性
+    对话框（改范围/刻度/标题，范围改动经 xlim_changed 自动同步
+    写回参数）；Save = 本面板另存为图片。父类 __init__ 按
+    toolitems 表逐个建按钮，覆盖成只含这三个的表即可。
+
+    Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
+    关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
+    绕过记账，存过还问）。
+    """
+
+    toolitems = [t for t in NavigationToolbar2QT.toolitems
+                 if t[0] in ("Home", "Customize", "Save")]
+
+    def __init__(self, canvas, parent=None, window=None, key=None):
+        super().__init__(canvas, parent)
+        self._window = window
+        self._panel_key = key
+
+    def save_figure(self, *args):
+        if self._window is not None and self._panel_key is not None:
+            _save_panel(self._window, self._panel_key)
+        else:
+            super().save_figure(*args)
+
+
+def _save_panel(window: QMainWindow, key: str) -> None:
+    """单面板保存（工具栏 [Save] 走这里）：选文件名存 PNG。
+
+    成功即置 figure_saved = True——这张面板在关窗询问里不再算
+    "未保存"；用户取消（没选文件名）不动记账。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    figure = getattr(_content(dock), "figure", None)
+    if figure is None:
+        _log(window, "该面板还没有可保存的图")
+        return
+    default = str(Path("outputs") / f"{dock.windowTitle()}.png")
+    name, _ = QFileDialog.getSaveFileName(
+        window, f"保存 {dock.windowTitle()}", default, "PNG 图片 (*.png)")
+    if not name:
+        return   # 用户取消：不动已保存记账
+    if not name.lower().endswith(".png"):
+        name += ".png"
+    try:
+        Path(name).parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(name)
+    except OSError as err:
+        _log(window, f"保存失败 {dock.windowTitle()} → {name}（{err}）")
+        return
+    dock.figure_saved = True
+    _log(window, f"已保存 {dock.windowTitle()} → {name}")
+
+
+def _pan_press(window: QMainWindow, key: str, event) -> None:
+    """按住左键在图上按下：记起点像素与当时的显示范围，准备平移。"""
+    dock = window.plot_docks.get(key)
+    if dock is None or event.inaxes is None or event.button != 1:
+        return
+    dock._pan_start = (event.x, event.y)
+    dock._pan_limits = (event.inaxes.get_xlim(), event.inaxes.get_ylim())
+
+
+def _pan_motion(window: QMainWindow, key: str, event) -> None:
+    """按住左键拖动 = 整图平移（图跟着鼠标走，像拖地图）。
+
+    起点之后每次移动都从"按下时的显示范围"重算（绝对位移，不
+    累计误差）。像素差换算：把起始范围的两个角换算成像素坐标，
+    平移后再反算回数据坐标——对数轴也精确（数据坐标直接相减在
+    对数轴上会变形）。范围变化走 xlim_changed/ylim_changed →
+    自动同步写回参数快照。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None or event.inaxes is None or event.button != 1:
+        return
+    start = getattr(dock, "_pan_start", None)
+    limits = getattr(dock, "_pan_limits", None)
+    if start is None or limits is None:
+        return
+    ax = event.inaxes
+    (x0, x1), (y0, y1) = limits
+    dx = event.x - start[0]
+    dy = event.y - start[1]
+    inv = ax.transData.inverted()
+    p0 = ax.transData.transform((x0, y0))
+    p1 = ax.transData.transform((x1, y1))
+    nx0, ny0 = inv.transform((p0[0] - dx, p0[1] - dy))
+    nx1, ny1 = inv.transform((p1[0] - dx, p1[1] - dy))
+    ax.set_xlim(nx0, nx1)
+    ax.set_ylim(ny0, ny1)
+    ax.figure.canvas.draw_idle()
+
+
+def _pan_release(window: QMainWindow, key: str, event) -> None:
+    """松开鼠标：结束平移（清掉起点与起始范围）。"""
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        dock._pan_start = None
+        dock._pan_limits = None
+
+
+def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
+    """滚轮（触摸板两指滚动）= 以光标为中心缩放。
+
+    光标对着的那个数据点缩放前后钉在原地（像地图应用）：上下限
+    按比例向光标收拢/张开。范围变化自动同步写回参数（缩放会动
+    纵轴 → 纵轴自动随之关掉，纵轴窗口由用户接管）。
+    """
+    dock = window.plot_docks.get(key)
+    ax = getattr(event, "inaxes", None)
+    if dock is None or ax is None or event.xdata is None or event.ydata is None:
+        return
+    # 每格 10%（1.25 = 25% 太猛：触摸板两指一滑是连续好多小格事件，
+    # 连乘几下图就飞了；与用户讨论定为 10%）
+    factor = 1.0 / 1.1 if event.button == "up" else 1.1
+    x, y = event.xdata, event.ydata
+    xlo, xhi = ax.get_xlim()
+    ylo, yhi = ax.get_ylim()
+    ax.set_xlim(x - (x - xlo) * factor, x + (xhi - x) * factor)
+    if ax.get_yscale() == "log" and ylo > 0 and y > 0:
+        # 对数轴：加性缩放会把下限算到 0 以下 → matplotlib 整个忽略
+        # 这次 set_ylim，上限还跟着涨、下限卡死（缩不动）。改乘性：
+        # 光标两侧的比例各开 factor 次方，永远 > 0，光标点在
+        # 对数空间里同样钉在原地
+        ax.set_ylim(y * (ylo / y) ** factor, y * (yhi / y) ** factor)
+    else:
+        ax.set_ylim(y - (y - ylo) * factor, y + (yhi - y) * factor)
+    ax.figure.canvas.draw_idle()
+
+
+def _on_xlim_changed(window: QMainWindow, key: str, ax) -> None:
+    """x 范围被改动（缩放/平移/Home/Customize 对话框）→ 写回视图
+    2θ 范围（看图的窗口，与数据组的积分 2θ 范围互不干扰）。
+
+    焦点面板同时刷新参数坞视图范围框，别面板只写快照——控件正
+    显示焦点面板的值，不能串台。程序自己画图设的范围
+    （_setting_limits）不算用户改动，跳过（否则 ax.clear() 把
+    范围重置成 (0,1) 时会把错值写回快照）。
+    """
+    if getattr(window, "_setting_limits", False):
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默跳过
+    snap = getattr(dock, "params_snapshot", None)
+    if not snap:
+        return
+    xlo, xhi = ax.get_xlim()
+    snap["视图 2θ 下限 (°)"] = float(xlo)
+    snap["视图 2θ 上限 (°)"] = float(xhi)
+    if window.plot_docks.get(window.focus_panel) is dock:
+        window.params["视图 2θ 下限 (°)"].setValue(xlo)
+        window.params["视图 2θ 上限 (°)"].setValue(xhi)
+
+
+def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
+    """y 范围被改动 → 写回纵轴窗口 + 关掉纵轴自动。
+
+    用户手动定过的纵轴窗口由用户接管（自动不再覆盖）；纯 x 方向
+    的缩放/平移不碰这里——只有真的动了纵轴才关自动。焦点面板
+    同时刷新参数坞控件；程序自己画图（_setting_limits）跳过。
+    """
+    if getattr(window, "_setting_limits", False):
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默跳过
+    snap = getattr(dock, "params_snapshot", None)
+    if not snap:
+        return
+    ylo, yhi = ax.get_ylim()
+    snap["纵轴自动"] = False
+    snap["纵轴下限"] = float(ylo)
+    snap["纵轴上限"] = float(yhi)
+    if window.plot_docks.get(window.focus_panel) is dock:
+        # setChecked(False) 触发 sync_ylim → 上下限框解除置灰
+        window.params["纵轴自动"].setChecked(False)
+        window.params["纵轴下限"].setValue(ylo)
+        window.params["纵轴上限"].setValue(yhi)
+
+
+def _connect_axis_sync(window: QMainWindow, key: str, ax=None) -> None:
+    """把 x/y 范围同步写回回调连到面板的坐标轴。
+
+    matplotlib 3.11 起 ax.clear()（cla）会把 ax 的回调注册表整个
+    清空 → 每次重画完都必须重连（清空后重连只有一套，不会叠罗汉）。
+    闭包只抓 key 不抓容器对象：面板弹出/收回会换容器（子窗口 ↔
+    弹出窗口），抓 key 回调永远现查到当前容器；面板关了则 None
+    守卫静默跳过。构建面板时内容还没挂进容器 → 调用方直接把 ax
+    传进来。
+    """
+    if ax is None:
+        dock = window.plot_docks.get(key)
+        if dock is None:
+            return
+        ax = _content(dock).axes_1d
+    ax.callbacks.connect("xlim_changed",
+                         lambda a, k=key: _on_xlim_changed(window, k, a))
+    ax.callbacks.connect("ylim_changed",
+                         lambda a, k=key: _on_ylim_changed(window, k, a))
 
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
@@ -1060,7 +1371,7 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
                          f"恢复占位默认值")
 
 
-def _compare_shown_curves(window: QMainWindow, dock: QDockWidget) -> list:
+def _compare_shown_curves(window: QMainWindow, dock) -> list:
     """对比面板实际画上去的曲线：[(tth, shown, display, i), ...]。
 
     shown = 按该面板自己的"对比归一化"设置处理后的显示数据（归一化
@@ -1386,6 +1697,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 手填；自动模式输入框置灰 = 只读展示正在用的区间
     add_caption(form2, "1D 显示")
 
+    # 视图 2θ 范围：只看图不参与计算的显示窗口。初始跟随数据组的
+    # 积分 2θ 范围；在图里缩放/平移（滚轮/拖拽/Home/自定义对话框）
+    # 会实时写回这里，[应用] 再用这里重画。与数据组的 2θ 范围完全
+    # 分开——改这里不会影响积分的区间
+    add_range(form2, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
+              0.0, 90.0, 1.0, 8.0,
+              label="视图 2θ 范围", suffix=" °", max_width=88,
+              tooltip="看图的窗口：缩放/平移实时写回；[应用] 用这里重画。"
+                      "恢复默认 = 回到跟随积分范围")
+
     log_y = QCheckBox("对数纵轴")
     log_y.setToolTip("对数刻度：强弱峰差几个数量级时弱峰也看得清")
     window.params["对数纵轴"] = log_y
@@ -1440,6 +1761,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["对比归一化"].setChecked(img_defaults["对比归一化"])
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
+        # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉
+        # 显式视图值（None = 跟随），输入框显示回积分范围
+        dock = window.plot_docks.get(window.focus_panel)
+        if dock is not None and getattr(dock, "params_snapshot", None):
+            for name in ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)"):
+                dock.params_snapshot.pop(name, None)
+        for name, base in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
+                           ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
+            window.params[name].setValue(window.params[base].value())
         _log(window, "图像参数已恢复默认")
 
     btn_reset_img.clicked.connect(reset_image)
@@ -1523,15 +1853,25 @@ def _build_log_dock(window: QMainWindow) -> QDockWidget:
 
 
 def _build_status(window: QMainWindow) -> None:
-    """状态行（两层之二）：左侧常驻文字（"就绪"/瞬时消息）+
-    右侧常驻当前文件 + 常驻坐标标签。用常驻 QLabel 而不是
-    showMessage——后者超时清空后状态栏会变成看不见的细条。
-    坐标标签常驻（鼠标没悬停在曲线上时是空文字，悬停时才显示，
-    见 _hover_motion），这样出字时状态栏不会整体跳动。"""
+    """状态行（两层之二）：左侧常驻文字（"就绪"/瞬时消息）+ 右侧
+    两块分明：坐标标签（等宽字体 + 凹槽框，一眼就是"数据读数"）
+    | 竖分隔线 | 当前文件。用常驻 QLabel 而不是 showMessage——
+    后者超时清空后状态栏会变成看不见的细条。坐标标签常驻（鼠标
+    没悬停在曲线上时是空文字，悬停时才显示，见 _hover_motion），
+    这样出字时状态栏不会整体跳动。"""
     window.status_text = QLabel("就绪")
     window.statusBar().addWidget(window.status_text)
+    # 坐标标签：凹槽框 + 等宽字体——坐标是机器读出来的数，用等宽
+    # 字体数字不会左右跳；凹槽框把"坐标信息"和右侧文件信息切开
     window.coord_label = QLabel("")   # 鼠标悬停时实时显示曲线坐标
+    window.coord_label.setFrameShape(QFrame.Shape.StyledPanel)
+    window.coord_label.setStyleSheet(
+        "font-family: Menlo, Consolas, monospace; padding: 1px 4px;")
     window.statusBar().addPermanentWidget(window.coord_label)
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.VLine)
+    sep.setFrameShadow(QFrame.Shadow.Sunken)
+    window.statusBar().addPermanentWidget(sep)
     window.file_label = QLabel("未打开文件")
     window.statusBar().addPermanentWidget(window.file_label)
 
@@ -1603,30 +1943,110 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
         _log(window, "回到分析模式")
 
 
-# ══ 中央：可停靠图面板区（内层 QMainWindow）═════════════════
+# ══ 中央：图面板区（QMdiArea 子窗口，互不牵连，可弹出）══════
+class _PlotSubWindow(QMdiSubWindow):
+    """绘图子窗口：× 关闭 = 面板从 plot_docks 移除（关闭即遗忘）。
+
+    Qt 默认行为是"关闭 = 隐藏"（还留在 subWindowList 里），与
+    "关闭即遗忘"的规则不符 → 重写 closeEvent 走统一关闭入口
+    _close_panel（从登记表移除 + 焦点移交 + 销毁容器）。
+    """
+
+    def __init__(self, window: QMainWindow, key: str):
+        super().__init__()
+        self._window = window
+        self.panel_key = key
+        # 点窗口任何地方都选中该面板：由 _PanelClickTracker（应用级
+        # 过滤器，见 create_window）统一处理——QWidget 的父过滤器
+        # 收不到子部件事件，容器级过滤器盖不住内容区
+
+    def closeEvent(self, event):
+        _close_panel(self._window, self.panel_key)
+        super().closeEvent(event)
+
+
+class _FloatedWindow(QWidget):
+    """弹出的独立窗口：面板内容整个搬进来，× 关闭同样"关闭即遗忘"。
+
+    无父 = 顶层 OS 窗口，不随主窗口移动/关闭。收回主窗口时不走
+    close()（那会触发 _close_panel 把面板登记抹掉），由调用方直接
+    deleteLater() 销毁壳。
+    """
+
+    def __init__(self, window: QMainWindow, key: str):
+        super().__init__()   # 无父 = 顶层独立窗口
+        self._window = window
+        self.panel_key = key
+        self.content = None   # 面板内容（_content(dock) 从这里取）
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        # 点窗口任何地方都选中该面板：同 _PlotSubWindow，
+        # 由 _PanelClickTracker 统一处理
+
+    def closeEvent(self, event):
+        _close_panel(self._window, self.panel_key)
+        super().closeEvent(event)
+
+
+def _content(dock) -> QWidget:
+    """面板容器 → 面板内容：子窗口用 widget()，弹出窗口用 content。"""
+    if isinstance(dock, QMdiSubWindow):
+        return dock.widget()
+    return dock.content
+
+
+def _close_panel(window: QMainWindow, key: str) -> None:
+    """统一关闭面板：从登记表移除（关闭即遗忘）+ 焦点移交 + 销毁容器。
+
+    幂等：面板已不在登记表里（如收回主窗口后旧壳被删除）直接返回。
+    子窗口先从 MDI 摘下再 deleteLater（探针验证 closeEvent 里这组
+    操作安全）；弹出窗口靠 WA_DeleteOnClose 自行销毁。焦点面板被
+    关 → 编辑对象移给下一张还开着的图；一张不剩则清空。
+    """
+    dock = window.plot_docks.pop(key, None)
+    if dock is None:
+        return
+    if isinstance(dock, QMdiSubWindow):
+        if dock in window.mdi.subWindowList():
+            window.mdi.removeSubWindow(dock)
+        dock.deleteLater()
+    _log(window, f"已关闭面板：{dock.windowTitle()}")
+    if window.focus_panel == key:
+        window.focus_panel = None   # 先清空，绕过 _set_focus 的同键早退
+        for next_key, next_dock in window.plot_docks.items():
+            _set_focus(window, next_key, next_dock.windowTitle())
+            break
+        if window.focus_panel is None:
+            window.focus_label.setText("编辑对象：未选中图面板")
+
+
 def _build_center(window: QMainWindow) -> None:
-    """内层 QMainWindow 托管图面板坞；外层窗口管文件/参数/日志坞。"""
-    inner = QMainWindow(window)
-    # PySide6 怪癖：QMainWindow(parent) 构造后仍带 Qt::Window 标志，
-    # 不会被当成子部件嵌入（isWindow() 为真、永不随主窗口显示）。
-    # 显式改成 Qt.Widget 后才是真正的嵌入式内层窗口。
-    inner.setWindowFlags(Qt.Widget)
-    inner.setObjectName("plot_area")
-    inner.setDockOptions(QMainWindow.AnimatedDocks
-                         | QMainWindow.AllowNestedDocks
-                         | QMainWindow.AllowTabbedDocks)
-    window.inner = inner
+    """中央绘图区 = QMdiArea：每张图一个子窗口，各拖各的互不牵连。
+
+    旧方案用停靠分栏（内层 QMainWindow + QDockWidget）：图与图
+    共用分栏把手，拽一张必然牵动邻居——这就是"图总是连在一起"
+    的根源，参数上无解，换成子窗口才治本。底部细条放模式提示
+    （左）+ 横排/竖排按钮（右，替代旧内层状态栏）。
+    """
+    mdi = QMdiArea()
+    mdi.setObjectName("plot_area")
+    # 滚动条策略必须显式设（默认策略下溢出区域的滚动条不出现，
+    # 探针验证）；平铺只摆位置不缩放，放不下就靠滚动条看
+    mdi.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    mdi.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    mdi.setStyleSheet("QMdiArea { background-color: #c8c8c8; }")
+    window.mdi = mdi
     window.plot_docks = {}
+    # 当前面板布局方向（横排/竖排按钮设定）："row" = 一行 /
+    # "column" = 一列
+    window._layout_orient = "row"
+    # 面板代数：每次（重新）开面板 +1；后台任务回调核对代数——
+    # 面板关过重开后，旧代迟到结果不会串进新图（对比面板的
+    # compare_gen 归零漏洞由它补上）
+    window._panel_epoch = {}
 
     window.mode_label = QLabel("分析模式 — 待实现")   # 默认：分析工作台
     window.mode_label.setAlignment(Qt.AlignCenter)
-    inner.setCentralWidget(window.mode_label)
-    window.setCentralWidget(inner)
 
-    # 绘图区右下角：横排/竖排按钮（像 Excel 底部右角的视图按钮）。
-    # 内层窗口自带状态栏，正贴绘图区下边缘；addPermanentWidget
-    # 靠右排列，按钮组就落在右下角。
-    inner.statusBar().setSizeGripEnabled(False)   # 去掉拖角手柄，更整洁
     arrange_box = QWidget()
     row = QHBoxLayout(arrange_box)
     row.setContentsMargins(0, 0, 0, 0)
@@ -1634,12 +2054,27 @@ def _build_center(window: QMainWindow) -> None:
     window.arrange_buttons = {}   # 登记按钮（测试与后续接线用）
     for name in ("横排", "竖排"):
         btn = QPushButton(name)
-        btn.setFlat(True)      # 扁平样式，更像 Excel 角上的小按钮
+        btn.setFlat(True)      # 扁平样式，像 Excel 角上的小按钮
         row.addWidget(btn)
         window.arrange_buttons[name] = btn
         btn.clicked.connect(
             lambda checked=False, n=name: _arrange(window, n))
-    inner.statusBar().addPermanentWidget(arrange_box)
+
+    strip = QWidget()
+    srow = QHBoxLayout(strip)
+    srow.setContentsMargins(4, 2, 4, 2)
+    srow.setSpacing(4)
+    srow.addWidget(window.mode_label)
+    srow.addStretch(1)
+    srow.addWidget(arrange_box)
+
+    center = QWidget()
+    lay = QVBoxLayout(center)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    lay.addWidget(mdi, 1)
+    lay.addWidget(strip)
+    window.setCentralWidget(center)
 
 
 def _build_view_widget(window: QMainWindow, name: str, key: str,
@@ -1654,11 +2089,14 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
         fig = Figure(figsize=(5, 3), tight_layout=True)
         canvas = FigureCanvasQTAgg(fig)
         canvas.axes_1d = fig.add_subplot(111)
-        # 每张面板自己的缩放工具栏（放大镜/抓手/回首页），只作用
-        # 于本面板的图。工具栏放画布上方，面板标题栏不动
-        toolbar = NavigationToolbar2QT(canvas, canvas)
+        # 每张面板自己的精简工具栏 [Home][Customize][Save] + [弹出]，
+        # 只作用于本面板的图。放大/平移改成鼠标手势（拖 = 平移、
+        # 滚轮 = 以光标为中心缩放），放大镜/抓手/前进后退/子图按钮
+        # 全砍掉；回首页不绑双击——Home 按钮就是回首页。工具栏放
+        # 画布上方，面板标题栏不动
+        toolbar = _SlimToolbar(canvas, canvas, window, key)
         # 容器 = 工具栏 + 画布竖排。把画布原有属性挂到容器上
-        # （axes_1d / figure / draw），其余代码仍按 dock.widget()
+        # （axes_1d / figure / draw），其余代码仍按 _content(dock)
         # 直取，不必改调用点
         widget = QWidget()
         box = QVBoxLayout(widget)
@@ -1670,19 +2108,95 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
         widget.figure = fig
         widget.canvas = canvas
         widget.toolbar = toolbar
-        widget.draw = canvas.draw   # dock.widget().draw() 仍直接落到画布
+        widget.draw = canvas.draw   # _content(dock).draw() 仍直接落到画布
+        widget.panel_key = key   # 弹出/收回按钮经它找面板
+        # 弹出按钮：工具栏末尾（按钮跟着内容走，弹出后在新窗口里
+        # 照样能点；addWidget 不动 toolitems 表，测试不受影响）
+        popout = QPushButton("弹出")
+        popout.setFocusPolicy(Qt.NoFocus)
+        toolbar.addWidget(popout)
+        widget.popout_btn = popout
+        popout.clicked.connect(lambda: _toggle_pop_out(window, key))
+        # 画布尺寸变化 = 用户拖了面板边框（或程序平铺/开局）→ 记
+        # 比例记忆。过滤器装在画布上而不是容器上：弹出/收回换容器
+        # 不用重挂（逻辑见 _on_canvas_resized）
+        canvas.installEventFilter(_PanelResizeFilter(window, key, canvas))
         # 悬停取点：鼠标移动 → 曲线上出点 + 状态栏出坐标；
         # 移出坐标轴 → 清空（细节见 _hover_motion/_hover_leave）
         canvas.mpl_connect("motion_notify_event",
                            lambda ev, k=key: _hover_motion(window, k, ev))
         canvas.mpl_connect("axes_leave_event",
                            lambda ev, k=key: _hover_leave(window, k, ev))
+        # 手势：按住左键拖 = 平移；滚轮（触摸板两指滚动）=
+        # 以光标为中心缩放。拖动期间悬停点退场（别在拖图时乱跳）
+        canvas.mpl_connect("button_press_event",
+                           lambda ev, k=key: _pan_press(window, k, ev))
+        canvas.mpl_connect("motion_notify_event",
+                           lambda ev, k=key: _pan_motion(window, k, ev))
+        canvas.mpl_connect("button_release_event",
+                           lambda ev, k=key: _pan_release(window, k, ev))
+        canvas.mpl_connect("scroll_event",
+                           lambda ev, k=key: _wheel_zoom(window, k, ev))
+        # 范围同步写回：缩放/平移/Home/Customize 对话框改动 x/y 范围
+        # → 写回该面板快照 + 焦点时同步参数坞控件（x/y 分开处理：
+        # 动 x 只写视图范围，动 y 才关纵轴自动，见两个处理函数）。
+        # 每次重画 ax.clear() 都会清掉这些回调，画完由 _draw_1d/
+        # _redraw_compare 重连（见 _connect_axis_sync）
+        _connect_axis_sync(window, key, canvas.axes_1d)
     else:
         placeholder = QLabel(f"{title} — 尚未接线")
         placeholder.setAlignment(Qt.AlignCenter)
         widget = placeholder
-    widget.installEventFilter(_FocusMarker(window, key, title))
+    # 焦点切换改挂容器（子窗口/弹出窗口）上：点标题栏/边框也选中
+    # （见 _FocusMarker 与两个容器的 __init__），这里不再挂内容上
+    _install_resize_grip(window, key, widget)
     return widget
+
+
+def _open_plot_panel(window: QMainWindow, name: str, key: str,
+                     title: str) -> QMdiSubWindow:
+    """新开一张图面板：QMdiSubWindow + 内容 + 几何状态 + 级联摆放。
+
+    开局几何：画布默认 500×300（真 5:3，内容 sizeHint 自带），
+    子窗口显式 resize(sizeHint())——QMdiSubWindow 不会自动适配内容
+    （探针验证），不显式设会以极小尺寸裁剪内容。级联位置只按子
+    窗口计数（弹出的窗口不算），开新图完全不动旧图——这正是
+    "图不再连在一起"的核心。
+    """
+    sub = _PlotSubWindow(window, key)
+    sub.setObjectName(f"plot_{name}")
+    window.mdi.addSubWindow(sub)
+    content = _build_view_widget(window, name, key, title)
+    sub.setWidget(content)
+    sub.setWindowTitle(title)
+    # 比例记忆的初始状态：没拖过 = 默认画布 (500, 300)。_settling
+    # 期间（开局/弹出/收回/平铺的程序性尺寸变化）画布 Resize
+    # 事件不记成"用户拖过"
+    sub._dragged = False
+    sub._canvas_pref = (PLOT_OPEN_W, PLOT_OPEN_H)
+    sub._last_canvas = (PLOT_OPEN_W, PLOT_OPEN_H)
+    sub._settling = True
+    # 面板代数 +1：后台任务回调核对代数，关过重开后旧代迟到结果
+    # 不会串进新面板
+    window._panel_epoch[key] = window._panel_epoch.get(key, 0) + 1
+    window.plot_docks[key] = sub
+    sub.resize(sub.sizeHint())   # 必须显式设（见 docstring）
+    n = sum(1 for d in window.plot_docks.values()
+            if isinstance(d, QMdiSubWindow))
+    sub.move(16 + 24 * ((n - 1) % 10), 16 + 24 * ((n - 1) % 10))
+    sub.show()
+    _settle(window)
+    # 开局引发的画布尺寸事件已全部消化：把最终实际画布尺寸记下，
+    # 之后到达的迟到事件对不上预期值会被跳过（不误标"拖过"）
+    canvas = getattr(content, "canvas", None)
+    if canvas is not None:
+        sub._last_canvas = (canvas.width(), canvas.height())
+    else:
+        # 占位面板没有画布尺寸约束：给个和 1D 面板相仿的开局大小
+        ew, eh = _panel_extra(sub)
+        sub.resize(PLOT_OPEN_W + ew, PLOT_OPEN_H + eh)
+    sub._settling = False
+    return sub
 
 
 def _plot_view(window: QMainWindow, name: str) -> None:
@@ -1716,35 +2230,13 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                 dock = window.plot_docks.get(key)
         if dock is None:
             title = f"{name}_{display}"
-            dock = QDockWidget(title, window.inner)
-            dock.setObjectName(f"plot_{name}")
+            # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
+            dock = _open_plot_panel(window, name, key, title)
             dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）
             dock.panel_item = item   # 面板绑定自己的列表条目（重名条目各自成图）
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步
-            dock.setWidget(_build_view_widget(window, name, key, title))
-            window.plot_docks[key] = dock
-            window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
-            # 固定 5:3 开局：Qt 分栏记得上次拖过的尺寸，新面板会
-            # 继承"这个位置"的旧大小（上次挤过就一直挤）→ 显式把
-            # 新面板设回 500×300。独苗面板纵向没有分栏、Qt 会把它
-            # 拽满绘图区高度 → 用高度上限钉住 300（见 _set_grid_cap）；
-            # 有伴时分栏成形，纵向 resizeDocks 对竖链/"行+新面板"
-            # 都生效，全体纵向统一到 300
-            others = [d for d in window.plot_docks.values()
-                      if d is not dock and d.isVisible()]
-            _clear_grid_caps(window)   # 旧网格上限作废，统一重新配
-            window.inner.resizeDocks([dock], [PLOT_OPEN_W],
-                                     Qt.Horizontal)
-            if others:
-                visible = others + [dock]
-                window.inner.resizeDocks(visible,
-                                         [PLOT_OPEN_H] * len(visible),
-                                         Qt.Vertical)
-            else:
-                _set_grid_cap(window, dock, PLOT_OPEN_H)
-            _hook_dock_resize(window, dock)   # Shift 拖边 = 等比例缩放
             _log(window, f"打开{name}面板：{display}")
         dock.setVisible(True)
         _run_view(window, name, path, key)
@@ -1767,55 +2259,70 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     在别的面板上，读控件会把别的图的设置画到这张图上。归一化到
     最强峰只动显示数据（原始结果原样保留在 compare_data）。
     """
-    dock = window.plot_docks[key]
-    ax = dock.widget().axes_1d
-    ax.clear()
-    curves = _compare_shown_curves(window, dock)
-    # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
-    # 颜色序号稳定（i 由 _compare_shown_curves 携带）
-    for tth, shown, display, i in curves:
-        ax.plot(tth, shown, f"C{i}", lw=0.8, label=display)
-    xlo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
-    xhi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
-    if xlo < xhi:
-        ax.set_xlim(xlo, xhi)
-    log_y = _panel_param(window, dock, "对数纵轴", False)
-    if log_y:
-        ax.set_yscale("log")
-    auto_y = _panel_param(window, dock, "纵轴自动", True)
-    ylo = yhi = None
-    if auto_y:
-        if curves:
-            ylo, yhi = _auto_y_range(
-                np.concatenate([s for _, s, _, _ in curves]), log_y)
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默丢弃
+    ax = _content(dock).axes_1d
+    window._setting_limits = True   # 同 _draw_1d：程序设范围不算用户改动
+    try:
+        ax.clear()
+        curves = _compare_shown_curves(window, dock)
+        # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
+        # 颜色序号稳定（i 由 _compare_shown_curves 携带）
+        for tth, shown, display, i in curves:
+            ax.plot(tth, shown, f"C{i}", lw=0.8, label=display)
+        xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
+        xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
+        if xlo is None or xhi is None or not xlo < xhi:
+            xlo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
+            xhi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
+        if xlo < xhi:
+            ax.set_xlim(xlo, xhi)
+        if window.plot_docks.get(window.focus_panel) is dock:
+            window.params["视图 2θ 下限 (°)"].setValue(xlo)
+            window.params["视图 2θ 上限 (°)"].setValue(xhi)
+        log_y = _panel_param(window, dock, "对数纵轴", False)
+        if log_y:
+            ax.set_yscale("log")
+        auto_y = _panel_param(window, dock, "纵轴自动", True)
+        ylo = yhi = None
+        if auto_y:
+            if curves:
+                ylo, yhi = _auto_y_range(
+                    np.concatenate([s for _, s, _, _ in curves]), log_y)
+                if ylo < yhi:
+                    ax.set_ylim(ylo, yhi)
+            else:
+                pass   # 一条曲线都没算成：空图，纵轴交给 matplotlib 默认
+        else:
+            ylo = _panel_param(window, dock, "纵轴下限", 1.0)
+            yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
+            if log_y:
+                ylo = max(ylo, 1e-6)
             if ylo < yhi:
                 ax.set_ylim(ylo, yhi)
-        else:
-            pass   # 一条曲线都没算成：空图，纵轴交给 matplotlib 默认
-    else:
-        ylo = _panel_param(window, dock, "纵轴下限", 1.0)
-        yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
-        if log_y:
-            ylo = max(ylo, 1e-6)
-        if ylo < yhi:
-            ax.set_ylim(ylo, yhi)
-    # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点）
-    if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
-        window.params["纵轴下限"].setValue(ylo)
-        window.params["纵轴上限"].setValue(yhi)
-    ax.set_xlabel("2θ (deg)")
-    ax.set_ylabel("Intensity (a.u.)")
-    ax.set_title(f"{dock.panel_display}: full azimuthal integration")
-    if dock.compare_data:
-        ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
-    dock.widget().draw()
+        # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点）
+        if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
+            window.params["纵轴下限"].setValue(ylo)
+            window.params["纵轴上限"].setValue(yhi)
+        ax.set_xlabel("2θ (deg)")
+        ax.set_ylabel("Intensity (a.u.)")
+        ax.set_title(f"{dock.panel_display}: full azimuthal integration")
+        if dock.compare_data:
+            ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
 def _finish_compare(window: QMainWindow, key: str) -> None:
     """对比面板全部曲线到齐（含失败）：整图重画 → 成为编辑对象 → 记日志。"""
-    dock = window.plot_docks[key]
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默丢弃
     _redraw_compare(window, key)
     _set_focus(window, key, dock.panel_display)
     if dock.compare_data:
@@ -1830,34 +2337,49 @@ def _run_compare(window: QMainWindow, key: str) -> None:
     代次（gen）防过期：重复点 [对比] 或数据 [应用] 时旧代任务
     全部作废。快照开工前拍下（与单文件面板一致）。
     """
-    dock = window.plot_docks[key]
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：迟到点击/重算不落地
     # 数据参数 = 控件当前值（计算就用它），显示参数沿用面板自己的
     # 旧快照（重按 [对比] 刷新不改这张图的长相）
     dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
     dock.compare_gen += 1
     gen = dock.compare_gen
+    epoch = window._panel_epoch.get(key, 0)   # 面板代数：关过重开旧代全作废
     dock.compare_pending = len(dock.compare_files)
     dock.compare_data = {}
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
-    dock.widget().axes_1d.clear()
+    window._setting_limits = True   # 程序自己清轴：不触发范围同步写回
+    try:
+        _content(dock).axes_1d.clear()
+    finally:
+        window._setting_limits = False
 
     def finish_one(path, display, result):
         """单文件结果到位：存原始数据、画一条曲线；全齐后收尾。"""
-        if dock.compare_gen != gen:
-            return   # 旧代次结果，静默丢弃（整图已由新代次重画）
+        # 现查面板（不捕获对象：面板可能已关、已换容器）：
+        # 面板没了 / 代数变了（关过重开）/ 代次旧了 → 丢弃
+        panel = window.plot_docks.get(key)
+        if (panel is None
+                or window._panel_epoch.get(key, 0) != epoch
+                or panel.compare_gen != gen):
+            return   # 旧结果静默丢弃（整图已由新代次重画）
         tth, intensity = result
-        dock.compare_data[display] = (tth, intensity)
-        dock.compare_pending -= 1
-        if dock.compare_pending == 0:
+        panel.compare_data[display] = (tth, intensity)
+        panel.compare_pending -= 1
+        if panel.compare_pending == 0:
             _finish_compare(window, key)
 
     def fail_one(path, display, msg):
-        if dock.compare_gen != gen:
+        panel = window.plot_docks.get(key)
+        if (panel is None
+                or window._panel_epoch.get(key, 0) != epoch
+                or panel.compare_gen != gen):
             return
-        dock.compare_pending -= 1
+        panel.compare_pending -= 1
         _log(window, f"对比：{display} 积分失败 — {msg}")
-        if dock.compare_pending == 0:
+        if panel.compare_pending == 0:
             _finish_compare(window, key)
 
     for path, display in dock.compare_files:
@@ -1897,29 +2419,13 @@ def _plot_compare(window: QMainWindow) -> None:
     dock = window.plot_docks.get(key)
     if dock is None:
         title = _compare_title([d for _, d in files])
-        dock = QDockWidget(title, window.inner)
-        dock.setObjectName("plot_compare")
+        # 新面板级联摆放，现有面板原地不动（同 _plot_view）
+        dock = _open_plot_panel(window, "1D", key, title)
         dock.panel_display = title   # 标题/日志/默认存盘名用
         dock.figure_saved = False
         dock.compare_files = files   # 面板绑定这组文件（重算用）
         dock.compare_gen = 0
         dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
-        dock.setWidget(_build_view_widget(window, "1D", key, title))
-        window.plot_docks[key] = dock
-        window.inner.addDockWidget(Qt.RightDockWidgetArea, dock)
-        # 与单文件面板同款：固定 5:3 开局（见 _plot_view 同段注释）
-        others = [d for d in window.plot_docks.values()
-                  if d is not dock and d.isVisible()]
-        _clear_grid_caps(window)
-        window.inner.resizeDocks([dock], [PLOT_OPEN_W], Qt.Horizontal)
-        if others:
-            visible = others + [dock]
-            window.inner.resizeDocks(visible,
-                                     [PLOT_OPEN_H] * len(visible),
-                                     Qt.Vertical)
-        else:
-            _set_grid_cap(window, dock, PLOT_OPEN_H)
-        _hook_dock_resize(window, dock)
         _log(window, f"打开对比面板：{len(files)} 个文件叠一张图")
     else:
         # 复用面板：文件显示名可能变过（删除重加/改名）→ 绑定刷新，
@@ -1933,155 +2439,399 @@ def _plot_compare(window: QMainWindow) -> None:
     _run_compare(window, key)
 
 
-def _aspect_height(width: int) -> int:
-    """5:3 比例下给定宽度应配的高度（取整 + 下限兜底）。"""
-    return max(round(width * PLOT_ASPECT_H / PLOT_ASPECT_W), 60)
+class _PanelGripFilter(QObject):
+    """四边抓取带 + 四角抓取区（右下角有可见把手 ▙）的事件过滤器。
 
-
-def _aspect_width(height: int) -> int:
-    """5:3 比例下给定高度应配的宽度（取整 + 下限兜底）。"""
-    return max(round(height * PLOT_ASPECT_W / PLOT_ASPECT_H), 100)
-
-
-def _set_grid_cap(window: QMainWindow, dock: QDockWidget,
-                  content_h: float) -> None:
-    """把面板高度上限钉在 content_h（按坞整体算，内容会矮掉标题栏
-    那十几像素，视觉上仍是 5:3）。
-
-    上限是 Qt 坞区唯一对横向链/独苗面板也管用的高度手段（纵向
-    resizeDocks 只认竖链，横链和独苗都被忽略、面板被拽满整个
-    绘图区高度）。注意不能按「内容高 + 标题栏」补偿：开新面板时
-    坞还没布局，此刻量装饰厚度得到的是负数（控件预布局尺寸 − 0）。
-    上限不清会妨碍用户往后拖高 → 网格上限只在打开/重排时设，
-    下一次重排或开新面板时统一解除重设。
-    """
-    cap = int(content_h)
-    dock.setMaximumHeight(cap)
-    dock._grid_cap = cap
-
-
-def _clear_grid_caps(window: QMainWindow) -> None:
-    """解除所有面板的网格高度上限（重新排布/开新面板时调用）。"""
-    for d in window.plot_docks.values():
-        if getattr(d, "_grid_cap", None) is not None:
-            d.setMaximumHeight(16777215)   # QWIDGETSIZE_MAX
-            d._grid_cap = None
-
-
-class _AspectResizeFilter(QObject):
-    """挂在坞上的事件过滤器：坞尺寸一变就检查 Shift、做等比例修正。
-
-    Qt6 的坞区分栏不是 QSplitter（findChildren 找不到、信号挂不
-    上），但用户拖分栏把手时被拖的坞自己会收到 Resize 事件 →
-    改挂坞本身。真正的逻辑在 _on_dock_resized。
+    macOS 原生样式画的 MDI 子窗口边框几乎不可见（用户实测：没有
+    拉伸光标、抓不到边）→ 不靠边框了，自己给图装"抓手"：内容四
+    边各留 5px 抓取带、四角各留 16px 抓取区，悬停换方向光标，按住
+    左键拖 = 直接改容器（子窗口/弹出窗口）几何。装到事件落点控件
+    上（画布/占位内容/把手，见 _install_resize_grip 的原因说明）；
+    不消费普通区域的鼠标事件——平移/悬停取点照旧。拖完画布尺寸
+    变化照常走 _on_canvas_resized 记"拖过"。位置判定统一换算到
+    内容坐标：把手/画布的事件都按同一套几何算。
     """
 
-    def __init__(self, window: QMainWindow, dock: QDockWidget):
-        super().__init__(dock)
+    CORNER, EDGE = 16, 5
+    _CURSORS = {
+        "left": Qt.SizeHorCursor, "right": Qt.SizeHorCursor,
+        "top": Qt.SizeVerCursor, "bottom": Qt.SizeVerCursor,
+        "topleft": Qt.SizeFDiagCursor, "bottomright": Qt.SizeFDiagCursor,
+        "topright": Qt.SizeBDiagCursor, "bottomleft": Qt.SizeBDiagCursor,
+    }
+
+    def __init__(self, window: QMainWindow, key: str, content, grip):
+        super().__init__(content)   # 父 = 内容：防 Python GC 静默失效
         self._window = window
-        self._dock = dock
+        self._key = key
+        self._content = content
+        self._grip = grip
+        self._zone = None      # 当前悬停区（控制光标）
+        self._drag = None      # (起点全局坐标, 起点几何, 抓取区名)
+
+    @classmethod
+    def _zone_at(cls, w, h, x, y):
+        """内容坐标 → 抓取区名；不在任何区 → None（角优先于边）。"""
+        c, e = cls.CORNER, cls.EDGE
+        if x < c and y < c:
+            return "topleft"
+        if x > w - c and y < c:
+            return "topright"
+        if x < c and y > h - c:
+            return "bottomleft"
+        if x > w - c and y > h - c:
+            return "bottomright"
+        if x < e:
+            return "left"
+        if x > w - e:
+            return "right"
+        if y < e:
+            return "top"
+        if y > h - e:
+            return "bottom"
+        return None
+
+    def _apply_drag(self, gpos):
+        """拖拽中：按起点几何 + 全局位移算新几何（增量法，子窗口的
+        MDI 坐标与弹出窗口的屏幕坐标都适用）。"""
+        sx, sy, gx, gy, gw, gh, z = self._drag
+        dx, dy = gpos.x() - sx, gpos.y() - sy
+        x, y, w, h = gx, gy, gw, gh
+        if "left" in z:
+            x, w = gx + dx, gw - dx
+        elif "right" in z:
+            w = gw + dx
+        if "top" in z:
+            y, h = gy + dy, gh - dy
+        elif "bottom" in z:
+            h = gh + dy
+        # 下限：别缩到看不见（内容自身最小 ~65×57，留够余地）
+        w, h = max(w, 120), max(h, 100)
+        dock = self._window.plot_docks.get(self._key)
+        if dock is not None:
+            dock.setGeometry(x, y, w, h)
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Resize and obj is self._dock:
-            _on_dock_resized(self._window, self._dock)
+        et = event.type()
+        if et == QEvent.Type.Resize and obj is self._content:
+            # 把手钉在右下角（内容变尺寸时跟随）
+            self._grip.move(self._content.width() - self._grip.width() - 2,
+                            self._content.height() - self._grip.height() - 2)
+            return False
+        if et not in (QEvent.Type.MouseMove, QEvent.Type.Enter,
+                      QEvent.Type.MouseButtonPress,
+                      QEvent.Type.MouseButtonRelease):
+            return False
+        # 事件可能落在子部件（画布/把手）上：统一换算到内容坐标判区
+        gpos = event.globalPosition().toPoint()
+        pos = self._content.mapFromGlobal(gpos)
+        zone = self._zone_at(self._content.width(), self._content.height(),
+                             pos.x(), pos.y())
+        if et in (QEvent.Type.MouseMove, QEvent.Type.Enter):
+            if self._drag is not None:
+                if et == QEvent.Type.MouseMove:
+                    self._apply_drag(gpos)
+                return True   # 拖拽中：吃下事件，不传给画布平移
+            if zone != self._zone or et == QEvent.Type.Enter:
+                self._zone = zone
+                # 方向光标直接设在落点控件上：画布被 mpl 设过自己的
+                # 光标，靠内容级继承会被它盖住；把手自带固定斜向光标
+                if obj is not self._grip:
+                    cur = self._CURSORS[zone] if zone else Qt.ArrowCursor
+                    if isinstance(obj, QToolBar):
+                        # QToolBar 会丢弃自己的光标（探针实证：setCursor
+                        # 后立刻读回是对的，事件循环一转就没了）——
+                        # 设到内容上让它继承（内容自己的光标只露在
+                        # 工具栏条上，画布被自己的光标盖着不冲突）
+                        self._content.setCursor(cur)
+                    else:
+                        obj.setCursor(cur)
+            return False   # 悬停不拦截：画布取点照旧
+        if et == QEvent.Type.MouseButtonPress:
+            if (zone is not None
+                    and event.button() == Qt.LeftButton):
+                self._drag = (gpos.x(), gpos.y(), *_dock_geo(self._window,
+                                                             self._key),
+                              zone)
+                return True   # 吃下：不让画布当平移起点
+            return False
+        # MouseButtonRelease
+        if self._drag is not None:
+            self._drag = None
+            return True
         return False
 
 
-def _hook_dock_resize(window: QMainWindow, dock: QDockWidget) -> None:
-    """给坞挂尺寸事件过滤器（Shift 拖边 = 等比缩放的入口）。"""
-    dock.installEventFilter(_AspectResizeFilter(window, dock))
+def _dock_geo(window: QMainWindow, key: str):
+    """当前容器几何 (x, y, w, h)；面板已关就原地踏步（拖拽兜底）。"""
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return (0, 0, 0, 0)
+    g = dock.geometry()
+    return (g.x(), g.y(), g.width(), g.height())
 
 
-def _on_dock_resized(window: QMainWindow, dock: QDockWidget,
-                     modifiers=None) -> None:
-    """坞被拖动后：按住 Shift = 等比缩放（挂坞 resizeEvent 的入口）。
+def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
+    """给面板内容装四边/四角抓手 + 右下角可见把手。
 
-    一次拖动只改一个方向，按哪个方向变了分别处理：
-      - 宽变了（拖竖把手）→ 用动态上限把高配成内容 5:3。横链
-        不认纵向 resizeDocks，上限是唯一管用且对竖链也无害的
-        手段；上限记在 _shift_cap，松开 Shift 后的下一次普通
-        拖动把它解除，恢复自由拉伸。
-      - 高变了（拖横把手）→ 用横向 resizeDocks 把宽配成内容
-        5:3（宽度无装饰，任何链型都认）。
-    自己改尺寸也会触发 Resize → _aspect_enforcing 旗标挡住再入；
-    _last_size 记录上一次尺寸，用于分辨哪一维变了。
+    把手 = 半透明小三角标签（child of 内容）：光标变斜向箭头、
+    按住拖 = 拉伸右下角；位置随内容尺寸变化由 _PanelGripFilter
+    钉住。过滤器必须装到事件落点控件上：QWidget 的父过滤器收不
+    到子部件事件（探针实证：子部件 accept 后不向上传播，而
+    matplotlib 画布会 accept 鼠标按下）——所以 1D 面板装画布、
+    占位面板装内容本体、把手自己再装一份；顶边抓取带落在工具栏
+    条上（含坐标标签），也各挂一份（按钮是它的子部件，按到按钮
+    仍各司其职，不会误拉伸）。mouseTracking 打开：悬停换光标需
+    要鼠标移动事件（按住拖动期间的移动事件有隐式鼠标抓取，把手
+    不开也照常拖）。光标机制：过滤器把方向光标直接设在落点控件
+    上——画布被 mpl 设过自己的光标，靠内容级继承会被它盖住；
+    QToolBar 反过来会丢弃自己的光标（探针实证），它的方向光标
+    设到内容上让它继承；右下角被把手挡着，把手自带 SizeFDiag
+    光标，按住把手拖 = 右下角拉伸（按压位置会换算回内容坐标判区）。
     """
-    last = getattr(dock, "_last_size", None)
-    dock._last_size = (dock.width(), dock.height())
-    if modifiers is None:
-        modifiers = QApplication.keyboardModifiers()
-    if not modifiers & Qt.ShiftModifier:
-        # 普通拖动：解除 Shift 动态上限（网格上限 _grid_cap 保留）
-        if getattr(dock, "_shift_cap", None) is not None:
-            grid = getattr(dock, "_grid_cap", None)
-            dock.setMaximumHeight(grid if grid is not None
-                                  else 16777215)
-            dock._shift_cap = None
+    grip = QLabel("▙", content)
+    grip.setCursor(Qt.SizeFDiagCursor)
+    grip.setStyleSheet("color: #808080; background: transparent;")
+    grip.setFixedSize(16, 16)
+    grip.move(max(content.width() - 18, 0), max(content.height() - 18, 0))
+    content.setMouseTracking(True)
+    filt = _PanelGripFilter(window, key, content, grip)
+    canvas = getattr(content, "canvas", None)
+    # content 必挂：接自己的 Resize 事件重定位把手（1D 面板它的
+    # 鼠标事件全被画布挡着，只有 Resize 会来，无害）；画布另挂
+    # 一份接真实鼠标落点（见 docstring 的原因说明）
+    targets = [content, grip]
+    if canvas is not None:
+        canvas.setMouseTracking(True)
+        targets.append(canvas)
+    toolbar = getattr(content, "toolbar", None)
+    if toolbar is not None:
+        # 内容上边 5px 抓取带落在工具栏条上：也挂一份（按钮是它的
+        # 子部件，按到按钮仍各司其职，不会误拉伸）
+        toolbar.setMouseTracking(True)
+        targets.append(toolbar)
+        loc = getattr(toolbar, "locLabel", None)
+        if loc is not None:
+            # 坐标标签占住工具栏右侧大半：不挂它顶边拖拽会在这里断
+            loc.setMouseTracking(True)
+            targets.append(loc)
+    for target in targets:
+        target.installEventFilter(filt)
+    content._resize_grip = grip
+
+
+class _PanelResizeFilter(QObject):
+    """装在画布上的事件过滤器：画布尺寸一变就记"用户拖过面板"。
+
+    挂在画布而不是容器上：弹出/收回换容器不用重挂。MDI 子窗口
+    自由缩放——用户拖边 = 画布跟着变，把当前画布尺寸记成新偏好
+    比例；程序自己的布局变化（开局/平铺/弹出收回）不算拖动。
+    真正的逻辑在 _on_canvas_resized。以画布为父对象：installEventFilter
+    不接管所有权，无父的过滤器对象会被 Python 垃圾回收、静默失效
+    （探针验证过）。
+    """
+
+    def __init__(self, window: QMainWindow, key: str, canvas):
+        super().__init__(canvas)
+        self._window = window
+        self._key = key
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            _on_canvas_resized(self._window, self._key)
+        return False
+
+
+def _on_canvas_resized(window: QMainWindow, key: str) -> None:
+    """画布尺寸变化 → 记比例记忆（每拖一次 = 记住当前画布比例）。
+
+    规则（与用户讨论定稿）：
+      - 手动缩放完全自由：拖成什么样就什么样，不弹回任何比例
+        （旧的普通拖/Shift 拖之分随停靠分栏一起退场）；
+      - 每拖一次 = _canvas_pref 记成当前画布尺寸、_dragged = True
+        ——之后开新图不动它、横排/竖排平铺按它等比摆放，这就是
+        "拖过就永远按拖成的比例缩放"的记忆载体；
+      - 程序自己的布局变化不算拖动：_layouting（平铺）与面板级
+        _settling（开局/弹出/收回）举旗期间直接跳过；旗外还有
+        _last_canvas 预期值兜底——与预期一致的迟到事件同样跳过，
+        不误标"拖过"。子窗口不随主窗口缩放，无需再区分"拖图"与
+        "拖窗口"（旧规则里那一大段启发式随分栏一起删掉）。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默丢弃
+    canvas = getattr(_content(dock), "canvas", None)
+    if canvas is None:
+        return   # 占位面板没有画布，没有比例记忆
+    now = (canvas.width(), canvas.height())
+    if (getattr(window, "_layouting", False)
+            or getattr(dock, "_settling", False)
+            or now == getattr(dock, "_last_canvas", None)):
         return
-    if last is None or getattr(window, "_aspect_enforcing", False):
+    dock._last_canvas = now
+    dock._canvas_pref = now
+    dock._dragged = True
+
+
+def _panel_extra(dock) -> tuple:
+    """面板"壳"尺寸 = 容器尺寸 − 画布尺寸（标题栏 + 工具栏 + 边框）。
+
+    布局稳定后直接量；刚创建/未布局时量出来是垃圾值（探针实测
+    子窗口刚 setWidget 后宽 0..60、高 10..300 都有）→ 改用
+    sizeHint 差值兜底（创建时 sizeHint 差值与稳定后的实测一致，
+    同旧 _dock_extra 的验证结论）。返回 (宽, 高)；占位面板没有
+    画布 → (0, 0)。弹出窗口的壳是 OS 标题栏（不进 widget 几何），
+    量出来 = (0, 0)——正常，弹出状态本就不需要壳。
+    """
+    content = _content(dock)
+    canvas = getattr(content, "canvas", None)
+    if canvas is None:
+        return 0, 0
+    live = (dock.width() - canvas.width(), dock.height() - canvas.height())
+    if 0 <= live[0] <= 60 and 10 <= live[1] <= 300:   # 合理区间外的 = 垃圾
+        return live
+    fallback = (dock.sizeHint().width() - content.sizeHint().width(),
+                dock.sizeHint().height() - content.sizeHint().height())
+    if 0 <= fallback[0] <= 60 and 10 <= fallback[1] <= 300:
+        return fallback
+    return 0, 0
+
+
+def _tile_panels(window: QMainWindow, subs, orient: str) -> None:
+    """平铺 = 纯摆位置：按类型分层，图保持各自大小，绝不缩放。
+
+    缩放数学题整个退役：旧实现为了"贴满视口"要算统一系数、量壳、
+    防压扁——用户拍板"宁可滚动也不压扁"后这些全部不需要（与用户
+    讨论定稿：默认图永远 500×300、拖过的图永远保持拖成比例，
+    平铺根本不碰尺寸，"拖过 = 永远按拖成比例"从此不需要任何
+    保护代码，_layouting 旗标也随之退役）。
+
+    分组：按面板键第一段（2D/剖面/1D/瀑布/对比各算一类），类型
+    顺序 = 开图先后（plot_docks 的键序）。横排 = 每类一行（顶
+    对齐，行内从左往右）；竖排 = 每类一列（左对齐，列内从上往
+    下）。行比视口宽 / 层总高比视口高 → QMdiArea 滚动条兜底
+    （两向 AsNeeded 策略本来就开着）。
+    """
+    if not subs:
         return
-    w, h = dock.width(), dock.height()
-    lw, lh = last
-    window._aspect_enforcing = True
-    try:
-        if abs(w - lw) >= 1 and abs(h - lh) < 1:
-            chrome = dock.height() - dock.widget().height()
-            cap = _aspect_height(w) + chrome
-            if abs(h - cap) > 2:
-                # 高度修正双管齐下：竖链认纵向 resizeDocks，横链/
-                # 独苗认最大高度上限——谁管用用谁，另一手是空操作
-                dock.setMaximumHeight(cap)
-                dock._shift_cap = cap
-                window.inner.resizeDocks([dock], [cap], Qt.Vertical)
-        elif abs(h - lh) >= 1 and abs(w - lw) < 1:
-            target = _aspect_width(dock.widget().height())
-            if abs(w - target) > 2:
-                window.inner.resizeDocks([dock], [target], Qt.Horizontal)
-    finally:
-        window._aspect_enforcing = False
+    groups = {}
+    for d in subs:
+        groups.setdefault(d.panel_key.split("|", 1)[0], []).append(d)
+    if orient == "column":
+        # 竖排：每类一列，列内从上往下
+        x = 4
+        for row in groups.values():
+            col_w = max(d.width() for d in row)
+            y = 4
+            for d in row:
+                d.move(x, y)
+                y += d.height() + 8
+            x += col_w + 8
+    else:
+        # 横排：每类一行，行内从左往右
+        y = 4
+        for row in groups.values():
+            x = 4
+            row_h = max(d.height() for d in row)
+            for d in row:
+                d.move(x, y)
+                x += d.width() + 8
+            y += row_h + 8
+    _log(window, f"已{'竖排' if orient == 'column' else '横排'}"
+                 f" {len(subs)} 个面板（按类型分层，保持各自大小）")
+
+
+def _settle(window: QMainWindow) -> None:
+    """消化排队中的 Qt 布局事件（_layouting 举着时处理函数会跳过）。"""
+    for _ in range(5):
+        QApplication.processEvents()
 
 
 def _arrange(window: QMainWindow, mode: str) -> None:
-    """一键重排所有已打开的面板：横排 = 一行格子 / 竖排 = 一列格子，
-    每格都保持 5:3，不再把图挤变形。
+    """一键重排主窗口内的面板：横排 = 每类一行 / 竖排 = 每类一列。
 
-    格子大小 = min(宽度够摊的, 高度够摊的 × 5/3)：两个方向谁先
-    顶到绘图区边缘就听谁的，格子永远不超区 → 多出来的空当露给
-    中央灰色底板（mode_label）。每次点击都重新确立布局，之前
-    怎么摆的都归位。
+    纯摆位置、绝不缩放（默认图保持 500×300、拖过的保持拖成比例，
+    放不下靠滚动条看——"宁可滚动也不压扁"）；只排主窗口内的子窗
+    口，弹出去的独立窗口不碰。每次点击都重新确立布局（之前怎么
+    摆的都归位），方向记在 _layout_orient 上。
     """
-    docks = [d for d in window.plot_docks.values() if d.isVisible()]
-    if not docks:
+    subs = [d for d in window.plot_docks.values()
+            if isinstance(d, QMdiSubWindow)]
+    if not subs:
         _log(window, "没有打开的面板")
         return
-    n = len(docks)
-    if mode == "竖排":
-        cols, rows = 1, n   # 一列格子
+    window._layout_orient = "column" if mode == "竖排" else "row"
+    _tile_panels(window, subs, window._layout_orient)
+
+
+def _toggle_pop_out(window: QMainWindow, key: str) -> None:
+    """[弹出]/[收回]：面板内容搬到独立 OS 窗口，或搬回 MDI 子窗口。
+
+    弹出（探针验证顺序）：先建浮动窗口、把内容改挂过去（addWidget
+    自带改挂），再删旧子窗口——顺序反了内容会被连带销毁。状态经
+    白名单 _copy_panel_attrs 搬家（vars() 整体拷会砸坏 PySide6
+    信号）。壳尺寸（标题栏 + 边框）在弹出时量好记下，收回时按
+    "内容尺寸 + 壳"原样恢复。
+    收回：浮动壳用 deleteLater 而不是 close()——close() 会触发
+    _close_panel 把面板登记抹掉；子窗口回到主窗口左上角。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    content = _content(dock)
+    btn = getattr(content, "popout_btn", None)
+    if isinstance(dock, QMdiSubWindow):
+        # ── 弹出：MDI 子窗口 → 顶层窗口 ──
+        dock._settling = True
+        cw, ch = content.width(), content.height()
+        floated = _FloatedWindow(window, key)
+        floated.setWindowTitle(dock.windowTitle())
+        floated.content = content
+        box = QVBoxLayout(floated)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(content)   # 先改挂内容，再删旧子窗口
+        floated._shell = (dock.width() - cw, dock.height() - ch)
+        floated._object_name = dock.objectName()
+        _copy_panel_attrs(dock, floated)
+        window.plot_docks[key] = floated
+        if dock in window.mdi.subWindowList():
+            window.mdi.removeSubWindow(dock)
+        dock.deleteLater()
+        floated.resize(cw, ch)
+        floated.show()
+        _settle(window)
+        canvas = getattr(content, "canvas", None)
+        if canvas is not None:
+            floated._last_canvas = (canvas.width(), canvas.height())
+        floated._settling = False
+        if btn is not None:
+            btn.setText("收回")
+        _log(window, f"已弹出面板：{floated.windowTitle()}")
     else:
-        cols, rows = n, 1   # 一行格子
-    # 绘图区可用高度要扣掉内层状态栏（横排/竖排按钮那条）
-    area_w = window.inner.width()
-    area_h = window.inner.height() - window.inner.statusBar().height()
-    cell_w = min(area_w / cols, area_h / rows * PLOT_ASPECT_W / PLOT_ASPECT_H)
-    cell_h = cell_w * PLOT_ASPECT_H / PLOT_ASPECT_W
-    _clear_grid_caps(window)   # 重排统一接管尺寸，旧上限作废
-    for d in docks:
-        window.inner.addDockWidget(Qt.RightDockWidgetArea, d)
-        d.show()
-    orient = Qt.Vertical if mode == "竖排" else Qt.Horizontal
-    for prev, d in zip(docks, docks[1:]):
-        window.inner.splitDockWidget(prev, d, orient)
-    window.inner.resizeDocks(docks, [int(cell_w)] * n, Qt.Horizontal)
-    window.inner.resizeDocks(docks, [int(cell_h)] * n, Qt.Vertical)
-    if mode == "横排" or n == 1:
-        # 横链/独苗不认纵向 resizeDocks（行高被拽满整个绘图区）
-        # → 用高度上限把每格钉在 5:3。横链没有横把手、独苗没有
-        # 任何把手，用户拖不了它们的高度，上限不妨碍任何操作
-        # （见 _set_grid_cap）；竖排是竖链，纵向 resizeDocks 生效，
-        # 不设上限——用户拖横把手调高度不受限
-        for d in docks:
-            _set_grid_cap(window, d, cell_h)
-    _log(window, f"已{mode} {n} 个面板（每格 5:3）")
+        # ── 收回：顶层窗口 → MDI 子窗口 ──
+        floated = dock
+        floated._settling = True
+        cw, ch = content.width(), content.height()
+        ew, eh = getattr(floated, "_shell", (0, 0))
+        sub = _PlotSubWindow(window, key)
+        sub.setObjectName(getattr(floated, "_object_name", "plot_1D"))
+        window.mdi.addSubWindow(sub)
+        sub.setWidget(content)   # 先改挂内容，再删旧壳（同弹出）
+        sub.setWindowTitle(floated.windowTitle())
+        _copy_panel_attrs(floated, sub)
+        window.plot_docks[key] = sub
+        floated.deleteLater()   # 不用 close()：close 会触发 _close_panel 抹掉登记
+        sub.resize(max(cw + ew, 60), max(ch + eh, 40))
+        sub.move(16, 16)
+        sub.show()
+        _settle(window)
+        canvas = getattr(content, "canvas", None)
+        if canvas is not None:
+            sub._last_canvas = (canvas.width(), canvas.height())
+        sub._settling = False
+        if btn is not None:
+            btn.setText("弹出")
+        _log(window, f"已收回面板：{sub.windowTitle()}")
 
 
 # ══ 保存：勾选已输出的图 → 逐个选文件名存 PNG ═══════════════
@@ -2092,7 +2842,7 @@ def _save_figures(window: QMainWindow) -> bool:
     目前只有 1D 面板有真图（figure）；占位面板不参与。
     """
     panels = [d for d in window.plot_docks.values()
-              if getattr(d.widget(), "figure", None) is not None]
+              if getattr(_content(d), "figure", None) is not None]
     if not panels:
         _log(window, "没有已输出的图可保存")
         return True
@@ -2116,7 +2866,7 @@ def _save_figures(window: QMainWindow) -> bool:
             name += ".png"
         try:
             Path(name).parent.mkdir(parents=True, exist_ok=True)
-            dock.widget().figure.savefig(name)
+            _content(dock).figure.savefig(name)
         except OSError as err:
             _log(window, f"保存失败 {dock.windowTitle()} → {name}（{err}）")
             skipped += 1
@@ -2180,12 +2930,24 @@ def create_window() -> QMainWindow:
     window = _MainWindow()
     window.setWindowTitle("XRD Toolkit")
     window.resize(1200, 800)
+    # 关窗即销毁 C++ 对象：窗口自己的 dict 里挂满了捕获自己的闭包
+    # （点选/作图/保存等回调），Python 引用计数环永远归不了零；而
+    # shiboken 的 C++→Python 绑定映射在 C++ 对象存活期间持有包装
+    # 器，gc 视之为可达也收不掉（探针实证：裸窗口能回收、带闭包环
+    # 的窗口不能）。close 时先销毁 C++ 对象 → 绑定映射解除 → 闭包
+    # 环变成无根环，gc 即可收走。取消/保存失败走 event.ignore()，
+    # 窗口留在程序里不受影响。
+    window.setAttribute(Qt.WA_DeleteOnClose)
     # 拖文件进窗口任意位置 = 加进文件列表（拖放事件冒泡到顶层窗口）
     window.drop_callback = lambda paths: add_files(window, paths)
 
     window._status_timer = None   # _log 里的状态栏恢复计时器（懒创建）
     window.log = lambda text: _log(window, text)
     window.add_files = lambda paths: add_files(window, paths)
+    # 布局/同步旗标（各自用途见 _on_canvas_resized / _tile_panels /
+    # _draw_1d / _on_limits_changed 的注释）
+    window._layouting = False          # 程序自己在平铺/布局（不算用户拖动）
+    window._setting_limits = False     # 程序自己在画图设范围（不算用户改动）
 
     # 后台任务簿：进行中的积分任务挂在这里防垃圾回收（结束回调里
     # 移除）；关窗口时逐一 discard（等待后台函数返回，防线程悬空）
@@ -2199,6 +2961,10 @@ def create_window() -> QMainWindow:
     window.focus_panel = None
 
     _build_center(window)
+    # 点任何面板窗口内任何位置都选中该面板（应用级过滤器，原因见
+    # _PanelClickTracker）。每个窗口装一个；窗口销毁时过滤器随父
+    # 对象销毁，Qt 自动把它从应用事件分发里摘掉
+    QApplication.instance().installEventFilter(_PanelClickTracker(window))
     window.file_dock = _build_file_dock(window)
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
@@ -2213,7 +2979,7 @@ def create_window() -> QMainWindow:
     # 任务收尾——直接销毁运行中的线程 Qt 会 abort
     def on_close(event):
         unsaved = [d for d in window.plot_docks.values()
-                   if getattr(d.widget(), "figure", None) is not None
+                   if getattr(_content(d), "figure", None) is not None
                    and not getattr(d, "figure_saved", False)]
         if unsaved:
             choice = _confirm_close(window, len(unsaved))
@@ -2225,6 +2991,11 @@ def create_window() -> QMainWindow:
                 return
         for task in window._tasks:
             task.discard()
+        # 弹出的顶层窗口不随主窗口关，逐一关掉（close → 遗忘登记；
+        # 遍历拷贝：close 会把面板从 plot_docks 里摘掉）
+        for d in list(window.plot_docks.values()):
+            if isinstance(d, _FloatedWindow):
+                d.close()
         event.accept()
 
     window.closeEvent = on_close
