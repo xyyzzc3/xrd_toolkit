@@ -67,6 +67,40 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 
 把 0°–360° 方位角分成 N 个扇区分别积分（默认 36 个，每 10° 一个；几何同样来自选中的 `--config` 条目，默认 lmfp1_lab6），输出每个扇区的两列 txt（`outputs/{数据名}/sectors/`）+ 一张原强度堆叠瀑布图（36 条曲线沿 Y 轴错开、行间距自适应，每条画到自己强度变 0 的位置——右端阶梯即各扇区衍射环被探测器边缘切掉的位置），用于检查衍射环的方位均匀性（大晶粒、择优取向会表现为强度集中在少数扇区）。
 
+## 图形界面（GUI）
+
+在同样的分析引擎之上套了一个 PySide6 桌面界面——看图、积分、叠加对比、打磨图样，全程不用碰终端：
+
+```bash
+python -m xrd_toolkit.gui
+```
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="../showcase/gui/gui_main.png" width="100%"><br>
+      <sub>主窗口——LaB₆ 标样积分出的 1D 图谱，右侧是参数面板</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="../showcase/gui/gui_compare.png" width="100%"><br>
+      <sub>对比视图——两张 LMFP 样品谱线叠加，带图例</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="../showcase/gui/gui_customize.png" width="32%"><br>
+      <sub>Customize 对话框——标题、轴标签、纵轴线性/对数、图边距</sub>
+    </td>
+  </tr>
+</table>
+
+- **独立图面板**——每张图是一个 MDI 子窗口，互不牵连：可自由缩放（每次拖动记住这张图自己的画布比例）、弹出成独立系统窗口、按各自比例横排/竖排平铺；绘图区支持 Ctrl+滚轮缩放（Excel 式）。
+- **一键出图**——[2D] [剖面] [1D] [瀑布] 四个按钮把勾选的文件一次全部出图；[对比] 把多条 1D 曲线叠进同一面板，四种归一化模式（各曲线最强峰 / 全体最强峰 / 指定文件 / 不归一化，默认不归一化）。1D 与对比已完全接线，其余视图目前是占位面板，接线待做。
+- **实时参数面板**——每个面板的数据与显示参数集中一栏（提示气泡全覆盖，分组重置/应用，面板快照）；缩放 / 平移会实时写回视图范围。
+- **面板手势**——左键拖动平移、滚轮以光标为中心缩放（可开放大镜）、悬停时状态栏实时显示数据点读数；面板每条边都有抓握缩放手柄。
+- **每面板工具栏**——Home / 放大镜 / Customize（标题、轴标签、纵轴线性/对数、图边距）/ 保存 PNG。
+- **校准模式**——[校准] 开关切到校准工作台（与命令行脚本共用几何配置）；工作台本体尚在建设中。
+
 ## 项目结构
 
 ```
@@ -85,7 +119,8 @@ python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
 │   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
 │   ├── services/data_loader.py # 数据读取（fabio）
 │   ├── services/integrator.py  # 几何校准 + 1D 积分（pyFAI）
-│   └── services/range_selector.py # 自动 2θ 区间选择（材料专属标准）
+│   ├── services/range_selector.py # 自动 2θ 区间选择（材料专属标准）
+│   └── gui/                    # PySide6 桌面界面（python -m xrd_toolkit.gui）
 ├── tests/                      # 合成图像单元测试（unittest）：部分环几何 + 自研积分回归护栏
 ├── environment.yml             # conda 环境定义（一键创建环境）
 ├── pyproject.toml              # 项目元信息与依赖

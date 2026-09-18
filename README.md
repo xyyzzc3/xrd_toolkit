@@ -40,6 +40,40 @@ Figures generated from a LaB₆ standard calibration dataset (NIST SRM 660).
 
 </details>
 
+## GUI
+
+A PySide6 desktop front end on top of the same analysis engine — inspect raw images, integrate, overlay and polish plots without touching a terminal:
+
+```bash
+python -m xrd_toolkit.gui
+```
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="showcase/gui/gui_main.png" width="100%"><br>
+      <sub>Main window — LaB₆ standard integrated to 1D, parameter dock on the right</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="showcase/gui/gui_compare.png" width="100%"><br>
+      <sub>Compare view — two LMFP scans overlaid with legend</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/gui/gui_customize.png" width="32%"><br>
+      <sub>Customize dialog — title, axis labels, linear–log y scale, figure margins</sub>
+    </td>
+  </tr>
+</table>
+
+- **Independent plot panels** — every plot is an MDI subwindow with free resizing (each drag remembers the panel's own aspect), pop-out into a separate OS window, cascade / tile arrangements, and a zoomable drawing area (Ctrl + wheel, Excel-style).
+- **One-click views** — [2D] [Profile] [1D] [Waterfall] buttons plot all checked files at once; [Compare] overlays several 1D curves in one panel with four normalization modes (per-curve strongest peak / strongest of all / a chosen file / off). 1D and Compare are fully wired; the remaining views open placeholder panels pending wiring.
+- **Live parameter dock** — data and display parameters per panel (tooltips everywhere, Reset / Apply per group, per-panel snapshots); zoom / pan writes the view range back in real time.
+- **Panel gestures** — left-drag pans, wheel zooms around the cursor (magnifier toggle), hover shows a data-point readout in the status bar; every panel edge has a resize grip.
+- **Per-panel toolbar** — Home / magnifier / Customize (title, axis labels, linear–log y scale, figure margins) / Save PNG.
+- **Calibration mode** — a [校准] toggle switches to the calibration workbench (geometry configs shared with the CLI); the workbench itself is under construction.
+
 ## Highlights
 
 - **Automatic ring-center localization (calibration starting point)** — the direct-beam position is found by FFT cross-correlation, exploiting the fact that a diffraction pattern is centrosymmetric about the ring center; accuracy < 1 px. It is used only as the initial value for geometric calibration — every other step uses the geometry of the config selected via `--config` from `src/xrd_toolkit/config.py`.
@@ -170,10 +204,11 @@ They cover the arc-coverage failure criterion for centered / edge / corner / out
 │   ├── config.py                  # registry of named geometry configs (one per batch; --config selects)
 │   ├── cli.py                     # shared interactive file-selection menu (used by all scripts)
 │   ├── core/processor.py          # image processing (line profiles, auto ring-center localization)
-│   └── services/
+│   ├── services/
 │       ├── data_loader.py         # image I/O (fabio)
 │       ├── integrator.py          # geometry refinement + 1D integration (pyFAI)
 │       └── range_selector.py      # automatic 2θ range selection (per-material standards)
+│   └── gui/                       # PySide6 desktop GUI (python -m xrd_toolkit.gui)
 ├── tests/                         # synthetic-image unit tests (unittest): partial-ring geometry & DIY integration
 ├── docs/                          # Chinese README (original)
 ├── environment.yml                # conda environment (one-command setup)
