@@ -158,7 +158,7 @@ def _build_center(window: QMainWindow) -> None:
     # 工作表）；弹出去的独立窗口不参与
     window._area_zoom = 1.0
 
-    window.mode_label = QLabel("分析模式 — 待实现")   # 默认：分析工作台
+    window.mode_label = QLabel("分析模式")   # 默认：分析工作台
     window.mode_label.setAlignment(Qt.AlignCenter)
 
     arrange_box = QWidget()

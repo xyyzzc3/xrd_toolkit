@@ -29,7 +29,12 @@
     （50%–200%），弹出去的不参与、平铺不碰它；新图左上角
     24px 小错位级联（6 档循环）、按当前总缩放开；
   - 关闭面板 = 关闭即遗忘：重开全新默认，关窗询问只算开着的图，
-    在飞任务/旧代对比结果迟到即作废。
+    在飞任务/旧代对比结果迟到即作废；
+  - 校准工作台（TestCalibration）：[校准] 进模式 = 参数坞换页 +
+    中央校准图面板开出（勾选的第一个文件；没勾文件只提示）；
+    自动校准后台跑（mock 引擎）→ 自动列 + 模板 + 剪贴板；校准图
+    点环判环吸附/拒点、撤销/清空、手动校准 → 手动列 + Δ 列；
+    面板关/退出模式后迟到结果作废；连点重跑旧任务过期。
 
 等待方式与 test_gui_tasks.py 相同：回调 + processEvents 轮询
 （QSignalSpy.wait 不处理跨线程投递，见该文件说明）。
@@ -63,6 +68,7 @@ from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui.app import create_window
 # 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
 # 打它的名字截不住别的模块里的裸名查找）
+from xrd_toolkit.gui import calib as gui_calib
 from xrd_toolkit.gui import panel_state as gui_state
 from xrd_toolkit.gui import plot_views as gui_views
 
@@ -1326,10 +1332,15 @@ class TestParamDockSplitLayout(unittest.TestCase):
             QApplication.processEvents()
             content = w.param_dock.widget()
             lay = content.layout()
-            # 编辑对象名固定在坞内容布局最上方，分隔条紧随其后占满
-            # 剩余空间（下方没有别的同级条目）
-            self.assertIs(lay.itemAt(0).widget(), w.focus_label)
-            splitter = lay.itemAt(1).widget()
+            # 参数坞 = QStackedWidget 两页翻面（页 0 = 分析工作台、
+            # 页 1 = 校准工作台），顶层层布局唯一的条目就是翻页栈
+            self.assertIs(lay.itemAt(0).widget(), w.param_stack)
+            self.assertEqual(w.param_stack.count(), 2)
+            # 分析页（页 0）：编辑对象名固定在最上方，分隔条紧随其后
+            # 占满剩余空间（下方没有别的同级条目）
+            page_lay = w.param_stack.widget(0).layout()
+            self.assertIs(page_lay.itemAt(0).widget(), w.focus_label)
+            splitter = page_lay.itemAt(1).widget()
             self.assertIsInstance(splitter, QSplitter)
             self.assertEqual(splitter.orientation(), Qt.Vertical)
             self.assertEqual(splitter.count(), 2)
@@ -4060,6 +4071,319 @@ class TestSavePromptExcludesClosed(unittest.TestCase):
                              "已关闭的面板不应再询问")
         finally:
             w.close()
+
+
+class TestCalibration(unittest.TestCase):
+    """校准工作台：模式切换 / 自动校准 / 手动选点 / 结果与模板 / 守卫。
+
+    patch 目标 = gui_calib 模块里的裸名（后台线程也读模块全局）；
+    引擎函数全部 mock（pyFAI 慢且非确定），只验接线与状态机。
+    """
+
+    FAKE_AUTO = {
+        "dist_m": 1.5958, "poni1_px": 1045.2, "poni2_px": 1022.0,
+        "offset_px": (1.0, 2.0), "rot1_deg": -0.005, "rot2_deg": -0.163,
+        "rot3_deg": 0.0, "residual_deg": 0.004,
+        "control_points": [(1050.0, 1020.0, 2), (1060.0, 1030.0, 4)],
+    }
+    FAKE_MANUAL = {
+        "dist_m": 1.5962, "poni1_px": 1044.0, "poni2_px": 1021.0,
+        "offset_px": (0.0, 0.0), "rot1_deg": -0.004, "rot2_deg": -0.160,
+        "rot3_deg": 0.0, "residual_deg": 0.012,
+    }
+    FAKE_CENTER = {"cx": 1022.0, "cy": 1021.5}
+
+    def _click_rings(self, w, specs):
+        """按 lmfp1 配置几何在指定 (环号, 方位角) 处模拟校准图点击
+        （等价于点图时点中该环：吸附判环应判回同一环）。"""
+        cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
+        theo = gui_calib.lab6_theoretical_2theta(cfg["wavelength_m"])
+        for ring, ang in specs:
+            r = cfg["dist_m"] * np.tan(np.radians(theo[ring])) \
+                / cfg["pixel_size_m"]
+            a = np.radians(ang)
+            x = cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.cos(a)
+            y = cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.sin(a)
+            gui_calib._on_calib_click(w, w.calib_key,
+                                      SimpleNamespace(xdata=x, ydata=y,
+                                                      inaxes=w.calib_ax))
+
+    def _logs(self, w):
+        return w.log_text.toPlainText()
+
+    def _enter_with_fake_a(self, w):
+        """加 fake_a.tif 并进校准模式（图像读取需调用方已 mock）。
+
+        注意：自动/手动校准的后台 worker 还会再读一次图，调用方要
+        自己把 load_diffraction_image 的 patch 罩住整个测试体。
+        """
+        w.add_files(["data/fake_a.tif"])
+        w.calib_btn.click()
+        self.assertEqual(w.param_stack.currentIndex(), 1)
+        self.assertIsNotNone(w.calib_dock)
+
+    def test_enter_mode_opens_panel_and_exit_restores(self):
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            self.assertEqual(w.calib_key, "校准|data/fake_a.tif")
+            self.assertIn("打开校准面板", self._logs(w))
+            self.assertIn("校准模式", w.mode_label.text())
+            # 16 个理论环圆圈按当前几何画上
+            self.assertGreaterEqual(len(w.calib_ax.patches), 16)
+            # 退出：面板关、参数坞还原
+            w.calib_btn.click()
+            self.assertEqual(w.param_stack.currentIndex(), 0)
+            self.assertIsNone(w.calib_dock)
+            self.assertIn("回到分析模式", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_enter_mode_without_file_logs_hint(self):
+        w = create_window()
+        try:
+            w.calib_btn.click()
+            self.assertEqual(w.param_stack.currentIndex(), 1)
+            self.assertIsNone(getattr(w, "calib_dock", None))
+            self.assertIn("请先在文件列表勾选标样文件", self._logs(w))
+        finally:
+            w.close()
+
+    def test_auto_calib_fills_result_and_template(self):
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=self.FAKE_AUTO) as fake:
+                self._enter_with_fake_a(w)
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+            # 引擎初值 = 自动定环心 (cx, cy) + 参数面板几何
+            self.assertEqual(fake.call_args.kwargs["center0_px"],
+                             (self.FAKE_CENTER["cx"], self.FAKE_CENTER["cy"]))
+            self.assertAlmostEqual(fake.call_args.kwargs["dist0_m"], 1.5958)
+            # 自动列 + 状态行日志
+            vals = w.calib_vals["auto"]
+            self.assertEqual(vals["dist"].text(), "1595.80")
+            self.assertEqual(vals["poni"].text(), "(1045.20, 1022.00)")
+            self.assertEqual(vals["resid"].text(), "0.0040")
+            self.assertIn("自动校准完成", self._logs(w))
+            # 图按新几何重画：控制点绿点（一条 2 点散点线）画上
+            self.assertTrue(any(len(line.get_xdata()) == 2
+                                for line in w.calib_ax.lines))
+            # 模板 = 自动结果 + 配置束心（与 CLI 同格式）
+            tmpl = w.calib_template.toPlainText()
+            self.assertIn("dist_m=1.59580,", tmpl)
+            self.assertIn('"beam_center": (1022.00, 1022.30),', tmpl)
+            # 复制入系统剪贴板
+            w.calib_copy_btn.click()
+            self.assertIn("已复制配置条目模板", self._logs(w))
+            self.assertIn("dist_m=1.59580,", QApplication.clipboard().text())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_manual_points_and_refine(self):
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            # 初始：0 点，手动按钮置灰
+            self.assertEqual(w.calib_points_label.text(), "已选 0 个点 / 0 个环")
+            self.assertFalse(w.calib_start_manual.isEnabled())
+            # 点环 2/4/6（自动判环吸附回同一环）
+            self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            self.assertEqual(len(w.calib_state["points"]), 3)
+            self.assertEqual(w.calib_points_label.text(), "已选 3 个点 / 3 个环")
+            self.assertTrue(w.calib_start_manual.isEnabled())
+            self.assertIn("已记录第 3 个点", self._logs(w))
+            # 束心附近点（离首环 1.7°）吸不上：日志忽略、列表不变
+            gui_calib._on_calib_click(
+                w, w.calib_key,
+                SimpleNamespace(xdata=1022.0, ydata=1022.0,
+                                inaxes=w.calib_ax))
+            self.assertEqual(len(w.calib_state["points"]), 3)
+            self.assertIn("已忽略", self._logs(w))
+            # 撤销 → 2 点回灰；清空 → 0 点、撤销按钮回灰
+            w.calib_undo_btn.click()
+            self.assertEqual(w.calib_points_label.text(), "已选 2 个点 / 2 个环")
+            self.assertFalse(w.calib_start_manual.isEnabled())
+            w.calib_clear_btn.click()
+            self.assertEqual(w.calib_points_label.text(), "已选 0 个点 / 0 个环")
+            self.assertFalse(w.calib_undo_btn.isEnabled())
+            # 重新点 3 点 → 手动校准（mock 引擎）
+            self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                                   return_value=self.FAKE_MANUAL) as fake:
+                w.calib_start_manual.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["manual"] is not None, 8000))
+            # 引擎输入：3 点 + 环号 + 束心 (行,列) 换序 + 面板几何
+            self.assertEqual(len(fake.call_args.args[0]), 3)
+            self.assertEqual(fake.call_args.args[1], [2, 4, 6])
+            self.assertEqual(fake.call_args.kwargs["center0_px"],
+                             (1022.3, 1022.0))
+            # 手动列 + 点数少的可信度提示
+            self.assertEqual(w.calib_vals["manual"]["dist"].text(), "1596.20")
+            self.assertIn("手动校准完成", self._logs(w))
+            self.assertIn("点数较少", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_delta_column_and_last_template(self):
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=self.FAKE_AUTO), \
+                 mock.patch.object(gui_calib, "refine_lab6_from_points",
+                                   return_value=self.FAKE_MANUAL):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+                # 只跑手动 → Δ 列保持 "—"
+                w.calib_start_manual.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["manual"] is not None, 8000))
+                self.assertEqual(w.calib_vals["delta"]["dist"].text(), "—")
+                # 再跑自动 → Δ = 手动 − 自动（PONI = 两点距离 px）
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+                d = w.calib_vals["delta"]
+                self.assertEqual(d["dist"].text(), "+0.40")
+                self.assertEqual(d["poni"].text(), "1.56")
+                self.assertEqual(d["resid"].text(), "+0.0080")
+                # 模板 = 最近一次完成的模式（自动后跑 → 自动结果）
+                self.assertIn("dist_m=1.59580,",
+                              w.calib_template.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_late_result_after_exit_is_dropped(self):
+        """任务在飞时退出模式：迟到结果作废（不崩、不填列）。"""
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_calib(*args, **kwargs):
+            started.set()
+            release.wait(10)
+            return self.FAKE_AUTO
+
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   side_effect=slow_calib):
+                self._enter_with_fake_a(w)
+                w.calib_start_auto.click()
+                self.assertTrue(started.wait(5))
+                w.calib_btn.click()   # 退出模式：面板关、代 +1
+                self.assertIsNone(w.calib_dock)
+                release.set()
+                # 等任务收尾投递后：状态与结果区仍为空（作废不炸）
+                self.assertTrue(_wait_until(lambda: not w._tasks, 5000))
+                self.assertIsNone(w.calib_state["auto"])
+                self.assertEqual(w.calib_vals["auto"]["dist"].text(), "—")
+        finally:
+            release.set()
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_restart_drops_stale_auto_result(self):
+        """连点 [开始自动校准]：旧任务慢、新任务快 → 旧结果晚到作废。"""
+        calls = {"n": 0}
+        slow_entered = threading.Event()
+        release = threading.Event()
+        fast = dict(self.FAKE_AUTO, dist_m=1.6000, residual_deg=0.009)
+
+        def two_speed_calib(*args, **kwargs):
+            i = calls["n"]
+            calls["n"] += 1
+            if i == 0:
+                slow_entered.set()
+                release.wait(10)
+                return self.FAKE_AUTO
+            return fast
+
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   side_effect=two_speed_calib):
+                self._enter_with_fake_a(w)
+                w.calib_start_auto.click()
+                self.assertTrue(slow_entered.wait(5))
+                w.calib_start_auto.click()   # 连点重跑：新任务说了算
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+                self.assertEqual(w.calib_vals["auto"]["dist"].text(),
+                                 "1600.00")
+                release.set()   # 旧任务这时才完成 → 迟到作废
+                self.assertTrue(_wait_until(lambda: not w._tasks, 5000))
+                self.assertEqual(w.calib_vals["auto"]["dist"].text(),
+                                 "1600.00", "旧结果不得覆盖新结果")
+                self.assertIs(w.calib_state["auto"], fast)
+        finally:
+            release.set()
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_closing_panel_forgets_state(self):
+        """× 关校准面板 = 选点/结果全清（关闭即遗忘，重开全新）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+                self.assertEqual(len(w.calib_state["points"]), 3)
+                dock = w.calib_dock
+                dock.close()   # × 按钮
+                QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                self.assertIsNone(w.calib_dock)
+                self.assertIn("已关闭校准面板", self._logs(w))
+                self.assertEqual(w.calib_state["points"], [])
+                self.assertIsNone(w.calib_state["auto"])
+                self.assertEqual(w.calib_points_label.text(),
+                                 "已选 0 个点 / 0 个环")
+                self.assertFalse(w.calib_start_manual.isEnabled())
+                self.assertEqual(w.calib_template.toPlainText(), "")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
 
 if __name__ == "__main__":

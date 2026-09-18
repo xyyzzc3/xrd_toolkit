@@ -9,6 +9,8 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
       → plot_views.py   视图注册表 + 出图调度 + 1D/对比绘图 +
                          悬停取点 + 手势（扩展点：2D/剖面/瀑布接线
                          = 往 _VIEW_BUILDERS/_VIEW_RUNNERS 加条目）
+      → calib.py        校准工作台：参数坞第 2 页表单 + 中央校准图
+                         面板 + 自动/手动校准后台任务
       → panels.py        面板容器生命周期：MDI 子窗口/弹出窗口、
                          关闭即遗忘、抓手、平铺、总缩放
       → customize.py     Customize 自绘轴属性对话框
@@ -53,11 +55,17 @@ from PySide6.QtWidgets import (
     QLabel, QInputDialog, QListWidget, QListWidgetItem, QMainWindow,
     QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
     QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QToolBar, QVBoxLayout, QWidget, QDockWidget,
-    QApplication)
+    QSpinBox, QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget,
+    QDockWidget, QApplication)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 # ── 兼容再导出（见模块 docstring）：测试与后续接线继续经本模块访问 ──
+from xrd_toolkit.gui.calib import (
+    _build_calib_form, _CalibSubWindow, _close_calib_panel,
+    _copy_calib_template, _draw_calib_image, _enter_calib, _exit_calib,
+    _on_calib_click, _open_calib_panel, _refresh_calib_template,
+    _start_auto_calib, _start_manual_calib, _undo_calib_point,
+    _clear_calib_points)
 from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
 from xrd_toolkit.gui.panels import (
@@ -518,6 +526,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
+    # 参数坞 = QStackedWidget 两页翻面：页 0 = 分析工作台（编辑对象
+    # + 数据/图像参数对半），页 1 = 校准工作台（校准表单）。[校准]
+    # 按钮按下/弹起 = 翻页（见 _on_mode），用户参数不丢（页 0 原样
+    # 保留，退出模式还原）。
+    window.param_stack = QStackedWidget()
+    lay.addWidget(window.param_stack)
+
+    # ── 页 0：分析工作台 ──
+    analysis_page = QWidget()
+    analysis_lay = QVBoxLayout(analysis_page)
+    analysis_lay.setContentsMargins(0, 0, 0, 0)
+    analysis_lay.setSpacing(0)
+
     # 编辑对象：参数坞当前作用在哪个图面板上。点图面板（_FocusMarker）
     # 或某视图计算完成（_on_integration_done）时更新；[应用] 重算它。
     # 编辑对象标题 = 文件名直出，可能很长：_ElideLabel 单行缩略，
@@ -526,13 +547,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.focus_label = _ElideLabel("编辑对象：未选中图面板",
                                      Qt.ElideMiddle)
     window.focus_label.setStyleSheet("color: gray;")
-    lay.addWidget(window.focus_label)   # 固定最上方，不随下面滚动
+    analysis_lay.addWidget(window.focus_label)   # 固定最上方，不随下面滚动
 
     # 下半区上下对半分：两块各自独立滚动的 QScrollArea + 底部固定
     # 按钮行。分隔条可拖（初始 1:1）；两块不允许拖到完全收起
     splitter = QSplitter(Qt.Vertical)
     splitter.setChildrenCollapsible(False)
-    lay.addWidget(splitter, 1)
+    analysis_lay.addWidget(splitter, 1)
+    window.param_stack.addWidget(analysis_page)
+
+    # ── 页 1：校准工作台（calib.py；见其模块 docstring）──
+    window.param_stack.addWidget(_build_calib_form(window))
 
     # ── 数据参数组（上半）──
     data_box = QGroupBox("数据参数")
@@ -886,7 +911,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
               + form.contentsMargins().left() + form.contentsMargins().right())
     dock.setMinimumWidth(form_min + chrome + 2)
     content.setMinimumWidth(form_min + chrome + 2)   # 双保险：坞本身也算上
-    dock.setMinimumHeight(content.layout().minimumSize().height())
+    # 坞的最小高度按分析页固定件显式算（编辑对象名 + 分隔条最小
+    # 提示）：翻页栈的最小尺寸只报当前页，且嵌套后布局 minimumSize
+    # 不再含子件 minimumSizeHint（探针验证），靠布局算会把下限
+    # 塌成一行标签的高度
+    dock.setMinimumHeight(
+        splitter.minimumSizeHint().height()
+        + window.focus_label.minimumSizeHint().height() + 4)
 
     dock.setWidget(content)
     window.addDockWidget(Qt.RightDockWidgetArea, dock)
@@ -987,12 +1018,21 @@ def _build_toolbar(window: QMainWindow) -> None:
         btn.toggled.connect(dock.setVisible)
 
 def _on_mode(window: QMainWindow, calibrating: bool) -> None:
-    """模式开关：勾选 = 校准工作台，弹起 = 分析工作台（框架阶段只换占位提示）。"""
+    """模式开关：勾选 = 校准工作台，弹起 = 分析工作台。
+
+    进入：参数坞翻到校准页（页 0 的分析参数原样保留），勾选的第一个
+    文件开校准面板；没勾文件只记日志提示（不崩）。退出：翻回分析页
+    + 关校准面板（校准状态清零，关闭即遗忘）。
+    """
     if calibrating:
-        window.mode_label.setText("校准模式 — 待实现")
+        window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
+        window.param_stack.setCurrentIndex(1)
+        _enter_calib(window)
     else:
-        window.mode_label.setText("分析模式 — 待实现")
+        window.mode_label.setText("分析模式")
+        window.param_stack.setCurrentIndex(0)
+        _exit_calib(window)
         _log(window, "回到分析模式")
 
 # ══ 保存：勾选已输出的图 → 逐个选文件名存 PNG ═══════════════

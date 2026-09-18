@@ -79,3 +79,53 @@ def get_config(name=None):
         raise ValueError(
             f"Unknown config '{name}'. Available configs: {', '.join(CONFIGS)}")
     return CONFIGS[name]
+
+
+def config_entry_template(key_hint="lmfp2_lab6", label_hint="（改成实际批次备注）",
+                          geometry=None, beam_center_rc=None):
+    """生成 CONFIGS 条目模板文本（GUI 校准工作台"复制到剪贴板"用）。
+
+    与 scripts/calibrate_integrate.py 标定后打印的模板逐字一致，粘贴
+    进 CONFIGS 大括号、改 key 与 label 即可使用。不自动写配置文件
+    ——登记必须人工复核（见文件头说明），这里只负责生成文本。
+
+    参数：
+        key_hint       新条目 key 提示（默认与 CLI 相同）
+        label_hint     批次备注提示（默认与 CLI 相同）
+        geometry       dict，需含 pixel_size_m / wavelength_m（米）、
+                       dist_m（米）、poni1_px / poni2_px（像素）、
+                       rot1_deg / rot2_deg（度），可选 residual_deg
+                       （度，写进注释行）。GUI 用校准结果 + 参数坞的
+                       像素/波长输入合并出这个 dict
+        beam_center_rc  (row, col) 束心像素坐标（直射束落点 B）
+
+    返回：
+        str，可直接粘贴进 config.py 的条目模板（多行文本）。
+    """
+    lines = []
+    lines.append("===== CONFIGS entry for config.py (copy-paste ready) =====")
+    residual = geometry.get("residual_deg")
+    if residual is None:
+        lines.append("# refined residual: ??? deg (diagnostic, not stored)")
+    else:
+        lines.append(f"# refined residual: {residual:.4f} deg (diagnostic, not stored)")
+    # CLI 里像素/波长取自命令行输入（µm / Å），这里从米制几何反推
+    pixel_um = geometry["pixel_size_m"] * 1e6
+    wl_angstrom = geometry["wavelength_m"] * 1e10
+    lines.append(
+        f'    "{key_hint}": {{   # rename key to "<material><n>_<standard>" (e.g. lmfp2_lab6)')
+    lines.append(f'        "label": "{label_hint}",')
+    lines.append('        "geometry": dict(')
+    lines.append(f"            pixel_size_m={pixel_um:g}e-6,")
+    lines.append(f"            wavelength_m={wl_angstrom:g}e-10,")
+    lines.append(f"            dist_m={geometry['dist_m']:.5f},")
+    lines.append(f"            poni1_m={geometry['poni1_px']:.3f} * {pixel_um:g}e-6,")
+    lines.append(f"            poni2_m={geometry['poni2_px']:.3f} * {pixel_um:g}e-6,")
+    lines.append(f"            rot1_deg={geometry['rot1_deg']:.4f},")
+    lines.append(f"            rot2_deg={geometry['rot2_deg']:.4f},")
+    lines.append('        ),')
+    row, col = beam_center_rc
+    lines.append(
+        f'        "beam_center": ({row:.2f}, {col:.2f}),   # (row, col) px = direct beam spot')
+    lines.append('    },')
+    return "\n".join(lines)

@@ -58,6 +58,46 @@ def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarra
     return np.degrees(2 * np.arcsin(wavelength_a / (2 * d_angstrom)))
 
 
+def snap_lab6_ring(x_px: float, y_px: float, *, pixel_size_m: float,
+                   wavelength_m: float, dist_m: float, poni1_m: float,
+                   poni2_m: float, rot1_deg: float = 0.0,
+                   rot2_deg: float = 0.0, max_rings: int = 16,
+                   tol_deg: float = 0.5):
+    """点击点吸附到最近的 LaB₆ 理论环（手动选点校准的判环助手）。
+
+    按当前几何算该点的 2θ（pyFAI Geometry.tth，输入像素坐标、输出
+    弧度），与 lab6_theoretical_2theta 的每个理论值比距离；最近者
+    在 tol_deg 内返回环序号（0 起），全部超出返回 None（调用方忽略
+    该点并提示）。rot1/rot2 默认 0：判环只需要大致几何，倾斜角对
+    2θ 的影响远小于环间距。
+
+    参数：
+        x_px, y_px   点击点的像素坐标（横向、纵向）
+        pixel_size_m / wavelength_m / dist_m / poni1_m / poni2_m
+                     当前几何（PONI 为米制，与 calibrate_lab6 的
+                     输入约定一致）
+        rot1_deg / rot2_deg  倾斜角（度，可选，默认 0）
+        max_rings    参与匹配的理论环数（默认 16）
+        tol_deg      吸附容差（2θ 度，默认 0.5°）
+
+    返回：
+        int 环序号（0 起）或 None
+    """
+    geo = Geometry(
+        dist=dist_m, poni1=poni1_m, poni2=poni2_m,
+        rot1=np.radians(rot1_deg), rot2=np.radians(rot2_deg), rot3=0.0,
+        detector=Detector(pixel1=pixel_size_m, pixel2=pixel_size_m),
+        wavelength=wavelength_m,
+    )
+    # pyFAI 的 tth 需要数组输入（内部会访问 .size），标量直接传会报错
+    tth_deg = float(np.degrees(geo.tth(np.array([x_px]), np.array([y_px]))[0]))
+    theo = lab6_theoretical_2theta(wavelength_m, max_rings)
+    i = int(np.argmin(np.abs(theo - tth_deg)))
+    if abs(theo[i] - tth_deg) > tol_deg:
+        return None
+    return i
+
+
 # 迭代精修收敛参数（calibrate_lab6）：残差目标、改善阈值、最大轮数。
 # 初始几何通常已接近真值，1~2 轮即收敛；上限 3 轮防止个别数据集震荡。
 REFINE_TARGET_RESIDUAL_DEG = 0.05
@@ -111,6 +151,8 @@ def calibrate_lab6(
             rot2_deg     倾斜角 2（度）
             rot3_deg     倾斜角 3（度，refine2 不精修，保持 0）
             residual_deg 全部控制点的 2θ 残差 RMS（度）
+            control_points 最优轮控制点 [[x, y, 环序号], ...]（像素
+                坐标 + 0 起环号；GUI 画绿点验证精修效果用，CLI 不消费）
 
     备注（pyFAI 接口注意事项）：
         - calibrant 的波长一经设置不可再改；换波长必须重新
@@ -205,6 +247,8 @@ def calibrate_lab6(
         "rot2_deg": float(np.degrees(ref.rot2)),
         "rot3_deg": float(np.degrees(ref.rot3)),
         "residual_deg": residual_deg,
+        "control_points": [
+            [float(x), float(y), int(r)] for x, y, r in control_points],
     }
 
 
@@ -226,6 +270,87 @@ def _control_point_residual(ref, control_points, wavelength_m, max_rings) -> flo
     if not residuals:
         return float("inf")   # 无任何控制点：残差无定义（视为最差）
     return float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
+
+
+def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
+                            wavelength_m: float, dist0_m: float,
+                            center0_px: tuple, max_rings: int = 16) -> dict:
+    """手动选点校准：用户点击的环上点 → pyFAI 反推探测器几何。
+
+    原理与 calibrate_lab6 完全相同（控制点 → GeometryRefinement.
+    refine2 最小二乘精修距离/束心/倾斜角），区别只是控制点来源：
+    自动 = extract_cp 按预测位置搜峰，手动 = 用户在图上点环
+    （环号由 snap_lab6_ring 判定）。单轮精修即可——用户点固定不动，
+    不需要"重取点再精修"的迭代。
+
+    点太少时未知数多于方程（例如 3 点 5 未知数），refine2 可能给
+    退化解或直接抛异常——异常如实转成 ValueError（调用方提示用户
+    多点几个点），结果可信度以 residual_deg 为准。
+
+    参数：
+        points_px      [(x, y), ...] 像素坐标（横向、纵向）
+        ring_indices   每个点所属的 LaB₆ 环序号（0 起，长度与
+                       points_px 一致）
+        pixel_size_m / wavelength_m  探测器像素尺寸（米）/ X 光波长（米）
+        dist0_m        探测器距离初值（米，精修起点）
+        center0_px     (cx, cy) 环心初值（像素）——通常取配置条目的
+                       beam_center（(行, 列) 换序成 (列, 行)）
+        max_rings      环号上限（与 snap_lab6_ring 一致，默认 16）
+
+    返回：
+        与 calibrate_lab6 同形 dict（dist_m/poni1_px/poni2_px/
+        offset_px/rot1_deg/rot2_deg/rot3_deg/residual_deg，见其
+        docstring）。
+
+    报错：
+        ValueError：点数 < 3、覆盖环 < 2、或 pyFAI refine2 抛异常。
+    """
+    points = np.asarray(points_px, dtype=np.float64)
+    rings = np.asarray(ring_indices, dtype=np.int64)
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError("points_px 必须是 [(x, y), ...] 的列表")
+    if len(points) != len(rings):
+        raise ValueError("points_px 与 ring_indices 长度必须一致")
+    if len(points) < 3:
+        raise ValueError("至少需要 3 个点")
+    if len(np.unique(rings)) < 2:
+        raise ValueError("至少需要覆盖 2 个不同的环")
+    if np.any((rings < 0) | (rings >= max_rings)):
+        raise ValueError(f"环序号越界（应在 0~{max_rings - 1} 内）")
+
+    # 与 calibrate_lab6 相同的 pyFAI 注意事项：calibrant 波长一经
+    # 设置不可再改，每次调用新建对象
+    cal = get_calibrant(LAB6_NAME)
+    cal.wavelength = wavelength_m
+    det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m)
+    control_points = np.column_stack([points[:, 0], points[:, 1], rings])
+    ref = GeometryRefinement(
+        data=control_points, calibrant=cal,
+        dist=dist0_m,
+        poni1=center0_px[0] * pixel_size_m,
+        poni2=center0_px[1] * pixel_size_m,
+        rot1=0.0, rot2=0.0, rot3=0.0,
+        detector=det, wavelength=wavelength_m,
+    )
+    try:
+        ref.refine2()
+    except Exception as err:
+        raise ValueError(f"pyFAI 精修失败（点多点几个环上的点会更稳）：{err}") from err
+    residual_deg = _control_point_residual(ref, control_points,
+                                           wavelength_m, max_rings)
+    return {
+        "dist_m": float(ref.dist),
+        "poni1_px": float(ref.poni1 / pixel_size_m),
+        "poni2_px": float(ref.poni2 / pixel_size_m),
+        "offset_px": (
+            float(ref.poni1 / pixel_size_m - center0_px[0]),
+            float(ref.poni2 / pixel_size_m - center0_px[1]),
+        ),
+        "rot1_deg": float(np.degrees(ref.rot1)),
+        "rot2_deg": float(np.degrees(ref.rot2)),
+        "rot3_deg": float(np.degrees(ref.rot3)),
+        "residual_deg": residual_deg,
+    }
 
 
 def integrate_1d(
