@@ -3013,6 +3013,56 @@ class TestGestures(unittest.TestCase):
         finally:
             w.close()
 
+    def test_home_returns_after_wheel_zoom(self):
+        """滚轮缩放后 Home 回到初始视图（滚轮绕过 mpl 手势，需自己
+        补记账——否则账本空着，Home 无事可做）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            content = gui_app._content(dock)
+            self._magnifier(w, "data/fake_b.tif", True)
+            x0 = ax.get_xlim()
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            self.assertNotEqual(ax.get_xlim(), x0, "滚轮缩放应先改范围")
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            xlo, xhi = ax.get_xlim()
+            self.assertAlmostEqual(xlo, x0[0], places=6,
+                                   msg="Home 应回到滚轮缩放前的视图")
+            self.assertAlmostEqual(xhi, x0[1], places=6)
+        finally:
+            w.close()
+
+    def test_home_refreshes_after_program_redraw(self):
+        """程序重画后"家"刷新成新画的视图（Home 不回重画前的老视图）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            content = gui_app._content(dock)
+            self._magnifier(w, "data/fake_b.tif", True)
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            # 程序重画（等价：参数面板改视图范围后点 [应用]）
+            dock.params_snapshot["视图 2θ 下限 (°)"] = 3.0
+            dock.params_snapshot["视图 2θ 上限 (°)"] = 6.0
+            gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+            QApplication.processEvents()
+            self.assertEqual(ax.get_xlim(), (3.0, 6.0))
+            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            self.assertNotEqual(ax.get_xlim(), (3.0, 6.0),
+                                "第二次滚轮缩放应先改范围")
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            xlo, xhi = ax.get_xlim()
+            self.assertAlmostEqual(xlo, 3.0, places=6,
+                                   msg="Home 应回到重画后的视图，不是开图时")
+            self.assertAlmostEqual(xhi, 6.0, places=6)
+        finally:
+            w.close()
+
     def test_drag_pans_plot(self):
         """按住左键拖动 = 整图平移（范围随拖拽位移）。"""
         w = create_window()
@@ -3034,6 +3084,118 @@ class TestGestures(unittest.TestCase):
             ylo, yhi = ax.get_ylim()
             self.assertGreater(ylo, 1.0, "向下拖图 → 数据范围应上移")
             self.assertGreater(yhi, 3.0)
+        finally:
+            w.close()
+
+
+class TestCustomizeProtection(unittest.TestCase):
+    """Customize 对话框改动保护（与用户讨论定稿的规则）：标题/轴标签/
+    曲线样式/纵轴刻度以用户为准，重画（应用/恢复默认/对比刷新）一律
+    不覆盖；参数面板里又改了一遍（显示名 → 标题、[对数纵轴] → 刻度）
+    才由参数接管。"""
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_a.tif"])
+            _open_view(w, "1D")
+            drawn = _wait_until(
+                lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0)
+            self.assertTrue(drawn)
+        return _dock(w, "1D", "data/fake_a.tif")
+
+    def _redraw(self, w, dock):
+        """等价于点 [应用] 的程序重画路径。"""
+        gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+        QApplication.processEvents()
+
+    def test_custom_title_survives_redraw(self):
+        """Customize 改过的标题重画不覆盖（连续重画也保留）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = _axes(w, "1D", "data/fake_a.tif")
+            ax.set_title("我的手改标题")   # 模拟在 Customize 里改
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_title(), "我的手改标题",
+                             "Customize 改过的标题不应被重画覆盖")
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_title(), "我的手改标题",
+                             "连续重画也应一直保留")
+        finally:
+            w.close()
+
+    def test_title_follows_display_change(self):
+        """显示名（参数源）改过 → 标题跟新的默认（参数接管）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = _axes(w, "1D", "data/fake_a.tif")
+            ax.set_title("我的手改标题")
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_title(), "我的手改标题")
+            dock.panel_display = "新名字"   # 参数源改了
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_title(),
+                             "新名字: full azimuthal integration",
+                             "显示名改过 → 标题应跟新的默认")
+        finally:
+            w.close()
+
+    def test_axis_labels_survive_redraw(self):
+        """Customize 改过的轴标签重画不覆盖（无参数源 → 永远用户为准）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = _axes(w, "1D", "data/fake_a.tif")
+            ax.set_xlabel("我的 X")
+            ax.set_ylabel("我的 Y")
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_xlabel(), "我的 X")
+            self.assertEqual(ax.get_ylabel(), "我的 Y")
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_xlabel(), "我的 X", "连续重画也应保留")
+        finally:
+            w.close()
+
+    def test_curve_style_survives_redraw(self):
+        """Customize 改过的曲线颜色/线型/线宽重画不覆盖。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = _axes(w, "1D", "data/fake_a.tif")
+            line = ax.lines[0]
+            line.set_color("red")
+            line.set_linestyle("--")
+            line.set_linewidth(3)
+            self._redraw(w, dock)
+            new = ax.lines[0]
+            self.assertEqual(new.get_color(), "red")
+            self.assertEqual(new.get_linestyle(), "--")
+            self.assertEqual(new.get_linewidth(), 3)
+            self._redraw(w, dock)
+            self.assertEqual(ax.lines[0].get_color(), "red",
+                             "连续重画也应保留样式")
+        finally:
+            w.close()
+
+    def test_scale_user_wins_until_param_toggled(self):
+        """Customize 改的纵轴刻度以用户为准，直到 [对数纵轴] 又改过。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = _axes(w, "1D", "data/fake_a.tif")
+            ax.set_yscale("log")   # 模拟在 Customize 里改刻度
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_yscale(), "log",
+                             "Customize 改的刻度不应被重画覆盖")
+            dock.params_snapshot["对数纵轴"] = True   # 参数又改了一遍
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_yscale(), "log")
+            dock.params_snapshot["对数纵轴"] = False   # 再改一遍
+            self._redraw(w, dock)
+            self.assertEqual(ax.get_yscale(), "linear",
+                             "参数又改过 → 参数接管刻度")
         finally:
             w.close()
 

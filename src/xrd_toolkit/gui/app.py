@@ -64,11 +64,17 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     缩图）；放大镜按钮 = 开关（点亮/熄灭状态可见 + 日志提示）：
     点亮 = 滚轮以光标为中心缩放（每格 10%——25% 连乘几下图就飞
     了）+ 左键拖框放大（mpl 自带），熄灭 = 滚轮滚动 + 左键平移。
-    双击不回全图（Home 就是回首页）；Customize = matplotlib 轴
-    属性对话框。缩放/平移/Home/改范围都会实时同步写回参数面板：
-    视图 2θ 范围（只看图不参与计算，与数据组的积分 2θ 范围互不
-    干扰）+ 纵轴窗口（自动纵轴随之关掉——用户手动定的窗口由
-    用户接管）。
+    双击不回全图（Home 就是回首页）：Home = 回到最近一次画好的
+    视图——滚轮缩放绕过 mpl 手势、自己补记账（_wheel_zoom 懒
+    记账）；程序重画（开图/应用/恢复默认/对比刷新）会把"家"刷新
+    成新画的视图（_refresh_home）。Customize = matplotlib 轴属性
+    对话框，里面改的归用户（_snapshot_canvas 等保护记账）：标题/
+    轴标签/曲线样式（颜色线型线宽标记图例名）/纵轴刻度，重画
+    一律不覆盖；只有参数面板里又改了一遍（显示名 → 标题、
+    [对数纵轴] → 刻度）才由参数接管。缩放/平移/Home/改范围都会
+    实时同步写回参数面板：视图 2θ 范围（只看图不参与计算，与
+    数据组的积分 2θ 范围互不干扰）+ 纵轴窗口（自动纵轴随之关掉
+    ——用户手动定的窗口由用户接管）。
   - [保存] 是主动操作：弹窗勾选要保存的已出图面板 → 逐个选文件
     名存 PNG；另外关闭窗口时若有尚未保存的图会弹窗询问
     （保存后关闭 / 不保存直接关 / 取消留在程序里）。
@@ -134,6 +140,9 @@ _PANEL_ATTRS = (
     "compare_data", "_dragged", "_canvas_pref", "hover_marker",
     "_pan_start", "_pan_limits", "last_tth", "last_intensity",
     "_last_canvas", "_settling", "panel_key",
+    # Customize 对话框保护记账（重画不覆盖用户改动，见 _draw_1d）
+    "_title_ours", "_title_display", "_xlabel_ours", "_ylabel_ours",
+    "_yscale_ours", "_yscale_param",
 )
 
 
@@ -949,6 +958,99 @@ def _on_integration_error(window: QMainWindow, path: Path, msg: str) -> None:
     _log(window, f"积分失败：{path.name} — {msg}")
 
 
+def _snapshot_canvas(ax):
+    """重画前把会被 ax.clear() 抹掉的状态拍下来（Customize 保护用）。
+
+    返回 (标题, x 标签, y 标签, 纵轴刻度, [(图例名,颜色,线型,线宽,
+    标记), ...])。曲线只收有数据的（悬停圆点是空数据假线，不算）。
+    """
+    lines = [(line.get_label(), line.get_color(), line.get_linestyle(),
+              line.get_linewidth(), line.get_marker())
+             for line in ax.lines if len(line.get_xdata()) > 0]
+    return (ax.get_title(), ax.get_xlabel(), ax.get_ylabel(),
+            ax.get_yscale(), lines)
+
+
+def _settle_scale(dock, cur_scale, param_log):
+    """纵轴刻度记账：返回本次应使用的刻度名（与用户讨论定稿）。
+
+    cur_scale = 重画前画布上的刻度（ax.clear() 会重置成 linear，须
+    提前拍下）。规则：用户在 Customize 对话框改过刻度 → 以用户为准；
+    除非参数里的 [对数纵轴] 又改过了（上次生效时记下的 _yscale_param
+    与现在不同）→ 参数为准。首画无条件用参数值。
+    """
+    want = "log" if param_log else "linear"
+    ours = getattr(dock, "_yscale_ours", None)
+    ours_param = getattr(dock, "_yscale_param", None)
+    if ours is None or ours_param is None or ours_param != param_log:
+        final = want          # 首画 / 参数又改过：参数为准
+    elif cur_scale != ours:
+        final = cur_scale     # 用户在 Customize 改过：用户为准
+    else:
+        final = ours          # 维持上次（参数值或用户值）
+    dock._yscale_ours = final
+    dock._yscale_param = param_log
+    return final
+
+
+def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel):
+    """标题/轴标签保护：用户在 Customize 里改过的保留，其余照默认。
+
+    标题的"参数源"= 显示名（panel_display）：显示名没变 → 用户手改
+    的标题以用户为准；显示名变过 → 参数为准（默认标题跟新名字）。
+    轴标签没有参数源 → 用户改过一次就永远以用户为准。
+    """
+    default_title = f"{dock.panel_display}: full azimuthal integration"
+    ours = getattr(dock, "_title_ours", None)
+    ours_display = getattr(dock, "_title_display", None)
+    if (ours is not None and keep_title != ours
+            and ours_display == dock.panel_display):
+        ax.set_title(keep_title)   # 用户为准（不更新 ours：它仍是默认基准）
+    else:
+        ax.set_title(default_title)
+        dock._title_ours = default_title
+        dock._title_display = dock.panel_display
+    ours = getattr(dock, "_xlabel_ours", None)
+    if ours is not None and keep_xlabel != ours:
+        ax.set_xlabel(keep_xlabel)
+    else:
+        ax.set_xlabel("2θ (deg)")
+        dock._xlabel_ours = "2θ (deg)"
+    ours = getattr(dock, "_ylabel_ours", None)
+    if ours is not None and keep_ylabel != ours:
+        ax.set_ylabel(keep_ylabel)
+    else:
+        ax.set_ylabel("Intensity (a.u.)")
+        dock._ylabel_ours = "Intensity (a.u.)"
+
+
+def _restore_line_styles(ax, old_lines):
+    """把重画前拍下的曲线样式原样套回新画的曲线（Customize 保护：
+    用户改过的颜色/线型/线宽/标记/图例名不被重画盖掉）。数量变了
+    就按顺序对前面几条（新多的曲线用默认样式）。"""
+    for i, line in enumerate(ax.lines):
+        if i >= len(old_lines):
+            break
+        label, color, ls, lw, marker = old_lines[i]
+        line.set_label(label)
+        line.set_color(color)
+        line.set_linestyle(ls)
+        line.set_linewidth(lw)
+        line.set_marker(marker)
+
+
+def _refresh_home(dock):
+    """程序自己重画后清空视图账本：新画好的视图 = 新的"家"（Home）。
+
+    mpl 只在用户手势（框选/平移）里记账，程序重画不自动刷新——
+    不刷的话 Home 会跳回重画前的老视图（与用户讨论定稿）。
+    """
+    canvas = getattr(_content(dock), "canvas", None)
+    toolbar = getattr(canvas, "toolbar", None)
+    if toolbar is not None:
+        toolbar.update()
+
+
 def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     """在指定的 1D 面板画出积分曲线（只允许主线程调用）。
 
@@ -965,6 +1067,9 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     （否则 ax.clear() 会先把范围重置成 (0,1)，同步会写回错值）。
     """
     ax = _content(dock).axes_1d
+    # Customize 保护：clear 会把标题/标签/刻度/曲线全抹掉，先拍下现状
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
     window._setting_limits = True
     try:
         ax.clear()
@@ -980,34 +1085,38 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         if window.plot_docks.get(window.focus_panel) is dock:
             window.params["视图 2θ 下限 (°)"].setValue(lo)
             window.params["视图 2θ 上限 (°)"].setValue(hi)
-        # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）
+        # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）。
+        # 刻度以 Customize 用户改动为准时（_settle_scale），纵轴范围也
+        # 按生效的刻度算（eff_log），避免对数轴拿到线性分位画不出来
         log_y = _panel_param(window, dock, "对数纵轴", False)
-        if log_y:
-            ax.set_yscale("log")
+        scale = _settle_scale(dock, keep_scale, log_y)
+        eff_log = (scale == "log")
+        if scale != "linear":
+            ax.set_yscale(scale)
         # 纵轴范围：自动 = 按曲线 1%/99.9% 分位；手动 = 手填上下限。
         # 对数轴画不出 ≤0 的范围，手动值也兜底抬高。自动模式把算出的
         # 区间填进置灰输入框（只读展示"程序正在用的区间"）——只有画的
         # 正是焦点面板才填：否则会覆盖用户正在看的别面板参数
         if _panel_param(window, dock, "纵轴自动", True):
-            ylo, yhi = _auto_y_range(intensity, log_y)
+            ylo, yhi = _auto_y_range(intensity, eff_log)
             if window.plot_docks.get(window.focus_panel) is dock:
                 window.params["纵轴下限"].setValue(ylo)
                 window.params["纵轴上限"].setValue(yhi)
         else:
             ylo = _panel_param(window, dock, "纵轴下限", 1.0)
             yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
-            if log_y:
+            if eff_log:
                 ylo = max(ylo, 1e-6)
         if ylo < yhi:
             ax.set_ylim(ylo, yhi)
-        ax.set_xlabel("2θ (deg)")
-        ax.set_ylabel("Intensity (a.u.)")
-        ax.set_title(f"{dock.panel_display}: full azimuthal integration")
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
+        _restore_line_styles(ax, old_lines)
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
+    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
@@ -1243,6 +1352,13 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
         return
     if not _magnifier_on(dock):
         return   # 放大镜熄灭：滚轮只滚动绘图区，不缩图
+    # 懒记账（照抄 mpl 框选/平移手势的做法）：滚轮直接改坐标轴范围、
+    # 绕过 mpl 的记账，账本一直空着 Home 就无事可做——首次滚轮缩放
+    # 前把当前视图记成"家"（程序重画时账本会被 _refresh_home 清空，
+    # 所以"家"= 最近一次画好的视图）
+    toolbar = getattr(ax.figure.canvas, "toolbar", None)
+    if toolbar is not None and toolbar._nav_stack() is None:
+        toolbar.push_current()
     # 每格 10%（1.25 = 25% 太猛：触摸板两指一滑是连续好多小格事件，
     # 连乘几下图就飞了；与用户讨论定为 10%）
     factor = 1.0 / 1.1 if event.button == "up" else 1.1
@@ -2349,6 +2465,9 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     if dock is None:
         return   # 面板已关：静默丢弃
     ax = _content(dock).axes_1d
+    # Customize 保护：同 _draw_1d，先拍下现状再 clear
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
     window._setting_limits = True   # 同 _draw_1d：程序设范围不算用户改动
     try:
         ax.clear()
@@ -2357,6 +2476,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         # 颜色序号稳定（i 由 _compare_shown_curves 携带）
         for tth, shown, display, i in curves:
             ax.plot(tth, shown, f"C{i}", lw=0.8, label=display)
+        _restore_line_styles(ax, old_lines)   # 图例在下面读标签，先套回样式
         xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
         if xlo is None or xhi is None or not xlo < xhi:
@@ -2368,14 +2488,16 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
             window.params["视图 2θ 下限 (°)"].setValue(xlo)
             window.params["视图 2θ 上限 (°)"].setValue(xhi)
         log_y = _panel_param(window, dock, "对数纵轴", False)
-        if log_y:
-            ax.set_yscale("log")
+        scale = _settle_scale(dock, keep_scale, log_y)
+        eff_log = (scale == "log")
+        if scale != "linear":
+            ax.set_yscale(scale)
         auto_y = _panel_param(window, dock, "纵轴自动", True)
         ylo = yhi = None
         if auto_y:
             if curves:
                 ylo, yhi = _auto_y_range(
-                    np.concatenate([s for _, s, _, _ in curves]), log_y)
+                    np.concatenate([s for _, s, _, _ in curves]), eff_log)
                 if ylo < yhi:
                     ax.set_ylim(ylo, yhi)
             else:
@@ -2383,7 +2505,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         else:
             ylo = _panel_param(window, dock, "纵轴下限", 1.0)
             yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
-            if log_y:
+            if eff_log:
                 ylo = max(ylo, 1e-6)
             if ylo < yhi:
                 ax.set_ylim(ylo, yhi)
@@ -2391,9 +2513,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
             window.params["纵轴下限"].setValue(ylo)
             window.params["纵轴上限"].setValue(yhi)
-        ax.set_xlabel("2θ (deg)")
-        ax.set_ylabel("Intensity (a.u.)")
-        ax.set_title(f"{dock.panel_display}: full azimuthal integration")
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         if dock.compare_data:
             ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
@@ -2401,6 +2521,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
+    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
