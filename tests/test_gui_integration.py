@@ -56,8 +56,8 @@ from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSplitter, QVBoxLayout)
+    QApplication, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout,
+    QLabel, QPushButton, QScrollArea, QSplitter, QVBoxLayout)
 
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui.app import create_window
@@ -241,6 +241,10 @@ class TestViewButtonRuns(unittest.TestCase):
                     a_done.set()
                 elif path_str.endswith("fake_b.tif"):
                     a_done.wait(timeout=5)
+                    # 再垫 0.2 s：a_done 在 A 返回之前就置位了，B
+                    # 光等事件可能比 A 更早投递完成信号（跨线程排队
+                    # 投递不保证顺序），垫一下让 B 确定最后完成
+                    time.sleep(0.2)
                 return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
 
             with mock.patch.object(gui_app, "_compute_integration",
@@ -1417,7 +1421,7 @@ class TestParamFormPolish(unittest.TestCase):
             self.assertEqual(
                 [combo.itemData(i) for i in range(combo.count())],
                 ["each", "global", "file", "off"])
-            self.assertEqual(combo.currentData(), "each")
+            self.assertEqual(combo.currentData(), "off", "默认 = 不归一化")
             # "指定数据" 未选中时，旁边的目标文件下拉框置灰
             self.assertFalse(w.params["归一化目标"].isEnabled())
         finally:
@@ -1859,12 +1863,17 @@ class TestCompare(unittest.TestCase):
         self.assertGreaterEqual(idx, 0, f"模式 {mode} 应在下拉框里")
         combo.setCurrentIndex(idx)
 
-    def test_normalize_each_on_by_default(self):
-        """默认 = 各自最强峰 → 每条曲线最强峰都是 1.0。"""
+    def test_normalize_off_by_default(self):
+        """默认 = 不归一化 → 曲线按原始强度画（fake_b 最强峰 30）；
+        切到各自最强峰 → 每条曲线最强峰都是 1.0（each 分支覆盖）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
-            self.assertEqual(w.params["对比归一化"].currentData(), "each")
+            self.assertEqual(w.params["对比归一化"].currentData(), "off")
+            ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
+            self.assertAlmostEqual(ymax, 30.0, places=4)
+            self._set_norm_mode(w, "each")
+            w.findChild(QPushButton, "apply_image_btn").click()
             for line in ax.lines:
                 self.assertAlmostEqual(float(np.max(line.get_ydata())),
                                        1.0, places=4)
@@ -2689,6 +2698,174 @@ class TestResizeGrips(unittest.TestCase):
             self.assertEqual((dock.width(), dock.height()), (w0 + 30, h0 + 20))
         finally:
             w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
+            w.close()
+
+
+class TestCustomizeDialog(unittest.TestCase):
+    """自绘 Customize 轴属性对话框（替换 mpl 子图配置器）：标题/
+    轴标签/纵轴刻度/图边距，表单标签左对齐 + [恢复默认][取消]
+    [应用]；应用后用户改动受保护记账（重画不覆盖），边距接管 =
+    摘掉 tight layout 引擎（否则 draw 时布局引擎把用户边距算回去）。"""
+
+    def _open_one(self, w, path_str="data/fake_b.tif"):
+        with mock.patch.object(gui_app, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([path_str])
+            _open_view(w, "1D")
+        self.assertTrue(_wait_until(
+            lambda: len(_axes(w, "1D", path_str).lines) > 0))
+        QApplication.processEvents()
+
+    def _build(self, w, path_str="data/fake_b.tif"):
+        dock = _dock(w, "1D", path_str)
+        content = gui_app._content(dock)
+        return dock, gui_app._build_customize_dialog(
+            w, dock, content.axes_1d, content.figure)
+
+    def test_dialog_prefills_current_axis_state(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_one(w)
+            dock, dlg = self._build(w)
+            content = gui_app._content(dock)
+            f = dlg._fields
+            self.assertEqual(f["title"].text(), content.axes_1d.get_title())
+            self.assertEqual(f["xlabel"].text(), content.axes_1d.get_xlabel())
+            self.assertEqual(f["ylabel"].text(), content.axes_1d.get_ylabel())
+            self.assertEqual(f["scale"].currentData(),
+                             content.axes_1d.get_yscale())
+            sp = content.figure.subplotpars
+            self.assertAlmostEqual(f["left"].value(), sp.left, places=3)
+            self.assertAlmostEqual(f["right"].value(), sp.right, places=3)
+            # 表单左对齐（用户点名要的）：macOS 风格默认把表单内容
+            # 整块水平居中，formAlignment 显式设左
+            text_box = next(b for b in dlg.findChildren(QGroupBox)
+                            if b.title() == "标题与轴标签")
+            self.assertEqual(text_box.layout().labelAlignment(),
+                             Qt.AlignLeft | Qt.AlignVCenter)
+            self.assertEqual(text_box.layout().formAlignment(),
+                             Qt.AlignLeft | Qt.AlignTop)
+            # 标题输入框加长（用户点名要的）
+            self.assertGreaterEqual(f["title"].minimumWidth(), 240)
+        finally:
+            w.hide()   # 见 TestPlotFixedSize：显示过的窗口关窗会弹模态框
+            w.close()
+
+    def test_apply_sets_title_labels_scale_and_margins(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_one(w)
+            dock, dlg = self._build(w)
+            f = dlg._fields
+            f["title"].setText("我的衍射图")
+            f["xlabel"].setText("角度")
+            f["ylabel"].setText("计数")
+            f["scale"].setCurrentIndex(f["scale"].findData("log"))
+            f["left"].setValue(0.2)
+            f["bottom"].setValue(0.15)
+            f["right"].setValue(0.85)
+            f["top"].setValue(0.8)
+            content = gui_app._content(dock)
+            gui_app._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            ax = content.axes_1d
+            self.assertEqual(ax.get_title(), "我的衍射图")
+            self.assertEqual(ax.get_xlabel(), "角度")
+            self.assertEqual(ax.get_ylabel(), "计数")
+            self.assertEqual(ax.get_yscale(), "log")
+            sp = content.figure.subplotpars
+            for name, value in (("left", 0.2), ("bottom", 0.15),
+                                ("right", 0.85), ("top", 0.8)):
+                self.assertAlmostEqual(getattr(sp, name), value, places=3)
+            self.assertIsNone(content.figure.get_layout_engine(),
+                              "边距由用户接管：tight layout 引擎退场")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_custom_edits_survive_redraw(self):
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_one(w)
+            dock, dlg = self._build(w)
+            f = dlg._fields
+            f["title"].setText("我的衍射图")
+            f["xlabel"].setText("角度")
+            f["ylabel"].setText("计数")
+            f["scale"].setCurrentIndex(f["scale"].findData("log"))
+            f["left"].setValue(0.2)
+            content = gui_app._content(dock)
+            gui_app._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            # 程序重画（等价于图像参数 [应用] 走的 _draw_1d 路径）
+            gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+            ax = content.axes_1d
+            self.assertEqual(ax.get_title(), "我的衍射图", "标题：用户为准")
+            self.assertEqual(ax.get_xlabel(), "角度", "X 标签：用户为准")
+            self.assertEqual(ax.get_ylabel(), "计数", "Y 标签：用户为准")
+            self.assertEqual(ax.get_yscale(), "log", "刻度：用户为准")
+            self.assertAlmostEqual(
+                content.figure.subplotpars.left, 0.2, places=3,
+                msg="边距不被重画覆盖")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_dialog_flow_accept_applies_cancel_keeps(self):
+        """[应用]/[取消] 两条完整路径（exec 打补丁，不真弹模态框）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_one(w)
+            key = "1D|data/fake_b.tif"
+            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            before = (content.axes_1d.get_title(),
+                      content.axes_1d.get_xlabel(),
+                      content.axes_1d.get_ylabel(),
+                      content.axes_1d.get_yscale())
+            # 取消路：exec 拒绝 → 图保持原样
+            with mock.patch.object(QDialog, "exec",
+                                   lambda self: QDialog.Rejected):
+                gui_app._open_customize_dialog(w, key)
+            self.assertEqual(
+                (content.axes_1d.get_title(), content.axes_1d.get_xlabel(),
+                 content.axes_1d.get_ylabel(), content.axes_1d.get_yscale()),
+                before, "取消不动图")
+            # 接受路：exec 里改字段再接受 → 改动生效
+            def _accept(self):
+                self._fields["title"].setText("流程标题")
+                self._fields["scale"].setCurrentIndex(
+                    self._fields["scale"].findData("log"))
+                return QDialog.Accepted
+            with mock.patch.object(QDialog, "exec", _accept):
+                gui_app._open_customize_dialog(w, key)
+            self.assertEqual(content.axes_1d.get_title(), "流程标题",
+                             "应用生效")
+            self.assertEqual(content.axes_1d.get_yscale(), "log")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_toolbar_customize_button_opens_our_dialog(self):
+        """工具栏 [Customize] 已从 mpl 子图配置器改接自绘对话框。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            self._open_one(w)
+            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            with mock.patch.object(gui_app, "_open_customize_dialog") as m:
+                content.toolbar._actions["edit_parameters"].trigger()
+            m.assert_called_once_with(w, "1D|data/fake_b.tif")
+        finally:
+            w.hide()
             w.close()
 
 

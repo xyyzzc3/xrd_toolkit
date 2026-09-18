@@ -32,8 +32,8 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     数 >= 2），每文件一个后台任务、全部算完再一起画；面板键 =
     f"对比|{排序后的路径们}"，重复点击同一选择 = 复用同一面板并
     重算；颜色自动循环（C0/C1/...），图例 = 显示名；对比归一化
-    （1D 显示组，下拉框四选一：各自最强峰（默认）/全图最强峰/
-    指定数据的最强峰/不归一化）只动显示层，曝光差很多的文件也
+    （1D 显示组，下拉框四选一：各自最强峰/全图最强峰/指定数据的
+    最强峰/不归一化（默认））只动显示层，曝光差很多的文件也
     看得清彼此峰形；1D 显示参数（对数/纵轴范围）对对比面板同样
     生效。
   - 图面板布局与比例（与用户讨论定稿）：每张图 = MDI 里的独立
@@ -69,14 +69,18 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
     只是纯开关，mpl 模式永远停在 NONE）。双击不回全图（Home 就是
     回首页）：Home = 回到最近一次画好的视图——滚轮缩放绕过 mpl
     手势、自己补记账（_wheel_zoom 懒记账）；程序重画（开图/应用/
-    恢复默认/对比刷新）会把"家"刷新成新画的视图（_refresh_home）。Customize = matplotlib 轴属性
-    对话框，里面改的归用户（_snapshot_canvas 等保护记账）：标题/
-    轴标签/曲线样式（颜色线型线宽标记图例名）/纵轴刻度，重画
-    一律不覆盖；只有参数面板里又改了一遍（显示名 → 标题、
-    [对数纵轴] → 刻度）才由参数接管。缩放/平移/Home/改范围都会
-    实时同步写回参数面板：视图 2θ 范围（只看图不参与计算，与
-    数据组的积分 2θ 范围互不干扰）+ 纵轴窗口（自动纵轴随之关掉
-    ——用户手动定的窗口由用户接管）。
+    恢复默认/对比刷新）会把"家"刷新成新画的视图（_refresh_home）。Customize = 自绘轴属性
+    对话框（表单标签左对齐、分节：[标题与轴标签] 标题/X 轴标签/
+    Y 轴标签、[纵轴刻度] 线性/对数、[图边距] 左/下/右/上 +
+    [恢复默认][取消][应用]；mpl 自带子图配置器被替换——英文
+    技术术语 + 单图无用的 hspace/wspace/Export values），里面改
+    的归用户（_snapshot_canvas 等保护记账）：标题/轴标签/曲线
+    样式（颜色线型线宽标记图例名）/纵轴刻度，重画一律不覆盖；
+    只有参数面板里又改了一遍（显示名 → 标题、[对数纵轴] → 刻度）
+    才由参数接管。边距改过 = 摘掉 tight layout 引擎，布局由用户
+    接管。缩放/平移/Home/改范围都会实时同步写回参数面板：视图
+    2θ 范围（只看图不参与计算，与数据组的积分 2θ 范围互不干扰）
+    + 纵轴窗口（自动纵轴随之关掉——用户手动定的窗口由用户接管）。
   - [保存] 是主动操作：弹窗勾选要保存的已出图面板 → 逐个选文件
     名存 PNG；另外关闭窗口时若有尚未保存的图会弹窗询问
     （保存后关闭 / 不保存直接关 / 取消留在程序里）。
@@ -116,7 +120,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QInputDialog, QListWidget, QListWidgetItem, QMainWindow,
+    QLabel, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMdiArea, QMdiSubWindow, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QToolBar, QVBoxLayout,
     QWidget, QDockWidget, QApplication)
@@ -317,8 +321,9 @@ _DISPLAY_DEFAULTS = {
     "纵轴下限": 1.0,
     "纵轴上限": 100000.0,
     # 对比归一化 = 模式（each 各自最强峰 / global 全图最强峰 /
-    # file 指定数据 / off 不归一化），"归一化目标" = file 模式用哪个文件
-    "对比归一化": "each",
+    # file 指定数据 / off 不归一化，默认 off = 原样画原始强度），
+    # "归一化目标" = file 模式用哪个文件
+    "对比归一化": "off",
     "归一化目标": "",
     "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
     "视图 2θ 上限 (°)": None,
@@ -1242,13 +1247,14 @@ class _SlimToolbar(NavigationToolbar2QT):
     光标为中心缩放（每格 10%）；熄灭 = 滚轮还给绘图区滚动。框选
     放大已删除（画框后再缩小会出 bug，且与滚轮缩放重复）。抓手/
     前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
-    一个入口；Customize = matplotlib 自带的轴属性对话框（改范围/
-    刻度/标题，范围改动经 xlim_changed 自动同步写回参数）；Save =
-    本面板另存为图片。父类 __init__ 按 toolitems 表逐个建按钮，
-    覆盖成只含这四个的表即可；放大镜 QAction mpl 自带 checkable，
-    点击自动亮灭翻转——把 mpl 的 triggered→zoom() 断开，按钮就
-    只当纯开关（mode 永远停在 NONE，不再进框选模式），toggled
-    信号接日志提示。
+    一个入口；Customize = 自绘轴属性对话框（标题/轴标签/纵轴刻度/
+    图边距，见 _open_customize_dialog；mpl 自带子图配置器被替换
+    ——那是英文技术术语，且 hspace/wspace/Export values 对单图
+    无用、字段还挤）；Save = 本面板另存为图片。父类 __init__ 按
+    toolitems 表逐个建按钮，覆盖成只含这四个的表即可；放大镜
+    QAction mpl 自带 checkable，点击自动亮灭翻转——把 mpl 的
+    triggered→zoom() 断开，按钮就只当纯开关（mode 永远停在
+    NONE，不再进框选模式），toggled 信号接日志提示。
 
     Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
     关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
@@ -1266,6 +1272,15 @@ class _SlimToolbar(NavigationToolbar2QT):
         # 点击只剩亮灭翻转；toggled 信号写日志
         self._actions["zoom"].triggered.disconnect()
         self._actions["zoom"].toggled.connect(self._log_zoom_toggle)
+        # Customize 断开 mpl 自带的图选项编辑器（edit_parameters =
+        # toolitem 的回调名，也是 _actions 的键），换成自绘轴属性对话框
+        self._actions["edit_parameters"].triggered.disconnect()
+        self._actions["edit_parameters"].triggered.connect(
+            self._open_customize)
+
+    def _open_customize(self):
+        if self._window is not None and self._panel_key is not None:
+            _open_customize_dialog(self._window, self._panel_key)
 
     def _log_zoom_toggle(self, on: bool) -> None:
         if self._window is not None:
@@ -1309,6 +1324,158 @@ def _save_panel(window: QMainWindow, key: str) -> None:
         return
     dock.figure_saved = True
     _log(window, f"已保存 {dock.windowTitle()} → {name}")
+
+
+def _open_customize_dialog(window: QMainWindow, key: str) -> None:
+    """Customize 按钮：自绘轴属性对话框（替换 mpl 自带子图配置器）。
+
+    内容 = 标题 / X 轴标签 / Y 轴标签 / 纵轴刻度（线性/对数）/
+    图边距（左/下/右/上）——单图面板真正用得上的字段。mpl 自带
+    的是英文技术术语（Left/Bottom/hspace/wspace/Export values），
+    hspace/wspace 对单图无用，字段还挤；自绘版：表单标签左对齐、
+    按节分组、[恢复默认][取消][应用] 按钮行（应用 = 生效并关闭，
+    与"用户改的归用户"保护记账配套，见 _snapshot_canvas）。
+
+    边距改动的坑：面板画布建在 tight_layout=True 的 Figure 上，
+    布局引擎每次 draw 都会把 subplots_adjust 的边距算回去——应用
+    时先把布局引擎摘掉（set_layout_engine(None)），边距由用户接管，
+    不再被程序重排。标题/轴标签/刻度改了重画不覆盖：_apply_text_guards
+    /_settle_scale 会认出"用户改过"（重画前快照与默认基准不符 =
+    用户为准）。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    content = _content(dock)
+    ax = getattr(content, "axes_1d", None)
+    fig = getattr(content, "figure", None)
+    if ax is None or fig is None:
+        return   # 占位面板还没有图
+    dlg = _build_customize_dialog(window, dock, ax, fig)
+    if dlg.exec() != QDialog.Accepted:
+        return   # 取消：图保持原样
+    _apply_customize(window, dock, ax, fig, dlg)
+
+
+def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
+    """搭 Customize 对话框并预填当前轴状态（供 _open_customize_dialog
+    与测试复用：测试可直改 _fields 再走 _apply_customize）。"""
+    dlg = QDialog(window)
+    dlg.setWindowTitle(f"Customize — {dock.panel_display}")
+    dlg.setMinimumWidth(460)
+    root = QVBoxLayout(dlg)
+    # 表单统一左对齐（用户点名要的）：macOS 风格默认把表单内容
+    # 整块水平居中（真机探针实测 formAlignment = AlignHCenter），
+    # 标签/输入框全停在对话框中间——formAlignment 显式设左，标签
+    # 列和输入框整块贴左；标签文本自身也设左对齐
+    label_align = Qt.AlignLeft | Qt.AlignVCenter
+    form_align = Qt.AlignLeft | Qt.AlignTop
+
+    text_box = QGroupBox("标题与轴标签")
+    text_form = QFormLayout(text_box)
+    text_form.setLabelAlignment(label_align)
+    text_form.setFormAlignment(form_align)
+    title = QLineEdit(ax.get_title())
+    title.setMinimumWidth(240)   # 标题输入框加长（列宽跟随变宽）
+    xlabel = QLineEdit(ax.get_xlabel())
+    ylabel = QLineEdit(ax.get_ylabel())
+    text_form.addRow("标题", title)
+    text_form.addRow("X 轴标签", xlabel)
+    text_form.addRow("Y 轴标签", ylabel)
+    root.addWidget(text_box)
+
+    scale_box = QGroupBox("纵轴刻度")
+    scale_form = QFormLayout(scale_box)
+    scale_form.setLabelAlignment(label_align)
+    scale_form.setFormAlignment(form_align)
+    scale = QComboBox()
+    scale.addItem("线性", "linear")
+    scale.addItem("对数", "log")
+    cur_scale = ax.get_yscale()
+    idx = scale.findData(cur_scale)
+    scale.setCurrentIndex(idx if idx >= 0 else 0)
+    scale_form.addRow("刻度", scale)
+    root.addWidget(scale_box)
+
+    margin_box = QGroupBox("图边距")
+    margin_form = QFormLayout(margin_box)
+    margin_form.setLabelAlignment(label_align)
+    margin_form.setFormAlignment(form_align)
+
+    def _spin(value):
+        s = QDoubleSpinBox()
+        s.setRange(0.0, 1.0)   # 边距 = 占图宽的分数；tight layout 会算出
+        # 0.96 这类大值，上限设 1 才装得下
+        s.setDecimals(3)
+        s.setSingleStep(0.005)
+        s.setKeyboardTracking(False)
+        s.setValue(value)
+        return s
+
+    sp = fig.subplotpars
+    fields = {
+        "left": _spin(sp.left), "bottom": _spin(sp.bottom),
+        "right": _spin(sp.right), "top": _spin(sp.top),
+    }
+    margin_form.addRow("左边距", fields["left"])
+    margin_form.addRow("下边距", fields["bottom"])
+    margin_form.addRow("右边距", fields["right"])
+    margin_form.addRow("上边距", fields["top"])
+    root.addWidget(margin_box)
+
+    btn_row = QHBoxLayout()
+    reset = QPushButton("恢复默认")
+    cancel = QPushButton("取消")
+    apply_btn = QPushButton("应用")
+    apply_btn.setDefault(True)
+    cancel.clicked.connect(dlg.reject)
+    apply_btn.clicked.connect(dlg.accept)
+    reset.clicked.connect(lambda: _reset_customize_fields(dock, dlg._fields))
+    btn_row.addWidget(reset)
+    btn_row.addStretch(1)
+    btn_row.addWidget(cancel)
+    btn_row.addWidget(apply_btn)
+    root.addLayout(btn_row)
+
+    dlg._fields = {"title": title, "xlabel": xlabel, "ylabel": ylabel,
+                   "scale": scale, **fields}
+    return dlg
+
+
+def _reset_customize_fields(dock, fields) -> None:
+    """[恢复默认]：各字段回到该面板的默认外观（只改对话框里的值，
+    点 [应用] 才生效）。"""
+    fields["title"].setText(f"{dock.panel_display}: full azimuthal integration")
+    fields["xlabel"].setText("2θ (deg)")
+    fields["ylabel"].setText("Intensity (a.u.)")
+    fields["scale"].setCurrentIndex(fields["scale"].findData("linear"))
+    for name, value in (("left", 0.125), ("bottom", 0.11),
+                        ("right", 0.9), ("top", 0.88)):
+        fields[name].setValue(value)
+
+
+def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
+    """把对话框字段写进轴 + 画布重画（[应用] 或测试直调）。
+
+    刻度换了自动纵轴就按新刻度重算（手动纵轴不动，由用户管）；
+    边距应用前先把 tight layout 引擎摘掉，否则 draw 时布局引擎
+    会把用户边距算回去（见 _open_customize_dialog 的 docstring）。
+    """
+    f = dlg._fields
+    ax.set_title(f["title"].text())
+    ax.set_xlabel(f["xlabel"].text())
+    ax.set_ylabel(f["ylabel"].text())
+    scale = f["scale"].currentData()
+    if scale != ax.get_yscale():
+        ax.set_yscale(scale)
+        if _panel_param(window, dock, "纵轴自动", True):
+            ax.relim()
+            ax.autoscale_view(scaley=True)
+    fig.set_layout_engine(None)   # 边距由用户接管：tight layout 退场
+    fig.subplots_adjust(left=f["left"].value(), bottom=f["bottom"].value(),
+                        right=f["right"].value(), top=f["top"].value())
+    _content(dock).draw()
+    _log(window, f"已应用 Customize 设置：{dock.windowTitle()}")
 
 
 def _magnifier_on(dock) -> bool:
@@ -1592,13 +1759,13 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     显示的区间才跟图对得上。
 
     归一化四模式（与用户讨论定稿）：
-      each   各自最强峰：每条曲线除以自己的最强峰（默认）
+      each   各自最强峰：每条曲线除以自己的最强峰
       global 全图最强峰：所有曲线除以全部曲线里最高的峰
       file   指定数据：所有曲线除以"归一化目标"那个文件的最强峰
-      off    不归一化（原样画原始强度）
+      off    不归一化（默认：原样画原始强度）
     旧快照里的 True/False 兼容（True = each、False = off）。
     """
-    mode = _panel_param(window, dock, "对比归一化", "each")
+    mode = _panel_param(window, dock, "对比归一化", "off")
     if isinstance(mode, bool):   # 旧快照兼容：True = 各自最强峰
         mode = "each" if mode else "off"
     target_path = _panel_param(window, dock, "归一化目标", "") \
@@ -1954,15 +2121,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # 对比归一化（与用户讨论定稿：下拉框四选一）——叠图时强度差
     # 很大的文件不归一会被强者压扁。四种模式：
-    #   each   各自最强峰：每条曲线除以自己的最强峰（默认）
+    #   each   各自最强峰：每条曲线除以自己的最强峰
     #   global 全图最强峰：所有曲线除以全部曲线里最高的峰
     #   file   指定数据：所有曲线除以旁边下拉框选的文件的最强峰
-    #   off    不归一化（原样画原始强度）
+    #   off    不归一化（默认：原样画原始强度）
     # 归一化只动显示层，原始结果原样保留在 compare_data。
     cmp_norm = QComboBox()
     for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
                        ("指定数据…", "file"), ("不归一化", "off")):
         cmp_norm.addItem(text, data)
+    cmp_norm.setCurrentIndex(cmp_norm.findData("off"))   # 默认 = 不归一化
     cmp_norm.setToolTip("叠图归一化：各自最强峰 / 全图最强峰 / "
                         "指定数据的最强峰 / 不归一化")
     window.params["对比归一化"] = cmp_norm
@@ -1981,7 +2149,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         norm_target.setEnabled(cmp_norm.currentData() == "file")
 
     cmp_norm.currentIndexChanged.connect(sync_norm_target)
-    sync_norm_target()   # 初始 = 各自最强峰 → 目标下拉框置灰
+    sync_norm_target()   # 初始 = 不归一化 → 目标下拉框置灰
 
     def sync_ylim(checked):
         window.params["纵轴下限"].setEnabled(not checked)
@@ -1998,7 +2166,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "剖面角度 (°)": 0.0,
         "对数纵轴": False,
         "纵轴自动": True,
-        "对比归一化": "each",
+        "对比归一化": "off",
         "归一化目标": "",
     }
     btn_reset_img = QPushButton("恢复默认")
