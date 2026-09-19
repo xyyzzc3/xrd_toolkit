@@ -13,10 +13,11 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
 
 界面分工：
   - 参数坞第 2 页 = _build_calib_form（模式单选 + 自动/手动按钮区 +
-    结果三列区 自动|手动|Δ偏差 + 配置条目模板 + 复制按钮）。两种
-    模式共用同一结果区与保存机制：CONFIGS 条目模板 + 复制按钮，
-    不写 config.py（沿用 CLI 人工复核规矩）。本期不做"采用结果到
-    会话"。
+    结果三列区 自动|手动|Δ偏差 + 保存为配置区）。两种模式共用同一
+    结果区与保存机制：最近完成模式的结果可直接存成命名用户条目
+    （config_user.json，不进 git），保存后分析页"几何配置"下拉框
+    立即出现并自动选中（几何填进参数坞）。内置 config.py 注册表
+    仍走 CLI 模板人工登记（见 config.py 文件头）。
   - 中央校准图面板 = _CalibSubWindow（MDI 子窗口，imshow + 理论环
     圆圈 + 控制点/用户点标记，只接鼠标点击）。不进 plot_docks：
     不掺和编辑对象焦点、平铺、总缩放；无手势无抓手（v1 从简）。
@@ -30,6 +31,7 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
                 "manual": 结果|None, "last": 最近完成模式}——关闭
                 面板即全清（关闭即遗忘）
 """
+import re
 from pathlib import Path
 
 import numpy as np
@@ -40,14 +42,15 @@ from matplotlib.patches import Circle
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QMainWindow, QMdiSubWindow, QPlainTextEdit,
-    QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget)
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMdiSubWindow,
+    QMessageBox, QPushButton, QRadioButton, QScrollArea, QVBoxLayout,
+    QWidget)
 
-from xrd_toolkit.config import config_entry_template
+from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.panel_state import (
-    _auto_contrast_values, _collect_geometry, _log)
+    _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import (
@@ -291,9 +294,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     布局（自上而下）：说明文字 → 模式单选（自动/手动）→ 自动区
     [开始自动校准] → 手动区（点数标签 + [撤销一点][清空] +
     [开始手动校准]，≥3 点且 ≥2 环才启用）→ 结果区（三列：自动 |
-    手动 | Δ偏差）→ 模板区（只读 + 复制按钮）。整个页面套滚动区
-    （参数坞窄，放不下时滚动）。模式单选只是意图表达（两种模式可
-    都跑、结果并列显示），不锁按钮。
+    手动 | Δ偏差）→ 保存区（key/label 输入 + 保存来源提示 +
+    [保存为配置]）。整个页面套滚动区（参数坞窄，放不下时滚动）。
+    模式单选只是意图表达（两种模式可都跑、结果并列显示），不锁按钮。
     """
     page = QWidget()
     lay = QVBoxLayout(page)
@@ -386,21 +389,38 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
             window.calib_vals[col][key_] = label
     lay.addWidget(result_box)
 
-    # 模板区：CONFIGS 条目模板（只读）+ 复制按钮
-    tmpl_box = QGroupBox("配置条目模板")
-    tmpl_lay = QVBoxLayout(tmpl_box)
-    window.calib_template = QPlainTextEdit()
-    window.calib_template.setReadOnly(True)
-    window.calib_template.setPlaceholderText(
-        "校准完成后生成；复制粘贴进 config.py 的 CONFIGS（人工复核）。")
-    window.calib_template.setMaximumHeight(160)
-    tmpl_lay.addWidget(window.calib_template)
-    btn_copy = QPushButton("复制到剪贴板")
-    tmpl_lay.addWidget(btn_copy)
-    window.calib_copy_btn = btn_copy
-    btn_copy.clicked.connect(lambda: _copy_calib_template(window))
-    lay.addWidget(tmpl_box)
+    # 保存区：校准结果直接存成命名配置条目（本地用户文件，替换旧
+    # 模板区——不再复制粘贴，保存即登记；保存后下拉框自动选中新条目）
+    save_box = QGroupBox("保存为几何配置")
+    save_lay = QVBoxLayout(save_box)
+    save_hint = QLabel("把最近完成的校准结果存成命名配置条目：保存后"
+                       "立即出现在分析页“几何配置”下拉框（重启后仍在，"
+                       "命令行脚本同样可用 --config 选取）。条目写入"
+                       "本地文件 config_user.json（不进 git），与人工"
+                       "登记的内置条目互不干扰。")
+    save_hint.setWordWrap(True)
+    save_lay.addWidget(save_hint)
+    key_edit = QLineEdit()
+    key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
+    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
+    save_lay.addWidget(key_edit)
+    label_edit = QLineEdit()
+    label_edit.setPlaceholderText(
+        "批次备注（label），如：lmfp 第 2 批（LaB₆ 标样标定）")
+    save_lay.addWidget(label_edit)
+    source_label = QLabel("尚未有校准结果")
+    source_label.setStyleSheet("color: gray;")
+    save_lay.addWidget(source_label)
+    btn_save = QPushButton("保存为配置")
+    btn_save.setObjectName("save_calib_config")
+    save_lay.addWidget(btn_save)
+    lay.addWidget(save_box)
     lay.addStretch(1)
+    window.calib_key_edit = key_edit
+    window.calib_label_edit = label_edit
+    window.calib_save_hint = source_label
+    window.calib_save_btn = btn_save
+    btn_save.clicked.connect(lambda: _save_calib_config(window))
 
     # 套滚动区：参数坞窄，放不下时滚动（与分析页滚动区同一套路）
     scroll = QScrollArea()
@@ -413,23 +433,38 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
 
 
 def _reset_calib_form(window: QMainWindow) -> None:
-    """表单复位：结果三列清空、点数标签归零、模板清空、按钮复位。"""
+    """表单复位：结果三列清空、点数标签归零、按钮复位。"""
     for col in ("auto", "manual", "delta"):
         for label in window.calib_vals[col].values():
             label.setText("—")
-    window.calib_template.setPlainText("")
     _calib_sync(window)
 
 
 def _calib_sync(window: QMainWindow) -> None:
-    """点数标签 + 手动按钮启用逻辑：≥3 点且 ≥2 环才可开始。"""
-    points = _calib_state(window)["points"]
+    """点数标签 + 手动按钮启用逻辑 + 保存按钮/来源提示同步。
+
+    手动按钮：≥3 点且 ≥2 环才可开始；保存按钮：最近一次完成的校准
+    结果存在才可存（无结果时置灰，来源提示随"最近完成模式"更新）。
+    """
+    state = _calib_state(window)
+    points = state["points"]
     n_rings = len({p[2] for p in points})
     window.calib_points_label.setText(f"已选 {len(points)} 个点 / {n_rings} 个环")
     ok = len(points) >= MIN_POINTS and n_rings >= MIN_RINGS
     window.calib_start_manual.setEnabled(ok)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
+    mode = state.get("last")
+    result = state.get(mode) if mode else None
+    if result is None:
+        window.calib_save_btn.setEnabled(False)
+        window.calib_save_hint.setText("尚未有校准结果")
+    else:
+        window.calib_save_btn.setEnabled(True)
+        window.calib_save_hint.setText(
+            f"将保存：{'自动' if mode == 'auto' else '手动'}校准"
+            f"（距离 {result['dist_m'] * 1000:.2f} mm，"
+            f"残差 {result['residual_deg']:.4f}°）")
 
 
 # ══ 手动选点：点击判环 / 撤销 / 清空 ══════════════════════════
@@ -489,25 +524,36 @@ def _clear_calib_points(window: QMainWindow) -> None:
 
 # ══ 后台任务：自动 / 手动（_spawn 同款守卫）═══════════════════
 def _auto_calib_worker(path_str: str, geom: dict) -> dict:
-    """后台线程纯计算：读标样 → 自动定环心（FFT 兜底）→ pyFAI 精修。"""
+    """后台线程纯计算：读标样 → 自动定环心（FFT 兜底）→ pyFAI 精修。
+
+    结果附 beam_center_rc：(行, 列) 像素——这次新拟合的环心就是直射
+    束落点 B（比沿用配置条目的旧 B 更准），[保存为配置] 用它入条目。
+    """
     image = load_diffraction_image(path_str)
     center = fit_center_from_rings(image)
     if center is None:
         cy, cx = find_ring_center(image)
     else:
         cy, cx = center["cy"], center["cx"]
-    return calibrate_lab6(
+    result = calibrate_lab6(
         image, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
         center0_px=(cx, cy))
+    result["beam_center_rc"] = (cy, cx)
+    return result
 
 
 def _manual_calib_worker(points, rings, geom: dict, center0_px: tuple) -> dict:
-    """后台线程纯计算：用户点 → pyFAI refine2 单轮精修。"""
-    return refine_lab6_from_points(
+    """后台线程纯计算：用户点 → pyFAI refine2 单轮精修。
+
+    结果附 beam_center_rc：手动精修不动束心（初值 = 配置条目 B），
+    保存时沿用初值 B（与旧模板机制一致）。"""
+    result = refine_lab6_from_points(
         points, rings, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
         center0_px=center0_px)
+    result["beam_center_rc"] = (center0_px[1], center0_px[0])
+    return result
 
 
 def _start_auto_calib(window: QMainWindow) -> None:
@@ -599,7 +645,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
     task.start()
 
 
-# ══ 结果 / Δ / 模板 ══════════════════════════════════════════
+# ══ 结果 / Δ / 保存为配置 ════════════════════════════════════
 def _on_auto_done(window: QMainWindow, result: dict) -> None:
     """自动校准完成（主线程）：自动列填值 + 图按新几何重画（环圈 +
     绿点控制点）+ 模板刷新。"""
@@ -609,7 +655,7 @@ def _on_auto_done(window: QMainWindow, result: dict) -> None:
     _fill_calib_result(window, "auto", result)
     _fill_calib_delta(window)
     _redraw_calib(window)
-    _refresh_calib_template(window)
+    _calib_sync(window)
     _log(window, f"自动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
                  f"残差 {result['residual_deg']:.4f}°")
@@ -623,7 +669,7 @@ def _on_manual_done(window: QMainWindow, result: dict) -> None:
     _fill_calib_result(window, "manual", result)
     _fill_calib_delta(window)
     _redraw_calib(window)
-    _refresh_calib_template(window)
+    _calib_sync(window)
     _log(window, f"手动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"残差 {result['residual_deg']:.4f}°")
     if state.get("manual_n", 99) < 6:
@@ -662,35 +708,87 @@ def _fill_calib_delta(window: QMainWindow) -> None:
     vals["resid"].setText(f"{m['residual_deg'] - a['residual_deg']:+.4f}")
 
 
-def _refresh_calib_template(window: QMainWindow) -> None:
-    """模板 = 最近一次完成模式的结果（两种模式的保存机制共用）。
+def _suggest_config_key(current_key: str) -> str:
+    """从当前配置 key 递推新条目建议名：lmfp1_lab6 → lmfp2_lab6。
 
-    与 CLI 同格式（config_entry_template 逐字一致），beam_center
-    用配置条目的束心 B。
+    懒前缀匹配**第一个**数字段 +1（新批次编号顺延，命名约定见
+    config.py；后缀里再出现数字不受影响，如 "_lab6" 的 6 不动）；
+    对不上该模式就退回通用提示名。
+    """
+    m = re.match(r"^(.*?)(\d+)(.*)$", current_key)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)) + 1}{m.group(3)}"
+    return "lab6_calib"
+
+
+def _confirm_overwrite(window: QMainWindow, key: str) -> bool:
+    """用户条目重名确认：覆盖返回 True（用户自己拍板，点击即复核）。"""
+    return QMessageBox.question(
+        window, "覆盖已有配置",
+        f"用户配置 {key} 已存在。用这次的校准结果覆盖它吗？"
+    ) == QMessageBox.Yes
+
+
+def _save_calib_config(window: QMainWindow) -> None:
+    """[保存为配置]：最近完成的校准结果 → 命名用户条目（本地落盘）。
+
+    校验 key/label → 与内置条目撞名拒绝、与已存用户条目撞名弹确认
+    覆盖 → config.save_user_config 落盘 → 下拉框重建并自动选中新
+    条目（_apply_config 把几何填进参数坞，保存即生效）。
+
+    保存的 geometry = 校准结果（距离/PONI/倾斜角）+ 参数坞当前像素
+    /波长输入；束心 = 结果附带的 beam_center_rc（自动 = 新拟合环心，
+    手动 = 初值 B）；residual_deg 一并存入作诊断量（消费方忽略）。
     """
     state = _calib_state(window)
     mode = state.get("last")
     result = state.get(mode) if mode else None
     if result is None:
-        window.calib_template.setPlainText("")
+        _log(window, "没有可保存的校准结果（先跑一次自动或手动校准）")
+        return
+    key = window.calib_key_edit.text().strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        _log(window, "key 无效：只允许字母/数字/下划线，且以字母或"
+                     "下划线开头（如 lmfp2_lab6）")
+        return
+    if key in config.BUILTIN_CONFIGS:
+        _log(window, f"key {key} 与内置条目重名（内置条目人工登记，"
+                     "不可覆盖），换一个名字")
+        return
+    label = window.calib_label_edit.text().strip()
+    if not label:
+        _log(window, "请先填写批次备注（label）")
+        return
+    if key in config.USER_CONFIGS and not _confirm_overwrite(window, key):
         return
     g = _collect_geometry(window)
-    geometry = dict(result)
-    geometry.setdefault("pixel_size_m", g["pixel_size_m"])
-    geometry.setdefault("wavelength_m", g["wavelength_m"])
-    text = config_entry_template(geometry=geometry,
-                                 beam_center_rc=window.config["beam_center"])
-    window.calib_template.setPlainText(text)
-
-
-def _copy_calib_template(window: QMainWindow) -> None:
-    """[复制到剪贴板]：模板文本入系统剪贴板（粘贴进 config.py 复核）。"""
-    text = window.calib_template.toPlainText()
-    if not text:
-        _log(window, "没有可复制的模板（先跑一次校准）")
+    pixel = g["pixel_size_m"]
+    entry = {
+        "label": label,
+        "geometry": {
+            "pixel_size_m": pixel,
+            "wavelength_m": g["wavelength_m"],
+            "dist_m": result["dist_m"],
+            "poni1_m": result["poni1_px"] * pixel,
+            "poni2_m": result["poni2_px"] * pixel,
+            "rot1_deg": result["rot1_deg"],
+            "rot2_deg": result["rot2_deg"],
+        },
+        "beam_center": tuple(
+            result.get("beam_center_rc", window.config["beam_center"])),
+        "residual_deg": result["residual_deg"],
+    }
+    try:
+        is_new = config.save_user_config(key, entry)
+    except ValueError as err:
+        _log(window, f"保存失败：{err}")
         return
-    QApplication.clipboard().setText(text)
-    _log(window, "已复制配置条目模板")
+    _reload_config_combo(window, key)
+    if is_new:
+        _log(window, f"已保存新配置条目 {key} 并自动选中；重启后仍在，"
+                     f"命令行脚本可用 --config {key} 取用")
+    else:
+        _log(window, f"已覆盖配置条目 {key} 并自动选中")
 
 
 # ══ 模式进出（app._on_mode 调用）══════════════════════════════

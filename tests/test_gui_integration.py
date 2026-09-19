@@ -31,11 +31,13 @@
     24px 小错位级联（6 档循环）、按当前总缩放开；
   - 关闭面板 = 关闭即遗忘：重开全新默认，关窗询问只算开着的图，
     在飞任务/旧代对比结果迟到即作废；
-  - 校准工作台（TestCalibration）：[校准] 进模式 = 参数坞换页 +
-    中央校准图面板开出（勾选的第一个文件；没勾文件只提示）；
-    自动校准后台跑（mock 引擎）→ 自动列 + 模板 + 剪贴板；校准图
-    点环判环吸附/拒点、撤销/清空、手动校准 → 手动列 + Δ 列；
-    面板关/退出模式后迟到结果作废；连点重跑旧任务过期。
+  - 校准工作台（TestCalibration / TestSaveCalibConfig）：[校准] 进
+    模式 = 参数坞换页 + 中央校准图面板开出（勾选的第一个文件；没勾
+    文件只提示）；自动校准后台跑（mock 引擎）→ 自动列 + 保存区提示；
+    校准图点环判环吸附/拒点、撤销/清空、手动校准 → 手动列 + Δ 列；
+    面板关/退出模式后迟到结果作废；连点重跑旧任务过期；[保存为配置]
+    = key/label 校验 + 落盘临时用户文件 + 下拉框同步自动选中 +
+    覆盖确认。
 
 等待方式与 test_gui_tasks.py 相同：回调 + processEvents 轮询
 （QSignalSpy.wait 不处理跨线程投递，见该文件说明）。
@@ -44,6 +46,7 @@
 """
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -63,8 +66,9 @@ from PySide6.QtGui import QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout,
-    QLabel, QPushButton, QScrollArea, QSplitter, QVBoxLayout)
+    QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout)
 
+from xrd_toolkit import config as config_mod
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui.app import create_window
 # 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
@@ -4204,7 +4208,7 @@ class TestCalibration(unittest.TestCase):
         finally:
             w.close()
 
-    def test_auto_calib_fills_result_and_template(self):
+    def test_auto_calib_fills_result_and_enables_save(self):
         w = create_window()
         try:
             w.show()
@@ -4231,14 +4235,10 @@ class TestCalibration(unittest.TestCase):
             # 图按新几何重画：控制点绿点（一条 2 点散点线）画上
             self.assertTrue(any(len(line.get_xdata()) == 2
                                 for line in w.calib_ax.lines))
-            # 模板 = 自动结果 + 配置束心（与 CLI 同格式）
-            tmpl = w.calib_template.toPlainText()
-            self.assertIn("dist_m=1.59580,", tmpl)
-            self.assertIn('"beam_center": (1022.00, 1022.30),', tmpl)
-            # 复制入系统剪贴板
-            w.calib_copy_btn.click()
-            self.assertIn("已复制配置条目模板", self._logs(w))
-            self.assertIn("dist_m=1.59580,", QApplication.clipboard().text())
+            # 保存区：来源提示 + 保存按钮启用（保存流程另测）
+            self.assertTrue(w.calib_save_btn.isEnabled())
+            self.assertEqual(w.calib_save_hint.text(),
+                             "将保存：自动校准（距离 1595.80 mm，残差 0.0040°）")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -4295,7 +4295,7 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_delta_column_and_last_template(self):
+    def test_delta_column_and_last_save_source(self):
         w = create_window()
         try:
             w.show()
@@ -4322,9 +4322,9 @@ class TestCalibration(unittest.TestCase):
                 self.assertEqual(d["dist"].text(), "+0.40")
                 self.assertEqual(d["poni"].text(), "1.56")
                 self.assertEqual(d["resid"].text(), "+0.0080")
-                # 模板 = 最近一次完成的模式（自动后跑 → 自动结果）
-                self.assertIn("dist_m=1.59580,",
-                              w.calib_template.toPlainText())
+                # 保存来源 = 最近一次完成的模式（自动后跑 → 自动结果）
+                self.assertIn("将保存：自动校准",
+                              w.calib_save_hint.text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -4429,11 +4429,205 @@ class TestCalibration(unittest.TestCase):
                 self.assertEqual(w.calib_points_label.text(),
                                  "已选 0 个点 / 0 个环")
                 self.assertFalse(w.calib_start_manual.isEnabled())
-                self.assertEqual(w.calib_template.toPlainText(), "")
+                self.assertFalse(w.calib_save_btn.isEnabled())
+                self.assertEqual(w.calib_save_hint.text(), "尚未有校准结果")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
                 w.close()
+
+
+class TestSaveCalibConfig(unittest.TestCase):
+    """[保存为配置]：校验 / 落盘 / 下拉框同步选中 / 覆盖确认 / worker 束心。
+
+    save 走真 config.save_user_config（写临时目录的真文件），
+    USER_CONFIG_PATH 指向临时路径（不碰仓库真文件），收尾还原
+    USER_CONFIGS / CONFIGS 内存字典。引擎照旧 mock。
+    """
+
+    FAKE_AUTO = dict(TestCalibration.FAKE_AUTO)
+    FAKE_MANUAL = dict(TestCalibration.FAKE_MANUAL)
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._path = Path(self._tmpdir) / "config_user.json"
+        patcher = mock.patch.object(config_mod, "USER_CONFIG_PATH",
+                                    self._path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._user_backup = dict(config_mod.USER_CONFIGS)
+        self._confs_backup = dict(config_mod.CONFIGS)
+
+    def tearDown(self):
+        config_mod.USER_CONFIGS.clear()
+        config_mod.USER_CONFIGS.update(self._user_backup)
+        config_mod.CONFIGS.clear()
+        config_mod.CONFIGS.update(self._confs_backup)
+
+    def _auto_calib(self, w):
+        """进校准模式跑一次 mock 自动校准（worker 真跑、引擎 mock）。"""
+        with mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=np.ones((256, 256)) * 10), \
+             mock.patch.object(gui_calib, "fit_center_from_rings",
+                               return_value=TestCalibration.FAKE_CENTER), \
+             mock.patch.object(gui_calib, "calibrate_lab6",
+                               return_value=dict(self.FAKE_AUTO)):
+            w.add_files(["data/fake_a.tif"])
+            w.calib_btn.click()
+            w.calib_start_auto.click()
+            self.assertTrue(_wait_until(
+                lambda: w.calib_state["auto"] is not None, 8000))
+
+    def test_save_adds_to_combo_and_selects(self):
+        """保存 → 下拉框出现新条目并自动选中（几何填进参数坞 + 落盘）。"""
+        w = create_window()
+        try:
+            w.show()
+            self._auto_calib(w)
+            w.calib_key_edit.setText("lmfp2_lab6")
+            w.calib_label_edit.setText("lmfp 第 2 批（LaB₆ 标样标定）")
+            w.calib_save_btn.click()
+            # 下拉框：新条目出现 + 自动选中
+            idx = w.config_combo.findData("lmfp2_lab6")
+            self.assertGreaterEqual(idx, 0)
+            self.assertEqual(w.config_combo.currentIndex(), idx)
+            self.assertEqual(w.config_name, "lmfp2_lab6")
+            # 几何填进参数坞：距离 = 校准结果（1595.80，不是初值 1600）
+            self.assertAlmostEqual(w.params["初始距离 (mm)"].value(),
+                                   1595.8, places=1)
+            # 条目内容：结果几何 + 参数坞像素/波长 + 新拟合束心 B
+            cfg = w.config
+            self.assertEqual(cfg["label"], "lmfp 第 2 批（LaB₆ 标样标定）")
+            self.assertAlmostEqual(cfg["geometry"]["dist_m"], 1.5958)
+            self.assertAlmostEqual(cfg["geometry"]["poni1_m"],
+                                   1045.2 * 200e-6)
+            self.assertEqual(cfg["beam_center"],
+                             (TestCalibration.FAKE_CENTER["cy"],
+                              TestCalibration.FAKE_CENTER["cx"]))
+            # 落盘真文件 + 内存注册表 + 日志
+            self.assertTrue(self._path.is_file())
+            self.assertIn("lmfp2_lab6", config_mod.CONFIGS)
+            self.assertIn("已保存新配置条目", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_save_validation_errors(self):
+        """key/label 校验 + 内置重名拒绝：只记日志、不落盘。"""
+        w = create_window()
+        try:
+            w.show()
+            self._auto_calib(w)
+            # 非法 key
+            w.calib_key_edit.setText("lmfp 2")
+            w.calib_label_edit.setText("某批次")
+            w.calib_save_btn.click()
+            self.assertIn("key 无效", w.log_text.toPlainText())
+            # 内置重名
+            w.calib_key_edit.setText("lmfp1_lab6")
+            w.calib_save_btn.click()
+            self.assertIn("与内置条目重名", w.log_text.toPlainText())
+            # 空 label
+            w.calib_key_edit.setText("lmfp2_lab6")
+            w.calib_label_edit.setText("  ")
+            w.calib_save_btn.click()
+            self.assertIn("请先填写批次备注", w.log_text.toPlainText())
+            self.assertFalse(self._path.exists())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_save_overwrite_asks_and_can_confirm(self):
+        """已存用户条目重名：弹确认，No 不动 / Yes 覆盖。"""
+        w = create_window()
+        try:
+            w.show()
+            self._auto_calib(w)
+            w.calib_key_edit.setText("lmfp2_lab6")
+            w.calib_label_edit.setText("第 2 批")
+            w.calib_save_btn.click()
+            self.assertIn("lmfp2_lab6", config_mod.USER_CONFIGS)
+            # 同 key 再存 → 确认框 No：不覆盖
+            with mock.patch.object(gui_calib.QMessageBox, "question",
+                                   return_value=QMessageBox.No):
+                w.calib_save_btn.click()
+            self.assertEqual(config_mod.USER_CONFIGS["lmfp2_lab6"]["label"],
+                             "第 2 批")
+            # 确认框 Yes：覆盖
+            w.calib_label_edit.setText("第 2 批（重标定）")
+            with mock.patch.object(gui_calib.QMessageBox, "question",
+                                   return_value=QMessageBox.Yes):
+                w.calib_save_btn.click()
+            self.assertEqual(config_mod.USER_CONFIGS["lmfp2_lab6"]["label"],
+                             "第 2 批（重标定）")
+            self.assertIn("已覆盖配置条目", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_suggest_config_key(self):
+        """key 建议名：第一个数字段 +1，后缀数字（_lab6 的 6）不动。"""
+        self.assertEqual(gui_calib._suggest_config_key("lmfp1_lab6"),
+                         "lmfp2_lab6")
+        self.assertEqual(gui_calib._suggest_config_key("lmfp12_lab6"),
+                         "lmfp13_lab6")
+        self.assertEqual(gui_calib._suggest_config_key("n7m3"), "n8m3")
+        self.assertEqual(gui_calib._suggest_config_key("no_digits"),
+                         "lab6_calib")
+
+    def test_save_requires_result(self):
+        """没有校准结果：按钮置灰 + 直调处理函数记日志拒绝。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+            self.assertFalse(w.calib_save_btn.isEnabled())
+            self.assertEqual(w.calib_save_hint.text(), "尚未有校准结果")
+            gui_calib._save_calib_config(w)   # 按钮置灰点不到：直调处理函数
+            self.assertIn("没有可保存的校准结果", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_workers_attach_beam_center(self):
+        """worker 附带 beam_center_rc：自动 = 新拟合环心，手动 = 初值 B。"""
+        image = np.ones((256, 256)) * 10
+        geom = {"pixel_size_m": 200e-6, "wavelength_m": 0.1223e-10,
+                "dist_m": 1.5958}   # worker 先读几何键再调引擎（引擎 mock）
+        with mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=image), \
+             mock.patch.object(gui_calib, "fit_center_from_rings",
+                               return_value=TestCalibration.FAKE_CENTER), \
+             mock.patch.object(gui_calib, "calibrate_lab6",
+                               return_value=dict(self.FAKE_AUTO)):
+            res = gui_calib._auto_calib_worker("data/fake_a.tif", geom)
+        self.assertEqual(res["beam_center_rc"],
+                         (TestCalibration.FAKE_CENTER["cy"],
+                          TestCalibration.FAKE_CENTER["cx"]))
+        # 取点拟合失败 → FFT 兜底同样附带
+        with mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=image), \
+             mock.patch.object(gui_calib, "fit_center_from_rings",
+                               return_value=None), \
+             mock.patch.object(gui_calib, "find_ring_center",
+                               return_value=(1021.0, 1023.0)), \
+             mock.patch.object(gui_calib, "calibrate_lab6",
+                               return_value=dict(self.FAKE_AUTO)):
+            res = gui_calib._auto_calib_worker("data/fake_a.tif", geom)
+        self.assertEqual(res["beam_center_rc"], (1021.0, 1023.0))
+        # 手动 worker：束心 = 初值 (列, 行) → (行, 列)
+        with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               return_value=dict(self.FAKE_MANUAL)):
+            res = gui_calib._manual_calib_worker(
+                [(1, 2), (3, 4), (5, 6)], [0, 1, 2], geom, (1022.3, 1022.0))
+        self.assertEqual(res["beam_center_rc"], (1022.0, 1022.3))
 
 
 if __name__ == "__main__":

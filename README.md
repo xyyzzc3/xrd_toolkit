@@ -72,7 +72,7 @@ python -m xrd_toolkit.gui
 - **Live parameter dock** — data and display parameters per panel (tooltips everywhere, Reset / Apply per group, per-panel snapshots); the 2θ range of the data group bounds the integration itself (npt samples within it), while zoom / pan writes the view range back in real time.
 - **Panel gestures** — left-drag pans, wheel zooms around the cursor (magnifier toggle), hover shows a data-point readout in the status bar; every panel edge has a resize grip.
 - **Per-panel toolbar** — Home / magnifier / Customize (title, axis labels, linear–log y scale, figure margins) / Save PNG.
-- **Calibration mode** — a [校准] toggle switches to the calibration workbench: one-click automatic refinement (ring-center localization → pyFAI) or manual point-picking on the rings (≥ 3 points, ≥ 2 rings, ±0.5° snapping), with side-by-side result columns, a Δ-deviation column, and a copy-paste CONFIGS entry template (geometry configs shared with the CLI).
+- **Calibration mode** — a [校准] toggle switches to the calibration workbench: one-click automatic refinement (ring-center localization → pyFAI) or manual point-picking on the rings (≥ 3 points, ≥ 2 rings, ±0.5° snapping), with side-by-side result columns and a Δ-deviation column. [Save as config] stores the refined geometry as a named entry (a local user file outside git) that instantly joins the geometry dropdown — selected automatically — survives restarts, and is usable from the CLI via `--config`.
 
 ## Highlights
 

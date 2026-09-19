@@ -62,8 +62,8 @@ from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 # ── 兼容再导出（见模块 docstring）：测试与后续接线继续经本模块访问 ──
 from xrd_toolkit.gui.calib import (
     _build_calib_form, _CalibSubWindow, _close_calib_panel,
-    _copy_calib_template, _draw_calib_image, _enter_calib, _exit_calib,
-    _on_calib_click, _open_calib_panel, _refresh_calib_template,
+    _draw_calib_image, _enter_calib, _exit_calib,
+    _on_calib_click, _open_calib_panel,
     _start_auto_calib, _start_manual_calib, _undo_calib_point,
     _clear_calib_points)
 from xrd_toolkit.gui.customize import (

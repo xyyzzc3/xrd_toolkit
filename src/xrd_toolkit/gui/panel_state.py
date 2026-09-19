@@ -15,6 +15,8 @@
     _load_params_snapshot（把快照填回参数坞，只展示不计算）；
   - _apply_config：几何配置条目应用到参数坞（PONI/倾斜角等完整
     条目挂在 window.config 供后续接线）；
+  - _reload_config_combo：配置下拉框与 CONFIGS 注册表同步
+    （校准工作台保存新条目后调用，保存即选中生效）；
   - _collect_geometry：从参数坞收集积分几何（像素/波长/距离 +
     配置条目的 PONI/倾斜角）；
   - 自动显示区间：_auto_y_range / _auto_contrast_values（1%/99.9%
@@ -23,7 +25,7 @@
     上去的归一化后曲线——画图与自动纵轴共用同一份口径）。
 """
 import numpy as np
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QMainWindow, QMdiSubWindow, QWidget)
 
@@ -474,6 +476,36 @@ def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None
     window.params["初始距离 (mm)"].setValue(geom["dist_m"] * 1e3)
     if not silent:
         _log(window, f"已加载几何配置 {key}（{cfg['label']}）")
+
+
+def _reload_config_combo(window: QMainWindow,
+                         select_key: str | None = None) -> None:
+    """配置下拉框与 CONFIGS 注册表同步（GUI 保存新条目后调用）。
+
+    重建全部条目（内置在前、用户条目在后，按 CONFIGS 顺序），悬停
+    提示保留（用户条目附加残差），最后选中 select_key：索引变化触发
+    _apply_config 把几何填进参数坞（保存即生效）。select_key 为 None
+    时保持当前选择不变。
+    """
+    combo = window.config_combo
+    if select_key is None:
+        select_key = combo.itemData(combo.currentIndex())
+    combo.blockSignals(True)
+    combo.clear()
+    for name, entry in CONFIGS.items():
+        combo.addItem(name, name)
+        tip = entry["label"]
+        if "residual_deg" in entry:
+            tip += f"（残差 {entry['residual_deg']:.4f}°）"
+        combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
+    combo.blockSignals(False)
+    idx = combo.findData(select_key)
+    if idx < 0:
+        idx = 0
+    if idx != combo.currentIndex():
+        combo.setCurrentIndex(idx)   # 索引变化 → currentIndexChanged → _apply_config
+    else:
+        _apply_config(window, idx)   # 索引没变信号不触发：手动应用
 
 
 def _content(dock) -> QWidget:

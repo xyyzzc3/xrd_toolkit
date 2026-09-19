@@ -1,3 +1,5 @@
+import json
+import sys
 from pathlib import Path
 
 # 项目根目录：基于本文件位置定位，无论从哪里启动程序都能准确找到根目录
@@ -6,22 +8,30 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 # ══ 几何配置注册表 ══════════════════════════════════════════════════
 # 每批实验的仪器摆位不同、几何各自标定，因此按批次登记为独立条目：
-# 每个 key 对应一批实验的标定几何 + 束心。
+# 每个 key 对应一批实验的标定几何 + 束心。导入时合并进 CONFIGS，
+# 消费方只认 CONFIGS。
+#
+# 注册表分两层：
+#   1. 内置条目 BUILTIN_CONFIGS（下方大括号）：进 git 的人工登记表。
+#      登记 = CLI（calibrate_integrate.py）标定后打印条目模板 →
+#      人工核对 → 粘贴进下方大括号、改新 key。脚本不自动写配置
+#      文件，配置登记必须人工复核，避免错误数据进入仓库。
+#   2. 用户条目 USER_CONFIGS：GUI 校准工作台 [保存为配置] 直接写入
+#      同目录的 config_user.json（本地文件，不进 git）。用户在结果
+#      区看完成绩（距离/残差）自己点保存，这一步点击就是复核。
+#      文件损坏或条目无效时跳过并打印警告，不拖垮程序启动。
+#      内置条目同名时以内置为准（人工登记的不可被用户文件覆盖）。
 #
 # 消费方（view_diffraction / integrate_pattern / sector_waterfall）：
-#     用 --config 指定条目；交互模式（不带 --file）下，选完数据文件后
-#     会再显示配置菜单选择一次。服务层（integrator.py）不依赖本文件，
-#     几何参数由调用方显式传入。
-# 生产方（calibrate_integrate.py）：
-#     标定完成后打印一段可直接复制的条目模板，人工核对后粘贴到下方
-#     大括号中并改为新 key（如 lmfp2_lab6）。脚本不自动写配置文件，
-#     配置登记必须人工复核，避免错误数据进入仓库。
+#     用 --config 指定条目（内置与用户条目一视同仁）；交互模式（不带
+#     --file）下，选完数据文件后会再显示配置菜单选择一次。服务层
+#     （integrator.py）不依赖本文件，几何参数由调用方显式传入。
 #
 # 命名约定：key = 材料简写 + 批次编号 + 标样简写（lmfp1_lab6 = lmfp
 # 第 1 批、LaB₆ 标样标定）——以批次为主，后缀标注校准标样便于溯源。
 # 隐私：label 只写批次级信息，不含数据集运行号或未公开样品名等实验
 # 细节（仓库公开）。LaB₆ 是公开标样（NIST SRM 660），可以提及。
-CONFIGS = {
+BUILTIN_CONFIGS = {
     # ── lmfp1_lab6 ──
     # lmfp 第 1 批实验的几何。LaB₆ 标样（NIST SRM 660）与本批样品同时
     # 测量、专门用于几何校准，标定结果适用于整个 lmfp 批次；key 以
@@ -53,6 +63,122 @@ CONFIGS = {
     },
 }
 
+# 用户配置文件：GUI 校准工作台 [保存为配置] 的落盘位置（config.py
+# 同目录，不进 git——个人标定记录本地保留，与内置人工登记表分开）。
+USER_CONFIG_PATH = Path(__file__).with_name("config_user.json")
+
+# 条目 geometry 必须包含的 7 个键（与内置条目一致，单位见各键注释）
+_GEOMETRY_KEYS = ("pixel_size_m", "wavelength_m", "dist_m",
+                  "poni1_m", "poni2_m", "rot1_deg", "rot2_deg")
+
+
+def _validate_user_entry(name, entry):
+    """校验并规范化一条用户配置条目。
+
+    非法条目抛 ValueError（报错信息说明原因）；合法条目返回规范化
+    副本：geometry 只保留 7 个标准键（多余键丢弃，如控制点），
+    beam_center 列表 → (row, col) 元组，residual_deg 可选保留
+    （诊断量，消费方忽略）。
+    """
+    if not isinstance(entry, dict):
+        raise ValueError(f"条目 {name!r} 必须是 dict")
+    label = entry.get("label")
+    if not isinstance(label, str) or not label.strip():
+        raise ValueError(f"条目 {name!r} 缺非空 label（批次备注）")
+    geom = entry.get("geometry")
+    if not isinstance(geom, dict):
+        raise ValueError(f"条目 {name!r} 缺 geometry dict")
+    for key in _GEOMETRY_KEYS:
+        value = geom.get(key)
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"条目 {name!r} 的 geometry 缺数值键 {key}")
+    beam = entry.get("beam_center")
+    if (not isinstance(beam, (list, tuple)) or len(beam) != 2
+            or not all(isinstance(v, (int, float)) for v in beam)):
+        raise ValueError(f"条目 {name!r} 的 beam_center 必须是 [row, col] 两个数字")
+    out = {
+        "label": label.strip(),
+        "geometry": {key: float(geom[key]) for key in _GEOMETRY_KEYS},
+        "beam_center": (float(beam[0]), float(beam[1])),
+    }
+    if isinstance(entry.get("residual_deg"), (int, float)):
+        out["residual_deg"] = float(entry["residual_deg"])
+    return out
+
+
+def _read_user_config(path):
+    """读用户配置文件：JSON dict {key: 条目}。
+
+    文件不存在 → {}；JSON 损坏 → 警告（stderr）并忽略整个文件；
+    单个条目无效 → 警告并跳过该条目（不让一条坏数据毁掉全部用户
+    配置）。本函数只读不写。
+    """
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as err:
+        print(f"警告：用户配置文件 {path} 读取失败，已忽略（{err}）",
+              file=sys.stderr)
+        return {}
+    if not isinstance(raw, dict):
+        print(f"警告：用户配置文件 {path} 顶层不是对象，已忽略",
+              file=sys.stderr)
+        return {}
+    entries = {}
+    for name, entry in raw.items():
+        try:
+            entries[name] = _validate_user_entry(name, entry)
+        except ValueError as err:
+            print(f"警告：用户配置条目无效，已跳过（{err}）", file=sys.stderr)
+    return entries
+
+
+def _merge_configs(builtin, user):
+    """合并两层注册表：内置在前、用户条目追加在后；重名内置优先。"""
+    merged = dict(builtin)
+    for name, entry in user.items():
+        if name not in merged:
+            merged[name] = entry
+    return merged
+
+
+USER_CONFIGS = _read_user_config(USER_CONFIG_PATH)
+CONFIGS = _merge_configs(BUILTIN_CONFIGS, USER_CONFIGS)
+
+
+def save_user_config(name, entry):
+    """GUI [保存为配置]：把校准结果存成命名用户条目。
+
+    校验条目 → 原子写入 config_user.json（先写临时文件再替换，
+    中途断电不会留半截文件）→ 立即合并进内存的 USER_CONFIGS /
+    CONFIGS（GUI 下拉框无需重启即可见到）。
+
+    参数：
+        name   条目 key（如 "lmfp2_lab6"）
+        entry  dict，结构同 _validate_user_entry 的输入
+
+    返回：
+        True = 新增条目；False = 覆盖了同名的已有用户条目。
+
+    报错：
+        ValueError：与内置条目重名（人工登记的不可覆盖）或条目结构
+        无效。
+    """
+    if name in BUILTIN_CONFIGS:
+        raise ValueError(f"key {name!r} 与内置条目重名，换一个名字")
+    validated = _validate_user_entry(name, entry)
+    is_new = name not in USER_CONFIGS
+    USER_CONFIGS[name] = validated
+    CONFIGS[name] = validated
+    # 原子写入：临时文件 → 替换（os.replace 在同一文件系统上是原子的）
+    tmp = USER_CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(USER_CONFIGS, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    tmp.replace(USER_CONFIG_PATH)
+    return is_new
+
 # 默认条目：消费脚本未指定 --config 且非交互模式时使用。PyCharm 的
 # 运行配置依赖该默认值，修改前需同步检查。
 DEFAULT_CONFIG = "lmfp1_lab6"
@@ -83,11 +209,13 @@ def get_config(name=None):
 
 def config_entry_template(key_hint="lmfp2_lab6", label_hint="（改成实际批次备注）",
                           geometry=None, beam_center_rc=None):
-    """生成 CONFIGS 条目模板文本（GUI 校准工作台"复制到剪贴板"用）。
+    """生成内置 CONFIGS 条目模板文本（CLI 标定完成后打印，人工粘贴登记用）。
 
-    与 scripts/calibrate_integrate.py 标定后打印的模板逐字一致，粘贴
-    进 CONFIGS 大括号、改 key 与 label 即可使用。不自动写配置文件
-    ——登记必须人工复核（见文件头说明），这里只负责生成文本。
+    scripts/calibrate_integrate.py 打印的模板就是这个函数的输出（逐字
+    一致由 test_calibration.py 守护）。GUI 校准工作台不再走复制粘贴：
+    它调 save_user_config 把结果直接存成用户条目（config_user.json）。
+    本函数只生成文本、不写任何文件——内置条目登记必须人工复核
+    （见文件头说明）。
 
     参数：
         key_hint       新条目 key 提示（默认与 CLI 相同）

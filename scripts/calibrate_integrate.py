@@ -27,6 +27,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
+from xrd_toolkit.config import config_entry_template  # 内置 CONFIGS 条目模板（标定后打印）
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings  # 自动定位环心（校准初值）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
@@ -129,30 +130,21 @@ def main() -> None:
         print(f"Residual (RMS)    : {geometry['residual_deg']:.4f} deg")
 
         # ══ CONFIGS 条目模板 ════════════════════════════════════════════
-        # 精修结果需人工登记进 src/xrd_toolkit/config.py 的 CONFIGS 后，
-        # 才能被三个消费脚本通过 --config 使用。脚本不直接写配置文件
-        # （避免错误数据进入仓库），仅打印可直接复制的模板：
+        # 精修结果需人工登记进 src/xrd_toolkit/config.py 的内置注册表
+        # 后，才能被三个消费脚本通过 --config 使用。脚本不直接写配置
+        # 文件（避免错误数据进入仓库），仅打印可直接复制的模板
+        # （config_entry_template 生成，与 GUI 校准工作台保存的用户
+        # 条目格式一致；GUI 直接存本地 config_user.json，见 config.py）：
         #   - key = 材料简写 + 批次编号 + 标样简写（如 lmfp2_lab6）；
         #   - label 只写批次级信息，不含数据集运行号等实验细节（隐私）；
         #   - beam_center 用初值圆心 (行, 列)（自动定位或 --center 输入）
         #     ——它是直射束落点 B，不是 PONI；view_diffraction 用 B 画十字，
         #     探测器有倾斜时 B 与 PONI 差约 23 px；
         #   - rot3_deg / offset_px / residual_deg 为诊断量，不写入注册表。
-        print("\n===== CONFIGS entry for config.py (copy-paste ready) =====")
-        print(f"# refined residual: {geometry['residual_deg']:.4f} deg (diagnostic, not stored)")
-        print('    "lmfp2_lab6": {   # rename key to "<material><n>_<standard>" (e.g. lmfp2_lab6)')
-        print('        "label": "（改成实际批次备注）",')
-        print('        "geometry": dict(')
-        print(f"            pixel_size_m={args.pixel:g}e-6,")
-        print(f"            wavelength_m={args.wavelength:g}e-10,")
-        print(f"            dist_m={geometry['dist_m']:.5f},")
-        print(f"            poni1_m={geometry['poni1_px']:.3f} * {args.pixel:g}e-6,")
-        print(f"            poni2_m={geometry['poni2_px']:.3f} * {args.pixel:g}e-6,")
-        print(f"            rot1_deg={geometry['rot1_deg']:.4f},")
-        print(f"            rot2_deg={geometry['rot2_deg']:.4f},")
-        print('        ),')
-        print(f'        "beam_center": ({cy:.2f}, {cx:.2f}),   # (row, col) px = direct beam spot')
-        print('    },')
+        print("\n" + config_entry_template(
+            geometry=dict(geometry, pixel_size_m=pixel_m,
+                          wavelength_m=wavelength_m),
+            beam_center_rc=(cy, cx)))
 
         # ---- 2θ 有效区间（默认 auto，同 sector_waterfall/integrate_pattern）----
         # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
