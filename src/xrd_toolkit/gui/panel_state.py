@@ -85,6 +85,14 @@ _DISPLAY_DEFAULTS = {
     "归一化目标": "",
     "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
     "视图 2θ 上限 (°)": None,
+    # 热图显示：色图 / 归一化（与对比同款 each/global/off 三模式）/
+    # 对数强度 / 强度范围（自动 = 1%/99.9% 分位）
+    "热图色图": "magma",
+    "热图归一化": "off",
+    "热图对数": False,
+    "热图自动范围": True,
+    "热图下限": 1.0,
+    "热图上限": 100000.0,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 
@@ -226,6 +234,14 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
         window.params["纵轴上限"].setEnabled(not auto_y.isChecked())
         if auto_y.isChecked():
             _apply_auto_ylim(window, silent=True)
+    # 热图自动范围联动（同纵轴自动套路）：自动开 → 上下限框置灰
+    # 只读展示，并按焦点热图重算填回
+    auto_heat = window.params.get("热图自动范围")
+    if auto_heat is not None:
+        window.params["热图下限"].setEnabled(not auto_heat.isChecked())
+        window.params["热图上限"].setEnabled(not auto_heat.isChecked())
+        if auto_heat.isChecked():
+            _apply_auto_heatlim(window, silent=True)
     # 归一化目标下拉框按焦点对比面板的文件列表重建（面板里有几个
     # 文件列表就是什么样；焦点不是对比面板 = 保持原样），建完再按
     # 快照值回选——列表重建会丢掉旧选中。只在"指定数据"模式可用
@@ -427,6 +443,29 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     return curves
 
 
+def _heat_shown(matrix, mode):
+    """热图实际画上去的强度矩阵（归一化是显示层，原始结果原样保留）。
+
+    mode 三选（与对比归一化同款语义，热图没有"指定文件"）：
+      each   每行最强峰：每个样品除以自己的最强峰（观察峰形/峰位
+             随样品的变化，绝对强度差异抹平——原位实验最常用）
+      global 全图最强峰：全体除以最强样品的最强峰
+      off    不归一化（默认：原样画原始强度）
+    画图（_draw_heatmap）与自动强度范围（_apply_auto_heatlim）共用
+    这一份口径，置灰框显示的区间才跟图对得上。
+    """
+    shown = np.asarray(matrix, dtype=float)
+    if mode == "each":
+        peaks = np.nanmax(shown, axis=1)
+        peaks = np.where(np.isfinite(peaks) & (peaks > 0), peaks, 1.0)
+        shown = shown / peaks[:, None]
+    elif mode == "global":
+        peak = float(np.nanmax(shown)) if np.isfinite(shown).any() else 0.0
+        if peak > 0:
+            shown = shown / peak
+    return shown
+
+
 def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
     """按编辑对象（焦点图）重算自动纵轴范围，填进置灰的输入框。
 
@@ -460,6 +499,34 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
     window.params["纵轴上限"].setValue(yhi)
     if not silent and loaded:
         _log(window, f"自动纵轴：编辑对象算得 {ylo:.4g} ~ {yhi:.4g}")
+
+
+def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
+    """按编辑对象（焦点热图）重算热图强度范围，填进置灰的输入框。
+
+    与 _apply_auto_ylim 同款：自动模式下输入框只是"程序正在用的
+    区间"的只读展示。焦点不是热图面板（或还没算完）= 占位默认。
+    范围按显示数据（含归一化/对数）算，与 _draw_heatmap 画图口径
+    一致（见 _heat_shown）。
+    """
+    lo, hi = _YLIM_FALLBACK
+    loaded = False
+    if window.focus_panel is not None:
+        dock = window.plot_docks.get(window.focus_panel)
+        if (dock is not None
+                and window.focus_panel.split("|", 1)[0] == "热图"):
+            data = getattr(dock, "heat_data", None)
+            if data is not None:
+                _, matrix, _, _ = data
+                shown = _heat_shown(matrix, _panel_param(
+                    window, dock, "热图归一化", "off"))
+                lo, hi = _auto_y_range(shown, _panel_param(
+                    window, dock, "热图对数", False))
+                loaded = True
+    window.params["热图下限"].setValue(lo)
+    window.params["热图上限"].setValue(hi)
+    if not silent and loaded:
+        _log(window, f"热图范围：编辑对象算得 {lo:.4g} ~ {hi:.4g}")
 
 
 def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:

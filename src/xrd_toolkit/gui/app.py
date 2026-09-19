@@ -78,13 +78,14 @@ from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _build_center, _close_panel, _FloatedWindow,
     _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
-    _apply_auto_contrast, _apply_auto_ylim, _apply_config,
-    _collect_geometry, _content, _log, _reload_config_combo, _set_focus)
+    _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
+    _apply_config, _collect_geometry, _content, _log,
+    _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _compute_integration, _draw_1d,
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
-    _pan_motion, _pan_press, _pan_release, _plot_compare, _plot_view,
-    _wheel_zoom)
+    _pan_motion, _pan_press, _pan_release, _plot_compare, _plot_heatmap,
+    _plot_view, _wheel_zoom)
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -660,19 +661,35 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.config_combo.findData(DEFAULT_CONFIG))
     window.config_combo.currentIndexChanged.connect(
         lambda i: _apply_config(window, i))
-    # 下拉框 + [导入 .poni] 并排一行：.poni 是 pyFAI 生态的通用
-    # 几何交换格式，导入 = 读文件 → 存成用户配置条目并自动选中
+    # 下拉框 + [加载参数][保存参数]（作业规格按钮名）：.poni 是
+    # pyFAI 生态的通用几何交换格式——加载 = 读文件 → 存成用户配置
+    # 条目并自动选中；保存 = 当前选中配置写成 .poni 文件。按钮放
+    # 下拉框下面一行（各占一半宽）：表单最窄行宽由下拉框决定，按钮
+    # 并排在下拉框右侧会把整个参数坞的最小宽度撑宽（同文件坞两排
+    # 按钮的考虑）
     combo_row = QWidget()
-    combo_lay = QHBoxLayout(combo_row)
+    combo_lay = QVBoxLayout(combo_row)
     combo_lay.setContentsMargins(0, 0, 0, 0)
-    combo_lay.setSpacing(4)
-    btn_poni = QPushButton("导入 .poni")
-    btn_poni.setObjectName("poni_btn")
-    btn_poni.setToolTip("读 pyFAI 交换格式几何文件（.poni），存成"
-                        "配置条目并自动选中")
+    combo_lay.setSpacing(2)
+    combo_lay.addWidget(window.config_combo)
+    btn_poni_row = QWidget()
+    btn_poni_lay = QHBoxLayout(btn_poni_row)
+    btn_poni_lay.setContentsMargins(0, 0, 0, 0)
+    btn_poni_lay.setSpacing(4)
+    btn_poni = QPushButton("加载参数")
+    btn_poni.setObjectName("poni_btn")   # objectName 保持 poni_btn：测试与历史引用
+    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成"
+                        "配置条目并自动选中（避免每次重新校准）")
     btn_poni.clicked.connect(lambda: _import_poni(window))
-    combo_lay.addWidget(window.config_combo, 1)
-    combo_lay.addWidget(btn_poni)
+    btn_save_poni = QPushButton("保存参数")
+    btn_save_poni.setObjectName("save_poni_btn")
+    btn_save_poni.setToolTip("保存 .poni：把当前选中配置的几何"
+                             "（探测器距离/中心点/像素尺寸/波长/倾斜角）"
+                             "写成 pyFAI 交换格式文件")
+    btn_save_poni.clicked.connect(lambda: _save_poni(window))
+    btn_poni_lay.addWidget(btn_poni, 1)
+    btn_poni_lay.addWidget(btn_save_poni, 1)
+    combo_lay.addWidget(btn_poni_row)
     form.addRow("几何配置", combo_row)
 
     window.params = {}
@@ -909,6 +926,56 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cmp_norm.currentIndexChanged.connect(sync_norm_target)
     sync_norm_target()   # 初始 = 不归一化 → 目标下拉框置灰
 
+    # ── 热图显示（小节）：批量热图的显示参数 ──
+    # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比
+    # 同款语义（热图没有"指定文件"模式）；对数强度 = 弱峰抬起来
+    # （XRD 行规）；强度范围与对比度同套路：自动 = 按显示矩阵
+    # 1%/99.9% 分位（含归一化后的口径，见 _heat_shown）
+    add_caption(form2, "热图显示")
+
+    heat_cmap = QComboBox()
+    for text, data in (("magma", "magma"), ("viridis", "viridis"),
+                       ("plasma", "plasma"), ("inferno", "inferno"),
+                       ("gray", "gray")):
+        heat_cmap.addItem(text, data)
+    heat_cmap.setToolTip("热图颜色映射（颜色 = 强度）")
+    window.params["热图色图"] = heat_cmap
+    form2.addRow(heat_cmap)
+
+    heat_norm = QComboBox()
+    for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
+                       ("不归一化", "off")):
+        heat_norm.addItem(text, data)
+    heat_norm.setCurrentIndex(heat_norm.findData("off"))
+    heat_norm.setToolTip("热图归一化：每行各自最强峰（抹平样品间绝对强度差，"
+                         "看峰形/峰位随样品的变化）/ 全图最强峰 / 不归一化")
+    window.params["热图归一化"] = heat_norm
+    form2.addRow(heat_norm)
+
+    heat_log = QCheckBox("对数强度")
+    heat_log.setToolTip("颜色按对数强度：弱峰抬起来（XRD 行规）")
+    window.params["热图对数"] = heat_log
+    form2.addRow(heat_log)
+
+    auto_heat = QCheckBox("热图自动范围")
+    auto_heat.setChecked(True)
+    auto_heat.setToolTip("按显示矩阵 1%~99.9% 分位自动确定强度范围")
+    window.params["热图自动范围"] = auto_heat
+    form2.addRow(auto_heat)
+
+    add_range(form2, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
+              label="热图范围", decimals=1,
+              tooltip="取消自动后手填的强度范围（下限 ~ 上限）")
+
+    def sync_heatlim(checked):
+        window.params["热图下限"].setEnabled(not checked)
+        window.params["热图上限"].setEnabled(not checked)
+        if checked:
+            _apply_auto_heatlim(window)   # 勾回自动：立刻按焦点热图算并填回
+
+    auto_heat.toggled.connect(sync_heatlim)
+    sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
+
     def sync_ylim(checked):
         window.params["纵轴下限"].setEnabled(not checked)
         window.params["纵轴上限"].setEnabled(not checked)
@@ -926,6 +993,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "纵轴自动": True,
         "对比归一化": "off",
         "归一化目标": "",
+        "热图色图": "magma",
+        "热图归一化": "off",
+        "热图对数": False,
+        "热图自动范围": True,
+        "热图下限": 1.0,
+        "热图上限": 100000.0,
     }
     btn_reset_img = QPushButton("恢复默认")
     btn_reset_img.setObjectName("reset_image_btn")
@@ -943,6 +1016,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["归一化目标"].setCurrentIndex(0)
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
+        window.params["热图色图"].setCurrentIndex(
+            window.params["热图色图"].findData(img_defaults["热图色图"]))
+        window.params["热图归一化"].setCurrentIndex(
+            window.params["热图归一化"].findData(img_defaults["热图归一化"]))
+        window.params["热图对数"].setChecked(img_defaults["热图对数"])
+        window.params["热图自动范围"].setChecked(img_defaults["热图自动范围"])
+        if window.params["热图自动范围"].isChecked():
+            _apply_auto_heatlim(window)   # 已勾着 toggled 不响，手动重算填回
         # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉
         # 显式视图值（None = 跟随），输入框显示回积分范围
         dock = window.plot_docks.get(window.focus_panel)
@@ -1079,6 +1160,13 @@ def _build_toolbar(window: QMainWindow) -> None:
     window.compare_btn = btn_compare   # 登记按钮（测试用）
     btn_compare.clicked.connect(lambda: _plot_compare(window))
 
+    # [热图]：把勾选文件的 1D 曲线拼成一张 2θ×样品 强度热图（见
+    # _plot_heatmap）。同为纯动作：重复点击 = 刷新那张热图面板
+    btn_heat = QPushButton("热图")
+    tb.addWidget(btn_heat)
+    window.heat_btn = btn_heat   # 登记按钮（测试用）
+    btn_heat.clicked.connect(lambda: _plot_heatmap(window))
+
     tb.addSeparator()
 
     # 面板开关：[文件][参数][日志] 三个勾选按钮，收起/展开对应坞。
@@ -1202,9 +1290,9 @@ def _confirm_close(window: QMainWindow, n_unsaved: int) -> str:
     return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(
         ans, "cancel")
 
-# ══ 批量管线：.poni 导入 + 1D 数据导出 / CSV 总表 ════════════
+# ══ 批量管线：.poni 保存/加载 + 1D 数据导出 / CSV 总表 ═════════
 def _import_poni(window: QMainWindow) -> None:
-    """[导入 .poni]：读 pyFAI 交换格式几何文件 → 存成用户配置条目。
+    """[加载参数]：读 .poni 交换格式几何文件 → 存成用户配置条目。
 
     .poni 是 pyFAI 生态通用的几何交换格式（别的工具/命令行标定的
     结果常以这种文件交付）。导入 = 解析出几何 → 照 GUI 配置条目的
@@ -1274,6 +1362,55 @@ def _import_poni(window: QMainWindow) -> None:
     _log(window, f"已导入 .poni → 配置条目 {key}"
                  f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
                  f"重启后仍在）")
+
+
+def _save_poni(window: QMainWindow) -> None:
+    """[保存参数]：把当前选中的几何配置写成标准 .poni 文件。
+
+    保存内容 = 探测器距离 / 中心点 / 像素尺寸 / 波长 / 倾斜角。
+    中心点在 .poni 标准里就是 poni1/poni2 米制坐标（像素束心含
+    显示语义、不含倾斜修正，不属于几何量——加载回来时由
+    getFit2D 重算，往返探测已验证自洽）。作业规格里的"掩膜文件
+    路径"是可选项：引擎尚未支持掩膜，且 pyFAI .poni 格式本身没
+    有掩膜字段，故不写。保存成功记日志（列出保存内容，供核对）。
+    默认文件名 = {配置名}.poni、默认目录 outputs/，同 [加载参数]
+    共用一套读写口径（pyFAI 只在点击时导入，CLI/测试不为启动背
+    依赖）。
+    """
+    cfg = window.config   # 当前选中条目（label / geometry / beam_center）
+    geom = cfg["geometry"]
+    default = str(Path("outputs") / f"{window.config_name}.poni")
+    path_str, _ = QFileDialog.getSaveFileName(
+        window, "保存几何参数（.poni）", default,
+        "pyFAI 几何 (*.poni);;所有文件 (*)")
+    if not path_str:
+        return   # 用户取消
+    if not path_str.lower().endswith(".poni"):
+        path_str += ".poni"
+    try:
+        from pyFAI.geometry import Geometry
+        g = Geometry(
+            dist=float(geom["dist_m"]),
+            poni1=float(geom["poni1_m"]),
+            poni2=float(geom["poni2_m"]),
+            rot1=float(np.radians(geom["rot1_deg"])),
+            rot2=float(np.radians(geom["rot2_deg"])),
+            pixel1=float(geom["pixel_size_m"]),
+            pixel2=float(geom["pixel_size_m"]),
+            wavelength=float(geom["wavelength_m"]))
+        Path(path_str).parent.mkdir(parents=True, exist_ok=True)
+        g.save(path_str)
+    except Exception as err:
+        _log(window, f".poni 保存失败（{err}）")
+        return
+    _log(window, f"已保存几何参数 → {path_str}"
+                 f"（距离 {geom['dist_m'] * 1e3:.2f} mm，"
+                 f"中心 poni1={geom['poni1_m']:.6g} m, "
+                 f"poni2={geom['poni2_m']:.6g} m，"
+                 f"像素 {geom['pixel_size_m'] * 1e6:.1f} µm，"
+                 f"波长 {geom['wavelength_m'] * 1e10:.4f} Å，"
+                 f"倾斜 rot1={geom['rot1_deg']:.4f}°, "
+                 f"rot2={geom['rot2_deg']:.4f}°）")
 
 
 def _checked_1d_results(window: QMainWindow) -> list:

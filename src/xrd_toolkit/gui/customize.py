@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 from xrd_toolkit.gui.panel_state import _content, _log, _panel_param
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
-_AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall")
+_AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
+               "axes_heat")
 
 # 各视图的默认外观（Customize [恢复默认] 与 plot_views 的
 # _apply_text_guards 共用；未知视图 = 1D 积分图默认）
@@ -31,6 +32,7 @@ _VIEW_DEFAULTS = {
              "Intensity (a.u.)"),
     "瀑布": ("{display}: 36-sector waterfall", "2θ (deg)",
              "Azimuthal sector (χ)"),
+    "热图": ("{display}: intensity heatmap", "2θ (deg)", "Sample"),
 }
 
 

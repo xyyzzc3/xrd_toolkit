@@ -8,7 +8,9 @@ panels.py 之上）。
 瀑布）全部注册；新视图接线 = 往表里加条目（builder / runner），
 _build_view_widget / _run_view 的分发骨架不用再动。对比（[对比]
 按钮）是 1D 的多文件叠图变体，流程独立（_plot_compare →
-_run_compare → _finish_compare），不占注册表。
+_run_compare → _finish_compare），不占注册表；热图（[热图] 按钮）
+是多文件 → 一张 2θ×样品强度热图（_plot_heatmap → _run_heatmap →
+_finish_heatmap），builder 占注册表、计算流程独立。
 
 其余内容：
   - 绘图：_draw_1d / _redraw_compare（对比多曲线 + 图例）/
@@ -38,7 +40,7 @@ import numpy as np
 from matplotlib import cm
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg, NavigationToolbar2QT)
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -53,7 +55,7 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _collect_geometry,
     _compare_shown_curves, _content, _data_snapshot, _display_snapshot,
-    _log, _panel_param, _set_focus)
+    _heat_shown, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
@@ -210,6 +212,9 @@ def _apply_params(window: QMainWindow) -> None:
     if view == "对比":
         _run_compare(window, key)   # 一组文件全部重算
         return
+    if view == "热图":
+        _run_heatmap(window, key, force=True)   # 数据参数变了：全部重积分
+        return
     _run_view(window, view, dock.panel_file, key)
 
 
@@ -278,6 +283,13 @@ def _apply_image_params(window: QMainWindow) -> None:
             return
         tth, i2d, chi = dock.last_waterfall
         _draw_waterfall(window, dock, tth, i2d, chi)
+    elif view == "热图":
+        if getattr(dock, "heat_data", None) is None:
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（热图完成后再试）")
+            return
+        tth, matrix, stems, _ = dock.heat_data
+        _draw_heatmap(window, dock, tth, matrix, stems)
     else:
         _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
                      f"（{view} 视图尚未接线）")
@@ -661,7 +673,7 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
 
 
 def _draw_2d(window: QMainWindow, dock, image) -> None:
-    """在指定的 2D 面板画出衍射图：对数色标 + 对比度参数 + 束心十字。
+    """在指定的 2D 面板画出衍射图：对数色标 + 颜色条 + 对比度参数 + 束心十字。
 
     样式对齐 CLI view_diffraction / 校准图：magma + LogNorm、自动
     对比度 1%/99.9% 分位（下限兜底 1.0）、origin="lower"（数组行
@@ -690,9 +702,20 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
             vmin = max(vmin, 1e-12)
             if vmax <= vmin:
                 vmax = vmin * 10.0   # 手填区间不合法时兜底（防 LogNorm 报错）
-        ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
-                  origin="lower")
+        im = ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
+                       origin="lower")
         ax.set_aspect("equal")
+        # 颜色条（作业规格"带颜色条"）：ax.clear() 不清 colorbar（它是
+        # 图上的另一个坐标系），重画先拆旧的再加新的——否则每画一次
+        # 叠一条。挂在 dock 上：关面板随 figure 一起销毁，不用清理
+        old_cb = getattr(dock, "_colorbar_2d", None)
+        if old_cb is not None:
+            try:
+                old_cb.remove()
+            except Exception:
+                pass
+        dock._colorbar_2d = ax.figure.colorbar(im, ax=ax)
+        dock._colorbar_2d.ax.tick_params(labelsize=7)
         cy, cx = window.config["beam_center"]
         ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
@@ -1282,10 +1305,18 @@ def _build_waterfall_widget(window: QMainWindow, key: str) -> QWidget:
                                hover=True, sync="")
 
 
+def _build_heat_widget(window: QMainWindow, key: str) -> QWidget:
+    """热图面板内容：同 1D 骨架，无悬停取点、无范围写回（y 轴 =
+    样品序号，不是强度；缩放/平移仍是通用的，只看图）。"""
+    return _build_canvas_panel(window, key, "axes_heat", hover=False, sync="")
+
+
 # 视图注册表：视图名 → 内容 builder（签名 window/key → QWidget）。
-# 新视图接线 = 加条目，分发骨架不动
+# 新视图接线 = 加条目，分发骨架不动（热图不占 VIEW_NAMES 工具栏
+# 按钮：它是多文件 → 一张面板，走 _plot_heatmap，同 [对比]）
 _VIEW_BUILDERS = {"2D": _build_2d_widget, "剖面": _build_profile_widget,
-                  "1D": _build_1d_widget, "瀑布": _build_waterfall_widget}
+                  "1D": _build_1d_widget, "瀑布": _build_waterfall_widget,
+                  "热图": _build_heat_widget}
 
 
 def _open_plot_panel(window: QMainWindow, name: str, key: str,
@@ -1590,3 +1621,236 @@ def _plot_compare(window: QMainWindow) -> None:
             dock.panel_display = title
     dock.setVisible(True)
     _run_compare(window, key)
+
+
+# ══ 热图面板（批量 1D → 2θ×样品 强度热图）════════════════════
+def _assemble_heatmap(results):
+    """把 [(样品名, tth, intensity), ...] 对齐成强度矩阵（纯函数）。
+
+    横轴 = 2θ、纵轴 = 样品（文件列表顺序）、颜色 = 强度。2θ 网格
+    以第一个文件的网格为准；别的文件网格不一致（点数/区间不同）
+    就 np.interp 重插值到第一网格（视图只求对齐，误差可忽略）——
+    是否重插值由返回的 interp 标志报告，调用方记日志。结果空 / 网
+    格空（0 点）返回 None。
+    """
+    if not results:
+        return None
+    x = np.asarray(results[0][1], dtype=float)
+    if x.size < 2:
+        return None   # 0/1 个点画不出 extent（imshow 至少要一段区间）
+    rows = []
+    interp = False
+    for name, t, intensity in results:
+        ti = np.asarray(t, dtype=float)
+        vi = np.asarray(intensity, dtype=float)
+        if ti.shape != x.shape or not np.allclose(ti, x, atol=1e-12):
+            interp = True
+            vi = np.interp(x, ti, vi)   # t 由引擎保证升序
+        rows.append(vi)
+    return x, np.vstack(rows), [r[0] for r in results], interp
+
+
+def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
+    """在热图面板画出强度热图（只允许主线程调用）。
+
+    样式：imshow 行 = 样品（origin=lower，列表第一个文件在最下）、
+    列 = 2θ，颜色 = 强度，右侧颜色条。显示参数读该面板自己的快照
+    （_panel_param）：热图色图 / 热图归一化（_heat_shown 三模式，
+    只动显示数据）/ 热图对数（LogNorm，弱峰抬起来）/ 热图自动范围
+    （自动 = 显示矩阵 1%/99.9% 分位，置灰框只读展示，同 2D 对比度
+    套路；手动 = 手填上下限）。颜色条同 2D：重画先拆旧的（ax.clear
+    不清 colorbar）。
+    """
+    ax = _content(dock).axes_heat
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
+    window._setting_limits = True
+    try:
+        ax.clear()
+        cmap = _panel_param(window, dock, "热图色图", "magma")
+        mode = _panel_param(window, dock, "热图归一化", "off")
+        log_c = _panel_param(window, dock, "热图对数", False)
+        shown = _heat_shown(matrix, mode)
+        auto = _panel_param(window, dock, "热图自动范围", True)
+        if auto:
+            vmin, vmax = _auto_y_range(shown, log_c)
+            if window.plot_docks.get(window.focus_panel) is dock:
+                window.params["热图下限"].setValue(vmin)
+                window.params["热图上限"].setValue(vmax)
+        else:
+            vmin = _panel_param(window, dock, "热图下限", 1.0)
+            vmax = _panel_param(window, dock, "热图上限", 100000.0)
+            if vmax <= vmin:
+                vmax = vmin * 10.0   # 手填区间不合法时兜底
+        if log_c:
+            vmin = max(vmin, 1e-12)   # LogNorm 画不出 ≤0
+            vmax = max(vmax, vmin * 10.0)
+        norm = LogNorm(vmin=vmin, vmax=vmax) if log_c \
+            else Normalize(vmin=vmin, vmax=vmax)
+        n = matrix.shape[0]
+        im = ax.imshow(shown, aspect="auto", origin="lower", cmap=cmap,
+                       norm=norm, extent=[float(tth[0]), float(tth[-1]),
+                                          -0.5, n - 0.5])
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(stems, fontsize=7)
+        old_cb = getattr(dock, "_heat_colorbar", None)
+        if old_cb is not None:
+            try:
+                old_cb.remove()
+            except Exception:
+                pass
+        dock._heat_colorbar = ax.figure.colorbar(im, ax=ax)
+        dock._heat_colorbar.ax.tick_params(labelsize=7)
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _refresh_home(dock)
+    dock.figure_saved = False
+
+
+def _finish_heatmap(window: QMainWindow, key: str) -> None:
+    """热图全部数据到齐（含失败）：对齐成矩阵 → 整图画出 → 成为编辑
+    对象 → 记日志。全部失败 = 面板留空。"""
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：静默丢弃
+    data = _assemble_heatmap([r for r in dock.heat_results if r is not None])
+    dock.heat_data = data
+    if data is None:
+        _log(window, "热图失败：所有文件的积分都失败了，面板留空")
+        return
+    tth, matrix, stems, interp = data
+    if interp:
+        _log(window, "热图提示：各文件 2θ 网格不一致，已重插值到"
+                     "第一个文件的网格")
+    _draw_heatmap(window, dock, tth, matrix, stems)
+    _set_focus(window, key, dock.panel_display)
+    _log(window, f"热图完成：{len(stems)} 个样品 × {len(tth)} 点")
+
+
+def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
+    """跑热图计算：已算好的 1D 面板缓存直接用，缺的后台补积分。
+
+    缓存复用 = 用户点 [热图] 时把已经算过 1D 的文件直接拿结果，
+    只对没算过的文件起后台任务（进度计数走 _batch_step，批名
+    "热图"）；force = 数据 [应用] 重算：用户改了数据参数，全部文件
+    重新积分（缓存里的旧参数结果不可信）。代次（heat_gen）防过期：
+    重复点 [热图] 旧代任务全部作废；面板代数（_panel_epoch）防关过
+    重开。结果按文件列表顺序收进 dock.heat_results，全部到齐
+    （含失败）收尾。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已关：迟到点击/重算不落地
+    dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
+    dock.heat_gen += 1
+    gen = dock.heat_gen
+    epoch = window._panel_epoch.get(key, 0)
+    results = [None] * len(dock.heat_files)   # 文件顺序占位
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    missing = []
+
+    def cache_of(path, display):
+        """该文件已有 1D 面板的积分缓存吗？（键同 _checked_1d_results）"""
+        for k in (f"1D|{path}", f"1D|{path}|{display}"):
+            d = window.plot_docks.get(k)
+            if d is not None and getattr(d, "last_tth", None) is not None:
+                return d.last_tth, d.last_intensity
+        return None
+
+    for i, (path, display) in enumerate(dock.heat_files):
+        if not force:
+            cached = cache_of(str(path), display)
+            if cached is not None:
+                results[i] = (Path(path).stem, cached[0], cached[1])
+                continue
+        missing.append((i, path, display))
+    dock.heat_results = results
+    dock.heat_pending = len(missing)
+    # 总结行两种路径都打（全缓存 = 后台积分 0 个）：日志一眼看出
+    # 这次热图用了多少新算的结果
+    _log(window, f"开始热图：{len(dock.heat_files)} 个文件"
+                 f"（复用已有 1D 结果，后台积分 {len(missing)} 个）")
+    if missing:
+        if len(missing) > 1:
+            # 批量进度记账（同 _plot_view）：完成任务/失败各计一次，
+            # 批走完自动清账
+            window._batch = {"view": "热图", "total": len(missing),
+                             "done": 0}
+        for i, path, display in missing:
+            # 默认参数绑定防闭包晚绑定（循环变量到回调执行时已走到末尾）
+            def spawn_one(i=i, path=path, display=display):
+                def done(window_, key_, task, result):
+                    suffix = _batch_step(window, key_)
+                    panel = window.plot_docks.get(key)
+                    if (panel is None
+                            or window._panel_epoch.get(key, 0) != epoch
+                            or panel.heat_gen != gen):
+                        return   # 旧结果静默丢弃（整图已由新代次接管）
+                    tth, intensity = result
+                    panel.heat_results[i] = (Path(path).stem, tth, intensity)
+                    panel.heat_pending -= 1
+                    _log(window, f"热图：{display} 积分完成（{len(tth)} 点）"
+                                 f"{suffix}")
+                    if panel.heat_pending == 0:
+                        _finish_heatmap(window, key)
+
+                def error(msg):
+                    suffix = _batch_step(window, key)   # error 包装器只有
+                    # msg（key 取闭包外层；done 才有 key_ 形参）
+                    panel = window.plot_docks.get(key)
+                    if (panel is None
+                            or window._panel_epoch.get(key, 0) != epoch
+                            or panel.heat_gen != gen):
+                        return
+                    panel.heat_pending -= 1
+                    _log(window, f"热图：{display} 积分失败 — {msg}{suffix}")
+                    if panel.heat_pending == 0:
+                        _finish_heatmap(window, key)
+
+                window.status_text.setText(f"正在积分 {path.name}…")
+                _spawn(window, path, geom, npt, key,
+                       on_done=done, on_error=error)
+
+            spawn_one()
+    else:
+        _finish_heatmap(window, key)
+
+
+def _plot_heatmap(window: QMainWindow) -> None:
+    """[热图] 按钮：把勾选文件的 1D 曲线拼成一张 2θ×样品 强度热图。
+
+    多文件 → 一张面板（同 [对比] 的流程形态）：横轴 2θ、纵轴样品
+    （文件列表顺序，行标签 = 文件名）、颜色 = 强度——原位实验看
+    峰位/强度/峰形随样品（时间/充电状态）的变化。勾选 ≥2 个文件；
+    已算好的 1D 结果直接复用，缺的后台补积分（见 _run_heatmap）。
+    同一勾选集合重复点 = 复用同一张面板刷新；换集合 = 新开一张。
+    面板键 = "热图|排序后的路径串"（与单文件面板并存，互不干扰）。
+    """
+    checked = [window.file_list.item(i)
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if len(checked) < 2:
+        _log(window, "热图至少勾选两个文件（多条 1D 曲线拼成一张强度图）")
+        return
+    files = [(Path(item.data(Qt.UserRole)), item.text()) for item in checked]
+    key = "热图|" + ",".join(sorted(str(p) for p, _ in files))
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        title = f"热图_{len(files)} 个样品"
+        dock = _open_plot_panel(window, "热图", key, title)
+        dock.panel_display = title   # 标题/日志/默认存盘名用
+        dock.figure_saved = False
+        dock.heat_files = files   # 面板绑定这组文件（重算用）
+        dock.heat_gen = 0
+        dock.heat_results = []
+        dock.heat_pending = 0
+        dock.heat_data = None
+        dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
+        _log(window, f"打开热图面板：{len(files)} 个文件拼一张强度图")
+    else:
+        dock.heat_files = files   # 复用面板：绑定刷新（删除重加/改名）
+    dock.setVisible(True)
+    _run_heatmap(window, key)

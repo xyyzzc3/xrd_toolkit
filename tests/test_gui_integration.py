@@ -291,11 +291,15 @@ class TestViewButtonRuns(unittest.TestCase):
             w.close()
 
     def test_four_views_registered(self):
-        """四个视图按钮全部接线：注册表齐套（旧版 2D 是占位面板）。"""
+        """四个视图按钮全部接线：注册表齐套（旧版 2D 是占位面板）。
+
+        热图只占 builder 表（多文件 → 一张面板，走 _plot_heatmap，
+        不占 runner 表——它复用 1D 的 _spawn 后台积分）。
+        """
         self.assertEqual(set(gui_views._VIEW_RUNNERS),
                          {"2D", "剖面", "1D", "瀑布"})
         self.assertEqual(set(gui_views._VIEW_BUILDERS),
-                         {"2D", "剖面", "1D", "瀑布"})
+                         {"2D", "剖面", "1D", "瀑布", "热图"})
 
 
 class TestNewViews(unittest.TestCase):
@@ -5207,7 +5211,7 @@ class TestExportCsv(unittest.TestCase):
 
 
 class TestPoniImport(unittest.TestCase):
-    """[导入 .poni]：读 pyFAI 几何 → 用户条目落盘 + 下拉框自动选中。
+    """[加载参数]：读 pyFAI 几何 → 用户条目落盘 + 下拉框自动选中。
 
     _import_poni 真调 pyFAI.load（读临时 .poni 文件）；USER_CONFIG_PATH
     指向临时路径（同 TestSaveCalibConfig），收尾还原内存字典。
@@ -5311,6 +5315,278 @@ class TestPoniImport(unittest.TestCase):
             self.assertIn("缺少几何字段", log)
             self.assertIn("pixel", log)
             self.assertNotIn("old", config_mod.USER_CONFIGS)
+        finally:
+            w.close()
+
+
+class TestSavePoni(unittest.TestCase):
+    """[保存参数]：当前选中配置 → 标准 .poni 文件（pyFAI Geometry.save）。
+
+    真调 pyFAI 写读往返：写出的文件能被 pyFAI.load 读回，几何 7 字段
+    与原配置一致（保存内容 = 距离/中心/像素/波长/倾斜角）。
+    """
+
+    def test_buttons_labelled_save_and_load(self):
+        """作业规格按钮名：[加载参数] + [保存参数]。"""
+        w = create_window()
+        try:
+            self.assertEqual(w.findChild(QPushButton, "poni_btn").text(),
+                             "加载参数")
+            self.assertEqual(
+                w.findChild(QPushButton, "save_poni_btn").text(),
+                "保存参数")
+        finally:
+            w.close()
+
+    def test_save_writes_poni_roundtrip(self):
+        w = create_window()
+        try:
+            out = Path(tempfile.mkdtemp()) / "sub" / "lmfp1_lab6.poni"
+            with mock.patch.object(
+                    QFileDialog, "getSaveFileName",
+                    return_value=(str(out), "pyFAI 几何 (*.poni)")):
+                w.findChild(QPushButton, "save_poni_btn").click()
+            self.assertTrue(out.is_file())
+            import pyFAI
+            g = pyFAI.load(str(out))
+            cfg = w.config["geometry"]
+            self.assertAlmostEqual(g.dist, cfg["dist_m"])
+            self.assertAlmostEqual(g.poni1, cfg["poni1_m"])
+            self.assertAlmostEqual(g.poni2, cfg["poni2_m"])
+            self.assertAlmostEqual(g.rot1, np.radians(cfg["rot1_deg"]))
+            self.assertAlmostEqual(g.rot2, np.radians(cfg["rot2_deg"]))
+            self.assertAlmostEqual(g.pixel1, cfg["pixel_size_m"])
+            self.assertAlmostEqual(g.wavelength, cfg["wavelength_m"])
+            log = w.log_text.toPlainText()
+            self.assertIn("已保存几何参数", log)
+            self.assertIn("距离", log)
+            self.assertIn("中心 poni1", log)
+            self.assertIn("倾斜 rot1", log)
+        finally:
+            w.close()
+
+    def test_save_cancel_writes_nothing(self):
+        w = create_window()
+        try:
+            with mock.patch.object(QFileDialog, "getSaveFileName",
+                                   return_value=("", "")):
+                w.findChild(QPushButton, "save_poni_btn").click()
+            self.assertNotIn("已保存几何参数", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+
+class TestHeatmap(unittest.TestCase):
+    """[热图]：勾选文件的 1D 曲线拼成 2θ×样品 强度热图。
+
+    已算好的 1D 面板缓存直接复用，缺的后台补积分（进度计数同
+    批量管线）；显示参数（色图/归一化/对数/范围）走面板快照，
+    图像 [应用] 只重画、数据 [应用] 全部重积分。
+    """
+
+    def _heat_dock(self, w):
+        """找到热图面板（键 = "热图|路径串"）。"""
+        return next(d for k, d in w.plot_docks.items()
+                    if k.startswith("热图|"))
+
+    def _wait_heat(self, w):
+        return _wait_until(
+            lambda: any(k.startswith("热图|")
+                        and getattr(d, "heat_data", None) is not None
+                        for k, d in w.plot_docks.items()))
+
+    def test_assemble_heatmap_same_grid_no_interp(self):
+        r = [("a", np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])),
+             ("b", np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0]))]
+        tth, matrix, stems, interp = gui_views._assemble_heatmap(r)
+        self.assertFalse(interp)
+        self.assertEqual(stems, ["a", "b"])
+        np.testing.assert_array_equal(matrix, [[1, 2, 3], [4, 5, 6]])
+
+    def test_assemble_heatmap_mismatched_grids_interp(self):
+        """网格不一致（点数/区间不同）→ 重插值到第一个文件的网格。"""
+        r = [("a", np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])),
+             ("b", np.array([1.0, 3.0]), np.array([10.0, 30.0]))]
+        tth, matrix, stems, interp = gui_views._assemble_heatmap(r)
+        self.assertTrue(interp)
+        np.testing.assert_allclose(matrix[1], [10.0, 20.0, 30.0])
+
+    def test_assemble_heatmap_empty_returns_none(self):
+        self.assertIsNone(gui_views._assemble_heatmap([]))
+        self.assertIsNone(gui_views._assemble_heatmap(
+            [("a", np.array([]), np.array([]))]))
+
+    def test_heat_shown_modes(self):
+        m = np.array([[1.0, 2.0], [3.0, 4.0]])
+        np.testing.assert_array_equal(gui_state._heat_shown(m, "off"), m)
+        np.testing.assert_allclose(gui_state._heat_shown(m, "each"),
+                                   [[0.5, 1.0], [0.75, 1.0]])
+        np.testing.assert_allclose(gui_state._heat_shown(m, "global"),
+                                   m / 4.0)
+
+    def test_heatmap_uses_cached_1d_and_draws(self):
+        """1D 已算好 → [热图] 零后台任务直接出图（复用面板缓存）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as c:
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: all(
+                        getattr(_dock(w, "1D", p), "last_tth", None)
+                        is not None
+                        for p in ("data/fake_a.tif", "data/fake_b.tif"))))
+                calls = c.call_count
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            self.assertEqual(c.call_count, calls)   # 复用缓存：零新任务
+            log = w.log_text.toPlainText()
+            self.assertIn("复用已有 1D 结果，后台积分 0 个", log)
+            self.assertIn("热图完成：2 个样品 × 3 点", log)
+            # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
+            dock = self._heat_dock(w)
+            ax = gui_app._content(dock).axes_heat
+            self.assertEqual(len(ax.images), 1)
+            self.assertIsNotNone(dock._heat_colorbar)
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
+                             ["fake_a", "fake_b"])
+            self.assertTrue(w.focus_panel.startswith("热图|"))
+        finally:
+            w.close()
+
+    def test_heatmap_integrates_missing_with_progress(self):
+        """没算过 1D → 后台补积分，进度计数（1/2）（2/2），完成出图。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            log = w.log_text.toPlainText()
+            self.assertIn("开始热图：2 个文件（复用已有 1D 结果，"
+                          "后台积分 2 个）", log)
+            self.assertIn("热图：fake_b.tif 积分完成（3 点）（1/2）", log)
+            self.assertIn("热图：fake_a.tif 积分完成（3 点）（2/2）", log)
+            self.assertIn("热图完成：2 个样品 × 3 点", log)
+            self.assertFalse(hasattr(w, "_batch"),
+                             "批走完应清账（之后零散任务不再计数）")
+        finally:
+            w.close()
+
+    def test_heatmap_single_file_hint(self):
+        w = create_window()
+        try:
+            w.add_files(["data/fake_a.tif"])
+            w.heat_btn.click()
+            self.assertIn("热图至少勾选两个文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_heatmap_error_still_draws_others(self):
+        """一个文件失败：错误日志计数，其余照样成图。"""
+        def flaky(path_str, geom, npt):
+            if path_str.endswith("fake_a.tif"):
+                raise RuntimeError("解码失败")
+            return _fake_compute(path_str, geom, npt)
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=flaky):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            log = w.log_text.toPlainText()
+            self.assertIn("热图：fake_a.tif 积分失败 — RuntimeError: 解码失败",
+                          log)
+            self.assertIn("热图：fake_b.tif 积分完成（3 点）（2/2）", log)
+            self.assertIn("热图完成：1 个样品 × 3 点", log)
+        finally:
+            w.close()
+
+    def test_heatmap_mismatched_grids_logs_interp_note(self):
+        """各文件网格不一致 → 出图 + 日志提示重插值。"""
+        def grids(path_str, geom, npt):
+            if path_str.endswith("fake_a.tif"):
+                return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
+            return np.array([0.5, 8.5]), np.array([1.0, 3.0])
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=grids):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            log = w.log_text.toPlainText()
+            self.assertIn("各文件 2θ 网格不一致，已重插值到"
+                          "第一个文件的网格", log)
+            dock = self._heat_dock(w)
+            self.assertEqual(dock.heat_data[1].shape, (2, 3))
+        finally:
+            w.close()
+
+    def test_heatmap_image_apply_redraws_with_new_colormap(self):
+        """图像 [应用]：改色图 → 重画（不重新积分）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as c:
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+                calls = c.call_count
+            dock = self._heat_dock(w)
+            ax = gui_app._content(dock).axes_heat
+            self.assertEqual(ax.images[0].get_cmap().name, "magma")
+            w.params["热图色图"].setCurrentIndex(
+                w.params["热图色图"].findData("viridis"))
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertEqual(ax.images[0].get_cmap().name, "viridis")
+            self.assertEqual(c.call_count, calls)   # 只重画不重算
+        finally:
+            w.close()
+
+    def test_heatmap_data_apply_reintegrates_all(self):
+        """数据 [应用]：改了数据参数 → 全部文件重新积分（无视缓存）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as c:
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+                calls = c.call_count
+                w.findChild(QPushButton, "apply_btn").click()
+                self.assertTrue(_wait_until(
+                    lambda: c.call_count >= calls + 2))
+        finally:
+            w.close()
+
+
+class Test2DColorbar(unittest.TestCase):
+    """2D 视图带颜色条（作业规格"带颜色条"）：每画一次恰好一条，
+    重画先拆旧的不叠罗汉。"""
+
+    def test_2d_has_single_colorbar_and_redraw_does_not_stack(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.ones((64, 64)) * 5.0):
+                w.add_files(["data/fake_a.tif"])
+                _open_view(w, "2D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
+                                    "last_image", None) is not None))
+            dock = _dock(w, "2D", "data/fake_a.tif")
+            fig = gui_app._content(dock).figure
+            self.assertEqual(len(fig.axes), 2)   # 图像轴 + 颜色条轴
+            # 图像 [应用] 重画 → 颜色条仍恰好一条
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertEqual(len(fig.axes), 2)
+            self.assertIsNotNone(dock._colorbar_2d)
         finally:
             w.close()
 
