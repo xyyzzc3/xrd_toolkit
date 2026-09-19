@@ -854,6 +854,71 @@ class TestDragDrop(unittest.TestCase):
             w.close()
 
 
+class TestFolderDrag(unittest.TestCase):
+    """拖文件夹进窗口 = 扫描加入（与 [打开文件夹] 同一条逻辑）。"""
+
+    def _tmp_folder(self, names):
+        folder = tempfile.mkdtemp()
+        for name in names:
+            Path(folder, name).touch()
+        return folder
+
+    def test_drop_folder_scans_and_adds(self):
+        folder = self._tmp_folder(("b.edf", "a.tif", "c.txt", "d.TIF"))
+        w = create_window()
+        try:
+            _drop_event(w, [folder])
+            names = [w.file_list.item(i).text()
+                     for i in range(w.file_list.count())]
+            self.assertEqual(names, ["a.tif", "b.edf", "d.TIF"])
+            self.assertIn("文件夹扫描", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_drop_folder_twice_skips_duplicates(self):
+        folder = self._tmp_folder(("a.tif",))
+        w = create_window()
+        try:
+            _drop_event(w, [folder])
+            _drop_event(w, [folder])
+            self.assertEqual(w.file_list.count(), 1)
+            self.assertIn("已跳过重复文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_drop_empty_folder_logs_hint(self):
+        folder = tempfile.mkdtemp()
+        w = create_window()
+        try:
+            _drop_event(w, [folder])
+            self.assertIn("文件夹里没有支持的数据文件",
+                          w.log_text.toPlainText())
+            self.assertEqual(w.file_list.count(), 0)
+        finally:
+            w.close()
+
+    def test_drop_mixed_files_and_dir(self):
+        folder = self._tmp_folder(("a.tif",))
+        w = create_window()
+        try:
+            abs_b = str(Path("data/fake_b.tif").resolve())
+            _drop_event(w, [abs_b, "/tmp/x.txt", folder])
+            names = [w.file_list.item(i).text()
+                     for i in range(w.file_list.count())]
+            self.assertEqual(names, ["fake_b.tif", "a.tif"])
+        finally:
+            w.close()
+
+    def test_drag_enter_accepts_dir(self):
+        folder = tempfile.mkdtemp()
+        w = create_window()
+        try:
+            ev = _drop_event(w, [folder], kind="enter")
+            self.assertTrue(ev.isAccepted(), "拖文件夹应接住（扫描加入）")
+        finally:
+            w.close()
+
+
 class TestDuplicateFiles(unittest.TestCase):
     """同一文件再次加入：弹窗问覆盖 / 改名 / 取消，列表不重名。"""
 

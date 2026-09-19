@@ -21,6 +21,7 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 窗口上的公共接口（供面板与测试使用）：
   window.log(text)        写日志区 + 状态行
   window.add_files(paths) 把文件加进左侧列表
+  window.drop_folder(path) 扫描文件夹加入列表（与 [打开文件夹] 同逻辑）
   window.mdi              QMdiArea（绘图区，所有图子窗口的父场地）
   window.plot_docks       {面板键: QMdiSubWindow 或 _FloatedWindow}，
                           键 = f"{视图}|{路径}"，重复文件改名条目再补
@@ -54,7 +55,7 @@ matplotlib.rcParams["font.family"] = [
 from PySide6.QtCore import QEvent, QObject, Qt, QSize
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
     QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
@@ -87,46 +88,60 @@ from xrd_toolkit.gui.plot_views import (
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
-SUPPORTED_SUFFIXES = (".tif", ".edf", ".cbf")   # 拖放只认这三种
+SUPPORTED_SUFFIXES = tuple(sorted(SUPPORTED_EXTS))   # 拖放白名单与文件夹扫描/CLI 菜单同一张表（含 .tiff）
 
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
-def _dropped_paths(event) -> list:
-    """从拖放事件提取本地文件路径（只留支持的类型 tif/edf/cbf）。"""
-    paths = []
+def _dropped_items(event) -> list:
+    """从拖放事件提取可处理的本地路径：支持类型的文件 + 目录。
+
+    目录拖入 = 扫描其中的数据文件（与 [打开文件夹] 同一套逻辑，
+    drop 时经 drop_folder 转发）。文件/目录的分流放在落点处理，
+    这里只负责"光标该不该显示可放"的判定与提取——拖文件夹进来
+    时光标同样要变 +，不然"显示可放、松手没反应"最糟。
+    """
+    items = []
     for url in event.mimeData().urls():
         if url.isLocalFile():
-            p = url.toLocalFile()
-            if p.lower().endswith(SUPPORTED_SUFFIXES):
-                paths.append(p)
-    return paths
+            p = Path(url.toLocalFile())
+            if p.is_dir() or p.suffix.lower() in SUPPORTED_SUFFIXES:
+                items.append(p)
+    return items
 
 class _MainWindow(QMainWindow):
-    """顶层窗口：接受拖入文件（拖到窗口任意位置 = 加进文件列表）。
+    """顶层窗口：接受拖入文件或文件夹（拖到窗口任意位置）。
 
-    至少拖进一个支持类型的文件才"接住"（光标变 +）；子控件默认
+    文件 → 加进文件列表；文件夹 → 扫描其中的数据文件。至少拖进
+    一个支持类型的文件或一个目录才"接住"（光标变 +）；子控件默认
     不接拖放（日志区显式关掉了文本拖放），事件会冒泡到顶层窗口
-    ——一个入口覆盖整个窗口面。drop_callback 由 create_window 接
-    到 add_files 上。
+    ——一个入口覆盖整个窗口面。drop_callback / drop_folder 由
+    create_window 接到 add_files / _scan_folder 上。
     """
 
     def __init__(self):
         super().__init__()
         self.drop_callback = None
+        self.drop_folder = None
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
-        if self.drop_callback and _dropped_paths(event):
+        if (self.drop_callback or self.drop_folder) and _dropped_items(event):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        paths = _dropped_paths(event)
-        if paths and self.drop_callback:
-            self.drop_callback(paths)
-            event.acceptProposedAction()
-        else:
+        files, dirs = [], []
+        for p in _dropped_items(event):
+            (dirs if p.is_dir() else files).append(p)
+        if not files and not dirs:
             event.ignore()
+            return
+        if files and self.drop_callback:
+            self.drop_callback([str(p) for p in files])
+        for d in dirs:
+            if self.drop_folder:
+                self.drop_folder(str(d))
+        event.acceptProposedAction()
 
 
 class _PanelClickTracker(QObject):
@@ -235,6 +250,23 @@ class NarrowList(QListWidget):
     def minimumSizeHint(self):
         return QSize(100, 120)
 
+def _scan_folder(window: QMainWindow, folder) -> None:
+    """扫描一个文件夹并把支持的数据文件加进列表（不递归、排序稳定）。
+
+    [打开文件夹] 按钮与"拖文件夹进窗口"共用：整目录重加时重复
+    文件只记日志不弹窗（skip_duplicates）——一摞"文件已存在"
+    弹窗没有意义。
+    """
+    found = sorted(p for p in Path(folder).iterdir()
+                   if p.suffix.lower() in SUPPORTED_EXTS)
+    if not found:
+        _log(window, "文件夹里没有支持的数据文件"
+                     "（.tif/.tiff/.edf/.cbf）")
+        return
+    _log(window, f"文件夹扫描：{folder} 找到 {len(found)} 个数据文件")
+    window.add_files([str(p) for p in found], skip_duplicates=True)
+
+
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """文件坞：打开（多选）/ 保存 / 删除 + 以对号为选择的文件列表。
 
@@ -257,29 +289,33 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     content = QWidget()
     lay = QVBoxLayout(content)
-    # 按钮网格：[打开] 占满第一行（长按钮）；[保存][删除][文件夹]
-    # 第二行；[导出数据] 占满第三行。第二行三个按钮把文件列最小
-    # 宽度锁在 ≈ 3×80+间距（270），与参数列一致——之前只有两个
-    # 按钮（184）文件列才能收得比参数列还窄
-    btns = QGridLayout()
-    btn_open = QPushButton("打开")
+    # 按钮两排：[打开文件][打开文件夹] 各占一半；[保存][删除]
+    # [导出数据] 各占 1/3。第二排三个按钮把文件列最小宽度锁在
+    # ≈ 3×80+间距（270），与参数列一致——排布改了，这个锁宽
+    # 约束不变（别把第二排砍成两个按钮，文件列会收得比参数列窄）
+    btn_open = QPushButton("打开文件")
     btn_save = QPushButton("保存")
     btn_delete = QPushButton("删除")
-    btn_folder = QPushButton("文件夹")
+    btn_folder = QPushButton("打开文件夹")
     btn_export = QPushButton("导出数据")
     btn_save.setObjectName("save_btn")
     btn_delete.setObjectName("delete_btn")
     btn_folder.setObjectName("folder_btn")
     btn_export.setObjectName("export_btn")
-    btn_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表")
+    btn_open.setToolTip("选择一个或多个衍射图像加入列表")
+    btn_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表"
+                          "（拖文件夹进窗口同样生效）")
     btn_export.setToolTip("把勾选文件的 1D 结果批量存成两列 txt/chi，"
                           "可顺带生成 CSV 总表")
-    btns.addWidget(btn_open, 0, 0, 1, 3)   # 打开占满第一行
-    btns.addWidget(btn_save, 1, 0)
-    btns.addWidget(btn_delete, 1, 1)
-    btns.addWidget(btn_folder, 1, 2)
-    btns.addWidget(btn_export, 2, 0, 1, 3)   # 导出数据占满第三行
-    lay.addLayout(btns)
+    row1 = QHBoxLayout()
+    row1.addWidget(btn_open, 1)
+    row1.addWidget(btn_folder, 1)
+    lay.addLayout(row1)
+    row2 = QHBoxLayout()
+    row2.addWidget(btn_save, 1)
+    row2.addWidget(btn_delete, 1)
+    row2.addWidget(btn_export, 1)
+    lay.addLayout(row2)
 
     window.file_list = NarrowList()   # 覆盖了 minimumSizeHint，可以收窄
     # 对号 = 选中（可多选）。用系统默认的选中样式：背景高亮 + 白字
@@ -321,21 +357,12 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             window.add_files(paths)
 
     def open_folder():
-        """文件夹导入：遍历目录里全部衍射图像（不递归子目录，排序
-        保证顺序稳定），一起加进列表；重复文件自动跳过不弹窗——
-        整目录重加时一摞"文件已存在"弹窗没有意义。"""
+        """文件夹导入 = 弹目录选择框 → _scan_folder 扫描加入
+        （与拖文件夹进窗口同一套逻辑）。"""
         folder = QFileDialog.getExistingDirectory(
             window, "选择数据文件夹", "data")
-        if not folder:
-            return
-        found = sorted(p for p in Path(folder).iterdir()
-                       if p.suffix.lower() in SUPPORTED_EXTS)
-        if not found:
-            _log(window, "文件夹里没有支持的数据文件"
-                         "（.tif/.tiff/.edf/.cbf）")
-            return
-        _log(window, f"文件夹扫描：{folder} 找到 {len(found)} 个数据文件")
-        window.add_files([str(p) for p in found], skip_duplicates=True)
+        if folder:
+            _scan_folder(window, folder)
 
     btn_folder.clicked.connect(open_folder)
     btn_export.clicked.connect(lambda: _run_export(window))
@@ -1458,8 +1485,10 @@ def create_window() -> QMainWindow:
     # 环变成无根环，gc 即可收走。取消/保存失败走 event.ignore()，
     # 窗口留在程序里不受影响。
     window.setAttribute(Qt.WA_DeleteOnClose)
-    # 拖文件进窗口任意位置 = 加进文件列表（拖放事件冒泡到顶层窗口）
+    # 拖文件进窗口任意位置 = 加进文件列表；拖文件夹 = 扫描加入
+    # （拖放事件冒泡到顶层窗口）
     window.drop_callback = lambda paths: add_files(window, paths)
+    window.drop_folder = lambda folder: _scan_folder(window, folder)
 
     window._status_timer = None   # _log 里的状态栏恢复计时器（懒创建）
     window.log = lambda text: _log(window, text)
