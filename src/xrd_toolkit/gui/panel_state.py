@@ -432,9 +432,10 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
 
     与 _apply_auto_contrast 同款：自动模式下输入框只是"程序正在用
     的区间"的只读展示。1D 焦点 → 按该面板曲线数据算；对比焦点 →
-    按叠图显示数据（含归一化）算；2D/剖面 没有纵轴概念、或还没算
-    完 → 占位默认。画图时（_draw_1d/_redraw_compare）也会填一次，
-    所以焦点图刚算完/刚 [应用] 后输入框一定是准的。
+    按叠图显示数据（含归一化）算；剖面焦点 → 按剖面强度曲线算；
+    2D 没有纵轴概念、或还没算完 → 占位默认。画图时（_draw_1d/
+    _redraw_compare/_draw_profile）也会填一次，所以焦点图刚算完/
+    刚 [应用] 后输入框一定是准的。
     """
     ylo, yhi = _YLIM_FALLBACK
     loaded = False
@@ -451,6 +452,10 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
                 if shown:
                     ylo, yhi = _auto_y_range(np.concatenate(shown), log_y)
                     loaded = True
+            elif view == "剖面" and getattr(dock, "last_profile_t",
+                                            None) is not None:
+                ylo, yhi = _auto_y_range(dock.last_profile_intensity, log_y)
+                loaded = True
     window.params["纵轴下限"].setValue(ylo)
     window.params["纵轴上限"].setValue(yhi)
     if not silent and loaded:

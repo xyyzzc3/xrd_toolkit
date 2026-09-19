@@ -290,15 +290,169 @@ class TestViewButtonRuns(unittest.TestCase):
         finally:
             w.close()
 
-    def test_unwired_view_logs_placeholder(self):
+    def test_four_views_registered(self):
+        """四个视图按钮全部接线：注册表齐套（旧版 2D 是占位面板）。"""
+        self.assertEqual(set(gui_views._VIEW_RUNNERS),
+                         {"2D", "剖面", "1D", "瀑布"})
+        self.assertEqual(set(gui_views._VIEW_BUILDERS),
+                         {"2D", "剖面", "1D", "瀑布"})
+
+
+class TestNewViews(unittest.TestCase):
+    """2D / 剖面 / 瀑布 视图接线：各自后台计算 → 画进面板 →
+    图像参数 [应用]（只重画，只有剖面角度变过才重算）。"""
+
+    def test_2d_view_draws_image_and_caches(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])
-            _open_view(w, "2D")
-            self.assertIn("2D 视图尚未接线", w.log_text.toPlainText())
+            fake_image = np.arange(400, dtype=float).reshape(20, 20)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=fake_image):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "2D")
+                drawn = _wait_until(lambda: len(gui_app._content(
+                    _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0)
+                self.assertTrue(drawn, "点 2D 后应画出图像")
             dock = _dock(w, "2D", "data/fake_b.tif")
             self.assertEqual(dock.windowTitle(), "2D_fake_b.tif")
-            self.assertFalse(dock.isHidden())
+            ax = gui_app._content(dock).axes_2d
+            self.assertEqual(len(ax.images), 1)
+            # 束心十字画在当前配置的 beam_center 上（(行, 列) → x=列, y=行）
+            cy, cx = w.config["beam_center"]
+            self.assertAlmostEqual(ax.lines[0].get_xdata()[0], cx)
+            self.assertAlmostEqual(ax.lines[0].get_ydata()[0], cy)
+            self.assertIn("读取完成：fake_b.tif", w.log_text.toPlainText())
+            self.assertEqual(w.focus_panel, "2D|data/fake_b.tif")
+            # 图进了路径键缓存（自动对比度直接复用，不重复解码）
+            self.assertIn("data/fake_b.tif", w._image_cache)
+        finally:
+            w.close()
+
+    def test_profile_view_uses_snapshot_angle_and_recomputes_on_apply(self):
+        w = create_window()
+        try:
+            profile_calls = []
+
+            def fake_profile(image, center, angle_deg=0.0):
+                profile_calls.append((center, angle_deg))
+                t = np.linspace(-100.0, 100.0, 21)
+                return t, 10.0 * np.ones_like(t)
+
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "line_profile",
+                                   side_effect=fake_profile):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "剖面")
+                drawn = _wait_until(lambda: len(gui_app._content(
+                    _dock(w, "剖面", "data/fake_b.tif")).axes_profile.lines) > 0)
+                self.assertTrue(drawn, "点 剖面 后应画出曲线")
+            dock = _dock(w, "剖面", "data/fake_b.tif")
+            self.assertEqual(dock.windowTitle(), "剖面_fake_b.tif")
+            # 首画：角度 = 面板快照默认 0，中心 = 配置 beam_center
+            self.assertEqual(profile_calls[0][1], 0.0)
+            self.assertEqual(profile_calls[0][0], tuple(w.config["beam_center"]))
+            self.assertIn("剖面完成：fake_b.tif", w.log_text.toPlainText())
+            # 改角度点图像 [应用] → 按新角度重算（不是只重画）
+            w.params["剖面角度 (°)"].setValue(45.0)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "line_profile",
+                                   side_effect=fake_profile):
+                w.findChild(QPushButton, "apply_image_btn").click()
+                recomputed = _wait_until(lambda: len(profile_calls) == 2)
+                self.assertTrue(recomputed, "角度变了应重算剖面")
+            self.assertEqual(profile_calls[1][1], 45.0)
+            self.assertIn("剖面角度改为 45°，重新计算",
+                          w.log_text.toPlainText())
+            # 角度没变再点 [应用] → 只重画，不再算
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "line_profile",
+                                   side_effect=fake_profile):
+                w.findChild(QPushButton, "apply_image_btn").click()
+                QApplication.processEvents()
+            self.assertEqual(len(profile_calls), 2, "角度没变不应重算")
+            self.assertIn("[应用] 图像参数已重画：剖面_fake_b.tif",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_waterfall_stacks_36_sectors(self):
+        w = create_window()
+        try:
+            tth = np.linspace(1.0, 8.0, 30)
+            i2d = np.ones((30, 36))
+            chi = np.linspace(-175.0, 175.0, 36)   # 真引擎惯例：χ 从 -175° 起
+
+            def fake_sectors(image, **kw):
+                self.assertEqual(kw["n_sectors"], 36)
+                return tth, i2d, chi
+
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "integrate_sectors",
+                                   side_effect=fake_sectors):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "瀑布")
+                drawn = _wait_until(lambda: len(gui_app._content(
+                    _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0)
+                self.assertTrue(drawn, "点 瀑布 后应画出堆叠曲线")
+            dock = _dock(w, "瀑布", "data/fake_b.tif")
+            ax = gui_app._content(dock).axes_waterfall
+            self.assertEqual(len(ax.lines), 36, "36 条扇区曲线")
+            # 每行基线标 χ（第一条 -175°），曲线名 = 扇区名（悬停读数）
+            self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°")
+            self.assertEqual(ax.lines[0].get_label(), "-175°")
+            self.assertIn("扇形积分完成：fake_b.tif（36 扇区 × 30 点）",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_image_params_apply_redraws_2d_contrast(self):
+        """2D 对比度参数：关自动 + 手填 → [应用] 用已有图按手填值重画。"""
+        w = create_window()
+        try:
+            fake_image = np.arange(400, dtype=float).reshape(20, 20)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=fake_image):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "2D")
+                self.assertTrue(_wait_until(lambda: len(gui_app._content(
+                    _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0))
+            ax = gui_app._content(_dock(w, "2D", "data/fake_b.tif")).axes_2d
+            self.assertGreater(ax.images[0].norm.vmin, 1.0, "自动 = 分位值")
+            w.params["自动对比度"].setChecked(False)
+            w.params["对比度下限"].setValue(5.0)
+            w.params["对比度上限"].setValue(50.0)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            self.assertEqual(ax.images[0].norm.vmin, 5.0)
+            self.assertEqual(ax.images[0].norm.vmax, 50.0)
+            self.assertIn("[应用] 图像参数已重画：2D_fake_b.tif",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_waterfall_apply_redraws_without_recompute(self):
+        """瀑布面板图像 [应用]：只重画已有结果，不重新扇形积分。"""
+        w = create_window()
+        try:
+            tth = np.linspace(1.0, 8.0, 10)
+            i2d = np.ones((10, 36))
+            chi = np.linspace(5.0, 355.0, 36)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(
+                    gui_views, "integrate_sectors",
+                    return_value=(tth, i2d, chi)) as fake_sectors:
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "瀑布")
+                self.assertTrue(_wait_until(lambda: len(gui_app._content(
+                    _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0))
+                w.findChild(QPushButton, "apply_image_btn").click()
+                QApplication.processEvents()
+                self.assertEqual(fake_sectors.call_count, 1,
+                                 "[应用] 不应重新积分")
         finally:
             w.close()
 
@@ -931,9 +1085,14 @@ class TestAutoContrast(unittest.TestCase):
     意义：焦点是 1D/对比面板时不读文件（占位默认，防主线程卡）。"""
 
     def _focus_2d(self, w):
-        """开一张 fake_a 的 2D 占位面板并点它 → 编辑对象 = 该面板。"""
-        w.add_files(["data/fake_a.tif"])
-        _open_view(w, "2D")   # 2D 只开面板不计算（占位）
+        """开一张 fake_a 的 2D 面板并等它画出来 → 编辑对象 = 该面板。"""
+        fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
+        with mock.patch.object(gui_views, "load_diffraction_image",
+                               return_value=fake_image):
+            w.add_files(["data/fake_a.tif"])
+            _open_view(w, "2D")
+            self.assertTrue(_wait_until(lambda: len(gui_app._content(
+                _dock(w, "2D", "data/fake_a.tif")).axes_2d.images) > 0))
         QTest.mouseClick(gui_app._content(_dock(w, "2D", "data/fake_a.tif")),
                          Qt.LeftButton)
         return w.focus_panel
@@ -958,6 +1117,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["对比度下限"].setValue(5.0)
             w.params["对比度上限"].setValue(200.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
+            w._image_cache.clear()   # 2D 面板已缓存其图：清掉让重算走 mock
             with mock.patch.object(gui_state, "load_diffraction_image",
                                    return_value=fake_image):
                 auto.setChecked(True)   # 勾回自动 → 按焦点图重算
@@ -998,6 +1158,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["对比度下限"].setValue(5.0)
             w.params["剖面角度 (°)"].setValue(45.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
+            w._image_cache.clear()   # 2D 面板已缓存其图：清掉让重算走 mock
             with mock.patch.object(gui_state, "load_diffraction_image",
                                    return_value=fake_image):
                 w.findChild(QPushButton, "reset_image_btn").click()
@@ -1017,6 +1178,7 @@ class TestAutoContrast(unittest.TestCase):
             self._focus_2d(w)
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
+            w._image_cache.clear()   # 2D 面板已缓存其图：清掉让读图真的失败
             with mock.patch.object(gui_state, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 w.params["自动对比度"].setChecked(True)
@@ -1480,7 +1642,7 @@ class TestParamFormPolish(unittest.TestCase):
             captions = {lb.text() for lb in w.param_dock.findChildren(QLabel)}
             self.assertIn("标定几何", captions)
             self.assertIn("积分设置", captions)
-            self.assertIn("2D/剖面视图（接线后生效）", captions)
+            self.assertIn("2D/剖面视图", captions)
             # 归一化四选一下拉框（键仍是"对比归一化"，快照回放认 data
             # 不认字面）：各自最强峰 / 全图最强峰 / 指定数据… / 不归一化
             combo = w.params["对比归一化"]
@@ -1579,16 +1741,21 @@ class TestImageApply(unittest.TestCase):
         finally:
             w.close()
 
-    def test_apply_on_unwired_view_logs_pending(self):
-        """编辑对象是 2D 占位面板 → [应用] 只记快照并提示尚未接线。"""
+    def test_apply_before_result_logs_pending(self):
+        """编辑对象是没算出结果的 2D 面板 → [应用] 提示先等计算结果。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])
-            _open_view(w, "2D")   # 2D 只开面板不计算（占位）
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   side_effect=OSError("boom")):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "2D")
+                self.assertTrue(_wait_until(
+                    lambda: "读取失败" in w.log_text.toPlainText()))
             QTest.mouseClick(gui_app._content(_dock(w, "2D", "data/fake_b.tif")),
                              Qt.LeftButton)
             w.findChild(QPushButton, "apply_image_btn").click()
-            self.assertIn("2D 视图尚未接线", w.log_text.toPlainText())
+            self.assertIn("还没有计算结果（读取完成后再试）",
+                          w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -2307,15 +2474,13 @@ class TestZoomToolbar(unittest.TestCase):
         finally:
             w.close()
 
-    def test_placeholder_has_no_toolbar(self):
+    def test_unregistered_view_still_placeholder(self):
+        """未注册视图（分发骨架的防御路径）：占位标签面板，无工具栏。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
-                _open_view(w, "2D")
-                _wait_until(lambda: "2D|data/fake_b.tif" in w.plot_docks)
-            widget = gui_app._content(_dock(w, "2D", "data/fake_b.tif"))
+            gui_views._open_plot_panel(w, "不存在", "不存在|data/fake_b.tif",
+                                       "不存在_fake_b.tif")
+            widget = gui_app._content(_dock(w, "不存在", "data/fake_b.tif"))
             self.assertIsInstance(widget, QLabel, "占位面板仍是标签")
             self.assertFalse(hasattr(widget, "toolbar"),
                              "占位面板不应有缩放工具栏")
@@ -2749,7 +2914,8 @@ class TestResizeGrips(unittest.TestCase):
             w.close()
 
     def test_placeholder_panel_also_has_grip(self):
-        """占位面板（无画布/工具栏）也有把手和抓手。"""
+        """2D 面板（画布内容）同样有把手和抓手——把手装在内容上，
+        与视图类型无关。"""
         w = create_window()
         try:
             w.show()
@@ -3567,7 +3733,7 @@ class TestTileScrollReset(unittest.TestCase):
             w.arrange_buttons["横排"].click()
             for _ in range(10):
                 QApplication.processEvents()
-            _, hmax1, _, _ = self._scroll(w)
+            _, hmax1, _, vmax1 = self._scroll(w)
             self.assertGreater(hmax1, 0, "两行三列应溢出视口出滚动条")
             # 用户滚到右下角看第 6 张图
             w.mdi.horizontalScrollBar().setValue(hmax1)
@@ -3582,12 +3748,14 @@ class TestTileScrollReset(unittest.TestCase):
             hv, _, vv, _ = self._scroll(w)
             self.assertEqual((hv, vv), (0, 0),
                              "排列后视图应回到左上角（滚动归零）")
-            # 再横排：桌面最大值应与第一次横排一致（无灰区增长）
+            # 再横排：桌面最大值应与第一次横排一致（无灰区增长）。
+            # 与第一次横排比而不是写死数值：面板内容尺寸会随视图
+            # 接线升级（2D 从占位标签变真画布面板），写死就不稳了
             w.arrange_buttons["横排"].click()
             for _ in range(10):
                 QApplication.processEvents()
             _, hmax2, _, vmax2 = self._scroll(w)
-            self.assertEqual((hmax2, vmax2), (hmax1, 44),
+            self.assertEqual((hmax2, vmax2), (hmax1, vmax1),
                              "反复排列后滚动范围不应增长（回归：滚动偏移混入 move）")
         finally:
             w.hide()

@@ -4,21 +4,25 @@
 panels.py 之上）。
 
 视图注册表（本模块的扩展点）：_VIEW_BUILDERS / _VIEW_RUNNERS 两张
-表，视图名 → 建面板内容 / 跑计算。目前只注册了 1D（全角度积分）；
-2D / 剖面 / 瀑布接线 = 往表里加条目（_build_2d_widget / _run_2d
-…），_build_view_widget / _run_view 的分发骨架不用再动。对比
-（[对比] 按钮）是 1D 的多文件叠图变体，流程独立（_plot_compare
-→ _run_compare → _finish_compare），不占注册表。
+表，视图名 → 建面板内容 / 跑计算。四个视图（2D / 剖面 / 1D /
+瀑布）全部注册；新视图接线 = 往表里加条目（builder / runner），
+_build_view_widget / _run_view 的分发骨架不用再动。对比（[对比]
+按钮）是 1D 的多文件叠图变体，流程独立（_plot_compare →
+_run_compare → _finish_compare），不占注册表。
 
 其余内容：
-  - 1D 绘图：_draw_1d（读该面板自己的参数快照；程序重画不覆盖
-    Customize 用户改动——_snapshot_canvas 先拍现状，_settle_scale
-    /_apply_text_guards/_restore_line_styles 保护记账）、
-    _redraw_compare（对比面板同套路：多曲线 + 图例）；
-  - 后台任务：_compute_integration（纯计算，后台线程跑）/
-    _spawn / _on_integration_done（过期结果丢弃，面板关了静默）
-    / _on_integration_error；_apply_params / _apply_image_params
-    （两个 [应用] 各管各的）；
+  - 绘图：_draw_1d / _redraw_compare（对比多曲线 + 图例）/
+    _draw_2d（图像 + 对比度 + 束心十字）/ _draw_profile（过束心
+    剖面）/ _draw_waterfall（36 扇区堆叠，对齐 CLI 画法）——都读
+    该面板自己的参数快照；程序重画不覆盖 Customize 用户改动
+    （_snapshot_canvas 先拍现状，_settle_scale/_apply_text_guards
+    /_restore_line_styles 保护记账）；
+  - 后台任务：各视图 worker（_compute_integration/_compute_image/
+    _compute_profile/_compute_waterfall，纯计算，后台线程跑）/
+    _spawn（1D 特化）/ _spawn_task（通用版）/ 各 _on_*_done（过期
+    结果丢弃，面板关了静默）/ _on_integration_error /
+    _on_view_error；_apply_params / _apply_image_params（两个
+    [应用] 各管各的）；
   - 悬停取点（_hover_motion/_hover_leave）：白边圆点吸附最近真实
     数据点 + 状态栏坐标；
   - 手势：_pan_*（左键拖 = 平移）/ _wheel_zoom（放大镜点亮时滚轮
@@ -31,24 +35,28 @@ panels.py 之上）。
 from pathlib import Path
 
 import numpy as np
+from matplotlib import cm
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg, NavigationToolbar2QT)
+from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog, QLabel, QMainWindow, QMdiSubWindow, QPushButton,
     QVBoxLayout, QWidget)
 
-from xrd_toolkit.gui.customize import _open_customize_dialog
+from xrd_toolkit.core.processor import line_profile
+from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _install_resize_grip, _PanelResizeFilter, _panel_extra,
     _PlotSubWindow, _settle, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
-    _auto_y_range, _collect_geometry, _compare_shown_curves, _content,
-    _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
+    _auto_contrast_values, _auto_y_range, _collect_geometry,
+    _compare_shown_curves, _content, _data_snapshot, _display_snapshot,
+    _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.services.integrator import integrate_1d
+from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
 
 
 PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板默认画布尺寸（画布真 5:3，
@@ -65,6 +73,44 @@ def _compute_integration(path_str: str, geom: dict, npt: int) -> tuple:
     image = load_diffraction_image(path_str)
     tth, intensity = integrate_1d(image, npt=npt, **geom)
     return tth, intensity
+
+
+def _compute_image(path_str: str):
+    """后台线程里运行的纯计算：读衍射图（2D 视图只要原图）。
+
+    不碰任何界面控件；异常由 tasks.BackgroundTask 转成 error 信号
+    送回主线程。
+    """
+    return load_diffraction_image(path_str)
+
+
+def _compute_profile(path_str: str, center, angle_deg: float) -> tuple:
+    """后台线程里运行的纯计算：读图 → 过束心的线剖面。
+
+    center = (行, 列)（配置条目的 beam_center），angle_deg = 剖面
+    线与水平方向的夹角；返回 (t, 强度)，t = 到束心的带符号距离。
+    """
+    image = load_diffraction_image(path_str)
+    return line_profile(image, center, angle_deg)
+
+
+def _compute_waterfall(path_str: str, geom: dict, npt: int) -> tuple:
+    """后台线程里运行的纯计算：读图 → 36 扇区分区积分。
+
+    与 CLI sector_waterfall 同引擎（默认 36 扇区）。geom 只取
+    integrate_sectors 认识的几何键（2θ 范围参数是 integrate_1d
+    的，扇区积分走全范围）。
+    """
+    image = load_diffraction_image(path_str)
+    return integrate_sectors(
+        image, n_sectors=36, npt=npt,
+        pixel_size_m=geom["pixel_size_m"],
+        wavelength_m=geom["wavelength_m"],
+        dist_m=geom["dist_m"],
+        poni1_m=geom["poni1_m"],
+        poni2_m=geom["poni2_m"],
+        rot1_deg=geom["rot1_deg"],
+        rot2_deg=geom["rot2_deg"])
 
 
 def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
@@ -97,9 +143,50 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
     _spawn(window, path, geom, npt, key)
 
 
+def _run_2d(window: QMainWindow, path: Path, key: str,
+            geom: dict, npt: int) -> None:
+    """2D = 衍射图原图：后台读图，画布 imshow（对数色标 + 对比度参数）。"""
+    window.status_text.setText(f"正在读取 {path.name}…")
+    _log(window, f"开始读取 {path.name}（后台线程）")
+    _spawn_task(window, key, _compute_image, (str(path),),
+                _on_image_done,
+                lambda msg: _on_view_error(window, path, "读取", msg))
+
+
+def _run_profile(window: QMainWindow, path: Path, key: str,
+                 geom: dict, npt: int) -> None:
+    """剖面 = 过束心直线采样：中心取配置、角度取该面板快照。
+
+    剖面角度是显示参数（每张图各记各的）：改角度后点图像 [应用]
+    按新角度重算（见 _apply_image_params 的剖面分支）；主 [应用]
+    （数据参数）重算时沿用面板自己的旧角度。
+    """
+    dock = window.plot_docks.get(key)
+    center = window.config["beam_center"]   # (行, 列)
+    angle = _panel_param(window, dock, "剖面角度 (°)", 0.0)
+    if dock is not None:
+        dock.profile_angle = angle   # [应用] 比较用：角度没变只重画
+    window.status_text.setText(f"正在计算剖面 {path.name}…")
+    _log(window, f"开始计算剖面 {path.name}（后台线程，角度 {angle:g}°）")
+    _spawn_task(window, key, _compute_profile, (str(path), center, angle),
+                _on_profile_done,
+                lambda msg: _on_view_error(window, path, "剖面计算", msg))
+
+
+def _run_waterfall(window: QMainWindow, path: Path, key: str,
+                   geom: dict, npt: int) -> None:
+    """瀑布 = 36 扇区分区积分堆叠（对齐 CLI sector_waterfall）。"""
+    window.status_text.setText(f"正在扇形积分 {path.name}…")
+    _log(window, f"开始扇形积分 {path.name}（后台线程，36 扇区）")
+    _spawn_task(window, key, _compute_waterfall, (str(path), geom, npt),
+                _on_waterfall_done,
+                lambda msg: _on_view_error(window, path, "瀑布积分", msg))
+
+
 # 视图注册表：视图名 → 计算 runner（签名 window/path/key/geom/npt）。
-# 新视图接线 = 加条目（如 "2D": _run_2d），_run_view 分发骨架不动
-_VIEW_RUNNERS = {"1D": _run_1d}
+# 新视图接线 = 加条目，_run_view 分发骨架不动
+_VIEW_RUNNERS = {"2D": _run_2d, "剖面": _run_profile, "1D": _run_1d,
+                 "瀑布": _run_waterfall}
 
 
 def _apply_params(window: QMainWindow) -> None:
@@ -131,12 +218,12 @@ def _apply_image_params(window: QMainWindow) -> None:
 
     两个 [应用] 各管各的：这个按钮只更新焦点面板快照里的显示参数
     （_display_snapshot），数据参数沿用旧快照——顺手改了数据控件也
-    不会冒充成这张图的计算参数。显示参数（对数纵轴/纵轴范围/对比
-    归一化）与数据参数同款：每张图各记各的（存在各自面板的
-    params_snapshot 里），点哪张图参数坞就显示哪张图的设置。改完
-    点 [应用] 只重画焦点那张图（用已有数据，不重新积分），别的图
-    保持自己的设置不动。没算完的焦点面板提示先完成积分。2D/剖面
-    尚未接线，其占位面板只记快照。
+    不会冒充成这张图的计算参数。显示参数（对比度/剖面角度/对数纵
+    轴/纵轴范围/对比归一化）与数据参数同款：每张图各记各的（存在
+    各自面板的 params_snapshot 里），点哪张图参数坞就显示哪张图的
+    设置。改完点 [应用] 用已有数据重画焦点那张图（不重新积分），
+    别的图保持自己的设置不动；只有剖面角度真的变过才重算剖面。
+    没算完的焦点面板提示先完成计算。
     """
     key = window.focus_panel
     if key is None:
@@ -162,6 +249,35 @@ def _apply_image_params(window: QMainWindow) -> None:
                          f"计算结果（积分完成后再试）")
             return
         _redraw_compare(window, key)
+    elif view == "2D":
+        if getattr(dock, "last_image", None) is None:
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（读取完成后再试）")
+            return
+        _draw_2d(window, dock, dock.last_image)
+    elif view == "剖面":
+        if getattr(dock, "last_profile_t", None) is None:
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（剖面算完后再试）")
+            return
+        angle = _panel_param(window, dock, "剖面角度 (°)", 0.0)
+        if angle != getattr(dock, "profile_angle", None):
+            # 角度变了：剖面要重算（读图 + 线剖面，后台线程）
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 剖面"
+                         f"角度改为 {angle:g}°，重新计算")
+            _run_profile(window, dock.panel_file, key,
+                         _collect_geometry(window),
+                         int(window.params["输出点数"].value()))
+            return
+        _draw_profile(window, dock, dock.last_profile_t,
+                      dock.last_profile_intensity)
+    elif view == "瀑布":
+        if getattr(dock, "last_waterfall", None) is None:
+            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                         f"计算结果（扇形积分完成后再试）")
+            return
+        tth, i2d, chi = dock.last_waterfall
+        _draw_waterfall(window, dock, tth, i2d, chi)
     else:
         _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
                      f"（{view} 视图尚未接线）")
@@ -169,40 +285,57 @@ def _apply_image_params(window: QMainWindow) -> None:
     _log(window, f"[应用] 图像参数已重画：{dock.windowTitle()}")
 
 
-def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
-           key: str, on_done=None, on_error=None) -> None:
-    """启动后台积分任务；引用挂在 window._tasks 防垃圾回收，结束移除。
+def _spawn_task(window: QMainWindow, key: str, worker, args: tuple,
+                on_done, on_error) -> None:
+    """启动后台任务：worker(*args) 在线程里跑，done/error 回调回主线程。
 
-    task 变量在闭包外定义、闭包内只引用：done/error 回调在任务结束
-    时才被调用，那时 task 早已完成赋值。
-
-    单文件面板走默认回调（_on_integration_done 画一张图）；对比
-    面板传入 on_done/on_error——一个面板有多个任务，各自把结果
-    画到同一张图上、出错时各自计数。
+    _spawn（1D 积分）的本体抽出来通用化：新视图（2D/剖面/瀑布）
+    换 worker 与回调即可，三条规则同一份——任务引用挂在
+    window._tasks 防垃圾回收、每面板只认最新任务（_latest_task）、
+    收尾清登记（不残留已完成任务）。task 变量在闭包外定义、闭包
+    内只引用：done/error 回调在任务结束时才被调用，那时 task 早
+    已完成赋值。
     """
     task = None
 
     def done(result):
         window._tasks.remove(task)
-        (on_done or _on_integration_done)(window, key, task, result)
+        on_done(window, key, task, result)
         # 收尾后再清登记：过期检查（回调里对比 _latest_task）要先看得到自己
         if window._latest_task.get(key) is task:
             del window._latest_task[key]   # 不残留已完成任务（防涨爆）
 
     def error(msg):
         window._tasks.remove(task)
+        on_error(msg)
+        if window._latest_task.get(key) is task:
+            del window._latest_task[key]
+
+    task = BackgroundTask(worker, *args, on_done=done, on_error=error)
+    window._latest_task[key] = task   # 每面板只认最新任务（防旧结果覆盖）
+    window._tasks.append(task)
+    task.start()
+
+
+def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
+           key: str, on_done=None, on_error=None) -> None:
+    """启动后台积分任务（1D）：_spawn_task 的 1D 特化，保持旧签名。
+
+    单文件面板走默认回调（_on_integration_done 画一张图）；对比
+    面板传入 on_done/on_error——一个面板有多个任务，各自把结果
+    画到同一张图上、出错时各自计数。
+    """
+    def done(window_, key_, task, result):
+        (on_done or _on_integration_done)(window_, key_, task, result)
+
+    def error(msg):
         if on_error is not None:
             on_error(msg)
         else:
             _on_integration_error(window, path, msg)
-        if window._latest_task.get(key) is task:
-            del window._latest_task[key]
 
-    task = BackgroundTask(_compute_integration, str(path), geom, npt,
-                          on_done=done, on_error=error)
-    window._latest_task[key] = task   # 每面板只认最新任务（防旧结果覆盖）
-    window._tasks.append(task)
-    task.start()
+    _spawn_task(window, key, _compute_integration, (str(path), geom, npt),
+                done, error)
 
 
 def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
@@ -240,6 +373,96 @@ def _on_integration_error(window: QMainWindow, path: Path, msg: str) -> None:
     _log(window, f"积分失败：{path.name} — {msg}")
 
 
+def _on_view_error(window: QMainWindow, path: Path, what: str,
+                   msg: str) -> None:
+    """新视图计算失败（主线程）：报错进日志区，不崩溃。
+
+    what = 计算名（读取/剖面计算/瀑布积分），日志统一 "{what}失败：
+    文件名 — 原因"。
+    """
+    _log(window, f"{what}失败：{path.name} — {msg}")
+
+
+def _cache_image(window: QMainWindow, path_str: str, image) -> None:
+    """把读好的图存进路径键图像缓存（_apply_auto_contrast 共用）。
+
+    上限 3 张、弹出最早的一张——同一文件反复点不再重复解码。
+    """
+    cache = window._image_cache
+    cache[path_str] = image
+    while len(cache) > 3:
+        cache.pop(next(iter(cache)))
+
+
+def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
+    """2D 读图完成（主线程）：缓存图像、画进面板。
+
+    与 _on_integration_done 同款过期防护：每面板只认最新任务，
+    面板关了静默丢弃。
+    """
+    if window._latest_task.get(key) is not task:
+        dock = window.plot_docks.get(key)
+        if dock is not None:   # 面板还开着才记日志；关了静默丢弃
+            _log(window, f"已忽略 {dock.panel_display} 的过期结果"
+                         f"（同一面板已有更新的计算）")
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已被关闭（关闭即遗忘）：迟到结果静默丢弃
+    image = result
+    dock.last_image = image   # 图像 [应用] 只改对比度时用已有图重画
+    _cache_image(window, str(dock.panel_file), image)
+    _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
+    _draw_2d(window, dock, image)
+    _log(window, f"读取完成：{dock.panel_display}"
+                 f"（{image.shape[0]}×{image.shape[1]} 像素）")
+
+
+def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
+    """剖面计算完成（主线程）：结果留面板、画曲线（同 1D 的过期防护）。"""
+    if window._latest_task.get(key) is not task:
+        dock = window.plot_docks.get(key)
+        if dock is not None:
+            _log(window, f"已忽略 {dock.panel_display} 的过期结果"
+                         f"（同一面板已有更新的计算）")
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已被关闭：迟到结果静默丢弃
+    t, intensity = result
+    dock.last_profile_t = t
+    dock.last_profile_intensity = intensity
+    _set_focus(window, key, dock.windowTitle())
+    _draw_profile(window, dock, t, intensity)
+    if len(t):
+        _log(window, f"剖面完成：{dock.panel_display}（{len(t)} 点，"
+                     f"距离 {t.min():.0f}~{t.max():.0f} px）")
+    else:
+        _log(window, f"剖面完成：{dock.panel_display}（0 点，无有效数据）")
+
+
+def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
+    """扇形积分完成（主线程）：结果留面板、画堆叠瀑布（同 1D 的过期防护）。"""
+    if window._latest_task.get(key) is not task:
+        dock = window.plot_docks.get(key)
+        if dock is not None:
+            _log(window, f"已忽略 {dock.panel_display} 的过期结果"
+                         f"（同一面板已有更新的计算）")
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 面板已被关闭：迟到结果静默丢弃
+    tth, i2d, chi = result
+    dock.last_waterfall = (tth, i2d, chi)
+    _set_focus(window, key, dock.windowTitle())
+    _draw_waterfall(window, dock, tth, i2d, chi)
+    if len(tth):
+        _log(window, f"扇形积分完成：{dock.panel_display}"
+                     f"（{i2d.shape[1]} 扇区 × {i2d.shape[0]} 点）")
+    else:
+        _log(window, f"扇形积分完成：{dock.panel_display}（0 点，无有效数据）")
+
+
 def _snapshot_canvas(ax):
     """重画前把会被 ax.clear() 抹掉的状态拍下来（Customize 保护用）。
 
@@ -275,14 +498,21 @@ def _settle_scale(dock, cur_scale, param_log):
     return final
 
 
-def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel):
+def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel,
+                       texts=None):
     """标题/轴标签保护：用户在 Customize 里改过的保留，其余照默认。
 
-    标题的"参数源"= 显示名（panel_display）：显示名没变 → 用户手改
-    的标题以用户为准；显示名变过 → 参数为准（默认标题跟新名字）。
-    轴标签没有参数源 → 用户改过一次就永远以用户为准。
+    texts = (默认标题, 默认 x 标签, 默认 y 标签)；None = 按面板的
+    视图名查 _default_texts（1D/对比 = 积分图默认，2D/剖面/瀑布 =
+    各自默认）。标题的"参数源"= 显示名（panel_display）：显示名没
+    变 → 用户手改的标题以用户为准；显示名变过 → 参数为准（默认
+    标题跟新名字）。轴标签没有参数源 → 用户改过一次就永远以用户
+    为准。
     """
-    default_title = f"{dock.panel_display}: full azimuthal integration"
+    if texts is None:
+        view = dock.panel_key.split("|", 1)[0]
+        texts = _default_texts(view, dock.panel_display)
+    default_title, default_xlabel, default_ylabel = texts
     ours = getattr(dock, "_title_ours", None)
     ours_display = getattr(dock, "_title_display", None)
     if (ours is not None and keep_title != ours
@@ -296,14 +526,14 @@ def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel):
     if ours is not None and keep_xlabel != ours:
         ax.set_xlabel(keep_xlabel)
     else:
-        ax.set_xlabel("2θ (deg)")
-        dock._xlabel_ours = "2θ (deg)"
+        ax.set_xlabel(default_xlabel)
+        dock._xlabel_ours = default_xlabel
     ours = getattr(dock, "_ylabel_ours", None)
     if ours is not None and keep_ylabel != ours:
         ax.set_ylabel(keep_ylabel)
     else:
-        ax.set_ylabel("Intensity (a.u.)")
-        dock._ylabel_ours = "Intensity (a.u.)"
+        ax.set_ylabel(default_ylabel)
+        dock._ylabel_ours = default_ylabel
 
 
 def _restore_line_styles(ax, old_lines):
@@ -402,7 +632,156 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
+def _draw_2d(window: QMainWindow, dock, image) -> None:
+    """在指定的 2D 面板画出衍射图：对数色标 + 对比度参数 + 束心十字。
+
+    样式对齐 CLI view_diffraction / 校准图：magma + LogNorm、自动
+    对比度 1%/99.9% 分位（下限兜底 1.0）、origin="lower"（数组行
+    序与 beam_center 的行序一致）。束心 = 当前几何配置的
+    beam_center（(行, 列)，画图取 (x=列, y=行)）。对比度参数读该
+    面板自己的快照：自动模式把算出的区间填进置灰输入框（同 1D
+    纵轴的只读展示语义，只填焦点面板）；手动模式手填上下限。
+    """
+    ax = _content(dock).axes_2d
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
+    window._setting_limits = True
+    try:
+        ax.clear()
+        auto = _panel_param(window, dock, "自动对比度", True)
+        if auto:
+            lo, hi = _auto_contrast_values(image)
+            vmin = max(1.0, lo)
+            vmax = max(hi, vmin * 10.0)
+            if window.plot_docks.get(window.focus_panel) is dock:
+                window.params["对比度下限"].setValue(vmin)
+                window.params["对比度上限"].setValue(vmax)
+        else:
+            vmin = _panel_param(window, dock, "对比度下限", 1.0)
+            vmax = _panel_param(window, dock, "对比度上限", 100000.0)
+            vmin = max(vmin, 1e-12)
+            if vmax <= vmin:
+                vmax = vmin * 10.0   # 手填区间不合法时兜底（防 LogNorm 报错）
+        ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
+                  origin="lower")
+        ax.set_aspect("equal")
+        cy, cx = window.config["beam_center"]
+        ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
+    dock.figure_saved = False   # 重画 = 新内容还没存盘
+
+
+def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
+    """在指定的剖面面板画出强度剖面（x = 到束心的带符号距离）。
+
+    与 _draw_1d 同套路但更简：x 轴是像素距离不是 2θ，没有视图
+    2θ 范围的概念（范围写回只连纵轴）；纵轴显示参数（对数纵轴 /
+    纵轴自动 / 上下限）读该面板自己的快照，缩放/平移写回纵轴窗口。
+    """
+    ax = _content(dock).axes_profile
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
+    window._setting_limits = True
+    try:
+        ax.clear()
+        ax.plot(t, intensity, "b-", lw=0.8)
+        log_y = _panel_param(window, dock, "对数纵轴", False)
+        scale = _settle_scale(dock, keep_scale, log_y)
+        eff_log = (scale == "log")
+        if scale != "linear":
+            ax.set_yscale(scale)
+        if _panel_param(window, dock, "纵轴自动", True):
+            ylo, yhi = _auto_y_range(intensity, eff_log)
+            if window.plot_docks.get(window.focus_panel) is dock:
+                window.params["纵轴下限"].setValue(ylo)
+                window.params["纵轴上限"].setValue(yhi)
+        else:
+            ylo = _panel_param(window, dock, "纵轴下限", 1.0)
+            yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
+            if eff_log:
+                ylo = max(ylo, 1e-6)
+        if ylo < yhi:
+            ax.set_ylim(ylo, yhi)
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
+        _restore_line_styles(ax, old_lines)
+        ax.grid(alpha=0.3)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _connect_axis_sync(window, dock.panel_key, ax=ax,
+                       sync_x=False)   # 只写回纵轴（x = 像素距离）
+    _refresh_home(dock)
+    dock.figure_saved = False
+
+
+def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
+    """在指定的瀑布面板画出 36 扇区堆叠瀑布（对齐 CLI 画法）。
+
+    与 CLI sector_waterfall 同一画法：原强度（不取根号）沿 Y 轴
+    错开堆叠，行间距自适应（行高 = 该行峰值 × 0.7），每条曲线画
+    到自身第一个 0（被探测器切掉的位置）——右端阶梯即截断几何；
+    y 刻度 = 各扇区 χ 基线，曲线名 = 扇区 χ（悬停读数用，无图例）。
+    纵轴显示参数不适用（行偏移由数据决定），范围写回不连（同 2D）。
+    """
+    ax = _content(dock).axes_waterfall
+    keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
+        _snapshot_canvas(ax)
+    window._setting_limits = True
+    try:
+        ax.clear()
+        n = i2d.shape[1]
+        colors = cm.viridis(np.linspace(0, 1, n))
+        # 每条曲线画到自身第一个 0（截断几何）；未截断的画到末尾
+        curves = []
+        for k in range(n):
+            v = i2d[:, k]
+            dead = ~np.isfinite(v) | (v == 0)
+            end = int(np.argmax(dead)) if dead.any() else len(v)
+            curves.append((tth[:end], v[:end], k))
+        # 行间距自适应：行高 = 该行峰值 × 0.7，弱扇区行矮、强扇区
+        # 行高；NaN 兜底成 0（坏扇区压成一条基线，不炸整张图）
+        i_pos = np.clip(i2d, 0.0, None)
+        peak = float(np.nanmax(i_pos)) if np.isfinite(i_pos).any() else 0.0
+        heights = np.nan_to_num(np.maximum(i_pos.max(axis=0), 0.05 * peak))
+        offsets = np.zeros(n)
+        for k in range(1, n):
+            offsets[k] = offsets[k - 1] + heights[k - 1] * 0.7
+        for t_cut, v_cut, k in curves:
+            ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],
+                    color=colors[k], lw=0.5)
+        ax.set_yticks(offsets)
+        ax.set_yticklabels([f"{c:.0f}°" for c in chi], fontsize=6)
+        _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
+        _restore_line_styles(ax, old_lines)
+        for line, c in zip(ax.lines, chi):
+            line.set_label(f"{c:.0f}°")   # 重画后重贴扇区名（悬停读数）
+        ax.grid(alpha=0.2)
+        _content(dock).draw()
+    finally:
+        window._setting_limits = False
+    _refresh_home(dock)
+    dock.figure_saved = False
+
+
 # ══ 悬停取点（鼠标放曲线上 = 出点 + 状态栏坐标）═════════════
+def _hover_label(dock, name: str, x: float, y: float) -> str:
+    """悬停读数文本：坐标名按视图走。
+
+    剖面 x = 到束心的像素距离；瀑布 y = 堆叠后的强度（已加行偏移）。
+    其余（1D/对比）维持 2θ/强度。
+    """
+    view = dock.panel_key.split("|", 1)[0]
+    if view == "剖面":
+        return f"{name}　距离 = {x:.4g} px, 强度 = {y:.4g}"
+    if view == "瀑布":
+        return f"{name}　2θ = {x:.4g}°, 堆叠强度 = {y:.4g}"
+    return f"{name}　2θ = {x:.4g}°, 强度 = {y:.4g}"
+
+
 def _hover_motion(window: QMainWindow, key: str, event) -> None:
     """鼠标在曲线上移动时：选最近的那条线、吸附最近的真实数据点，
     画一个白边圆点，状态栏右侧实时显示该点坐标。
@@ -459,7 +838,7 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     name = line.get_label()
     if not name or name.startswith("_child"):
         name = dock.panel_display
-    window.coord_label.setText(f"{name}　2θ = {x:.4g}°, 强度 = {y:.4g}")
+    window.coord_label.setText(_hover_label(dock, name, x, y))
 
 
 def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
@@ -727,23 +1106,26 @@ def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
         window.params["纵轴上限"].setValue(yhi)
 
 
-def _connect_axis_sync(window: QMainWindow, key: str, ax=None) -> None:
+def _connect_axis_sync(window: QMainWindow, key: str, ax=None,
+                       sync_x: bool = True) -> None:
     """把 x/y 范围同步写回回调连到面板的坐标轴。
 
-    matplotlib 3.11 起 ax.clear()（cla）会把 ax 的回调注册表整个
-    清空 → 每次重画完都必须重连（清空后重连只有一套，不会叠罗汉）。
-    闭包只抓 key 不抓容器对象：面板弹出/收回会换容器（子窗口 ↔
-    弹出窗口），抓 key 回调永远现查到当前容器；面板关了则 None
-    守卫静默跳过。构建面板时内容还没挂进容器 → 调用方直接把 ax
-    传进来。
+    sync_x=False = 只连纵轴（剖面：x 轴是像素距离，没有视图 2θ
+    范围的概念）。matplotlib 3.11 起 ax.clear()（cla）会把 ax 的
+    回调注册表整个清空 → 每次重画完都必须重连（清空后重连只有
+    一套，不会叠罗汉）。闭包只抓 key 不抓容器对象：面板弹出/收回
+    会换容器（子窗口 ↔ 弹出窗口），抓 key 回调永远现查到当前
+    容器；面板关了则 None 守卫静默跳过。构建面板时内容还没挂进
+    容器 → 调用方直接把 ax 传进来。
     """
     if ax is None:
         dock = window.plot_docks.get(key)
         if dock is None:
             return
         ax = _content(dock).axes_1d
-    ax.callbacks.connect("xlim_changed",
-                         lambda a, k=key: _on_xlim_changed(window, k, a))
+    if sync_x:
+        ax.callbacks.connect("xlim_changed",
+                             lambda a, k=key: _on_xlim_changed(window, k, a))
     ax.callbacks.connect("ylim_changed",
                          lambda a, k=key: _on_ylim_changed(window, k, a))
 
@@ -771,27 +1153,40 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
     return widget
 
 
-def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
-    """1D 面板内容：matplotlib 画布 + 精简工具栏 + 弹出按钮 + 手势。"""
+def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
+                        hover: bool, sync: str) -> QWidget:
+    """面板内容骨架（1D/2D/剖面/瀑布共用）：画布 + 精简工具栏 +
+    弹出按钮 + 手势。
+
+    ax_attr = 坐标轴挂到容器上的属性名（axes_1d / axes_2d /
+    axes_profile / axes_waterfall）——各 _draw_* 按名取轴。hover =
+    是否接悬停取点（2D 是图没有曲线）；sync = 接哪些方向的范围
+    写回："xy" = x/y 都写（1D），"y" = 只写纵轴（剖面：x 是像素
+    距离），"" = 都不接（2D 像素轴无参数语义 / 瀑布行偏移由数据
+    决定）。手势（拖 = 平移、滚轮 = 以光标为中心缩放）是通用的，
+    全部视图都接。
+
+    每张面板自己的精简工具栏 [Home][Customize][Save] + [弹出]，
+    只作用于本面板的图。放大/平移改成鼠标手势（拖 = 平移、滚轮
+    = 以光标为中心缩放），放大镜/抓手/前进后退/子图按钮全砍掉；
+    回首页不绑双击——Home 按钮就是回首页。工具栏放画布上方，
+    面板标题栏不动。
+    """
     fig = Figure(figsize=(5, 3), tight_layout=True)
     canvas = FigureCanvasQTAgg(fig)
-    canvas.axes_1d = fig.add_subplot(111)
-    # 每张面板自己的精简工具栏 [Home][Customize][Save] + [弹出]，
-    # 只作用于本面板的图。放大/平移改成鼠标手势（拖 = 平移、
-    # 滚轮 = 以光标为中心缩放），放大镜/抓手/前进后退/子图按钮
-    # 全砍掉；回首页不绑双击——Home 按钮就是回首页。工具栏放
-    # 画布上方，面板标题栏不动
+    ax = fig.add_subplot(111)
+    setattr(canvas, ax_attr, ax)
     toolbar = _SlimToolbar(canvas, canvas, window, key)
-    # 容器 = 工具栏 + 画布竖排。把画布原有属性挂到容器上
-    # （axes_1d / figure / draw），其余代码仍按 _content(dock)
-    # 直取，不必改调用点
+    # 容器 = 工具栏 + 画布竖排。把画布原有属性挂到容器上（坐标轴
+    # / figure / draw），其余代码仍按 _content(dock) 直取，不必改
+    # 调用点
     widget = QWidget()
     box = QVBoxLayout(widget)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(0)
     box.addWidget(toolbar)
     box.addWidget(canvas)
-    widget.axes_1d = canvas.axes_1d
+    setattr(widget, ax_attr, ax)
     widget.figure = fig
     widget.canvas = canvas
     widget.toolbar = toolbar
@@ -810,10 +1205,11 @@ def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
     canvas.installEventFilter(_PanelResizeFilter(window, key, canvas))
     # 悬停取点：鼠标移动 → 曲线上出点 + 状态栏出坐标；
     # 移出坐标轴 → 清空（细节见 _hover_motion/_hover_leave）
-    canvas.mpl_connect("motion_notify_event",
-                       lambda ev, k=key: _hover_motion(window, k, ev))
-    canvas.mpl_connect("axes_leave_event",
-                       lambda ev, k=key: _hover_leave(window, k, ev))
+    if hover:
+        canvas.mpl_connect("motion_notify_event",
+                           lambda ev, k=key: _hover_motion(window, k, ev))
+        canvas.mpl_connect("axes_leave_event",
+                           lambda ev, k=key: _hover_leave(window, k, ev))
     # 手势：按住左键拖 = 平移；滚轮（触摸板两指滚动）=
     # 以光标为中心缩放。拖动期间悬停点退场（别在拖图时乱跳）
     canvas.mpl_connect("button_press_event",
@@ -827,15 +1223,41 @@ def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
     # 范围同步写回：缩放/平移/Home/Customize 对话框改动 x/y 范围
     # → 写回该面板快照 + 焦点时同步参数坞控件（x/y 分开处理：
     # 动 x 只写视图范围，动 y 才关纵轴自动，见两个处理函数）。
-    # 每次重画 ax.clear() 都会清掉这些回调，画完由 _draw_1d/
-    # _redraw_compare 重连（见 _connect_axis_sync）
-    _connect_axis_sync(window, key, canvas.axes_1d)
+    # 每次重画 ax.clear() 都会清掉这些回调，画完由 _draw_* 重连
+    # （见 _connect_axis_sync）
+    if sync:
+        _connect_axis_sync(window, key, ax, sync_x=(sync == "xy"))
     return widget
 
 
+def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
+    """1D 面板内容：画布 + 精简工具栏 + 弹出按钮 + 悬停取点 +
+    手势 + 范围写回（x/y 都写）。"""
+    return _build_canvas_panel(window, key, "axes_1d", hover=True, sync="xy")
+
+
+def _build_2d_widget(window: QMainWindow, key: str) -> QWidget:
+    """2D 面板内容：同 1D 骨架，无悬停取点、无范围写回（像素轴
+    没有 2θ/纵轴参数语义）。"""
+    return _build_canvas_panel(window, key, "axes_2d", hover=False, sync="")
+
+
+def _build_profile_widget(window: QMainWindow, key: str) -> QWidget:
+    """剖面面板内容：同 1D 骨架，只写回纵轴（x = 像素距离）。"""
+    return _build_canvas_panel(window, key, "axes_profile",
+                               hover=True, sync="y")
+
+
+def _build_waterfall_widget(window: QMainWindow, key: str) -> QWidget:
+    """瀑布面板内容：同 1D 骨架，无范围写回（行偏移由数据决定）。"""
+    return _build_canvas_panel(window, key, "axes_waterfall",
+                               hover=True, sync="")
+
+
 # 视图注册表：视图名 → 内容 builder（签名 window/key → QWidget）。
-# 新视图接线 = 加条目（如 "2D": _build_2d_widget），分发骨架不动
-_VIEW_BUILDERS = {"1D": _build_1d_widget}
+# 新视图接线 = 加条目，分发骨架不动
+_VIEW_BUILDERS = {"2D": _build_2d_widget, "剖面": _build_profile_widget,
+                  "1D": _build_1d_widget, "瀑布": _build_waterfall_widget}
 
 
 def _open_plot_panel(window: QMainWindow, name: str, key: str,

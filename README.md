@@ -65,10 +65,16 @@ python -m xrd_toolkit.gui
       <sub>Customize dialog — title, axis labels, linear–log y scale, figure margins</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/gui/gui_views.png" width="50%"><br>
+      <sub>2D / Profile / Waterfall views — every one-click view now renders real data (LaB₆ standard)</sub>
+    </td>
+  </tr>
 </table>
 
 - **Independent plot panels** — every plot is an MDI subwindow with free resizing (each drag remembers the panel's own aspect), pop-out into a separate OS window, cascade / tile arrangements, and a zoomable drawing area (Ctrl + wheel, Excel-style).
-- **One-click views** — [2D] [Profile] [1D] [Waterfall] buttons plot all checked files at once; [Compare] overlays several 1D curves in one panel with four normalization modes (per-curve strongest peak / strongest of all / a chosen file / off). 1D and Compare are fully wired; the remaining views open placeholder panels pending wiring.
+- **One-click views** — [2D] [Profile] [1D] [Waterfall] buttons plot all checked files at once; [Compare] overlays several 1D curves in one panel with four normalization modes (per-curve strongest peak / strongest of all / a chosen file / off). All views are fully wired: 2D shows the raw image (log-intensity magma colormap, auto or manual contrast, beam-center cross), Profile samples a line through the beam center at a chosen angle, 1D is the full azimuthal integration, and Waterfall stacks 36 sector-wise integrations (rows labeled by sector χ, each curve cut where the detector clips it).
 - **Live parameter dock** — data and display parameters per panel (tooltips everywhere, Reset / Apply per group, per-panel snapshots); the 2θ range of the data group bounds the integration itself (npt samples within it), while zoom / pan writes the view range back in real time.
 - **Panel gestures** — left-drag pans, wheel zooms around the cursor (magnifier toggle), hover shows a data-point readout in the status bar; every panel edge has a resize grip.
 - **Per-panel toolbar** — Home / magnifier / Customize (title, axis labels, linear–log y scale, figure margins) / Save PNG.

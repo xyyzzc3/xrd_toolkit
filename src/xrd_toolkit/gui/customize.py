@@ -20,6 +20,27 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit.gui.panel_state import _content, _log, _panel_param
 
+# 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
+_AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall")
+
+# 各视图的默认外观（Customize [恢复默认] 与 plot_views 的
+# _apply_text_guards 共用；未知视图 = 1D 积分图默认）
+_VIEW_DEFAULTS = {
+    "2D": ("{display}: diffraction image", "横向 (px)", "纵向 (px)"),
+    "剖面": ("{display}: line profile", "Distance from center (px)",
+             "Intensity (a.u.)"),
+    "瀑布": ("{display}: 36-sector waterfall", "2θ (deg)",
+             "Azimuthal sector (χ)"),
+}
+
+
+def _default_texts(view: str, display: str) -> tuple:
+    """该视图的默认 (标题, x 轴标签, y 轴标签)。"""
+    title, xlabel, ylabel = _VIEW_DEFAULTS.get(view, (
+        "{display}: full azimuthal integration", "2θ (deg)",
+        "Intensity (a.u.)"))
+    return title.format(display=display), xlabel, ylabel
+
 
 def _open_customize_dialog(window: QMainWindow, key: str) -> None:
     """Customize 按钮：自绘轴属性对话框（替换 mpl 自带子图配置器）。
@@ -42,7 +63,10 @@ def _open_customize_dialog(window: QMainWindow, key: str) -> None:
     if dock is None:
         return
     content = _content(dock)
-    ax = getattr(content, "axes_1d", None)
+    # 各视图画布属性名不同（axes_1d/axes_2d/…），统一按注册表取
+    # 第一个挂上的坐标轴
+    ax = next((getattr(content, name) for name in _AXES_ATTRS
+               if hasattr(content, name)), None)
     fig = getattr(content, "figure", None)
     if ax is None or fig is None:
         return   # 占位面板还没有图
@@ -138,11 +162,14 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
 
 
 def _reset_customize_fields(dock, fields) -> None:
-    """[恢复默认]：各字段回到该面板的默认外观（只改对话框里的值，
-    点 [应用] 才生效）。"""
-    fields["title"].setText(f"{dock.panel_display}: full azimuthal integration")
-    fields["xlabel"].setText("2θ (deg)")
-    fields["ylabel"].setText("Intensity (a.u.)")
+    """[恢复默认]：各字段回到该面板视图的默认外观（1D/对比 = 积分
+    图，2D/剖面/瀑布 = 各自默认；只改对话框里的值，点 [应用]
+    才生效）。"""
+    view = dock.panel_key.split("|", 1)[0]
+    title, xlabel, ylabel = _default_texts(view, dock.panel_display)
+    fields["title"].setText(title)
+    fields["xlabel"].setText(xlabel)
+    fields["ylabel"].setText(ylabel)
     fields["scale"].setCurrentIndex(fields["scale"].findData("linear"))
     for name, value in (("left", 0.125), ("bottom", 0.11),
                         ("right", 0.9), ("top", 0.88)):

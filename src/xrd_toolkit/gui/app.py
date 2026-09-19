@@ -6,9 +6,9 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 模块图（2026-09-18 从 3622 行单文件拆分，调用方向永远从上往下，
 循环导入无路可走）：
     app.py（本模块：窗口组装与保存/关窗流程）
-      → plot_views.py   视图注册表 + 出图调度 + 1D/对比绘图 +
-                         悬停取点 + 手势（扩展点：2D/剖面/瀑布接线
-                         = 往 _VIEW_BUILDERS/_VIEW_RUNNERS 加条目）
+      → plot_views.py   视图注册表 + 出图调度 + 绘图（2D/剖面/1D/
+                         瀑布全接线）+ 悬停取点 + 手势（扩展点：
+                         _VIEW_BUILDERS/_VIEW_RUNNERS 两张注册表）
       → calib.py        校准工作台：参数坞第 2 页表单 + 中央校准图
                          面板 + 自动/手动校准后台任务
       → panels.py        面板容器生命周期：MDI 子窗口/弹出窗口、
@@ -18,7 +18,7 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
                          几何收集/自动显示区间
       → tasks.py         后台任务运行器（耗时计算挪出界面线程）
 
-窗口上的公共接口（供后续页面接线与测试使用）：
+窗口上的公共接口（供面板与测试使用）：
   window.log(text)        写日志区 + 状态行
   window.add_files(paths) 把文件加进左侧列表
   window.mdi              QMdiArea（绘图区，所有图子窗口的父场地）
@@ -30,7 +30,8 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
   window.params           参数面板控件字典
   window.config_name      当前选中的配置条目 key（如 lmfp1_lab6）
   window.config           完整条目 dict（label / geometry / beam_center）
-  1D 面板的画布/坐标轴在面板内容上：_content(dock).axes_1d
+  各视图面板的画布/坐标轴在面板内容上：_content(dock).axes_1d
+  （2D/剖面/瀑布 = axes_2d / axes_profile / axes_waterfall）
 
 兼容再导出：拆分前全部函数都住在 app 模块里，测试等外部代码继续
 经 gui_app 访问它们（下方 import 即再导出）。mock.patch 的目标请
@@ -59,7 +60,7 @@ from PySide6.QtWidgets import (
     QDockWidget, QApplication)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
-# ── 兼容再导出（见模块 docstring）：测试与后续接线继续经本模块访问 ──
+# ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
 from xrd_toolkit.gui.calib import (
     _build_calib_form, _CalibSubWindow, _close_calib_panel,
     _draw_calib_image, _enter_calib, _exit_calib,
@@ -501,8 +502,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     数据参数 = 参与计算的（几何配置 + 积分区间 + 点数），改它们
     会改变积分/校准的结果；图像参数 = 只看图不参与计算的，组内
-    分两个区：2D/剖面视图（对比度 + 剖面线角度，接线后生效）+
-    "1D 显示" 小节（对数纵轴 + 纵轴范围，随 [应用] 重画曲线）。
+    分两个区：2D/剖面视图（对比度 + 剖面线角度）+"1D 显示" 小节
+    （对数纵轴 + 纵轴范围，随 [应用] 重画曲线）。
     两块各自独立滚动（内容放不下时自动出滚动条），[恢复默认]
     在左、[应用] 在右并排（通栏宽一分为二），固定在各区最下方，
     不随滚动走。
@@ -578,7 +579,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 批次备注走悬停提示（鼠标长放显示，不单独占一行——与用户
     # 讨论定稿）。key 藏在 itemData 里给程序用。
     # 选中即把该条目的标定几何填进下方三个输入框；完整条目（含
-    # beam_center）挂在 window.config，后续 2D/剖面接线时直接取用。
+    # beam_center）挂在 window.config，2D/剖面视图直接取用。
     # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没
     # 建好，信号此刻触发会去写一个还不存在的控件；默认值改由
     # create_window 收尾时显式调用 _apply_config 应用。
@@ -722,9 +723,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     img_scroll.setWidget(img_fields)
     img_v.addWidget(img_scroll, 1)
 
-    # 组内分区：上面的对比度/剖面角只对二维视图有意义（接线后
-    # 生效）；下面的 "1D 显示" 子分组管曲线图自己的显示参数
-    add_caption(form2, "2D/剖面视图（接线后生效）")
+    # 组内分区：上面的对比度/剖面角只对二维视图有意义；下面的
+    # "1D 显示" 子分组管曲线图自己的显示参数
+    add_caption(form2, "2D/剖面视图")
 
     # 自动对比度（默认开）：显示区间按编辑对象（焦点图）数据的
     # 1%/99.9% 分位自定，与 view_diffraction 的默认行为一致；取消勾
@@ -975,7 +976,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     btn_calib = QPushButton("校准")
     btn_calib.setCheckable(True)   # 默认弹起 = 分析工作台
     tb.addWidget(btn_calib)
-    window.calib_btn = btn_calib   # 登记按钮（测试与后续接线用）
+    window.calib_btn = btn_calib   # 登记按钮（测试用）
     btn_calib.toggled.connect(lambda on: _on_mode(window, on))
 
     tb.addSeparator()
@@ -984,7 +985,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 该视图并出图。纯动作不是开关：点几下算几下，重复点击安全；
     # 面板的开/关只由 × 和拖动管理（勾选式的第二次点击会关面板，
     # 让人误以为"画不了"）
-    window.view_buttons = {}   # 登记按钮（测试与后续接线用）
+    window.view_buttons = {}   # 登记按钮（测试用）
     for name in VIEW_NAMES:
         btn = QPushButton(name)
         tb.addWidget(btn)
@@ -1005,7 +1006,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 全收起来 = 中央只剩绘图区，看图视野最大。双向同步：按钮点
     # 击 → 坞显隐；坞被标题栏 × 关掉 → 按钮自动弹起（visibilityChanged
     # 信号），下次点按钮还能再展开。
-    window.panel_toggles = {}   # 登记按钮（测试与后续接线用）
+    window.panel_toggles = {}   # 登记按钮（测试用）
     for name, dock in (("文件", window.file_dock),
                        ("参数", window.param_dock),
                        ("日志", window.log_dock)):
@@ -1040,7 +1041,7 @@ def _save_figures(window: QMainWindow) -> bool:
     """[保存] 按钮与关窗询问共用：弹窗勾选要保存的图 → 逐个选文件名存 PNG。
 
     返回 False = 流程被取消（关窗时应留在程序里），True = 完成。
-    目前只有 1D 面板有真图（figure）；占位面板不参与。
+    有画布（figure）的面板才参与；未接线视图的占位面板（若有）不参与。
     """
     panels = [d for d in window.plot_docks.values()
               if getattr(_content(d), "figure", None) is not None]
