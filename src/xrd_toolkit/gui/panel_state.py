@@ -267,7 +267,9 @@ def _collect_geometry(window: QMainWindow) -> dict:
 
     PONI/倾斜角取当前配置条目的标定值（面板暂不暴露），像素/波长/
     距离取面板输入框——对应 integrate_pattern 里 --pixel/--wavelength/
-    --dist 覆盖配置值的语义。
+    --dist 覆盖配置值的语义。2θ 上下限是积分设置（参与计算，不是
+    显示窗口），一并收进 geom：_compute_integration 原样 **geom 传给
+    integrate_1d，改了范围点 [应用] 即按新区间重积分。
     """
     geom = window.config["geometry"]
     return dict(
@@ -278,6 +280,8 @@ def _collect_geometry(window: QMainWindow) -> dict:
         poni2_m=geom["poni2_m"],
         rot1_deg=geom["rot1_deg"],
         rot2_deg=geom["rot2_deg"],
+        tth_min_deg=window.params["2θ 下限 (°)"].value(),
+        tth_max_deg=window.params["2θ 上限 (°)"].value(),
     )
 
 

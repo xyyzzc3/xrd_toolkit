@@ -14,7 +14,8 @@
   - 文件列表以对号为唯一选择表达（点行 = 切对号，作图用对号文件）；
   - [保存] 弹窗勾选要保存的图 → 逐个选文件名存 PNG；关窗时若有
     未保存的图会弹窗询问（保存 / 不保存 / 取消）；
-  - _collect_geometry：面板输入覆盖配置条目值；
+  - _collect_geometry：面板输入覆盖配置条目值；2θ 上下限（积分设置）
+    经 geom 传进计算链路（引擎侧区间约束见 test_partial_ring.py）；
   - 绘图区 = MDI 子窗口（每图一窗）：自由缩放（拖过 = 记画布比例，
     主窗口缩放不牵动子窗口）、开新图不动旧图、[弹出]/[收回] 搬进
     搬出独立 OS 窗口；
@@ -867,6 +868,55 @@ class TestCollectGeometry(unittest.TestCase):
             w.params["波长 (Å)"].setValue(0.15)
             self.assertAlmostEqual(
                 gui_app._collect_geometry(w)["wavelength_m"], 0.15e-10)
+            # 2θ 上下限 = 积分设置，随面板走（改了就进 geom）
+            self.assertAlmostEqual(geom["tth_min_deg"], 1.0)
+            self.assertAlmostEqual(geom["tth_max_deg"], 8.0)
+            w.params["2θ 下限 (°)"].setValue(2.5)
+            w.params["2θ 上限 (°)"].setValue(7.5)
+            geom2 = gui_app._collect_geometry(w)
+            self.assertAlmostEqual(geom2["tth_min_deg"], 2.5)
+            self.assertAlmostEqual(geom2["tth_max_deg"], 7.5)
+        finally:
+            w.close()
+
+
+class TestTthRangeFlowsToCompute(unittest.TestCase):
+    """2θ 上下限进计算链路：点 [1D]/[应用] 时 geom 带当前区间值。
+
+    引擎按区间重积分由 TestIntegrate1DRange（test_partial_ring.py）
+    兜底；这里只验 GUI 把参数传对。
+    """
+
+    def test_range_values_reach_compute_and_rerun(self):
+        w = create_window()
+        try:
+            calls = []
+            def recorder(path_str, geom, npt):
+                calls.append(dict(geom))
+                return np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=recorder):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: len(calls) >= 1))
+                self.assertAlmostEqual(calls[0]["tth_min_deg"], 1.0)
+                self.assertAlmostEqual(calls[0]["tth_max_deg"], 8.0)
+                # 先等首轮计算的焦点回放落地（回放把快照写回参数坞，
+                # 会覆盖"在飞"的控件改动）——真实用户也是等出图后
+                # 再改参数
+                self.assertTrue(
+                    _wait_until(lambda: w.focus_panel == "1D|data/fake_b.tif"),
+                    "出图后焦点面板应就位")
+                w.params["2θ 下限 (°)"].setValue(2.5)
+                w.params["2θ 上限 (°)"].setValue(7.5)
+                w.findChild(QPushButton, "apply_btn").click()
+                self.assertTrue(
+                    _wait_until(lambda: len(calls) >= 2),
+                    f"[应用] 未触发重算；calls 区间值 = "
+                    f"{[c['tth_min_deg'] for c in calls]}；"
+                    f"日志 = {w.log_text.toPlainText().splitlines()[-2:]}")
+                self.assertAlmostEqual(calls[-1]["tth_min_deg"], 2.5)
+                self.assertAlmostEqual(calls[-1]["tth_max_deg"], 7.5)
         finally:
             w.close()
 

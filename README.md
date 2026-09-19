@@ -69,10 +69,10 @@ python -m xrd_toolkit.gui
 
 - **Independent plot panels** — every plot is an MDI subwindow with free resizing (each drag remembers the panel's own aspect), pop-out into a separate OS window, cascade / tile arrangements, and a zoomable drawing area (Ctrl + wheel, Excel-style).
 - **One-click views** — [2D] [Profile] [1D] [Waterfall] buttons plot all checked files at once; [Compare] overlays several 1D curves in one panel with four normalization modes (per-curve strongest peak / strongest of all / a chosen file / off). 1D and Compare are fully wired; the remaining views open placeholder panels pending wiring.
-- **Live parameter dock** — data and display parameters per panel (tooltips everywhere, Reset / Apply per group, per-panel snapshots); zoom / pan writes the view range back in real time.
+- **Live parameter dock** — data and display parameters per panel (tooltips everywhere, Reset / Apply per group, per-panel snapshots); the 2θ range of the data group bounds the integration itself (npt samples within it), while zoom / pan writes the view range back in real time.
 - **Panel gestures** — left-drag pans, wheel zooms around the cursor (magnifier toggle), hover shows a data-point readout in the status bar; every panel edge has a resize grip.
 - **Per-panel toolbar** — Home / magnifier / Customize (title, axis labels, linear–log y scale, figure margins) / Save PNG.
-- **Calibration mode** — a [校准] toggle switches to the calibration workbench (geometry configs shared with the CLI); the workbench itself is under construction.
+- **Calibration mode** — a [校准] toggle switches to the calibration workbench: one-click automatic refinement (ring-center localization → pyFAI) or manual point-picking on the rings (≥ 3 points, ≥ 2 rings, ±0.5° snapping), with side-by-side result columns, a Δ-deviation column, and a copy-paste CONFIGS entry template (geometry configs shared with the CLI).
 
 ## Highlights
 

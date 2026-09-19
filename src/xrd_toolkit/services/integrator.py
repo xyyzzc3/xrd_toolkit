@@ -363,6 +363,8 @@ def integrate_1d(
     rot1_deg: float,
     rot2_deg: float,
     npt: int = 3000,
+    tth_min_deg: float | None = None,
+    tth_max_deg: float | None = None,
 ) -> tuple:
     """
     方位角积分：把 2D 衍射图像变成 1D 图谱 I(2θ)。
@@ -380,16 +382,23 @@ def integrate_1d(
             倾斜角（度）
         npt : int
             1D 曲线采样点数（默认 3000）
+        tth_min_deg, tth_max_deg : float 或 None（可选）
+            积分 2θ 区间（度）。None = 该侧不限（默认全探测器范围，
+            CLI 脚本不传即走全范围）；传了就只积这个区间，npt 个
+            采样点摊在区间内（区间越小分辨率越高）。两者都传时
+            必须 tth_min_deg < tth_max_deg，否则 ValueError。
 
     备注：
         物理/几何参数全部必传、无默认值——由脚本从 config.py 的
         CONFIGS 选中条目取出后显式传入。若在函数签名中复制一份默认值，
         会与 config 形成两份独立数据，更新不同步时静默使用旧值；
-        必传参数将此类错误转化为显式的 TypeError。
+        必传参数将此类错误转化为显式的 TypeError。范围参数是可选
+        功能（GUI 积分设置传，CLI 不传 = 全范围），不是几何的一部分，
+        所以带 None 默认。
 
     返回：
         (tth_deg, intensity) : tuple
-            tth_deg     1D 曲线的 2θ 坐标（度）
+            tth_deg     1D 曲线的 2θ 坐标（度），覆盖积分区间
             intensity   对应强度（numpy 数组）
 
     备注：
@@ -400,9 +409,16 @@ def integrate_1d(
         束心位置正确；1D 曲线按存在的方位角归一化，与偏置摆法的
         扇形矩阵自洽）。
     """
+    if tth_min_deg is not None and tth_max_deg is not None \
+            and tth_max_deg <= tth_min_deg:
+        raise ValueError(
+            f"tth_min_deg ({tth_min_deg}) must be < tth_max_deg "
+            f"({tth_max_deg})")
     if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
         return _integrate_1d_diy(image, pixel_size_m, dist_m,
-                                 poni1_m, poni2_m, npt)
+                                 poni1_m, poni2_m, npt,
+                                 tth_min_deg=tth_min_deg,
+                                 tth_max_deg=tth_max_deg)
     ai = AzimuthalIntegrator(
         dist=dist_m,
         poni1=poni1_m,
@@ -414,7 +430,13 @@ def integrate_1d(
         pixel2=pixel_size_m,
         wavelength=wavelength_m,
     )
-    tth_deg, intensity = ai.integrate1d(image, npt, unit="2th_deg")
+    if tth_min_deg is None and tth_max_deg is None:
+        tth_deg, intensity = ai.integrate1d(image, npt, unit="2th_deg")
+    else:
+        # radial_range 用输出单位（2th_deg → 度）；None = 该侧不限
+        tth_deg, intensity = ai.integrate1d(
+            image, npt, unit="2th_deg",
+            radial_range=(tth_min_deg, tth_max_deg))
     return tth_deg, intensity
 
 
@@ -498,14 +520,17 @@ def integrate_sectors(
     return tth_deg, i2d, chi_centers_deg
 
 
-def _polar_bins(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt):
+def _polar_bins(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
+                tth_min_deg=None, tth_max_deg=None):
     """逐像素极坐标分箱：返回 (tth_grid, idx, chi_px)。
 
-    idx[i, j] = 像素 (i, j) 的 2θ 分箱号（0..npt-1），
-    chi_px[i, j] = 像素的方位角（度，约定同 integrate2d 返回值：
-    atan2(dy, dx)，0° 沿 +x 向右、逆时针为正，图像下方 = +90°）。
+    idx[i, j] = 像素 (i, j) 的 2θ 分箱号（0..npt-1），区间外的像素
+    记 -1（计数前滤掉：bincount 不收负数）；chi_px[i, j] = 像素的方位角
+    （度，约定同 integrate2d 返回值：atan2(dy, dx)，0° 沿 +x 向右、
+    逆时针为正，图像下方 = +90°）。
     _integrate_1d_diy 与 _integrate_sectors_diy 共用此分箱，保证
-    1D 曲线 = 扇形矩阵的加权平均（自洽）。
+    1D 曲线 = 扇形矩阵的加权平均（自洽）。范围参数与 integrate_1d
+    同语义（None = 不限），扇形积分不传 = 全范围。
     """
     h, w = image.shape
     x0 = poni1_m / pixel_size_m
@@ -515,29 +540,38 @@ def _polar_bins(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt):
     tth_px = np.degrees(np.arctan(r_px * pixel_size_m / dist_m))
     t_max = float(np.degrees(np.arctan(
         np.hypot(max(x0, w - x0), max(y0, h - y0)) * pixel_size_m / dist_m)))
-    tth_grid = np.linspace(0.0, t_max, npt)
-    idx = np.clip(np.digitize(tth_px, tth_grid) - 1, 0, npt - 1)
+    lo = 0.0 if tth_min_deg is None else max(0.0, tth_min_deg)
+    hi = t_max if tth_max_deg is None else min(tth_max_deg, t_max)
+    tth_grid = np.linspace(lo, hi, npt)
+    idx = np.digitize(tth_px, tth_grid) - 1
+    idx[(tth_px < lo) | (tth_px > hi)] = -1   # 区间外像素不进任何箱
     chi_px = np.degrees(np.arctan2(rows - y0, cols - x0))
     return tth_grid, idx, chi_px
 
 
-def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt):
+def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
+                      tth_min_deg=None, tth_max_deg=None):
     """自研 numpy 方位角积分（1D），束心偏离探测器中心过大时使用。
 
     pyFAI 2026.x 在该条件下径向分箱错误（见 OFF_CENTER_PX 注释），
     此函数用逐像素极坐标直接分箱，对任意束心位置都正确：
       1) 每个像素的 2θ = atan(到束心距离 · pixel / dist)；
-      2) digitize 到 npt 个等距 2θ 分箱；
+      2) digitize 到 npt 个等距 2θ 分箱（区间外的像素不参与）；
       3) 每箱强度 = 箱内像素强度平均（bincount 累加 / 计数），
          空箱填 NaN。
     强度按存在的方位角归一化——曲线上看不到环被截断的失效，
     与偏置摆法的扇形矩阵自洽（曲线 = 各扇区加权平均）。
     """
     tth_grid, idx, _ = _polar_bins(image, pixel_size_m, dist_m,
-                                   poni1_m, poni2_m, npt)
+                                   poni1_m, poni2_m, npt,
+                                   tth_min_deg=tth_min_deg,
+                                   tth_max_deg=tth_max_deg)
     flat = idx.ravel()
+    keep = flat >= 0   # 区间外像素（-1）不进任何箱：bincount 不收负数
+    flat = flat[keep]
     counts = np.bincount(flat, minlength=npt)
-    sums = np.bincount(flat, weights=image.ravel().astype(np.float64),
+    sums = np.bincount(flat,
+                       weights=image.ravel().astype(np.float64)[keep],
                        minlength=npt)
     intensity = np.full(npt, np.nan)
     alive = counts > 0

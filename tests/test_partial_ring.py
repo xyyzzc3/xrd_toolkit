@@ -181,5 +181,61 @@ class TestDiyIntegration(unittest.TestCase):
         self.assertAlmostEqual(chi[-1], 175.0, places=1)
 
 
+class TestIntegrate1DRange(unittest.TestCase):
+    """integrate_1d 的 2θ 区间参数：npt 摊在区间内、区间外数据不进谱。
+
+    GUI 积分设置（2θ 上下限）经 geom 传入这里——区间约束必须在
+    两条路径（pyFAI / DIY）都生效，且不传 = 全范围（CLI 行为不变）。
+    """
+
+    def test_centered_pyfai_path_range(self):
+        # 居中束心（pyFAI 路径）：环 (1.0, 5.0)°，只积 [2, 6]° →
+        # 谱从 2° 起、峰只有 5° 一个；1° 环整段不在谱里
+        img = _synthetic_rings(1024.0, 1024.0, (1.0, 5.0))
+        tth, curve = integrate_1d(img, PIXEL_M, 0.1223e-10, DIST_M,
+                                  poni1_m=1024.0 * PIXEL_M,
+                                  poni2_m=1024.0 * PIXEL_M,
+                                  rot1_deg=0.0, rot2_deg=0.0, npt=2000,
+                                  tth_min_deg=2.0, tth_max_deg=6.0)
+        self.assertEqual(len(tth), 2000)
+        self.assertAlmostEqual(tth[0], 2.0, delta=0.05)
+        self.assertAlmostEqual(tth[-1], 6.0, delta=0.05)
+        j = int(np.argmax(curve))
+        self.assertAlmostEqual(tth[j], 5.0, delta=0.1)
+        self.assertGreater(curve[j], 20.0)
+
+    def test_off_center_diy_path_range(self):
+        # 轴方向偏置束心（DIY 路径，见 TestDiyIntegration）：环 (1.0, 5.0)°，
+        # 只积 [2, 6]° → 5° 峰在、1° 环不进箱（区间外像素 idx = -1）
+        img = _synthetic_rings(1148.0, 1024.0, (1.0, 5.0))
+        tth, curve = integrate_1d(img, PIXEL_M, 0.1223e-10, DIST_M,
+                                  poni1_m=1148.0 * PIXEL_M,
+                                  poni2_m=1024.0 * PIXEL_M,
+                                  rot1_deg=0.0, rot2_deg=0.0, npt=2000,
+                                  tth_min_deg=2.0, tth_max_deg=6.0)
+        self.assertAlmostEqual(tth[0], 2.0, delta=0.1)
+        self.assertAlmostEqual(tth[-1], 6.0, delta=0.1)
+        win = (tth > 4.9) & (tth < 5.1)
+        self.assertGreater(np.nanmax(curve[win]), 20.0)
+
+    def test_no_range_keeps_full_span(self):
+        # 不传区间 = 全探测器范围（CLI 行为不变）：谱从近 0° 起
+        img = _synthetic_rings(1024.0, 1024.0, (3.0,))
+        tth, curve = integrate_1d(img, PIXEL_M, 0.1223e-10, DIST_M,
+                                  poni1_m=1024.0 * PIXEL_M,
+                                  poni2_m=1024.0 * PIXEL_M,
+                                  rot1_deg=0.0, rot2_deg=0.0, npt=500)
+        self.assertLess(tth[0], 0.5)
+
+    def test_inverted_range_raises(self):
+        img = _synthetic_rings(1024.0, 1024.0, (3.0,))
+        with self.assertRaises(ValueError):
+            integrate_1d(img, PIXEL_M, 0.1223e-10, DIST_M,
+                         poni1_m=1024.0 * PIXEL_M,
+                         poni2_m=1024.0 * PIXEL_M,
+                         rot1_deg=0.0, rot2_deg=0.0,
+                         tth_min_deg=8.0, tth_max_deg=1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
