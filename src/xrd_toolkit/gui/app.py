@@ -660,13 +660,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.config_combo.setCurrentIndex(
         window.config_combo.findData(DEFAULT_CONFIG))
     window.config_combo.currentIndexChanged.connect(
-        lambda i: _apply_config(window, i))
-    # 下拉框 + [加载参数][保存参数]（作业规格按钮名）：.poni 是
+        lambda i: (_apply_config(window, i),
+                   _sync_del_config_btn(window)))
+    # 下拉框 + [加载参数][保存参数][删除]（作业规格按钮名）：.poni 是
     # pyFAI 生态的通用几何交换格式——加载 = 读文件 → 存成用户配置
-    # 条目并自动选中；保存 = 当前选中配置写成 .poni 文件。按钮放
-    # 下拉框下面一行（各占一半宽）：表单最窄行宽由下拉框决定，按钮
-    # 并排在下拉框右侧会把整个参数坞的最小宽度撑宽（同文件坞两排
-    # 按钮的考虑）
+    # 条目并自动选中；保存 = 当前选中配置写成 .poni 文件；删除 =
+    # 移除用户条目（内置条目置灰）。按钮放下拉框下面一行（各占
+    # 1/3 宽）：表单最窄行宽由下拉框决定，按钮并排在下拉框右侧会
+    # 把整个参数坞的最小宽度撑宽（同文件坞两排按钮的考虑）
     combo_row = QWidget()
     combo_lay = QVBoxLayout(combo_row)
     combo_lay.setContentsMargins(0, 0, 0, 0)
@@ -675,7 +676,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_poni_row = QWidget()
     btn_poni_lay = QHBoxLayout(btn_poni_row)
     btn_poni_lay.setContentsMargins(0, 0, 0, 0)
-    btn_poni_lay.setSpacing(4)
+    # 三按钮一行：每个按钮收紧内边距（默认 ~12px 左右各半会把这行
+    # 的最小宽度撑过 320 上限——同文件坞两排按钮的窄排版考虑）
+    btn_poni_lay.setSpacing(2)
     btn_poni = QPushButton("加载参数")
     btn_poni.setObjectName("poni_btn")   # objectName 保持 poni_btn：测试与历史引用
     btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成"
@@ -687,8 +690,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                              "（探测器距离/中心点/像素尺寸/波长/倾斜角）"
                              "写成 pyFAI 交换格式文件")
     btn_save_poni.clicked.connect(lambda: _save_poni(window))
+    btn_del_config = QPushButton("删除")
+    btn_del_config.setObjectName("del_config_btn")
+    btn_del_config.setToolTip("删除当前选中的用户配置条目（.poni 导入"
+                              "或 [保存为配置] 产生的条目）；内置条目"
+                              "是人工登记的注册表，不可删除（按钮置灰）")
+    btn_del_config.clicked.connect(lambda: _delete_config(window))
+    window.del_config_btn = btn_del_config
+    for btn in (btn_poni, btn_save_poni, btn_del_config):
+        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距：保住 320 窄排版
     btn_poni_lay.addWidget(btn_poni, 1)
     btn_poni_lay.addWidget(btn_save_poni, 1)
+    btn_poni_lay.addWidget(btn_del_config, 1)
     combo_lay.addWidget(btn_poni_row)
     form.addRow("几何配置", combo_row)
 
@@ -1191,13 +1204,22 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     进入：参数坞翻到校准页（页 0 的分析参数原样保留），勾选的第一个
     文件开校准面板；没勾文件只记日志提示（不崩）。退出：翻回分析页
     + 关校准面板（校准状态清零，关闭即遗忘）。
+
+    开关文字随状态变（校准 ↔ 退出校准）：按钮自己就是"怎么回来"
+    的说明，与校准页底部的 [返回分析模式] 出口互为呼应。
     """
     if calibrating:
+        window.calib_btn.setText("退出校准")
+        window.calib_btn.setToolTip("再点一次退出校准工作台，"
+                                    "返回常规参数面板")
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
         window.param_stack.setCurrentIndex(1)
         _enter_calib(window)
     else:
+        window.calib_btn.setText("校准")
+        window.calib_btn.setToolTip("进入校准工作台：标样数据定几何"
+                                    "（束心/距离/倾斜角）")
         window.mode_label.setText("分析模式")
         window.param_stack.setCurrentIndex(0)
         _exit_calib(window)
@@ -1411,6 +1433,60 @@ def _save_poni(window: QMainWindow) -> None:
                  f"波长 {geom['wavelength_m'] * 1e10:.4f} Å，"
                  f"倾斜 rot1={geom['rot1_deg']:.4f}°, "
                  f"rot2={geom['rot2_deg']:.4f}°）")
+
+
+def _sync_del_config_btn(window: QMainWindow) -> None:
+    """[删除] 按钮置灰同步：选中内置条目时不可删（人工登记注册表）。
+
+    下拉框当前索引变化时由连接调用；_reload_config_combo 重建下拉
+    框后索引不变不触发信号，调用方（_delete_config / 建坞收尾）再
+    显式补一次。
+    """
+    btn = getattr(window, "del_config_btn", None)
+    if btn is None:
+        return   # 建坞早于按钮创建时的信号（若有）安全忽略
+    idx = window.config_combo.currentIndex()
+    btn.setEnabled(idx >= 0 and
+                   window.config_combo.itemData(idx) not in
+                   config.BUILTIN_CONFIGS)
+
+
+def _delete_config(window: QMainWindow) -> None:
+    """[删除]：把当前选中的用户配置条目从注册表与磁盘移除。
+
+    只删用户条目（.poni 导入 / [保存为配置] 产生）——内置条目是
+    config.py 人工登记的注册表，按钮置灰 + 处理函数双保险拒绝。
+    删除前弹确认框；删后下拉框重建并切回默认条目（删除的对象是
+    "当前选中"条目，删完当前选中已不存在）。
+    """
+    combo = window.config_combo
+    key = combo.itemData(combo.currentIndex())
+    if key in config.BUILTIN_CONFIGS:
+        _log(window, f"内置条目 {key} 不可删除（人工登记的注册表）")
+        return
+    entry = config.USER_CONFIGS.get(key)
+    if entry is None:
+        _log(window, f"用户条目 {key} 不存在，无需删除")
+        return
+    answer = QMessageBox.question(
+        window, "删除配置",
+        f"删除用户配置条目 {key}（{entry['label']}）？\n"
+        "删除后不可恢复（内置条目不受影响）。",
+        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+    if answer != QMessageBox.Yes:
+        return
+    try:
+        removed = config.remove_user_config(key)
+    except ValueError as err:
+        _log(window, f"删除失败（{err}）")
+        return
+    if not removed:
+        _log(window, f"用户条目 {key} 不存在，无需删除")
+        return
+    _reload_config_combo(window, config.DEFAULT_CONFIG)
+    _sync_del_config_btn(window)
+    _log(window, f"已删除配置条目 {key}（{entry['label']}），"
+                 f"已切回默认条目 {config.DEFAULT_CONFIG}")
 
 
 def _checked_1d_results(window: QMainWindow) -> list:
@@ -1693,8 +1769,10 @@ def create_window() -> QMainWindow:
     window.resizeDocks([window.log_dock], [140], Qt.Vertical)
 
     # 启动即应用默认配置条目：参数坞初值来自注册表（如初始距离
-    # 1595.80 mm），而不是写死的占位默认值
+    # 1595.80 mm），而不是写死的占位默认值；[删除] 按钮随选中条目
+    # 同步置灰（默认条目是内置的 → 初始不可删）
     _apply_config(window, window.config_combo.currentIndex())
+    _sync_del_config_btn(window)
 
     window.log("主框架已就绪")
     return window

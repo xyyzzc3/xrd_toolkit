@@ -147,12 +147,24 @@ USER_CONFIGS = _read_user_config(USER_CONFIG_PATH)
 CONFIGS = _merge_configs(BUILTIN_CONFIGS, USER_CONFIGS)
 
 
+def _write_user_configs():
+    """把内存里的 USER_CONFIGS 原子落盘（保存/删除共用）。
+
+    先写临时文件再替换：os.replace 在同一文件系统上是原子的，
+    中途断电不会留半截文件。
+    """
+    tmp = USER_CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(USER_CONFIGS, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    tmp.replace(USER_CONFIG_PATH)
+
+
 def save_user_config(name, entry):
     """GUI [保存为配置]：把校准结果存成命名用户条目。
 
-    校验条目 → 原子写入 config_user.json（先写临时文件再替换，
-    中途断电不会留半截文件）→ 立即合并进内存的 USER_CONFIGS /
-    CONFIGS（GUI 下拉框无需重启即可见到）。
+    校验条目 → 原子写入 config_user.json → 立即合并进内存的
+    USER_CONFIGS / CONFIGS（GUI 下拉框无需重启即可见到）。
 
     参数：
         name   条目 key（如 "lmfp2_lab6"）
@@ -171,13 +183,32 @@ def save_user_config(name, entry):
     is_new = name not in USER_CONFIGS
     USER_CONFIGS[name] = validated
     CONFIGS[name] = validated
-    # 原子写入：临时文件 → 替换（os.replace 在同一文件系统上是原子的）
-    tmp = USER_CONFIG_PATH.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(USER_CONFIGS, ensure_ascii=False, indent=2),
-        encoding="utf-8")
-    tmp.replace(USER_CONFIG_PATH)
+    _write_user_configs()
     return is_new
+
+
+def remove_user_config(name):
+    """GUI [删除]：把一条用户配置条目从注册表与磁盘移除。
+
+    参数：
+        name   条目 key（如 "lmfp2_lab6"）
+
+    返回：
+        True = 删除了条目；False = 用户条目里没有该 key（无操作）。
+
+    报错：
+        ValueError：与内置条目重名——内置注册表是人工登记维护的，
+        不从 GUI 改动。
+    """
+    if name in BUILTIN_CONFIGS:
+        raise ValueError(f"key {name!r} 是内置条目（人工登记的注册表），"
+                         "不可从 GUI 删除")
+    if name not in USER_CONFIGS:
+        return False
+    del USER_CONFIGS[name]
+    CONFIGS.pop(name, None)
+    _write_user_configs()
+    return True
 
 # 默认条目：消费脚本未指定 --config 且非交互模式时使用。PyCharm 的
 # 运行配置依赖该默认值，修改前需同步检查。

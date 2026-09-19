@@ -99,6 +99,12 @@ class TestSaveUserConfig(unittest.TestCase):
     def setUp(self):
         self._user_backup = dict(config.USER_CONFIGS)
         self._confs_backup = dict(config.CONFIGS)
+        # 隔离环境：清空用户条目再从干净状态存——真文件里若残留其他
+        # 会话的条目，"落盘只有自己的 key"这类断言会被误伤
+        config.USER_CONFIGS.clear()
+        for key in [k for k in config.CONFIGS
+                    if k not in config.BUILTIN_CONFIGS]:
+            config.CONFIGS.pop(key)
         self._tmpdir = tempfile.mkdtemp()
         self._path = Path(self._tmpdir) / "config_user.json"
         patcher = mock.patch.object(config, "USER_CONFIG_PATH", self._path)

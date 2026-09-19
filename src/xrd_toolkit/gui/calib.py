@@ -295,8 +295,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     [开始自动校准] → 手动区（点数标签 + [撤销一点][清空] +
     [开始手动校准]，≥3 点且 ≥2 环才启用）→ 结果区（三列：自动 |
     手动 | Δ偏差）→ 保存区（key/label 输入 + 保存来源提示 +
-    [保存为配置]）。整个页面套滚动区（参数坞窄，放不下时滚动）。
-    模式单选只是意图表达（两种模式可都跑、结果并列显示），不锁按钮。
+    [保存为配置]）→ 底部 [返回分析模式] 出口。整个页面套滚动区
+    （参数坞窄，放不下时滚动）。模式单选只是意图表达（两种模式可
+    都跑、结果并列显示），不锁按钮。
     """
     page = QWidget()
     lay = QVBoxLayout(page)
@@ -421,6 +422,17 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     window.calib_save_hint = source_label
     window.calib_save_btn = btn_save
     btn_save.clicked.connect(lambda: _save_calib_config(window))
+
+    # 出口：本页唯一的返回路径（与工具栏 [校准] 开关同源——把开关
+    # 弹起 = toggled(False) → _on_mode 翻回分析页 + 关校准面板）。
+    # 钉在页面底部：用户在当前页找出口，出口就在当前页。
+    btn_exit = QPushButton("返回分析模式")
+    btn_exit.setObjectName("exit_calib_btn")
+    btn_exit.setToolTip("回到常规参数面板（校准图面板关闭，选点/结果"
+                        "清空，关闭即遗忘）")
+    btn_exit.clicked.connect(lambda: window.calib_btn.setChecked(False))
+    lay.addWidget(btn_exit)
+    window.calib_exit_btn = btn_exit
 
     # 套滚动区：参数坞窄，放不下时滚动（与分析页滚动区同一套路）
     scroll = QScrollArea()

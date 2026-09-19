@@ -37,7 +37,11 @@
     校准图点环判环吸附/拒点、撤销/清空、手动校准 → 手动列 + Δ 列；
     面板关/退出模式后迟到结果作废；连点重跑旧任务过期；[保存为配置]
     = key/label 校验 + 落盘临时用户文件 + 下拉框同步自动选中 +
-    覆盖确认。
+    覆盖确认；校准页 [返回分析模式] 出口 + 开关文字随状态变
+    （校准 ↔ 退出校准）。
+  - 配置条目删除（TestDeleteConfig）：[删除] 只删用户条目（内置
+    置灰 + 处理函数双保险）、确认框取消保留、删后回退默认条目、
+    磁盘同步（config.remove_user_config 单测）。
 
 等待方式与 test_gui_tasks.py 相同：回调 + processEvents 轮询
 （QSignalSpy.wait 不处理跨线程投递，见该文件说明）。
@@ -2434,15 +2438,20 @@ class TestArrangeModeClose(unittest.TestCase):
                 w.close()
 
     def test_calib_mode_toggle(self):
-        """[校准] 按下 = 校准模式提示，弹起 = 分析模式提示。"""
+        """[校准] 按下 = 校准模式提示，弹起 = 分析模式提示。
+
+        开关文字随状态变（校准 ↔ 退出校准）：按钮自己说明怎么回来。
+        """
         w = create_window()
         try:
             w.calib_btn.click()
             self.assertIn("进入校准模式", w.log_text.toPlainText())
             self.assertIn("校准模式", w.mode_label.text())
+            self.assertEqual(w.calib_btn.text(), "退出校准")
             w.calib_btn.click()
             self.assertIn("回到分析模式", w.log_text.toPlainText())
             self.assertIn("分析模式", w.mode_label.text())
+            self.assertEqual(w.calib_btn.text(), "校准")
         finally:
             w.close()
 
@@ -4435,6 +4444,28 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_calib_page_exit_button_returns_to_analysis(self):
+        """校准页底部 [返回分析模式] = 把工具栏开关弹起（同源切换）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            self.assertEqual(w.calib_btn.text(), "退出校准")
+            self.assertTrue(w.calib_btn.isChecked())
+            # 页面出口：点 [返回分析模式] → 开关弹起 → 翻回分析页
+            w.calib_exit_btn.click()
+            self.assertFalse(w.calib_btn.isChecked())
+            self.assertEqual(w.calib_btn.text(), "校准")
+            self.assertEqual(w.param_stack.currentIndex(), 0)
+            self.assertIsNone(w.calib_dock)
+            self.assertIn("回到分析模式", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_enter_mode_without_file_logs_hint(self):
         w = create_window()
         try:
@@ -5317,6 +5348,116 @@ class TestPoniImport(unittest.TestCase):
             self.assertNotIn("old", config_mod.USER_CONFIGS)
         finally:
             w.close()
+
+
+class TestDeleteConfig(unittest.TestCase):
+    """[删除] 几何配置条目：只删用户条目（内置置灰 + 处理函数双保险）、
+    确认框、删后回退默认、磁盘同步。
+
+    remove 走真 config.remove_user_config（写临时目录的真文件），
+    USER_CONFIG_PATH 指向临时路径（不碰仓库真文件），收尾还原
+    USER_CONFIGS / CONFIGS 内存字典。
+    """
+
+    ENTRY = {
+        "label": "tmp 删除测试条目",
+        "geometry": {"pixel_size_m": 200e-6, "wavelength_m": 1.223e-10,
+                     "dist_m": 1.6, "poni1_m": 0.21, "poni2_m": 0.20,
+                     "rot1_deg": 0.0, "rot2_deg": -0.16},
+        "beam_center": (1022.0, 1022.3),
+    }
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._path = Path(self._tmpdir) / "config_user.json"
+        patcher = mock.patch.object(config_mod, "USER_CONFIG_PATH",
+                                    self._path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._user_backup = dict(config_mod.USER_CONFIGS)
+        self._confs_backup = dict(config_mod.CONFIGS)
+
+    def tearDown(self):
+        config_mod.USER_CONFIGS.clear()
+        config_mod.USER_CONFIGS.update(self._user_backup)
+        config_mod.CONFIGS.clear()
+        config_mod.CONFIGS.update(self._confs_backup)
+
+    def _close(self, w):
+        with mock.patch.object(gui_app, "_confirm_close",
+                               return_value="discard"):
+            w.close()
+
+    def test_remove_user_config_unit(self):
+        """config.remove_user_config：删除 / 再删无操作 / 内置报错 / 落盘。"""
+        config_mod.save_user_config("tmp_del", dict(self.ENTRY))
+        self.assertTrue(config_mod.remove_user_config("tmp_del"))
+        self.assertNotIn("tmp_del", config_mod.USER_CONFIGS)
+        self.assertNotIn("tmp_del", config_mod.CONFIGS)
+        # 再删同一条：无操作返回 False
+        self.assertFalse(config_mod.remove_user_config("tmp_del"))
+        # 内置条目：人工登记注册表，报错拒绝
+        with self.assertRaises(ValueError):
+            config_mod.remove_user_config("lmfp1_lab6")
+        # 磁盘文件同步：不含已删条目
+        self.assertNotIn("tmp_del", self._path.read_text(encoding="utf-8"))
+
+    def test_delete_button_removes_and_falls_back_to_default(self):
+        """选中用户条目 → [删除] 确认 → 条目消失 + 回退默认 + 按钮置灰。"""
+        config_mod.save_user_config("tmp_del", dict(self.ENTRY))
+        w = create_window()
+        try:
+            w.show()
+            idx = w.config_combo.findData("tmp_del")
+            self.assertGreaterEqual(idx, 0)
+            w.config_combo.setCurrentIndex(idx)   # 选中用户条目 → 按钮可用
+            self.assertTrue(w.del_config_btn.isEnabled())
+            with mock.patch.object(gui_app.QMessageBox, "question",
+                                   return_value=QMessageBox.Yes) as ask:
+                w.del_config_btn.click()
+            ask.assert_called_once()
+            # 注册表 + 下拉框 + 磁盘：条目消失
+            self.assertNotIn("tmp_del", config_mod.USER_CONFIGS)
+            self.assertEqual(w.config_combo.findData("tmp_del"), -1)
+            self.assertNotIn("tmp_del", self._path.read_text(encoding="utf-8"))
+            # 回退默认条目（内置）→ [删除] 重新置灰
+            self.assertEqual(w.config_combo.currentData(),
+                             config_mod.DEFAULT_CONFIG)
+            self.assertFalse(w.del_config_btn.isEnabled())
+            self.assertIn("已删除配置条目 tmp_del", w.log_text.toPlainText())
+        finally:
+            self._close(w)
+
+    def test_builtin_selected_button_disabled_and_handler_refuses(self):
+        """内置条目选中：按钮置灰；直调处理函数也不弹框、注册表不动。"""
+        w = create_window()
+        try:
+            w.show()
+            self.assertIn(w.config_combo.currentData(),
+                          config_mod.BUILTIN_CONFIGS)
+            self.assertFalse(w.del_config_btn.isEnabled())
+            # 置灰是体验层，处理函数是安全层：直调也被拒
+            with mock.patch.object(gui_app.QMessageBox, "question") as ask:
+                gui_app._delete_config(w)
+            ask.assert_not_called()
+            self.assertIn("内置条目", w.log_text.toPlainText())
+        finally:
+            self._close(w)
+
+    def test_delete_cancel_keeps_entry(self):
+        """确认框选 No：条目原样保留，选中不变。"""
+        config_mod.save_user_config("tmp_del", dict(self.ENTRY))
+        w = create_window()
+        try:
+            w.show()
+            w.config_combo.setCurrentIndex(w.config_combo.findData("tmp_del"))
+            with mock.patch.object(gui_app.QMessageBox, "question",
+                                   return_value=QMessageBox.No):
+                w.del_config_btn.click()
+            self.assertIn("tmp_del", config_mod.USER_CONFIGS)
+            self.assertEqual(w.config_combo.currentData(), "tmp_del")
+        finally:
+            self._close(w)
 
 
 class TestSavePoni(unittest.TestCase):
