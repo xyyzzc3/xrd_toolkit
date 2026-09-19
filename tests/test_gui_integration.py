@@ -4798,5 +4798,457 @@ class TestSaveCalibConfig(unittest.TestCase):
         self.assertEqual(res["beam_center_rc"], (1022.0, 1022.3))
 
 
+class TestBatchProgress(unittest.TestCase):
+    """批量进度计数：多文件一次出图，完成/失败日志末尾贴（k/n）。"""
+
+    def test_batch_logs_progress_suffix_and_clears(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                # fake_a 慢 0.2 s → fake_b 先完成 =（1/2），fake_a =（2/2）
+                self.assertTrue(_wait_until(
+                    lambda: all(
+                        getattr(_dock(w, "1D", p), "last_tth", None)
+                        is not None
+                        for p in ("data/fake_a.tif", "data/fake_b.tif"))))
+            log = w.log_text.toPlainText()
+            self.assertIn("积分完成：fake_b.tif（3 点，2θ 0.500~8.500°）"
+                          "（1/2）", log)
+            self.assertIn("积分完成：fake_a.tif（3 点，2θ 0.500~8.500°）"
+                          "（2/2）", log)
+            self.assertFalse(hasattr(w, "_batch"),
+                             "批走完应清账（之后零散任务不再计数）")
+        finally:
+            w.close()
+
+    def test_single_file_has_no_progress_suffix(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
+                                    "last_tth", None) is not None))
+            log = w.log_text.toPlainText()
+            self.assertIn("积分完成：fake_b.tif（3 点", log)
+            self.assertNotIn("（1/1）", log)
+        finally:
+            w.close()
+
+    def test_error_counts_toward_progress(self):
+        """一个文件积分失败：错误日志同样计数，批照常走完。"""
+        def flaky(path_str, geom, npt):
+            if path_str.endswith("fake_a.tif"):
+                raise RuntimeError("解码失败")
+            return _fake_compute(path_str, geom, npt)
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=flaky):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: not hasattr(w, "_batch")))
+            log = w.log_text.toPlainText()
+            self.assertIn("积分失败：fake_a.tif — RuntimeError: 解码失败",
+                          log)
+            self.assertIn("积分完成：fake_b.tif（3 点，2θ 0.500~8.500°）"
+                          "（2/2）", log)
+        finally:
+            w.close()
+
+
+class TestFolderImport(unittest.TestCase):
+    """[文件夹]：遍历目录（支持格式白名单，与 CLI 一致）+ 重复自动跳过。"""
+
+    def test_folder_scan_adds_supported_and_skips_duplicates(self):
+        folder = tempfile.mkdtemp()
+        for name in ("a.tif", "b.edf", "c.TIF", "d.txt", "e.cbf"):
+            Path(folder, name).touch()
+        w = create_window()
+        try:
+            with mock.patch.object(QFileDialog, "getExistingDirectory",
+                                   return_value=folder):
+                w.findChild(QPushButton, "folder_btn").click()
+            names = [w.file_list.item(i).text()
+                     for i in range(w.file_list.count())]
+            self.assertEqual(names, ["a.tif", "b.edf", "c.TIF", "e.cbf"])
+            self.assertIn("找到 4 个数据文件", w.log_text.toPlainText())
+            # 整目录重导：全部重复 → 逐个跳过不弹窗，列表不长
+            with mock.patch.object(QFileDialog, "getExistingDirectory",
+                                   return_value=folder):
+                w.findChild(QPushButton, "folder_btn").click()
+            self.assertEqual(w.file_list.count(), 4)
+            self.assertIn("已跳过重复文件",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_empty_folder_logs_hint(self):
+        folder = tempfile.mkdtemp()
+        w = create_window()
+        try:
+            with mock.patch.object(QFileDialog, "getExistingDirectory",
+                                   return_value=folder):
+                w.findChild(QPushButton, "folder_btn").click()
+            self.assertIn("文件夹里没有支持的数据文件",
+                          w.log_text.toPlainText())
+            self.assertEqual(w.file_list.count(), 0)
+        finally:
+            w.close()
+
+    def test_folder_dialog_cancelled_does_nothing(self):
+        w = create_window()
+        try:
+            with mock.patch.object(QFileDialog, "getExistingDirectory",
+                                   return_value=""):
+                w.findChild(QPushButton, "folder_btn").click()
+            self.assertEqual(w.file_list.count(), 0)
+        finally:
+            w.close()
+
+
+class TestExportData(unittest.TestCase):
+    """[导出数据]：1D 结果批量落盘（镜像 CLI 格式）+ 取消/跳过/单文件失败。"""
+
+    def _two_1d_results(self, w):
+        """勾两个文件出 1D（mock 计算），等结果进面板缓存。"""
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: all(
+                    getattr(_dock(w, "1D", p), "last_tth", None)
+                    is not None
+                    for p in ("data/fake_a.tif", "data/fake_b.tif"))))
+
+    def test_export_writes_cli_format_files(self):
+        w = create_window()
+        try:
+            self._two_1d_results(w)
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": False}):
+                gui_app._run_export(w)
+            target = outdir / "fake_a" / "integrated_2th.txt"
+            self.assertTrue(target.is_file())
+            lines = target.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], "# 2theta(deg)  intensity")
+            data = np.loadtxt(str(target))
+            np.testing.assert_allclose(data[:, 0], [0.5, 1.0, 8.5])
+            np.testing.assert_allclose(data[:, 1], [1.0, 2.0, 3.0])
+            self.assertTrue(
+                (outdir / "fake_b" / "integrated_2th.txt").is_file())
+            log = w.log_text.toPlainText()
+            self.assertIn("导出完成：2 个文件", log)
+        finally:
+            w.close()
+
+    def test_export_chi_suffix(self):
+        w = create_window()
+        try:
+            self._two_1d_results(w)
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".chi",
+                                                 "csv": False}):
+                gui_app._run_export(w)
+            self.assertTrue(
+                (outdir / "fake_b" / "integrated_2th.chi").is_file())
+        finally:
+            w.close()
+
+    def test_export_cancel_writes_nothing(self):
+        w = create_window()
+        try:
+            self._two_1d_results(w)
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_build_export_dialog",
+                                   return_value=None):
+                gui_app._run_export(w)
+            self.assertIn("已取消导出", w.log_text.toPlainText())
+            self.assertEqual(list(outdir.iterdir()), [])
+        finally:
+            w.close()
+
+    def test_export_without_1d_results_logs_hint(self):
+        """勾了文件但没出过 1D：逐条提示先点 [1D]，不弹导出设置框。"""
+        w = create_window()
+        try:
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            with mock.patch.object(gui_app, "_build_export_dialog") as dlg:
+                gui_app._run_export(w)
+            dlg.assert_not_called()
+            log = w.log_text.toPlainText()
+            self.assertIn("跳过 fake_a.tif：还没有 1D 结果", log)
+            self.assertIn("跳过 fake_b.tif：还没有 1D 结果", log)
+            self.assertIn("没有可导出的 1D 结果", log)
+        finally:
+            w.close()
+
+    def test_export_one_failure_does_not_abort_batch(self):
+        """单个文件写盘失败只记日志，其余照常导出。"""
+        w = create_window()
+        try:
+            self._two_1d_results(w)
+            outdir = Path(tempfile.mkdtemp())
+            real_write = gui_app._write_export
+            calls = {"n": 0}
+
+            def flaky_write(target, tth, intensity):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise OSError("磁盘已满")
+                real_write(target, tth, intensity)
+
+            with mock.patch.object(gui_app, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": False}), \
+                 mock.patch.object(gui_app, "_write_export",
+                                   side_effect=flaky_write):
+                gui_app._run_export(w)
+            log = w.log_text.toPlainText()
+            self.assertIn("导出失败 fake_a", log)
+            self.assertIn("导出完成：1 个文件", log)
+            self.assertEqual(sorted(p.name for p in outdir.iterdir()),
+                             ["fake_b"])
+        finally:
+            w.close()
+
+
+class TestExportCsv(unittest.TestCase):
+    """CSV 总表：同网格直拼 / 网格不一致三路（交集/跳过/取消）。"""
+
+    def test_same_grid_csv(self):
+        w = create_window()
+        try:
+            tth = np.array([0.5, 1.0, 8.5])
+            results = [("a", tth, np.array([1.0, 2.0, 3.0])),
+                       ("b", tth, np.array([4.0, 5.0, 6.0]))]
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_ask_csv_range") as ask:
+                gui_app._write_csv_summary(w, results, outdir)
+            ask.assert_not_called()   # 网格一致不打扰用户
+            target = outdir / "1d_summary.csv"
+            self.assertEqual(target.read_text().splitlines()[0],
+                             "2theta(deg),a,b")
+            data = np.loadtxt(str(target), delimiter=",", skiprows=1)
+            self.assertEqual(data.shape, (3, 3))
+            np.testing.assert_allclose(data[:, 0], tth)
+            np.testing.assert_allclose(data[:, 1], [1, 2, 3])
+            self.assertIn("已生成 CSV 总表", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_mismatch_intersect_reinterpolates(self):
+        w = create_window()
+        try:
+            results = [("a", np.array([1.0, 2.0, 3.0]),
+                        np.array([1.0, 2.0, 3.0])),
+                       ("b", np.array([2.0, 3.0, 4.0]),
+                        np.array([2.0, 3.0, 4.0]))]
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_ask_csv_range",
+                                   return_value="intersect"):
+                gui_app._write_csv_summary(w, results, outdir)
+            data = np.loadtxt(str(outdir / "1d_summary.csv"),
+                              delimiter=",", skiprows=1)
+            # 公共交集 2~3° 按最大点数均匀取样，两列都重插到公共网格
+            self.assertEqual(data.shape, (3, 3))
+            np.testing.assert_allclose(data[:, 0], [2.0, 2.5, 3.0])
+            np.testing.assert_allclose(data[:, 1], [2.0, 2.5, 3.0])
+            np.testing.assert_allclose(data[:, 2], [2.0, 2.5, 3.0])
+            self.assertIn("取公共交集", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_mismatch_skip_drops_different(self):
+        w = create_window()
+        try:
+            results = [("a", np.array([1.0, 2.0, 3.0]),
+                        np.array([1.0, 1.0, 1.0])),
+                       ("b", np.array([0.0, 1.0]),
+                        np.array([2.0, 2.0]))]
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_ask_csv_range",
+                                   return_value="skip"):
+                gui_app._write_csv_summary(w, results, outdir)
+            data = np.loadtxt(str(outdir / "1d_summary.csv"),
+                              delimiter=",", skiprows=1)
+            self.assertEqual(data.shape, (3, 2))   # 只留网格一致的文件
+            self.assertIn("跳过 1 个", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_mismatch_cancel_writes_nothing(self):
+        w = create_window()
+        try:
+            results = [("a", np.array([1.0, 2.0]), np.array([1.0, 1.0])),
+                       ("b", np.array([3.0, 4.0]), np.array([2.0, 2.0]))]
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_ask_csv_range",
+                                   return_value="cancel"):
+                gui_app._write_csv_summary(w, results, outdir)
+            self.assertIn("已取消 CSV 总表", w.log_text.toPlainText())
+            self.assertEqual(list(outdir.iterdir()), [])
+        finally:
+            w.close()
+
+    def test_ask_csv_range_defaults_to_skip_when_not_visible(self):
+        """窗口未显示（测试环境）：问询对话框不弹，直接按"跳过"处理。"""
+        w = create_window()
+        try:
+            self.assertEqual(gui_app._ask_csv_range(w), "skip")
+        finally:
+            w.close()
+
+    def test_export_flow_writes_csv_when_checked(self):
+        """导出勾选 CSV → 总表与逐文件 txt 一起落盘。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
+                                    "last_tth", None) is not None))
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_app, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": True}):
+                gui_app._run_export(w)
+            self.assertTrue((outdir / "fake_b" / "integrated_2th.txt")
+                            .is_file())
+            csv = outdir / "1d_summary.csv"
+            self.assertEqual(csv.read_text().splitlines()[0],
+                             "2theta(deg),fake_b")
+            data = np.loadtxt(str(csv), delimiter=",", skiprows=1)
+            self.assertEqual(data.shape, (3, 2))
+        finally:
+            w.close()
+
+
+class TestPoniImport(unittest.TestCase):
+    """[导入 .poni]：读 pyFAI 几何 → 用户条目落盘 + 下拉框自动选中。
+
+    _import_poni 真调 pyFAI.load（读临时 .poni 文件）；USER_CONFIG_PATH
+    指向临时路径（同 TestSaveCalibConfig），收尾还原内存字典。
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._path = Path(self._tmpdir) / "config_user.json"
+        patcher = mock.patch.object(config_mod, "USER_CONFIG_PATH",
+                                    self._path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._user_backup = dict(config_mod.USER_CONFIGS)
+        self._confs_backup = dict(config_mod.CONFIGS)
+
+    def tearDown(self):
+        config_mod.USER_CONFIGS.clear()
+        config_mod.USER_CONFIGS.update(self._user_backup)
+        config_mod.CONFIGS.clear()
+        config_mod.CONFIGS.update(self._confs_backup)
+
+    def _poni_file(self, name, **over):
+        lines = {
+            "Version": "2.1",
+            "Detector": "Pilatus",
+            "Detector_config":
+                '{"pixel1": 0.0002, "pixel2": 0.0002,'
+                ' "max_shape": [2048, 2048]}',
+            "Distance": "1.5958",
+            "Poni1": str(1045.2 * 200e-6),
+            "Poni2": str(1022.0 * 200e-6),
+            "Rot1": str(np.radians(-0.005)),
+            "Rot2": str(np.radians(-0.163)),
+            "Rot3": "0",
+            "Wavelength": "1.223e-11",
+        }
+        lines.update(over)
+        p = Path(self._tmpdir, name)
+        p.write_text("\n".join(f"{k}: {v}" for k, v in lines.items())
+                     + "\n", encoding="utf-8")
+        return p
+
+    def _click_poni(self, w, path):
+        with mock.patch.object(QFileDialog, "getOpenFileName",
+                               return_value=(str(path),
+                                             "pyFAI 几何 (*.poni)")):
+            w.findChild(QPushButton, "poni_btn").click()
+
+    def test_import_adds_entry_and_selects(self):
+        w = create_window()
+        try:
+            p = self._poni_file("mygeom.poni")
+            self._click_poni(w, p)
+            idx = w.config_combo.findData("mygeom")
+            self.assertGreaterEqual(idx, 0)
+            self.assertEqual(w.config_combo.currentIndex(), idx)
+            self.assertEqual(w.config_name, "mygeom")
+            cfg = w.config
+            self.assertAlmostEqual(cfg["geometry"]["dist_m"], 1.5958)
+            self.assertAlmostEqual(cfg["geometry"]["pixel_size_m"], 200e-6)
+            self.assertAlmostEqual(cfg["geometry"]["rot1_deg"], -0.005)
+            self.assertAlmostEqual(cfg["geometry"]["rot2_deg"], -0.163)
+            # 束心 = pyFAI getFit2D 直射束落点（含倾斜修正，B ≠ PONI）
+            import pyFAI
+            f = pyFAI.load(str(p)).getFit2D()
+            self.assertAlmostEqual(cfg["beam_center"][0], f.centerY,
+                                   places=4)
+            self.assertAlmostEqual(cfg["beam_center"][1], f.centerX,
+                                   places=4)
+            # 落盘真文件 + 日志
+            self.assertTrue(self._path.is_file())
+            self.assertIn("已导入 .poni → 配置条目 mygeom",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_key_sanitized_and_collision_suffixed(self):
+        w = create_window()
+        try:
+            self._click_poni(w, self._poni_file("123 weird name!.poni"))
+            self.assertIn("poni_123_weird_name_", config_mod.USER_CONFIGS)
+            # 与内置条目撞名：自动补 _poni1
+            self._click_poni(w, self._poni_file("lmfp1_lab6.poni"))
+            self.assertIn("lmfp1_lab6_poni1", config_mod.USER_CONFIGS)
+            self.assertEqual(w.config_name, "lmfp1_lab6_poni1")
+            self.assertIn("lmfp1_lab6_poni1", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_missing_fields_rejected(self):
+        """旧版 v1 .poni 不带探测器 → 像素缺失 → 拒绝导入。"""
+        w = create_window()
+        try:
+            v1 = Path(self._tmpdir, "old.poni")
+            v1.write_text(
+                "Distance: 1.5958\nPoni1: 0.20904\nPoni2: 0.2044\n"
+                "Rot1: -8.7e-05\nRot2: -0.0028\nRot3: 0\n"
+                "Wavelength: 1.223e-11\n", encoding="utf-8")
+            self._click_poni(w, v1)
+            log = w.log_text.toPlainText()
+            self.assertIn("缺少几何字段", log)
+            self.assertIn("pixel", log)
+            self.assertNotIn("old", config_mod.USER_CONFIGS)
+        finally:
+            w.close()
+
+
 if __name__ == "__main__":
     unittest.main()

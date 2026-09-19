@@ -71,6 +71,12 @@ python -m xrd_toolkit.gui
       <sub>2D / Profile / Waterfall views — every one-click view now renders real data (LaB₆ standard)</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/gui/gui_batch.png" width="50%"><br>
+      <sub>Batch pipeline — a folder imported at once, three real datasets integrated with live progress（k/n）in the log, then exported to txt + CSV summary</sub>
+    </td>
+  </tr>
 </table>
 
 - **Independent plot panels** — every plot is an MDI subwindow with free resizing (each drag remembers the panel's own aspect), pop-out into a separate OS window, cascade / tile arrangements, and a zoomable drawing area (Ctrl + wheel, Excel-style).
@@ -79,6 +85,8 @@ python -m xrd_toolkit.gui
 - **Panel gestures** — left-drag pans, wheel zooms around the cursor (magnifier toggle), hover shows a data-point readout in the status bar; every panel edge has a resize grip.
 - **Per-panel toolbar** — Home / magnifier / Customize (title, axis labels, linear–log y scale, figure margins) / Save PNG.
 - **Calibration mode** — a [校准] toggle switches to the calibration workbench: one-click automatic refinement (ring-center localization → pyFAI) or manual point-picking on the rings (≥ 3 points, ≥ 2 rings, ±0.5° snapping), with side-by-side result columns and a Δ-deviation column. [Save as config] stores the refined geometry as a named entry (a local user file outside git) that instantly joins the geometry dropdown — selected automatically — survives restarts, and is usable from the CLI via `--config`.
+- **Batch pipeline** — [文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically) and any view button processes all checked files at once, with a live progress counter in the log (completion lines end in （k/n）). [导出数据] saves each file's 1D result as a two-column `integrated_2th.txt` or `.chi` under `outputs/{file}/` — byte-identical format to the CLI — with an optional `1d_summary.csv` (one intensity column per file; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch.
+- **Import .poni geometry** — the [导入 .poni] button beside the geometry dropdown reads a pyFAI exchange-format geometry file (the format other calibration tools export) into a named config entry: stored like [Save as config], auto-selected immediately, surviving restarts — so externally calibrated geometries drop straight into the GUI.
 
 ## Highlights
 

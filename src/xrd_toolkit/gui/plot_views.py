@@ -150,7 +150,7 @@ def _run_2d(window: QMainWindow, path: Path, key: str,
     _log(window, f"开始读取 {path.name}（后台线程）")
     _spawn_task(window, key, _compute_image, (str(path),),
                 _on_image_done,
-                lambda msg: _on_view_error(window, path, "读取", msg))
+                lambda msg: _on_view_error(window, path, key, "读取", msg))
 
 
 def _run_profile(window: QMainWindow, path: Path, key: str,
@@ -170,7 +170,7 @@ def _run_profile(window: QMainWindow, path: Path, key: str,
     _log(window, f"开始计算剖面 {path.name}（后台线程，角度 {angle:g}°）")
     _spawn_task(window, key, _compute_profile, (str(path), center, angle),
                 _on_profile_done,
-                lambda msg: _on_view_error(window, path, "剖面计算", msg))
+                lambda msg: _on_view_error(window, path, key, "剖面计算", msg))
 
 
 def _run_waterfall(window: QMainWindow, path: Path, key: str,
@@ -180,7 +180,7 @@ def _run_waterfall(window: QMainWindow, path: Path, key: str,
     _log(window, f"开始扇形积分 {path.name}（后台线程，36 扇区）")
     _spawn_task(window, key, _compute_waterfall, (str(path), geom, npt),
                 _on_waterfall_done,
-                lambda msg: _on_view_error(window, path, "瀑布积分", msg))
+                lambda msg: _on_view_error(window, path, key, "瀑布积分", msg))
 
 
 # 视图注册表：视图名 → 计算 runner（签名 window/path/key/geom/npt）。
@@ -332,7 +332,7 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
         if on_error is not None:
             on_error(msg)
         else:
-            _on_integration_error(window, path, msg)
+            _on_integration_error(window, path, key, msg)
 
     _spawn_task(window, key, _compute_integration, (str(path), geom, npt),
                 done, error)
@@ -345,6 +345,7 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     情况是同一面板连点两次开了两个任务——先开的晚到会被丢弃
     （每面板只认最新任务，旧结果不得覆盖新图）。
     """
+    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
@@ -363,24 +364,46 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     _draw_1d(window, dock, tth, intensity)
     if len(tth):
         _log(window, f"积分完成：{dock.panel_display}（{len(tth)} 点，"
-                     f"2θ {tth.min():.3f}~{tth.max():.3f}°）")
+                     f"2θ {tth.min():.3f}~{tth.max():.3f}°）{suffix}")
     else:
-        _log(window, f"积分完成：{dock.panel_display}（0 点，无有效数据）")
+        _log(window, f"积分完成：{dock.panel_display}（0 点，无有效数据）"
+                     f"{suffix}")
 
 
-def _on_integration_error(window: QMainWindow, path: Path, msg: str) -> None:
-    """积分失败（主线程）：报错进日志区，不崩溃。"""
-    _log(window, f"积分失败：{path.name} — {msg}")
+def _batch_step(window: QMainWindow, key: str) -> str:
+    """批量进度计数：key 属于当前批（视图一致）就 +1，返回 "（k/n）"
+    后缀（贴到完成/失败日志末尾）；非批量或批已走完返回空串。
+
+    [1D] 等按钮一次勾 N 个文件 = 一批（_plot_view 记账 total/视图）。
+    每个任务结束时恰好回调一次（done 或 error），进度按"完成数/总
+    数"计；批外零散的面板（[应用] 重算、单个开图）不计数。
+    """
+    batch = getattr(window, "_batch", None)
+    if batch is None or key.split("|", 1)[0] != batch["view"]:
+        return ""
+    batch["done"] += 1
+    suffix = f"（{batch['done']}/{batch['total']}）"
+    if batch["done"] >= batch["total"]:
+        del window._batch   # 批走完：清账，之后零散任务回到无计数
+    return suffix
 
 
-def _on_view_error(window: QMainWindow, path: Path, what: str,
+def _on_integration_error(window: QMainWindow, path: Path, key: str,
+                          msg: str) -> None:
+    """积分失败（主线程）：报错进日志区，不崩溃（批内带进度计数）。"""
+    suffix = _batch_step(window, key)
+    _log(window, f"积分失败：{path.name} — {msg}{suffix}")
+
+
+def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
                    msg: str) -> None:
     """新视图计算失败（主线程）：报错进日志区，不崩溃。
 
     what = 计算名（读取/剖面计算/瀑布积分），日志统一 "{what}失败：
-    文件名 — 原因"。
+    文件名 — 原因"；批内带进度计数后缀。
     """
-    _log(window, f"{what}失败：{path.name} — {msg}")
+    suffix = _batch_step(window, key)
+    _log(window, f"{what}失败：{path.name} — {msg}{suffix}")
 
 
 def _cache_image(window: QMainWindow, path_str: str, image) -> None:
@@ -400,6 +423,7 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
     与 _on_integration_done 同款过期防护：每面板只认最新任务，
     面板关了静默丢弃。
     """
+    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
@@ -415,11 +439,12 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
     _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
     _draw_2d(window, dock, image)
     _log(window, f"读取完成：{dock.panel_display}"
-                 f"（{image.shape[0]}×{image.shape[1]} 像素）")
+                 f"（{image.shape[0]}×{image.shape[1]} 像素）{suffix}")
 
 
 def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
     """剖面计算完成（主线程）：结果留面板、画曲线（同 1D 的过期防护）。"""
+    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:
@@ -436,13 +461,15 @@ def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
     _draw_profile(window, dock, t, intensity)
     if len(t):
         _log(window, f"剖面完成：{dock.panel_display}（{len(t)} 点，"
-                     f"距离 {t.min():.0f}~{t.max():.0f} px）")
+                     f"距离 {t.min():.0f}~{t.max():.0f} px）{suffix}")
     else:
-        _log(window, f"剖面完成：{dock.panel_display}（0 点，无有效数据）")
+        _log(window, f"剖面完成：{dock.panel_display}（0 点，无有效数据）"
+                     f"{suffix}")
 
 
 def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
     """扇形积分完成（主线程）：结果留面板、画堆叠瀑布（同 1D 的过期防护）。"""
+    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:
@@ -458,9 +485,10 @@ def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
     _draw_waterfall(window, dock, tth, i2d, chi)
     if len(tth):
         _log(window, f"扇形积分完成：{dock.panel_display}"
-                     f"（{i2d.shape[1]} 扇区 × {i2d.shape[0]} 点）")
+                     f"（{i2d.shape[1]} 扇区 × {i2d.shape[0]} 点）{suffix}")
     else:
-        _log(window, f"扇形积分完成：{dock.panel_display}（0 点，无有效数据）")
+        _log(window, f"扇形积分完成：{dock.panel_display}"
+                     f"（0 点，无有效数据）{suffix}")
 
 
 def _snapshot_canvas(ax):
@@ -1331,6 +1359,10 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     if not checked:
         _log(window, "没有选中的文件")
         return
+    if len(checked) > 1:
+        # 批量进度记账：这一批的总数/视图名；每个任务结束回调计数
+        # 一次（k/n 后缀贴在完成/失败日志末尾，批走完自动清账）
+        window._batch = {"view": name, "total": len(checked), "done": 0}
     for item in checked:
         path = Path(item.data(Qt.UserRole))
         display = item.text()

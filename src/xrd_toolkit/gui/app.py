@@ -37,10 +37,12 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 经 gui_app 访问它们（下方 import 即再导出）。mock.patch 的目标请
 指到实现所在的新模块（tests 里已改为 gui_views / gui_customize）。
 """
+import re
 import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt 后端
 # 图标题取自文件显示名（重复文件改名可输入中文）→ 字体回退链补上
@@ -53,12 +55,14 @@ from PySide6.QtCore import QEvent, QObject, Qt, QSize
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QInputDialog, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
+    QLabel, QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
     QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
     QSpinBox, QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget,
     QDockWidget, QApplication)
 
+from xrd_toolkit import config
+from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 # ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
 from xrd_toolkit.gui.calib import (
@@ -74,14 +78,14 @@ from xrd_toolkit.gui.panels import (
     _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_ylim, _apply_config,
-    _collect_geometry, _content, _log, _set_focus)
+    _collect_geometry, _content, _log, _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _compute_integration, _draw_1d,
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
     _pan_motion, _pan_press, _pan_release, _plot_compare, _plot_view,
     _wheel_zoom)
 
-FILE_FILTER = "衍射图像 (*.tif *.edf *.cbf);;所有文件 (*)"
+FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
 SUPPORTED_SUFFIXES = (".tif", ".edf", ".cbf")   # 拖放只认这三种
 
@@ -253,18 +257,28 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     content = QWidget()
     lay = QVBoxLayout(content)
-    # 按钮排 2 列网格：[打开] 占满第一行（长按钮），[保存][删除] 第二行。
-    # 一行三个按钮的最小宽度 ≈ 3×80+间距，把文件列锁在 270；
-    # 网格最宽的一行只有两个按钮 ≈ 184，文件列才能和参数列一样收窄
+    # 按钮网格：[打开] 占满第一行（长按钮）；[保存][删除][文件夹]
+    # 第二行；[导出数据] 占满第三行。第二行三个按钮把文件列最小
+    # 宽度锁在 ≈ 3×80+间距（270），与参数列一致——之前只有两个
+    # 按钮（184）文件列才能收得比参数列还窄
     btns = QGridLayout()
     btn_open = QPushButton("打开")
     btn_save = QPushButton("保存")
     btn_delete = QPushButton("删除")
+    btn_folder = QPushButton("文件夹")
+    btn_export = QPushButton("导出数据")
     btn_save.setObjectName("save_btn")
     btn_delete.setObjectName("delete_btn")
-    btns.addWidget(btn_open, 0, 0, 1, 2)   # 打开占满第一行
+    btn_folder.setObjectName("folder_btn")
+    btn_export.setObjectName("export_btn")
+    btn_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表")
+    btn_export.setToolTip("把勾选文件的 1D 结果批量存成两列 txt/chi，"
+                          "可顺带生成 CSV 总表")
+    btns.addWidget(btn_open, 0, 0, 1, 3)   # 打开占满第一行
     btns.addWidget(btn_save, 1, 0)
     btns.addWidget(btn_delete, 1, 1)
+    btns.addWidget(btn_folder, 1, 2)
+    btns.addWidget(btn_export, 2, 0, 1, 3)   # 导出数据占满第三行
     lay.addLayout(btns)
 
     window.file_list = NarrowList()   # 覆盖了 minimumSizeHint，可以收窄
@@ -305,6 +319,26 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             window, "选择数据文件", "data", FILE_FILTER)
         if paths:
             window.add_files(paths)
+
+    def open_folder():
+        """文件夹导入：遍历目录里全部衍射图像（不递归子目录，排序
+        保证顺序稳定），一起加进列表；重复文件自动跳过不弹窗——
+        整目录重加时一摞"文件已存在"弹窗没有意义。"""
+        folder = QFileDialog.getExistingDirectory(
+            window, "选择数据文件夹", "data")
+        if not folder:
+            return
+        found = sorted(p for p in Path(folder).iterdir()
+                       if p.suffix.lower() in SUPPORTED_EXTS)
+        if not found:
+            _log(window, "文件夹里没有支持的数据文件"
+                         "（.tif/.tiff/.edf/.cbf）")
+            return
+        _log(window, f"文件夹扫描：{folder} 找到 {len(found)} 个数据文件")
+        window.add_files([str(p) for p in found], skip_duplicates=True)
+
+    btn_folder.clicked.connect(open_folder)
+    btn_export.clicked.connect(lambda: _run_export(window))
 
     def delete_selected():
         checked = [window.file_list.item(i)
@@ -388,7 +422,7 @@ def _ask_rename(window: QMainWindow, default_name: str):
         return None
     return text
 
-def add_files(window: QMainWindow, paths) -> None:
+def add_files(window: QMainWindow, paths, skip_duplicates: bool = False) -> None:
     """把文件加进左侧列表；一批新加的文件全部打对号（选中）。
 
     对号是唯一的选择表达：一起选入/拖入的文件默认全部勾上，点一次
@@ -397,6 +431,8 @@ def add_files(window: QMainWindow, paths) -> None:
       - 改名 = 弹输入框起新名字（预填 "xxx (1).tif"，可自己改；
         输入的名字已被占用会要求换一个）再开一条（同文件两条条目）；
       - 取消 = 这次不加。
+    skip_duplicates=True（文件夹导入用）时重复文件直接跳过不弹窗：
+    整目录重加弹一摞"文件已存在"没有意义。
     列表里永远不出现重名。
     """
     existing = {}   # 绝对路径 → 已有条目（重复检测按真实路径）
@@ -410,6 +446,9 @@ def add_files(window: QMainWindow, paths) -> None:
         p = Path(p)
         old = existing.get(p.resolve())
         if old is not None:   # 重复文件
+            if skip_duplicates:   # 文件夹导入：不弹窗，直接跳过
+                _log(window, f"已跳过重复文件 {p.name}")
+                continue
             choice = _ask_duplicate(window, p.name)
             if choice == "overwrite":
                 old.setCheckState(Qt.Checked)   # 保留原条目并勾上
@@ -594,7 +633,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.config_combo.findData(DEFAULT_CONFIG))
     window.config_combo.currentIndexChanged.connect(
         lambda i: _apply_config(window, i))
-    form.addRow("几何配置", window.config_combo)
+    # 下拉框 + [导入 .poni] 并排一行：.poni 是 pyFAI 生态的通用
+    # 几何交换格式，导入 = 读文件 → 存成用户配置条目并自动选中
+    combo_row = QWidget()
+    combo_lay = QHBoxLayout(combo_row)
+    combo_lay.setContentsMargins(0, 0, 0, 0)
+    combo_lay.setSpacing(4)
+    btn_poni = QPushButton("导入 .poni")
+    btn_poni.setObjectName("poni_btn")
+    btn_poni.setToolTip("读 pyFAI 交换格式几何文件（.poni），存成"
+                        "配置条目并自动选中")
+    btn_poni.clicked.connect(lambda: _import_poni(window))
+    combo_lay.addWidget(window.config_combo, 1)
+    combo_lay.addWidget(btn_poni)
+    form.addRow("几何配置", combo_row)
 
     window.params = {}
     def add_caption(form, text):
@@ -1123,6 +1175,275 @@ def _confirm_close(window: QMainWindow, n_unsaved: int) -> str:
     return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(
         ans, "cancel")
 
+# ══ 批量管线：.poni 导入 + 1D 数据导出 / CSV 总表 ════════════
+def _import_poni(window: QMainWindow) -> None:
+    """[导入 .poni]：读 pyFAI 交换格式几何文件 → 存成用户配置条目。
+
+    .poni 是 pyFAI 生态通用的几何交换格式（别的工具/命令行标定的
+    结果常以这种文件交付）。导入 = 解析出几何 → 照 GUI 配置条目的
+    形状存进本地 config_user.json（与 [保存为配置] 同源，重启仍
+    在）→ 下拉框重建并自动选中（_apply_config 立即生效）。pyFAI
+    只在点击时导入：CLI 用户与纯测试环境不为此多背启动依赖。
+    """
+    path_str, _ = QFileDialog.getOpenFileName(
+        window, "选择 .poni 几何文件", "data",
+        "pyFAI 几何 (*.poni);;所有文件 (*)")
+    if not path_str:
+        return
+    p = Path(path_str)
+    try:
+        import pyFAI
+        ai = pyFAI.load(str(p))
+    except Exception as err:
+        _log(window, f".poni 读取失败 {p.name}（{err}）")
+        return
+    # 必备几何字段缺一不可（探测器库不认识旧型号时 pixel 可能缺失）
+    missing = [field for field, val in (
+        ("dist", ai.dist), ("poni1", ai.poni1), ("poni2", ai.poni2),
+        ("rot1", ai.rot1), ("rot2", ai.rot2),
+        ("wavelength", ai.wavelength),
+        ("pixel", getattr(ai, "pixel1", None) or getattr(ai, "pixel2", None)),
+    ) if val is None]
+    if missing:
+        _log(window, f".poni 缺少几何字段：{', '.join(missing)}，无法导入")
+        return
+    pixel = float(ai.pixel1)   # 配置只有单一像素尺寸：非方像素取 pixel1
+    if float(ai.pixel2) != pixel:
+        _log(window, "注意：.poni 像素非方形（pixel1≠pixel2），配置只"
+                     "存单一像素尺寸，已取 pixel1")
+    # 束心 = getFit2D 的直射束落点（含倾斜修正）：正是配置条目的 B
+    # 语义（B ≠ PONI，探测器有倾斜时两者差可达 23 px，见 config.py
+    # 注释）——不能直接用 poni/pixel 投影。约定核实过：pyFAI 里
+    # centerX = 列、centerY = 行，与内置 lmfp1_lab6 条目的实测值吻合。
+    fit2d = ai.getFit2D()
+    entry = {
+        "label": p.stem,
+        "geometry": {
+            "pixel_size_m": pixel,
+            "wavelength_m": float(ai.wavelength),
+            "dist_m": float(ai.dist),
+            "poni1_m": float(ai.poni1),
+            "poni2_m": float(ai.poni2),
+            "rot1_deg": float(np.degrees(ai.rot1)),
+            "rot2_deg": float(np.degrees(ai.rot2)),
+        },
+        "beam_center": (float(fit2d.centerY), float(fit2d.centerX)),
+    }
+    # key = 文件名清洗（只留字母数字下划线）；数字开头补前缀，
+    # 撞名依次补 _poni1/_poni2…（CONFIGS 含内置，循环避开全部重名）
+    key = re.sub(r"[^A-Za-z0-9_]", "_", p.stem)
+    if not key or key[0].isdigit():
+        key = "poni_" + key
+    base, n = key, 1
+    while key in CONFIGS:
+        key = f"{base}_poni{n}"
+        n += 1
+    try:
+        is_new = config.save_user_config(key, entry)
+    except ValueError as err:
+        _log(window, f".poni 导入失败（{err}）")
+        return
+    _reload_config_combo(window, key)
+    _log(window, f"已导入 .poni → 配置条目 {key}"
+                 f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
+                 f"重启后仍在）")
+
+
+def _checked_1d_results(window: QMainWindow) -> list:
+    """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity), ...]。
+
+    只认已经算好的 1D 面板缓存（last_tth / last_intensity），按文件
+    列表顺序返回；勾选里没算过的文件跳过并记日志（提示先点 [1D]
+    出图）。重复文件改名加入的条目按显示名找各自面板。
+    """
+    checked = [window.file_list.item(i)
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if not checked:
+        _log(window, "没有选中的文件")
+        return []
+    out = []
+    for item in checked:
+        path = str(Path(item.data(Qt.UserRole)))
+        display = item.text()
+        for key in (f"1D|{path}", f"1D|{path}|{display}"):
+            dock = window.plot_docks.get(key)
+            if dock is not None and getattr(dock, "last_tth", None) is not None:
+                out.append((Path(path).stem, dock.last_tth,
+                            dock.last_intensity))
+                break
+        else:
+            _log(window, f"跳过 {display}：还没有 1D 结果"
+                         f"（先点 [1D] 出图）")
+    if not out:
+        _log(window, "没有可导出的 1D 结果")
+    return out
+
+
+def _build_export_dialog(window: QMainWindow, n_results: int):
+    """导出设置弹窗：输出目录 + 后缀（.txt/.chi）+ CSV 总表开关。
+
+    返回 dict（"dir"=Path / "suffix" / "csv"）或 None（取消）。测试
+    可以 mock 本函数直接给 dict，也可以 patch QDialog.exec 走真实
+    控件。"""
+    dlg = QDialog(window)
+    dlg.setWindowTitle(f"导出 1D 数据（{n_results} 个文件）")
+    lay = QFormLayout(dlg)
+    dir_edit = QLineEdit("outputs")
+    dir_edit.setObjectName("export_dir_edit")
+    browse = QPushButton("浏览…")
+    browse.setObjectName("export_browse_btn")
+
+    def pick_dir():
+        folder = QFileDialog.getExistingDirectory(
+            window, "选择输出目录", dir_edit.text())
+        if folder:
+            dir_edit.setText(folder)
+
+    browse.clicked.connect(pick_dir)
+    row = QWidget()
+    row_lay = QHBoxLayout(row)
+    row_lay.setContentsMargins(0, 0, 0, 0)
+    row_lay.addWidget(dir_edit, 1)
+    row_lay.addWidget(browse)
+    lay.addRow("输出目录", row)
+    suffix_combo = QComboBox()
+    suffix_combo.setObjectName("export_suffix_combo")
+    suffix_combo.addItem(".txt（两列文本）", ".txt")
+    suffix_combo.addItem(".chi（与 txt 同格式）", ".chi")
+    lay.addRow("文件后缀", suffix_combo)
+    csv_check = QCheckBox("同时生成 CSV 总表（1d_summary.csv）")
+    csv_check.setObjectName("export_csv_check")
+    csv_check.setChecked(True)   # 默认顺手出一张总表
+    lay.addRow("", csv_check)
+    btn_row = QWidget()
+    btn_lay = QHBoxLayout(btn_row)
+    btn_lay.setContentsMargins(0, 0, 0, 0)
+    ok = QPushButton("导出")
+    ok.setObjectName("export_ok_btn")
+    cancel = QPushButton("取消")
+    ok.clicked.connect(dlg.accept)
+    cancel.clicked.connect(dlg.reject)
+    btn_lay.addWidget(ok)
+    btn_lay.addWidget(cancel)
+    lay.addRow("", btn_row)
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    return {"dir": Path(dir_edit.text()), "suffix": suffix_combo.currentData(),
+            "csv": csv_check.isChecked()}
+
+
+def _write_export(target: Path, tth, intensity) -> None:
+    """写一个两列 1D 数据文件（头行与格式逐字镜像 CLI integrate_pattern）。"""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    np.savetxt(str(target), np.c_[tth, intensity], fmt="%.6g",
+               header="2theta(deg)  intensity")
+
+
+def _ask_csv_range(window: QMainWindow) -> str:
+    """2θ 网格不一致时问用户 CSV 怎么出；返回 "intersect"/"skip"/"cancel"。
+
+    窗口从未显示过（测试等非交互场景）不弹框，直接按"跳过范围不同
+    的文件"处理，免得模态对话框把测试挂死；真实使用中窗口显示过，
+    正常弹框。
+    """
+    if not window.isVisible():
+        return "skip"
+    box = QMessageBox(window)
+    box.setWindowTitle("2θ 范围不一致")
+    box.setText("这批文件的 2θ 网格不一致，CSV 总表怎么出？")
+    b_common = box.addButton("取公共交集（重插值）", QMessageBox.AcceptRole)
+    b_skip = box.addButton("跳过范围不同的文件", QMessageBox.RejectRole)
+    box.addButton("取消", QMessageBox.DestructiveRole)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is b_common:
+        return "intersect"
+    if clicked is b_skip:
+        return "skip"
+    return "cancel"
+
+
+def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
+    """把一批 1D 结果汇总成一张 CSV：第一列 2θ，其后每文件一列强度。
+
+    所有结果的 2θ 网格一致（同 npt 同范围）时直接按列拼；网格不一
+    致时弹窗问用户（取公共交集重插值 / 跳过范围不同的文件 / 取消）。
+    重插值 = 公共区间内按最大点数均匀取样，原数据 np.interp 上去。
+    """
+    grids = [tth for _, tth, _ in results]
+    ref = grids[0]
+    same_grid = all(len(g) == len(ref) and np.allclose(g, ref, atol=1e-9)
+                    for g in grids[1:])
+    if not same_grid:
+        choice = _ask_csv_range(window)
+        if choice == "cancel":
+            _log(window, "已取消 CSV 总表")
+            return
+        if choice == "intersect":
+            lo = max(g.min() for g in grids)
+            hi = min(g.max() for g in grids)
+            npt = max(len(g) for g in grids)
+            common = np.linspace(lo, hi, npt)
+            results = [(stem, common, np.interp(common, tth, intensity))
+                       for stem, tth, intensity in results]
+            _log(window, f"CSV 总表取公共交集 2θ {lo:.3f}~{hi:.3f}°"
+                         f"（重插值到 {npt} 点）")
+        else:   # "skip"：只保留与第一个文件同网格的
+            kept = [r for r in results
+                    if len(r[1]) == len(ref) and np.allclose(r[1], ref,
+                                                             atol=1e-9)]
+            if not kept:
+                _log(window, "CSV 总表已取消：没有 2θ 网格一致的文件")
+                return
+            _log(window, f"CSV 总表跳过 {len(results) - len(kept)} 个"
+                         f" 2θ 范围不同的文件")
+            results = kept
+    grid = results[0][1]
+    data = np.column_stack([grid] + [intensity for _, _, intensity in results])
+    header = "2theta(deg)," + ",".join(stem for stem, _, _ in results)
+    target = outdir / "1d_summary.csv"
+    try:
+        # comments=""：头行不带 # 前缀，读回时第一行就是列名
+        np.savetxt(str(target), data, fmt="%.6g", delimiter=",",
+                   header=header, comments="")
+    except OSError as err:
+        _log(window, f"CSV 总表写入失败（{err}）")
+        return
+    _log(window, f"已生成 CSV 总表 → {target}")
+
+
+def _run_export(window: QMainWindow) -> None:
+    """[导出数据]：勾选文件的 1D 结果批量落盘（镜像 CLI 的 txt 格式）。
+
+    输出路径 = {目录}/{文件名}/integrated_2th{suffix}（与命令行
+    integrate_pattern 同目录同格式）；可选 CSV 总表。单个文件写盘
+    失败只记日志、不中断批处理；没算过 1D 的文件跳过并提示先点
+    [1D] 出图。
+    """
+    results = _checked_1d_results(window)
+    if not results:
+        return   # 原因（没勾选/没结果）已在 _checked_1d_results 里记日志
+    fields = _build_export_dialog(window, len(results))
+    if fields is None:
+        _log(window, "已取消导出")
+        return
+    outdir, suffix = fields["dir"], fields["suffix"]
+    ok = 0
+    for stem, tth, intensity in results:
+        target = outdir / stem / f"integrated_2th{suffix}"
+        try:
+            _write_export(target, tth, intensity)
+        except OSError as err:
+            _log(window, f"导出失败 {stem}（{err}）")
+            continue
+        ok += 1
+        _log(window, f"已导出 {stem} → {target}")
+    if ok:
+        _log(window, f"导出完成：{ok} 个文件")
+    if fields["csv"]:
+        _write_csv_summary(window, results, outdir)
+
 # ══ 主窗口组装 ════════════════════════════════════════════
 def create_window() -> QMainWindow:
     """组装主框架：文件坞 + 参数坞 + 日志坞 + 工具栏 + 中央面板区。"""
@@ -1142,7 +1463,7 @@ def create_window() -> QMainWindow:
 
     window._status_timer = None   # _log 里的状态栏恢复计时器（懒创建）
     window.log = lambda text: _log(window, text)
-    window.add_files = lambda paths: add_files(window, paths)
+    window.add_files = lambda paths, **kw: add_files(window, paths, **kw)
     # 布局/同步旗标（各自用途见 _on_canvas_resized / _tile_panels /
     # _draw_1d / _on_limits_changed 的注释）
     window._layouting = False          # 程序自己在平铺/布局（不算用户拖动）
