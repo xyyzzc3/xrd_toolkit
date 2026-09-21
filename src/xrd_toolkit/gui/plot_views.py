@@ -44,8 +44,9 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QLabel, QMainWindow, QMdiSubWindow, QPushButton,
-    QVBoxLayout, QWidget)
+    QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QMainWindow, QMdiSubWindow, QPushButton, QSpinBox, QVBoxLayout,
+    QWidget)
 
 from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
@@ -54,8 +55,8 @@ from xrd_toolkit.gui.panels import (
     _PlotSubWindow, _settle, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _collect_geometry,
-    _compare_shown_curves, _content, _data_snapshot, _display_snapshot,
-    _heat_shown, _log, _panel_param, _set_focus)
+    _compare_shown_curves, _content, _curve_color, _data_snapshot,
+    _display_snapshot, _heat_shown, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
@@ -576,16 +577,25 @@ def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel,
         dock._ylabel_ours = default_ylabel
 
 
-def _restore_line_styles(ax, old_lines):
+def _restore_line_styles(ax, old_lines, restore_color=True):
     """把重画前拍下的曲线样式原样套回新画的曲线（Customize 保护：
-    用户改过的颜色/线型/线宽/标记/图例名不被重画盖掉）。数量变了
-    就按顺序对前面几条（新多的曲线用默认样式）。"""
+    用户改过的线型/线宽/标记/图例名不被重画盖掉）。数量变了
+    就按顺序对前面几条（新多的曲线用默认样式）。
+
+    restore_color=False = 1D/剖面/对比视图：颜色由"曲线配色"参数
+    + 逐条自定义色（dock.curve_colors）管——参数本身就是用户改色
+    的入口，重画时按新参数着色；旧快照的颜色套回会把换配色方案
+    的 [应用] 打回原形。用户颜色保护不丢——自定义色存在
+    curve_colors 里，画图时优先于色板（瀑布的 χ 渐变色是程序
+    自定、与配色参数无关，仍走 restore_color=True）。
+    """
     for i, line in enumerate(ax.lines):
         if i >= len(old_lines):
             break
         label, color, ls, lw, marker = old_lines[i]
         line.set_label(label)
-        line.set_color(color)
+        if restore_color:
+            line.set_color(color)
         line.set_linestyle(ls)
         line.set_linewidth(lw)
         line.set_marker(marker)
@@ -625,7 +635,10 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     window._setting_limits = True
     try:
         ax.clear()
-        ax.plot(tth, intensity, "b-", lw=0.8)
+        # 单曲线颜色跟配色参数走（高对比第 1 槽蓝 / 默认 = 传统蓝 b）
+        palette = _panel_param(window, dock, "曲线配色", "高对比")
+        ax.plot(tth, intensity, color=_curve_color(palette, 0, single=True),
+                lw=0.8)
         lo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         hi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
         if lo is None or hi is None or not lo < hi:
@@ -662,7 +675,9 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         if ylo < yhi:
             ax.set_ylim(ylo, yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
-        _restore_line_styles(ax, old_lines)
+        # 颜色跟"曲线配色"参数走（参数本身就是用户改色的入口），
+        # 线型/线宽/标记照旧保护
+        _restore_line_styles(ax, old_lines, restore_color=False)
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
@@ -739,7 +754,9 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
     window._setting_limits = True
     try:
         ax.clear()
-        ax.plot(t, intensity, "b-", lw=0.8)
+        palette = _panel_param(window, dock, "曲线配色", "高对比")
+        ax.plot(t, intensity, color=_curve_color(palette, 0, single=True),
+                lw=0.8)
         log_y = _panel_param(window, dock, "对数纵轴", False)
         scale = _settle_scale(dock, keep_scale, log_y)
         eff_log = (scale == "log")
@@ -758,7 +775,9 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         if ylo < yhi:
             ax.set_ylim(ylo, yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
-        _restore_line_styles(ax, old_lines)
+        # 颜色跟"曲线配色"参数走（参数本身就是用户改色的入口），
+        # 线型/线宽/标记照旧保护
+        _restore_line_styles(ax, old_lines, restore_color=False)
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
@@ -963,11 +982,48 @@ class _SlimToolbar(NavigationToolbar2QT):
             super().save_figure(*args)
 
 
+def _ask_save_options(window: QMainWindow):
+    """保存图片选项弹窗：分辨率 dpi + 格式（PNG/TIF）。
+
+    返回 {"dpi": int, "fmt": "png"|"tif"} 或 None（取消 = 整个保存
+    流程中止，不继续弹文件名框）。fmt 既是 currentData 也是扩展名，
+    文件名框的过滤器与自动补后缀都从它来。默认 300 dpi：屏幕看 100
+    dpi 够用，论文/报告印刷要求 300 起步，图大了再往上加。
+    """
+    dlg = QDialog(window)
+    dlg.setWindowTitle("保存图片选项")
+    lay = QFormLayout(dlg)
+    dpi_spin = QSpinBox()
+    dpi_spin.setObjectName("save_dpi_spin")
+    dpi_spin.setRange(72, 1200)
+    dpi_spin.setValue(300)
+    lay.addRow("分辨率 (dpi)", dpi_spin)
+    fmt_combo = QComboBox()
+    fmt_combo.setObjectName("save_fmt_combo")
+    fmt_combo.addItem("PNG（通用，文件小）", "png")
+    fmt_combo.addItem("TIF（无损，论文常用）", "tif")
+    lay.addRow("格式", fmt_combo)
+    btn_row = QWidget()
+    btn_lay = QHBoxLayout(btn_row)
+    btn_lay.setContentsMargins(0, 0, 0, 0)
+    ok = QPushButton("确定")
+    ok.setObjectName("save_opt_ok_btn")
+    cancel = QPushButton("取消")
+    ok.clicked.connect(dlg.accept)
+    cancel.clicked.connect(dlg.reject)
+    btn_lay.addWidget(ok)
+    btn_lay.addWidget(cancel)
+    lay.addRow("", btn_row)
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    return {"dpi": dpi_spin.value(), "fmt": fmt_combo.currentData()}
+
+
 def _save_panel(window: QMainWindow, key: str) -> None:
-    """单面板保存（工具栏 [Save] 走这里）：选文件名存 PNG。
+    """单面板保存（工具栏 [Save] 走这里）：选分辨率/格式 → 选文件名存图。
 
     成功即置 figure_saved = True——这张面板在关窗询问里不再算
-    "未保存"；用户取消（没选文件名）不动记账。
+    "未保存"；用户取消（选项弹窗或文件名框）不动记账。
     """
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -976,21 +1032,27 @@ def _save_panel(window: QMainWindow, key: str) -> None:
     if figure is None:
         _log(window, "该面板还没有可保存的图")
         return
-    default = str(Path("outputs") / f"{dock.windowTitle()}.png")
+    options = _ask_save_options(window)
+    if options is None:
+        return   # 选项弹窗取消：不动已保存记账
+    ext = options["fmt"]
+    default = str(Path("outputs") / f"{dock.windowTitle()}.{ext}")
     name, _ = QFileDialog.getSaveFileName(
-        window, f"保存 {dock.windowTitle()}", default, "PNG 图片 (*.png)")
+        window, f"保存 {dock.windowTitle()}", default,
+        f"{ext.upper()} 图片 (*.{ext})")
     if not name:
         return   # 用户取消：不动已保存记账
-    if not name.lower().endswith(".png"):
-        name += ".png"
+    if not name.lower().endswith(f".{ext}"):
+        name += f".{ext}"
     try:
         Path(name).parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(name)
+        figure.savefig(name, dpi=options["dpi"])
     except OSError as err:
         _log(window, f"保存失败 {dock.windowTitle()} → {name}（{err}）")
         return
     dock.figure_saved = True
-    _log(window, f"已保存 {dock.windowTitle()} → {name}")
+    _log(window, f"已保存 {dock.windowTitle()} → {name}"
+                 f"（{options['dpi']} dpi）")
 
 
 def _magnifier_on(dock) -> bool:
@@ -1307,8 +1369,20 @@ def _build_waterfall_widget(window: QMainWindow, key: str) -> QWidget:
 
 def _build_heat_widget(window: QMainWindow, key: str) -> QWidget:
     """热图面板内容：同 1D 骨架，无悬停取点、无范围写回（y 轴 =
-    样品序号，不是强度；缩放/平移仍是通用的，只看图）。"""
-    return _build_canvas_panel(window, key, "axes_heat", hover=False, sync="")
+    样品序号，不是强度；缩放/平移仍是通用的，只看图）。额外挂
+    行点击联动：点某行 = 该样品在含它的对比面板里隐藏/显示切换
+    （任务六：热图与多曲线叠加配合使用）。"""
+    widget = _build_canvas_panel(window, key, "axes_heat", hover=False,
+                                 sync="")
+    canvas = getattr(widget, "canvas", None)
+    if canvas is not None:
+        canvas.mpl_connect(
+            "button_press_event",
+            lambda event: _heat_row_press(window, key, event))
+        canvas.mpl_connect(
+            "button_release_event",
+            lambda event: _heat_row_release(window, key, event))
+    return widget
 
 
 # 视图注册表：视图名 → 内容 builder（签名 window/key → QWidget）。
@@ -1450,10 +1524,36 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         ax.clear()
         curves = _compare_shown_curves(window, dock)
         # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
-        # 颜色序号稳定（i 由 _compare_shown_curves 携带）
-        for tth, shown, display, i in curves:
-            ax.plot(tth, shown, f"C{i}", lw=0.8, label=display)
-        _restore_line_styles(ax, old_lines)   # 图例在下面读标签，先套回样式
+        # 颜色序号稳定（i 由 _compare_shown_curves 携带）。颜色 =
+        # 逐条自定义色（dock.curve_colors，Customize 对话框改）优先，
+        # 否则按面板快照里的配色参数取槽色（颜色跟着文件走，见
+        # _curve_color）
+        palette = _panel_param(window, dock, "曲线配色", "高对比")
+        overrides = getattr(dock, "curve_colors", None) or {}
+        stack = _panel_param(window, dock, "对比堆叠", False)
+        if stack:
+            # 瀑布式错开叠放：行高 = 该行峰值 × 0.7（对齐 CLI
+            # waterfall 画法），y 刻度 = 各条基线（显示名）。归一化
+            # 先做（每条显示数据再叠），堆叠下纵轴范围/对数不适用
+            # （行偏移由数据决定，同瀑布）
+            peaks = [float(np.nanmax(s)) if len(s) and np.isfinite(s).any()
+                     else 0.0 for _, s, _, _ in curves]
+            offsets = [0.0]
+            for p in peaks[:-1]:
+                offsets.append(offsets[-1] + p * 0.7)
+            for (tth, shown, display, i), off in zip(curves, offsets):
+                color = overrides.get(display) or _curve_color(palette, i)
+                ax.plot(tth, shown + off, color=color, lw=0.8,
+                        label=display)
+            ax.set_yticks(offsets)
+            ax.set_yticklabels([d for _, _, d, _ in curves], fontsize=6)
+        else:
+            for tth, shown, display, i in curves:
+                color = overrides.get(display) or _curve_color(palette, i)
+                ax.plot(tth, shown, color=color, lw=0.8, label=display)
+        # 颜色不套旧快照（配色参数/自定义色在画图时已定），其余样式
+        # 照旧保护（图例在下面读标签，先套回样式）
+        _restore_line_styles(ax, old_lines, restore_color=False)
         xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
         if xlo is None or xhi is None or not xlo < xhi:
@@ -1464,34 +1564,38 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         if window.plot_docks.get(window.focus_panel) is dock:
             window.params["视图 2θ 下限 (°)"].setValue(xlo)
             window.params["视图 2θ 上限 (°)"].setValue(xhi)
-        log_y = _panel_param(window, dock, "对数纵轴", False)
-        scale = _settle_scale(dock, keep_scale, log_y)
-        eff_log = (scale == "log")
-        if scale != "linear":
-            ax.set_yscale(scale)
-        auto_y = _panel_param(window, dock, "纵轴自动", True)
-        ylo = yhi = None
-        if auto_y:
-            if curves:
-                ylo, yhi = _auto_y_range(
-                    np.concatenate([s for _, s, _, _ in curves]), eff_log)
+        if not stack:
+            # 堆叠模式下纵轴由行偏移决定，对数/范围参数不适用（同瀑布）
+            log_y = _panel_param(window, dock, "对数纵轴", False)
+            scale = _settle_scale(dock, keep_scale, log_y)
+            eff_log = (scale == "log")
+            if scale != "linear":
+                ax.set_yscale(scale)
+            auto_y = _panel_param(window, dock, "纵轴自动", True)
+            ylo = yhi = None
+            if auto_y:
+                if curves:
+                    ylo, yhi = _auto_y_range(
+                        np.concatenate([s for _, s, _, _ in curves]), eff_log)
+                    if ylo < yhi:
+                        ax.set_ylim(ylo, yhi)
+                else:
+                    pass   # 一条曲线都没算成：空图，纵轴交给 matplotlib 默认
+            else:
+                ylo = _panel_param(window, dock, "纵轴下限", 1.0)
+                yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
+                if eff_log:
+                    ylo = max(ylo, 1e-6)
                 if ylo < yhi:
                     ax.set_ylim(ylo, yhi)
-            else:
-                pass   # 一条曲线都没算成：空图，纵轴交给 matplotlib 默认
-        else:
-            ylo = _panel_param(window, dock, "纵轴下限", 1.0)
-            yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
-            if eff_log:
-                ylo = max(ylo, 1e-6)
-            if ylo < yhi:
-                ax.set_ylim(ylo, yhi)
-        # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点）
-        if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
-            window.params["纵轴下限"].setValue(ylo)
-            window.params["纵轴上限"].setValue(yhi)
+            # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点）
+            if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
+                window.params["纵轴下限"].setValue(ylo)
+                window.params["纵轴上限"].setValue(yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
-        if dock.compare_data:
+        if dock.compare_data and not stack:
+            # 堆叠下 y 刻度 = 样品名（曲线就躺在自己名字那行上），
+            # 图例冗余（同瀑布）
             ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
         _content(dock).draw()
@@ -1648,6 +1752,68 @@ def _assemble_heatmap(results):
             vi = np.interp(x, ti, vi)   # t 由引擎保证升序
         rows.append(vi)
     return x, np.vstack(rows), [r[0] for r in results], interp
+
+
+def _heat_row_press(window: QMainWindow, key: str, event) -> None:
+    """热图按下：记候选行（没拖动才算"点击"，松手再决定）。
+
+    左键拖 = 平移（通用手势），点按 = 行联动——按下先记账，松手
+    时挪动超过阈值就算平移，不算点击。
+    """
+    if event.inaxes is None or event.button != 1:
+        return
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    y = event.ydata
+    n = len(getattr(dock, "heat_files", ()))
+    row = int(round(y))
+    if not (0 <= row < n) or abs(y - row) > 0.5:
+        return   # 点在行缝/图外：不算
+    dock._heat_press = (event.x, event.y, row)
+
+
+def _heat_row_release(window: QMainWindow, key: str, event) -> None:
+    """热图松手：按下点没怎么挪（阈值 5 px）→ 行联动——该行样品在
+    所有含它的对比面板里隐藏/显示切换（再点恢复）；挪多了 = 平移，
+    不动。
+
+    隐藏集合挂在对比面板 dock.compare_hidden 上（显示名），画图/
+    图例/自动纵轴同口径少掉这条曲线（见 _compare_shown_curves）；
+    颜色序号不重排（颜色跟着文件走）。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    info = getattr(dock, "_heat_press", None)
+    dock._heat_press = None
+    if info is None:
+        return
+    x0, y0, row = info
+    if (event.x - x0) ** 2 + (event.y - y0) ** 2 > 5 ** 2:
+        return   # 拖过了 = 平移手势，不是点击
+    _path, display = dock.heat_files[row]
+    targets = []
+    for ckey, cdock in window.plot_docks.items():
+        if not ckey.startswith("对比|"):
+            continue
+        if any(d == display for _p, d in
+               getattr(cdock, "compare_files", ())):
+            targets.append((ckey, cdock))
+    if not targets:
+        _log(window, f"热图点击 {display}：没有含该文件的对比面板")
+        return
+    for ckey, cdock in targets:
+        hidden = set(getattr(cdock, "compare_hidden", None) or ())
+        if display in hidden:
+            hidden.discard(display)
+            _log(window, f"热图点击 {display}：对比面板重新显示该曲线")
+        else:
+            hidden.add(display)
+            _log(window, f"热图点击 {display}：对比面板隐藏该曲线"
+                         f"（再点该行恢复）")
+        cdock.compare_hidden = hidden
+        _redraw_compare(window, ckey)
 
 
 def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:

@@ -83,6 +83,12 @@ _DISPLAY_DEFAULTS = {
     # "归一化目标" = file 模式用哪个文件
     "对比归一化": "off",
     "归一化目标": "",
+    # 曲线配色 = 多曲线（对比/瀑布）的分类色调色板："高对比"（默认，
+    # 固定顺序 8 槽、色盲友好）或 "默认"（matplotlib 自带循环）
+    "曲线配色": "高对比",
+    # 对比堆叠 = 瀑布式错开叠放（每条曲线抬到自己的行上，y 刻度 =
+    # 样品名；堆叠下纵轴范围/对数不适用，同瀑布）
+    "对比堆叠": False,
     "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
     "视图 2θ 上限 (°)": None,
     # 热图显示：色图 / 归一化（与对比同款 each/global/off 三模式）/
@@ -95,6 +101,28 @@ _DISPLAY_DEFAULTS = {
     "热图上限": 100000.0,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
+
+# 曲线配色表：分类色固定顺序、颜色跟着文件走不跟排序走（第一个
+# 文件永远是蓝，过滤/增删文件不会把幸存者重涂）。"高对比" 8 槽按
+# OKLab 校验色盲安全（相邻对 CVD ΔE ≥ 9.1），浅色底上可用；槽用尽
+# （第 9 条曲线起）回到槽 0 复用——曲线再多靠图例文字分辨，不生成
+# 近似第 9 色。"默认" = matplotlib 传统（单曲线蓝 b、多曲线 C 循环）。
+_CURVE_PALETTES = {
+    "高对比": ("#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+               "#e87ba4", "#008300", "#4a3aa7", "#e34948"),
+    "默认": None,
+}
+
+
+def _curve_color(palette: str, i: int, single: bool = False) -> str:
+    """第 i 条曲线的颜色（palette = 面板快照里的"曲线配色"）。
+
+    single=True = 单曲线面板（1D/剖面）。未知色板名兜底成高对比。
+    """
+    if palette == "默认":
+        return "b" if single else f"C{i % 10}"   # C 循环只有 C0~C9
+    slots = _CURVE_PALETTES.get(palette) or _CURVE_PALETTES["高对比"]
+    return slots[i % len(slots)]
 
 
 def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
@@ -395,7 +423,8 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     是显示层，原始结果原样保留在 compare_data）；i = 在 compare_files
     里的序号（决定颜色/图例顺序）。画图（_redraw_compare）与自动
     纵轴（_apply_auto_ylim）共用这一份数据——两边口径一致，置灰框
-    显示的区间才跟图对得上。
+    显示的区间才跟图对得上。热图联动隐藏的样品（dock.compare_hidden
+    里的显示名）不参与：画图、图例、自动纵轴同时少掉这条曲线。
 
     归一化四模式（与用户讨论定稿）：
       each   各自最强峰：每条曲线除以自己的最强峰
@@ -409,9 +438,15 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
         mode = "each" if mode else "off"
     target_path = _panel_param(window, dock, "归一化目标", "") \
         if mode == "file" else ""
-    # 先把原始数据全收起来：global/file 的除数要等所有曲线到齐才算
+    # 先把原始数据全收起来：global/file 的除数要等所有曲线到齐才算。
+    # 热图联动隐藏的样品（dock.compare_hidden）直接跳过：不算除数、
+    # 不进图例、不占颜色槽——其他曲线的颜色序号不变（颜色跟着文件
+    # 走的承诺在隐藏/恢复来回切时也不破）
+    hidden = set(getattr(dock, "compare_hidden", None) or ())
     raw_curves = []
     for i, (path, display) in enumerate(dock.compare_files):
+        if display in hidden:
+            continue
         if display not in dock.compare_data:
             continue   # 这条还没算成（本函数只在全部到齐后调用）
         tth, raw = dock.compare_data[display]

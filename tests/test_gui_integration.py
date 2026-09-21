@@ -49,6 +49,7 @@
 运行：python -m unittest discover -s tests -v
 """
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -66,14 +67,16 @@ from types import SimpleNamespace
 import numpy as np
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent, QPointingDevice, QWheelEvent
+from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout,
-    QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout)
+    QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGroupBox,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter,
+    QSpinBox, QVBoxLayout)
 
 from xrd_toolkit import config as config_mod
 from xrd_toolkit.gui import app as gui_app
+from xrd_toolkit.gui import customize as gui_customize
 from xrd_toolkit.gui.app import create_window
 # 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
 # 打它的名字截不住别的模块里的裸名查找）
@@ -666,12 +669,14 @@ class TestSaveFigures(unittest.TestCase):
             fig = gui_app._content(dock).figure
             with mock.patch.object(gui_app, "_choose_panels",
                                    return_value=[dock]), \
+                 mock.patch.object(gui_app, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/out", "PNG 图片 (*.png)")) as dlg, \
                  mock.patch.object(fig, "savefig") as savefig:
                 w.findChild(QPushButton, "save_btn").click()
                 self.assertTrue(dlg.called)
-                savefig.assert_called_once_with("/tmp/out.png")   # 自动补 .png
+                savefig.assert_called_once_with("/tmp/out.png", dpi=300)   # 自动补 .png + 300 dpi
                 self.assertTrue(dock.figure_saved)
                 self.assertIn("已保存 1D_fake_b.tif → /tmp/out.png",
                               w.log_text.toPlainText())
@@ -723,6 +728,8 @@ class TestSaveFigures(unittest.TestCase):
             d2 = _dock(w, "1D", "data/fake_b.tif")
             with mock.patch.object(gui_app, "_choose_panels",
                                    return_value=[d1, d2]), \
+                 mock.patch.object(gui_app, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    side_effect=[("/tmp/a", ""),
                                                 ("", "")]) as dlg, \
@@ -743,6 +750,8 @@ class TestSaveFigures(unittest.TestCase):
             dock = _draw_one_1d(w)
             with mock.patch.object(gui_app, "_choose_panels",
                                    return_value=[dock]), \
+                 mock.patch.object(gui_app, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/no/such/dir/out.png", "")), \
                  mock.patch.object(gui_app._content(dock).figure, "savefig",
@@ -750,6 +759,396 @@ class TestSaveFigures(unittest.TestCase):
                 self.assertFalse(gui_app._save_figures(w))
             log = w.log_text.toPlainText()
             self.assertIn("保存失败 1D_fake_b.tif", log)
+        finally:
+            w.close()
+
+
+class TestSaveOptions(unittest.TestCase):
+    """保存选项弹窗：分辨率 dpi + 格式（PNG/TIF）贯穿单张与批量保存。"""
+
+    def test_dialog_defaults(self):
+        """默认 300 dpi + PNG（论文/报告印刷的常用起步值）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views.QDialog, "exec",
+                                   return_value=QDialog.Accepted):
+                self.assertEqual(gui_views._ask_save_options(w),
+                                 {"dpi": 300, "fmt": "png"})
+        finally:
+            w.close()
+
+    def test_dialog_custom_values(self):
+        """改 600 dpi + TIF → 返回对应值（fmt 同时当扩展名用）。"""
+        w = create_window()
+        try:
+            def fake_exec(dlg):
+                dlg.findChild(QSpinBox, "save_dpi_spin").setValue(600)
+                dlg.findChild(QComboBox, "save_fmt_combo").setCurrentIndex(1)
+                return QDialog.Accepted
+            # new= 放普通函数：函数是描述符，实例访问自动绑定 dlg；
+            # return_value 的 MagicMock 不绑定（Shiboken 方法也不吃 autospec）
+            with mock.patch.object(gui_views.QDialog, "exec", new=fake_exec):
+                self.assertEqual(gui_views._ask_save_options(w),
+                                 {"dpi": 600, "fmt": "tif"})
+        finally:
+            w.close()
+
+    def test_dialog_cancel_returns_none(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views.QDialog, "exec",
+                                   return_value=QDialog.Rejected):
+                self.assertIsNone(gui_views._ask_save_options(w))
+        finally:
+            w.close()
+
+    def test_batch_cancel_options_aborts_save(self):
+        """批量保存：选项弹窗取消 → 不弹文件名框、返回 False（关窗留在程序里）。"""
+        w = create_window()
+        try:
+            dock = _draw_one_1d(w)
+            with mock.patch.object(gui_app, "_choose_panels",
+                                   return_value=[dock]), \
+                 mock.patch.object(gui_app, "_ask_save_options",
+                                   return_value=None), \
+                 mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
+                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(dlg.called)
+                self.assertIn("已取消保存", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_batch_tif_saves_with_extension_and_dpi(self):
+        """批量保存 TIF：文件名过滤器带 TIF、自动补 .tif + savefig 收到 dpi。"""
+        w = create_window()
+        try:
+            dock = _draw_one_1d(w)
+            fig = gui_app._content(dock).figure
+            with mock.patch.object(gui_app, "_choose_panels",
+                                   return_value=[dock]), \
+                 mock.patch.object(gui_app, "_ask_save_options",
+                                   return_value={"dpi": 600, "fmt": "tif"}), \
+                 mock.patch.object(QFileDialog, "getSaveFileName",
+                                   return_value=("/tmp/b", "TIF 图片 (*.tif)")) as dlg, \
+                 mock.patch.object(fig, "savefig") as savefig:
+                self.assertTrue(gui_app._save_figures(w))
+                self.assertIn("TIF", dlg.call_args[0][3])
+                savefig.assert_called_once_with("/tmp/b.tif", dpi=600)
+        finally:
+            w.close()
+
+    def test_panel_save_cancel_options_keeps_unsaved(self):
+        """单面板工具栏 [Save]：选项弹窗取消 → 不弹文件名框、记账不动。"""
+        w = create_window()
+        try:
+            dock = _draw_one_1d(w)
+            with mock.patch.object(gui_views, "_ask_save_options",
+                                   return_value=None), \
+                 mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
+                gui_app._content(dock).toolbar.save_figure()
+                self.assertFalse(dlg.called)
+                self.assertFalse(dock.figure_saved)
+        finally:
+            w.close()
+
+    def test_panel_save_tif_dpi(self):
+        """单面板保存 TIF 600 dpi：自动补 .tif + savefig 收到 dpi。"""
+        w = create_window()
+        try:
+            dock = _draw_one_1d(w)
+            fig = gui_app._content(dock).figure
+            with mock.patch.object(gui_views, "_ask_save_options",
+                                   return_value={"dpi": 600, "fmt": "tif"}), \
+                 mock.patch.object(QFileDialog, "getSaveFileName",
+                                   return_value=("/tmp/panel_tif", "TIF 图片 (*.tif)")) as dlg, \
+                 mock.patch.object(fig, "savefig") as savefig:
+                gui_app._content(dock).toolbar.save_figure()
+                self.assertIn("TIF", dlg.call_args[0][3])
+                savefig.assert_called_once_with("/tmp/panel_tif.tif", dpi=600)
+                self.assertTrue(dock.figure_saved)
+        finally:
+            w.close()
+
+
+class TestCurveColors(unittest.TestCase):
+    """任务六·色彩：曲线配色参数（固定色序色板）+ Customize 逐条自定义色。"""
+
+    # 高对比色板 8 槽（OKLab 校验色盲安全；颜色跟着文件走不跟排序走）
+    _SLOTS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+              "#e87ba4", "#008300", "#4a3aa7", "#e34948")
+
+    def test_curve_color_slots(self):
+        """高对比固定顺序、槽尽回槽 0 复用；默认 = C 循环/单曲线蓝；
+        未知色板兜底高对比。"""
+        self.assertEqual([gui_state._curve_color("高对比", i)
+                          for i in range(8)], list(self._SLOTS))
+        self.assertEqual(gui_state._curve_color("高对比", 8),
+                         self._SLOTS[0])   # 第 9 条回槽 0（靠图例文字分辨）
+        self.assertEqual(gui_state._curve_color("默认", 0), "C0")
+        self.assertEqual(gui_state._curve_color("默认", 10), "C0")   # 越界复用
+        self.assertEqual(gui_state._curve_color("高对比", 0, single=True),
+                         self._SLOTS[0])
+        self.assertEqual(gui_state._curve_color("默认", 0, single=True), "b")
+        self.assertEqual(gui_state._curve_color("乱写的", 2),
+                         self._SLOTS[2])   # 未知色板兜底
+
+    def test_draw_1d_follows_palette_param(self):
+        """1D 单曲线：默认高对比 = 第 1 槽蓝；快照切"默认"重画 = 传统蓝 b。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            self.assertEqual(ax.lines[0].get_color(), self._SLOTS[0])
+            dock = _dock(w, "1D", "data/fake_b.tif")
+            dock.params_snapshot["曲线配色"] = "默认"
+            gui_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+            self.assertEqual(ax.lines[0].get_color(), "b")
+        finally:
+            w.close()
+
+    def _plot_compare(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比|")]
+            self.assertEqual(len(keys), 1)
+            ax = gui_app._content(w.plot_docks[keys[0]]).axes_1d
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        return keys[0], ax
+
+    def test_compare_uses_palette_slots_and_override(self):
+        """对比曲线按色板槽着色；自定义色优先；换色板重画不被打回旧色。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            self.assertEqual([line.get_color() for line in ax.lines],
+                             [self._SLOTS[0], self._SLOTS[1]])
+            # 逐条自定义：第一条换红 → 重画时自定义优先
+            dock.curve_colors = {"fake_a.tif": "#ff0000"}
+            gui_views._redraw_compare(w, key)
+            self.assertEqual(ax.lines[0].get_color(), "#ff0000")
+            self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
+            # 换"默认"配色 → 颜色按新参数重画（旧色不被套回）
+            dock.params_snapshot["曲线配色"] = "默认"
+            gui_views._redraw_compare(w, key)
+            self.assertEqual([line.get_color() for line in ax.lines],
+                             ["#ff0000", "C1"])
+        finally:
+            w.close()
+
+    def test_palette_widget_and_reset(self):
+        """参数坞有配色下拉框；[恢复默认] 回高对比；默认表收录新参数。"""
+        w = create_window()
+        try:
+            w.params["曲线配色"].setCurrentIndex(
+                w.params["曲线配色"].findData("默认"))
+            w.findChild(QPushButton, "reset_image_btn").click()
+            self.assertEqual(w.params["曲线配色"].currentData(), "高对比")
+            self.assertEqual(gui_state._DISPLAY_DEFAULTS["曲线配色"], "高对比")
+        finally:
+            w.close()
+
+    def test_customize_compare_color_section(self):
+        """对比面板 Customize：曲线颜色小节逐条换色（应用才写回）、
+        取消不动图、恢复默认配色清掉自定义。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            content = gui_app._content(dock)
+            dlg = gui_app._build_customize_dialog(w, dock, content.axes_1d,
+                                                  content.figure)
+            swatches = [dlg.findChild(QPushButton, f"swatch_{i}")
+                        for i in range(2)]
+            self.assertTrue(all(s is not None for s in swatches),
+                            "对比面板应有逐条色块")
+            with mock.patch.object(gui_customize.QColorDialog, "getColor",
+                                   return_value=QColor("#00ff00")):
+                swatches[0].click()
+            self.assertIn("fake_a.tif", dlg._color_picks)
+            # [恢复默认配色] 清空暂存
+            dlg.findChild(QPushButton, "clear_colors_btn").click()
+            self.assertEqual(dlg._color_picks, {})
+            # 重新选红 → 应用 → 写回 dock + 重画
+            with mock.patch.object(gui_customize.QColorDialog, "getColor",
+                                   return_value=QColor("#ff0000")):
+                swatches[0].click()
+            gui_app._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            self.assertEqual(dock.curve_colors, {"fake_a.tif": "#ff0000"})
+            self.assertEqual(ax.lines[0].get_color(), "#ff0000")
+            self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
+            # 再开对话框：色块预填自定义色；清空后应用 → 回色板色
+            dlg2 = gui_app._build_customize_dialog(w, dock, content.axes_1d,
+                                                   content.figure)
+            self.assertEqual(dlg2._color_picks, {"fake_a.tif": "#ff0000"})
+            dlg2.findChild(QPushButton, "clear_colors_btn").click()
+            gui_app._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg2)
+            self.assertFalse(hasattr(dock, "curve_colors"))
+            self.assertEqual(ax.lines[0].get_color(), self._SLOTS[0])
+        finally:
+            w.close()
+
+
+class TestCompareStackAndHeatLink(unittest.TestCase):
+    """任务六·对比增强：瀑布式堆叠显示 + 热图行点击联动对比面板。"""
+
+    def _plot_compare(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比|")]
+            self.assertEqual(len(keys), 1)
+            ax = gui_app._content(w.plot_docks[keys[0]]).axes_1d
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        return keys[0], ax
+
+    def _synthetic_event(self, ax, ydata, x=50, y=50, button=1):
+        ev = mock.Mock()
+        ev.inaxes = ax
+        ev.button = button
+        ev.xdata = 1.0
+        ev.ydata = ydata
+        ev.x = x
+        ev.y = y
+        return ev
+
+    def test_stack_offsets_curves_like_waterfall(self):
+        """堆叠：第 2 条按第 1 条峰值 ×0.7 抬行，y 刻度 = 样品名，
+        无图例；取消堆叠回到平铺 + 图例回来。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
+            dock.params_snapshot["对比堆叠"] = True
+            gui_views._redraw_compare(w, key)
+            y_stack = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
+            peak0 = np.nanmax(y_flat[0])   # fake_a 最强峰 = 3
+            np.testing.assert_allclose(y_stack[0], y_flat[0])   # 第一条不动
+            np.testing.assert_allclose(y_stack[1], y_flat[1] + peak0 * 0.7)
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
+                             ["fake_a.tif", "fake_b.tif"])
+            self.assertIsNone(ax.get_legend(), "堆叠下 y 刻度即样品名，无图例")
+            dock.params_snapshot["对比堆叠"] = False
+            gui_views._redraw_compare(w, key)
+            np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
+            self.assertIsNotNone(ax.get_legend())
+        finally:
+            w.close()
+
+    def test_stack_ignores_log_and_ylim(self):
+        """堆叠下纵轴保持线性、范围由行偏移决定（对数/纵轴参数不适用）。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            dock.params_snapshot["对数纵轴"] = True
+            dock.params_snapshot["纵轴自动"] = False
+            dock.params_snapshot["纵轴下限"] = 2.0
+            dock.params_snapshot["纵轴上限"] = 3.0
+            dock.params_snapshot["对比堆叠"] = True
+            gui_views._redraw_compare(w, key)
+            self.assertEqual(ax.get_yscale(), "linear")
+            lo, hi = ax.get_ylim()   # 手填 2~3 不生效：行基线决定范围
+            self.assertTrue(lo <= 0.0 and hi > 3.0,
+                            f"范围应按行偏移算，实际 {lo}~{hi}")
+        finally:
+            w.close()
+
+    def test_stack_widget_and_reset(self):
+        w = create_window()
+        try:
+            w.params["对比堆叠"].setChecked(True)
+            w.findChild(QPushButton, "reset_image_btn").click()
+            self.assertFalse(w.params["对比堆叠"].isChecked())
+            self.assertEqual(gui_state._DISPLAY_DEFAULTS["对比堆叠"], False)
+        finally:
+            w.close()
+
+    def test_heat_row_click_toggles_compare_curve(self):
+        """热图行点击 = 该样品在对比面板隐藏/显示切换（颜色序号不乱）。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            # 给面板挂 heat_files（行→文件），行 1 = fake_b.tif
+            dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
+                               ("data/fake_b.tif", "fake_b.tif")]
+            gui_views._heat_row_press(w, key, self._synthetic_event(ax, 1))
+            gui_views._heat_row_release(w, key, self._synthetic_event(ax, 1))
+            self.assertEqual(dock.compare_hidden, {"fake_b.tif"})
+            self.assertEqual([l.get_label() for l in ax.lines],
+                             ["fake_a.tif"])
+            self.assertIn("对比面板隐藏该曲线", w.log_text.toPlainText())
+            # 再点一次 → 恢复，颜色序号不变（fake_b 仍是第 2 槽）
+            gui_views._heat_row_press(w, key, self._synthetic_event(ax, 1))
+            gui_views._heat_row_release(w, key, self._synthetic_event(ax, 1))
+            self.assertEqual(dock.compare_hidden, set())
+            self.assertEqual(len(ax.lines), 2)
+            self.assertEqual(ax.lines[1].get_color(), "#eb6834")
+        finally:
+            w.close()
+
+    def test_heat_drag_is_not_a_click(self):
+        """按下后拖走（>5 px）→ 平移手势，不切换。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
+                               ("data/fake_b.tif", "fake_b.tif")]
+            gui_views._heat_row_press(w, key,
+                                      self._synthetic_event(ax, 1, x=50, y=50))
+            gui_views._heat_row_release(w, key,
+                                        self._synthetic_event(ax, 1,
+                                                              x=200, y=200))
+            self.assertFalse(hasattr(dock, "compare_hidden"))
+            self.assertEqual(len(ax.lines), 2)
+        finally:
+            w.close()
+
+    def test_heat_click_no_compare_panel_only_logs(self):
+        """没有含该文件的对比面板 → 只提示，不炸。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
+            dock1 = _dock(w, "1D", "data/fake_b.tif")
+            dock1.heat_files = [("data/fake_b.tif", "fake_b.tif")]
+            ax1 = gui_app._content(dock1).axes_1d
+            gui_views._heat_row_press(w, "1D|data/fake_b.tif",
+                                      self._synthetic_event(ax1, 0))
+            gui_views._heat_row_release(w, "1D|data/fake_b.tif",
+                                        self._synthetic_event(ax1, 0))
+            self.assertIn("没有含该文件的对比面板", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_compare_shown_curves_filters_hidden(self):
+        """_compare_shown_curves 跳过 compare_hidden：图例/颜色同口径。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            dock.compare_hidden = {"fake_a.tif"}
+            curves = gui_state._compare_shown_curves(w, dock)
+            self.assertEqual([d for _, _, d, _ in curves], ["fake_b.tif"])
+            self.assertEqual([i for _, _, _, i in curves], [1],
+                             "颜色序号跟文件走（隐藏第一条，第二条仍是 1 号）")
         finally:
             w.close()
 
@@ -3742,7 +4141,8 @@ class TestCustomizeProtection(unittest.TestCase):
             w.close()
 
     def test_curve_style_survives_redraw(self):
-        """Customize 改过的曲线颜色/线型/线宽重画不覆盖。"""
+        """改过的线型/线宽重画不覆盖；颜色跟"曲线配色"参数走
+        （任务六起颜色有了参数入口，不再按旧快照保护）。"""
         w = create_window()
         try:
             dock = self._open_1d(w)
@@ -3753,12 +4153,13 @@ class TestCustomizeProtection(unittest.TestCase):
             line.set_linewidth(3)
             self._redraw(w, dock)
             new = ax.lines[0]
-            self.assertEqual(new.get_color(), "red")
+            self.assertEqual(new.get_color(), "#2a78d6",
+                             "颜色跟配色参数（默认高对比第 1 槽）")
             self.assertEqual(new.get_linestyle(), "--")
             self.assertEqual(new.get_linewidth(), 3)
             self._redraw(w, dock)
-            self.assertEqual(ax.lines[0].get_color(), "red",
-                             "连续重画也应保留样式")
+            self.assertEqual(ax.lines[0].get_linestyle(), "--",
+                             "连续重画也应保留线型")
         finally:
             w.close()
 
@@ -4337,12 +4738,14 @@ class TestToolbarSave(unittest.TestCase):
         try:
             dock = _draw_one_1d(w)
             fig = gui_app._content(dock).figure
-            with mock.patch.object(QFileDialog, "getSaveFileName",
+            with mock.patch.object(gui_views, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "png"}), \
+                 mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/panel_out", "PNG 图片 (*.png)")) as dlg, \
                  mock.patch.object(fig, "savefig") as savefig:
                 gui_app._content(dock).toolbar.save_figure()
                 self.assertTrue(dlg.called)
-                savefig.assert_called_once_with("/tmp/panel_out.png")
+                savefig.assert_called_once_with("/tmp/panel_out.png", dpi=300)
                 self.assertTrue(dock.figure_saved)
                 self.assertIn("已保存 1D_fake_b.tif → /tmp/panel_out.png",
                               w.log_text.toPlainText())
@@ -5608,8 +6011,13 @@ class TestHeatmap(unittest.TestCase):
             log = w.log_text.toPlainText()
             self.assertIn("开始热图：2 个文件（复用已有 1D 结果，"
                           "后台积分 2 个）", log)
-            self.assertIn("热图：fake_b.tif 积分完成（3 点）（1/2）", log)
-            self.assertIn("热图：fake_a.tif 积分完成（3 点）（2/2）", log)
+            self.assertIn("热图：fake_b.tif 积分完成（3 点）", log)
+            self.assertIn("热图：fake_a.tif 积分完成（3 点）", log)
+            # 两条完成回调跑在独立 QThread，先后由调度决定（教训 12）：
+            # 只断言两条都计数、合计 (1/2)+(2/2)
+            k = re.findall(r"热图：fake_[ab]\.tif 积分完成（3 点）（(\d)/2）",
+                           log)
+            self.assertEqual(set(k), {"1", "2"})
             self.assertIn("热图完成：2 个样品 × 3 点", log)
             self.assertFalse(hasattr(w, "_batch"),
                              "批走完应清账（之后零散任务不再计数）")
@@ -5642,7 +6050,13 @@ class TestHeatmap(unittest.TestCase):
             log = w.log_text.toPlainText()
             self.assertIn("热图：fake_a.tif 积分失败 — RuntimeError: 解码失败",
                           log)
-            self.assertIn("热图：fake_b.tif 积分完成（3 点）（2/2）", log)
+            self.assertIn("热图：fake_b.tif 积分完成（3 点）", log)
+            # 完成/失败回调各跑在独立 QThread，谁先到主线程由调度决定
+            # （教训 12）——不写死先后，只断言"失败也参与计数、两条
+            # 合计 (1/2)+(2/2)"
+            k = re.findall(r"热图：(?:fake_a|fake_b)\.tif 积分(?:完成|失败)"
+                           r".*?（(\d)/2）", log)
+            self.assertEqual(set(k), {"1", "2"})
             self.assertIn("热图完成：1 个样品 × 3 点", log)
         finally:
             w.close()

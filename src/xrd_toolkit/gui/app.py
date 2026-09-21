@@ -82,10 +82,10 @@ from xrd_toolkit.gui.panel_state import (
     _apply_config, _collect_geometry, _content, _log,
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _compute_integration, _draw_1d,
-    _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
-    _pan_motion, _pan_press, _pan_release, _plot_compare, _plot_heatmap,
-    _plot_view, _wheel_zoom)
+    _apply_image_params, _apply_params, _ask_save_options,
+    _compute_integration, _draw_1d, _hover_leave, _hover_motion,
+    _magnifier_on, _open_plot_panel, _pan_motion, _pan_press,
+    _pan_release, _plot_compare, _plot_heatmap, _plot_view, _wheel_zoom)
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -939,6 +939,24 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cmp_norm.currentIndexChanged.connect(sync_norm_target)
     sync_norm_target()   # 初始 = 不归一化 → 目标下拉框置灰
 
+    # 曲线配色（显示参数）：多曲线的分类色。"高对比" = 固定顺序
+    # 8 槽色盲友好（颜色跟着文件走，第一个文件永远是蓝）；
+    # "默认" = matplotlib 自带循环。逐条自定义色走 Customize。
+    curve_palette = QComboBox()
+    for text, data in (("高对比（推荐）", "高对比"),
+                       ("默认（matplotlib）", "默认")):
+        curve_palette.addItem(text, data)
+    curve_palette.setToolTip("多曲线配色：高对比 = 色盲友好固定色序"
+                             "（颜色跟着文件走）/ matplotlib 默认循环")
+    window.params["曲线配色"] = curve_palette
+    form2.addRow(curve_palette)
+
+    cmp_stack = QCheckBox("堆叠显示")
+    cmp_stack.setToolTip("瀑布式错开叠放：每条曲线按自身峰高抬到自己的"
+                         "行上，y 刻度 = 样品名（堆叠下纵轴范围/对数不适用）")
+    window.params["对比堆叠"] = cmp_stack
+    form2.addRow(cmp_stack)
+
     # ── 热图显示（小节）：批量热图的显示参数 ──
     # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比
     # 同款语义（热图没有"指定文件"模式）；对数强度 = 弱峰抬起来
@@ -1006,6 +1024,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "纵轴自动": True,
         "对比归一化": "off",
         "归一化目标": "",
+        "曲线配色": "高对比",
+        "对比堆叠": False,
         "热图色图": "magma",
         "热图归一化": "off",
         "热图对数": False,
@@ -1027,6 +1047,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["对比归一化"].setCurrentIndex(
             window.params["对比归一化"].findData(img_defaults["对比归一化"]))
         window.params["归一化目标"].setCurrentIndex(0)
+        window.params["曲线配色"].setCurrentIndex(
+            window.params["曲线配色"].findData(img_defaults["曲线配色"]))
+        window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
         window.params["热图色图"].setCurrentIndex(
@@ -1225,9 +1248,10 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
         _exit_calib(window)
         _log(window, "回到分析模式")
 
-# ══ 保存：勾选已输出的图 → 逐个选文件名存 PNG ═══════════════
+# ══ 保存：勾选已输出的图 → 选分辨率/格式 → 逐个选文件名存图 ══
 def _save_figures(window: QMainWindow) -> bool:
-    """[保存] 按钮与关窗询问共用：弹窗勾选要保存的图 → 逐个选文件名存 PNG。
+    """[保存] 按钮与关窗询问共用：弹窗勾选要保存的图 → 选分辨率/格式
+    （_ask_save_options，整批共用一份）→ 逐个选文件名存图。
 
     返回 False = 流程被取消（关窗时应留在程序里），True = 完成。
     有画布（figure）的面板才参与；未接线视图的占位面板（若有）不参与。
@@ -1244,29 +1268,36 @@ def _save_figures(window: QMainWindow) -> bool:
     if not chosen:
         _log(window, "没有勾选要保存的图")
         return False
+    options = _ask_save_options(window)
+    if options is None:
+        _log(window, "已取消保存")
+        return False
+    ext = options["fmt"]
     saved, skipped = 0, 0
     for dock in chosen:
-        default = str(Path("outputs") / f"{dock.windowTitle()}.png")
+        default = str(Path("outputs") / f"{dock.windowTitle()}.{ext}")
         name, _ = QFileDialog.getSaveFileName(
-            window, f"保存 {dock.windowTitle()}", default, "PNG 图片 (*.png)")
+            window, f"保存 {dock.windowTitle()}", default,
+            f"{ext.upper()} 图片 (*.{ext})")
         if not name:
             skipped += 1   # 这张图用户没存：不算"保存完成"
             _log(window, f"已跳过保存 {dock.windowTitle()}")
             continue
-        if not name.lower().endswith(".png"):
-            name += ".png"
+        if not name.lower().endswith(f".{ext}"):
+            name += f".{ext}"
         try:
             Path(name).parent.mkdir(parents=True, exist_ok=True)
-            _content(dock).figure.savefig(name)
+            _content(dock).figure.savefig(name, dpi=options["dpi"])
         except OSError as err:
             _log(window, f"保存失败 {dock.windowTitle()} → {name}（{err}）")
             skipped += 1
             continue
         dock.figure_saved = True
         saved += 1
-        _log(window, f"已保存 {dock.windowTitle()} → {name}")
+        _log(window, f"已保存 {dock.windowTitle()} → {name}"
+                     f"（{options['dpi']} dpi）")
     if saved:
-        _log(window, f"保存完成：{saved} 张图")
+        _log(window, f"保存完成：{saved} 张图（{options['dpi']} dpi）")
     return skipped == 0
 
 def _choose_panels(window: QMainWindow, panels) -> list:

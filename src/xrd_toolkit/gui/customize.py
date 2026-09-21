@@ -14,11 +14,14 @@ layout 引擎（fig.set_layout_engine(None)），否则每次 draw
 引擎都把用户边距算回去。
 """
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGroupBox,
-    QHBoxLayout, QLineEdit, QMainWindow, QPushButton, QVBoxLayout)
+    QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
+    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QVBoxLayout, QWidget)
 
-from xrd_toolkit.gui.panel_state import _content, _log, _panel_param
+from xrd_toolkit.gui.panel_state import (
+    _content, _curve_color, _log, _panel_param)
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
 _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
@@ -144,6 +147,60 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     margin_form.addRow("上边距", fields["top"])
     root.addWidget(margin_box)
 
+    # 对比面板专属：逐条自定义曲线颜色。参数坞的"曲线配色"只给
+    # 整套色板，这里允许"某一条换色"（任务六的"自定义选取色彩"）。
+    # 选择结果暂存 dlg._color_picks，点 [应用] 才写回 dock（取消 =
+    # 图保持原样，与其余字段同规矩）。色块初值 = 自定义色，没有
+    # 就按当前配色参数取该条槽色。
+    view = dock.panel_key.split("|", 1)[0]
+    if view == "对比" and getattr(dock, "compare_files", None):
+        palette = _panel_param(window, dock, "曲线配色", "高对比")
+        staged = dict(getattr(dock, "curve_colors", None) or {})
+        color_box = QGroupBox("曲线颜色")
+        color_form = QFormLayout(color_box)
+        color_form.setLabelAlignment(label_align)
+        color_form.setFormAlignment(form_align)
+        swatches = {}
+        # macOS 按钮样式会在纯背景色上叠一层高光渐变，把色块洗淡
+        # （#2a78d6 → #6fadf4）；带 border 声明即改用纯色渲染（真机
+        # 探针实测），细灰边也让浅色块在白底上有个轮廓。
+        _swatch_qss = lambda c: f"background-color: {c}; border: 1px solid #999"
+        for i, (_path, display) in enumerate(dock.compare_files):
+            swatch = QPushButton()
+            swatch.setObjectName(f"swatch_{i}")
+            swatch.setFixedSize(30, 20)
+
+            def pick(checked=False, display=display, swatch=swatch, i=i):
+                initial = staged.get(display) or _curve_color(palette, i)
+                picked = QColorDialog.getColor(
+                    QColor(initial), window, f"选择 {display} 的颜色")
+                if picked.isValid():
+                    staged[display] = picked.name()
+                    swatch.setStyleSheet(_swatch_qss(picked.name()))
+
+            swatch.clicked.connect(pick)
+            swatch.setStyleSheet(_swatch_qss(
+                staged.get(display) or _curve_color(palette, i)))
+            swatches[i] = swatch
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.addWidget(QLabel(display), 1)
+            row_lay.addWidget(swatch)
+            color_form.addRow(row)
+
+        def clear_colors():
+            staged.clear()
+            for i, swatch in swatches.items():
+                swatch.setStyleSheet(_swatch_qss(_curve_color(palette, i)))
+
+        clear_btn = QPushButton("恢复默认配色")
+        clear_btn.setObjectName("clear_colors_btn")
+        clear_btn.clicked.connect(clear_colors)
+        color_form.addRow("", clear_btn)
+        root.addWidget(color_box)
+        dlg._color_picks = staged
+
     btn_row = QHBoxLayout()
     reset = QPushButton("恢复默认")
     cancel = QPushButton("取消")
@@ -198,5 +255,16 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
     fig.set_layout_engine(None)   # 边距由用户接管：tight layout 退场
     fig.subplots_adjust(left=f["left"].value(), bottom=f["bottom"].value(),
                         right=f["right"].value(), top=f["top"].value())
+    picks = getattr(dlg, "_color_picks", None)
+    if picks is not None:
+        # 逐条自定义色：点 [应用] 才真正写回 dock，随后按新色重画
+        # 整张对比图（_redraw_compare 自带重画与记账；惰性导入防
+        # 模块环——plot_views 反向 import 本模块）
+        if picks:
+            dock.curve_colors = dict(picks)
+        elif hasattr(dock, "curve_colors"):
+            del dock.curve_colors
+        from xrd_toolkit.gui.plot_views import _redraw_compare
+        _redraw_compare(window, dock.panel_key)
     _content(dock).draw()
     _log(window, f"已应用 Customize 设置：{dock.windowTitle()}")
