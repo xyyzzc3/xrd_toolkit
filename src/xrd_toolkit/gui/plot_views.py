@@ -721,15 +721,16 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
                        origin="lower")
         ax.set_aspect("equal")
         # 颜色条（作业规格"带颜色条"）：ax.clear() 不清 colorbar（它是
-        # 图上的另一个坐标系），重画先拆旧的再加新的——否则每画一次
-        # 叠一条。挂在 dock 上：关面板随 figure 一起销毁，不用清理
-        old_cb = getattr(dock, "_colorbar_2d", None)
-        if old_cb is not None:
-            try:
-                old_cb.remove()
-            except Exception:
-                pass
-        dock._colorbar_2d = ax.figure.colorbar(im, ax=ax)
+        # 图上的另一个坐标系）。只建一次、之后 update_normal 复用
+        # ——remove+重建每做一次，fig.colorbar 就把主坐标轴再让出
+        # 20% 宽度且 remove 不退还（累积缩小，教训 13）；复用时
+        # 几何只算一次，数据/norm/色图跟着新 im 走。挂在 dock 上：
+        # 关面板随 figure 一起销毁，不用清理
+        cb = getattr(dock, "_colorbar_2d", None)
+        if cb is None:
+            dock._colorbar_2d = ax.figure.colorbar(im, ax=ax)
+        else:
+            cb.update_normal(im)
         dock._colorbar_2d.ax.tick_params(labelsize=7)
         cy, cx = window.config["beam_center"]
         ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
@@ -1859,13 +1860,13 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
                                           -0.5, n - 0.5])
         ax.set_yticks(range(n))
         ax.set_yticklabels(stems, fontsize=7)
-        old_cb = getattr(dock, "_heat_colorbar", None)
-        if old_cb is not None:
-            try:
-                old_cb.remove()
-            except Exception:
-                pass
-        dock._heat_colorbar = ax.figure.colorbar(im, ax=ax)
+        # 颜色条同 2D：只建一次、之后 update_normal 复用（remove+
+        # 重建会让坐标轴每次再让 20% 宽度，教训 13）
+        cb = getattr(dock, "_heat_colorbar", None)
+        if cb is None:
+            dock._heat_colorbar = ax.figure.colorbar(im, ax=ax)
+        else:
+            cb.update_normal(im)
         dock._heat_colorbar.ax.tick_params(labelsize=7)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _content(dock).draw()

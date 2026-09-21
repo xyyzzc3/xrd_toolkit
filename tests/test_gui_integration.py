@@ -6104,6 +6104,28 @@ class TestHeatmap(unittest.TestCase):
         finally:
             w.close()
 
+    def test_heatmap_repeated_apply_does_not_shrink_axes(self):
+        """图像 [应用] 反复重画：主坐标轴宽度不缩（教训 13——
+        remove+重建颜色条每次让 20% 宽度且不退还；颜色条改为
+        update_normal 复用后几何只算一次）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            dock = self._heat_dock(w)
+            ax = gui_app._content(dock).axes_heat
+            widths = []
+            for _ in range(3):
+                w.findChild(QPushButton, "apply_image_btn").click()
+                widths.append(float(ax.get_position().width))
+            self.assertLess(max(widths) - min(widths), 1e-3,
+                            f"热图宽度在反复[应用]后缩小：{widths}")
+        finally:
+            w.close()
+
     def test_heatmap_data_apply_reintegrates_all(self):
         """数据 [应用]：改了数据参数 → 全部文件重新积分（无视缓存）。"""
         w = create_window()
@@ -6123,7 +6145,7 @@ class TestHeatmap(unittest.TestCase):
 
 class Test2DColorbar(unittest.TestCase):
     """2D 视图带颜色条（作业规格"带颜色条"）：每画一次恰好一条，
-    重画先拆旧的不叠罗汉。"""
+    颜色条只建一次、重画 update_normal 复用（教训 13）。"""
 
     def test_2d_has_single_colorbar_and_redraw_does_not_stack(self):
         w = create_window()
@@ -6142,6 +6164,29 @@ class Test2DColorbar(unittest.TestCase):
             w.findChild(QPushButton, "apply_image_btn").click()
             self.assertEqual(len(fig.axes), 2)
             self.assertIsNotNone(dock._colorbar_2d)
+        finally:
+            w.close()
+
+    def test_2d_repeated_apply_does_not_shrink_axes(self):
+        """图像 [应用] 反复重画：主坐标轴宽度不缩（与热图同病，
+        教训 13——remove+重建颜色条每次让 20% 宽度且不退还）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.ones((64, 64)) * 5.0):
+                w.add_files(["data/fake_a.tif"])
+                _open_view(w, "2D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
+                                    "last_image", None) is not None))
+            dock = _dock(w, "2D", "data/fake_a.tif")
+            ax = gui_app._content(dock).axes_2d
+            widths = []
+            for _ in range(3):
+                w.findChild(QPushButton, "apply_image_btn").click()
+                widths.append(float(ax.get_position().width))
+            self.assertLess(max(widths) - min(widths), 1e-3,
+                            f"2D 宽度在反复[应用]后缩小：{widths}")
         finally:
             w.close()
 
