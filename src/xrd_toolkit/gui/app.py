@@ -79,13 +79,14 @@ from xrd_toolkit.gui.panels import (
     _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
-    _apply_config, _collect_geometry, _content, _log,
+    _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _ask_save_options,
+    _apply_image_params, _apply_params, _ask_save_options, _bg_curve,
     _compute_integration, _draw_1d, _hover_leave, _hover_motion,
     _magnifier_on, _open_plot_panel, _pan_motion, _pan_press,
-    _pan_release, _plot_compare, _plot_heatmap, _plot_view, _wheel_zoom)
+    _pan_release, _plot_compare, _plot_heatmap, _plot_view, _refresh_bg,
+    _spawn_task, _wheel_zoom)
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -563,6 +564,165 @@ def _on_file_selected(window: QMainWindow, current, previous) -> None:
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
 
+def _bg_edit_dock(window: QMainWindow):
+    """"背景扣除"里锚点操作作用的面板：优先当前编辑对象（若是 1D 面板），
+    否则第一个开着的 1D 面板；都没有就 None。
+
+    锚点在 1D 图上点选（那里能看到单条曲线的真实形状），但作用范围是
+    **文件**——对比/热图/瀑布里同一条曲线也跟着扣。
+    """
+    key = window.focus_panel
+    if key is not None and key.split("|", 1)[0] == "1D":
+        dock = window.plot_docks.get(key)
+        if dock is not None:
+            return dock
+    for k, d in window.plot_docks.items():
+        if k.split("|", 1)[0] == "1D":
+            return d
+    return None
+
+
+def _bg_anchor_file(window: QMainWindow):
+    """锚点当前作用在哪个文件上（路径，供显示/日志）。"""
+    dock = _bg_edit_dock(window)
+    return getattr(dock, "panel_file", None) if dock is not None else None
+
+
+def _bg_anchor_count(window: QMainWindow) -> int:
+    """当前作用文件的锚点数（给参数坞那个计数标签用）。"""
+    path = _bg_anchor_file(window)
+    if path is None:
+        return 0
+    return len((getattr(window, "bg_anchors", None) or {}).get(str(path), []))
+
+
+def _update_bg_count(window: QMainWindow) -> None:
+    """刷新锚点计数标签。"""
+    lbl = getattr(window, "bg_count_lbl", None)
+    if lbl is None:
+        return
+    n = _bg_anchor_count(window)
+    # 没有可作用的 1D 面板时留空（此时数字对用户没有意义）
+    lbl.setText(f"{n} 点" if _bg_anchor_file(window) is not None else "")
+
+
+def _sync_bg_rows(window: QMainWindow) -> None:
+    """按背景扣除模式收起/放出专用行，并同步按钮可用状态。
+
+    三个模式各有一行专用控件（空扫：选图+归一化；自动：窗口宽度；
+    锚点：拾取+清空+计数），只放出当前模式那一行——参数坞窄，全部
+    摊开既挤又让人不知道该填哪个。隐藏的行不占布局高度，也不计入
+    坞的最小宽度（所以本函数只允许在宽度量完之后调用）。
+    """
+    rows = getattr(window, "bg_rows", None)
+    if not rows:
+        return
+    mode = window.params["背景扣除模式"].currentData()
+    for name, row in rows.items():
+        row.setVisible(name == mode)
+    # "显示原始曲线对比"只在真的在扣的时候才有意义
+    window.params["背景显示原始"].setEnabled(mode != "off")
+    window.params["负值截断为 0"].setEnabled(mode != "off")
+    if hasattr(window, "bg_pick_btn"):
+        window.bg_pick_btn.setEnabled(mode == "anchor")
+        window.bg_clear_btn.setEnabled(mode == "anchor")
+        if mode != "anchor" and window.bg_pick_btn.isChecked():
+            window.bg_pick_btn.setChecked(False)   # 离开锚点模式即停止拾取
+    _update_bg_count(window)
+
+
+def _on_bg_mode(window: QMainWindow) -> None:
+    """背景扣除模式切换：调好专用行的显隐、立刻重画、记一条日志。
+
+    模式是显示参数（不重新积分），所以走 _refresh_bg 实时重画——
+    与其余显示参数"等 [应用]"不同，理由见 _refresh_bg 的说明。
+    """
+    _sync_bg_rows(window)
+    mode = window.params["背景扣除模式"].currentData()
+    labels = {"off": "关闭", "blank": "空扫相减", "auto": "自动基线",
+              "anchor": "手动锚点"}
+    if mode == "blank" and getattr(window, "bg_blank", None) is None:
+        _log(window, "背景扣除：空扫相减——还没选空扫图，先点 [选择空扫图]")
+    elif mode == "anchor" and _bg_anchor_count(window) == 0:
+        _log(window, "背景扣除：手动锚点——点 [拾取锚点] 后在 1D 图上"
+                     "左键点选只有背景的位置")
+    else:
+        _log(window, f"背景扣除：{labels.get(mode, mode)}")
+    _refresh_bg(window)
+
+
+def _on_pick_anchor(window: QMainWindow, on: bool) -> None:
+    """[拾取锚点] 开关：打开后在 1D 面板上点选锚点。
+
+    点选逻辑在 plot_views 的 _anchor_press / _anchor_release（按 5 px
+    位移阈值区分"点击"与"拖拽平移"）。
+    """
+    if on:
+        dock = _bg_edit_dock(window)
+        name = Path(dock.panel_file).name if dock is not None else "（无 1D 面板）"
+        _log(window, f"开始拾取锚点：在 1D 图上左键点选纯背景位置"
+                     f"（对象 {name}，再点已有关键点可删除）")
+    else:
+        _log(window, "已停止拾取锚点")
+
+
+def _on_clear_anchors(window: QMainWindow) -> None:
+    """[清空锚点]：清掉当前作用文件的全部锚点并立刻重画。"""
+    path = _bg_anchor_file(window)
+    if path is None:
+        _log(window, "清空锚点：先打开一个 1D 面板")
+        return
+    # 不能写 `getattr(...) or {}`：空 dict 是 falsy，`or` 会换成临时新
+    # 字典，pop 掉的是临时的（同 _anchor_release 的坑）
+    anchors = getattr(window, "bg_anchors", None)
+    if anchors is None:
+        anchors = window.bg_anchors = {}
+    n = len(anchors.get(str(path), []))
+    if not n:
+        _log(window, f"清空锚点：{Path(path).name} 本来就没有锚点")
+        return
+    anchors.pop(str(path), None)
+    _update_bg_count(window)
+    _refresh_bg(window)
+    _log(window, f"已清空 {Path(path).name} 的 {n} 个锚点")
+
+
+def _on_choose_blank(window: QMainWindow) -> None:
+    """[选择空扫图]：挑一张空扫图 → 后台按当前几何积分 → 存进窗级缓存。
+
+    空扫只需积分一次（三种模式共用曲线层扣除，见 services/background.py
+    关于积分线性的说明），之后切文件/调参数都不再重算它。
+    几何取参数坞当前选中的配置——空扫必须与样品同几何，否则"先扣图再
+    积分 ≡ 先积分再扣"的线性前提不成立。
+    """
+    path_str, _ = QFileDialog.getOpenFileName(
+        window, "选择空扫图（没有样品的空白测量）", "", FILE_FILTER)
+    if not path_str:
+        return
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    key = f"空扫|{path_str}"   # 独立键：不占 1D 面板缓存
+
+    def done(window_, key_, task, result):
+        tth, intensity = result
+        window.bg_blank = {"path": path_str, "tth": tth,
+                           "intensity": intensity,
+                           "geom_sig": _bg_geom_sig(geom)}
+        # 换了空扫图，两条提示重新计起
+        window._bg_geom_warned = False
+        window._bg_cover_warned = False
+        _refresh_bg(window)
+        _log(window, f"空扫积分完成：{Path(path_str).name}"
+                     f"（{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）")
+
+    def error(msg):
+        _log(window, f"空扫积分失败：{Path(path_str).name} — {msg}")
+
+    _spawn_task(window, key, _compute_integration, (path_str, geom, npt),
+                done, error)
+    _log(window, f"开始积分空扫图：{Path(path_str).name}")
+
+
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
     """参数坞：顶部固定"编辑对象"名，下面上下对半分两块（QGroupBox）
     ——数据参数（上）/ 图像参数（下），中间分隔条可拖。
@@ -957,6 +1117,153 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["对比堆叠"] = cmp_stack
     form2.addRow(cmp_stack)
 
+    # ── 背景扣除（小节）：1D/对比/瀑布/热图四条曲线路径共用 ──
+    # 三种模式 = 对"背景长什么样"的三个不同假设（物理依据见
+    # services/background.py 的模块头注释）：
+    #   空扫相减 = 实测：把"没有样品的那个世界"拍一遍逐点减掉
+    #   自动基线 = 算法猜：假设背景比峰宽且平滑（滑动窗估计）
+    #   手动锚点 = 人判断：用户指出"这几处是纯背景"
+    # 锚点列表与空扫曲线不是快照参数（快照只认 QCheckBox/QComboBox/
+    # spinbox 三种控件），放窗级属性 window.bg_anchors / window.bg_blank。
+    add_caption(form2, "背景扣除")
+
+    bg_mode = QComboBox()
+    for text, data in (("关闭", "off"),
+                       ("空扫相减", "blank"),
+                       ("自动基线（推荐）", "auto"),
+                       ("手动锚点", "anchor")):
+        bg_mode.addItem(text, data)
+    bg_mode.setToolTip(
+        "背景 = 不含样品结构信息的加性信号（空气散射、非晶漫散射、"
+        "荧光、暗电流、直射束光晕）。\n"
+        "空扫相减 = 实测：先拍一张没有样品的图，从样品图里逐点减掉"
+        "（最干净，但必须真有空扫、曝光/几何一致）。\n"
+        "自动基线 = 算法猜：假设背景比峰宽且平滑，按窗口宽度估计"
+        "（一键，无需额外数据）。\n"
+        "手动锚点 = 人判断：在图上点几个只有背景的位置连成底线"
+        "（最可控，适合宽鼓包样品）。")
+    window.params["背景扣除模式"] = bg_mode
+    form2.addRow(bg_mode)
+
+    def bg_group(rows):
+        """把若干控件行打包成一个可整体显隐的竖直容器。
+
+        三个模式各有一个容器（空扫/自动/锚点），按模式只放出一个——
+        参数坞窄，全部摊开既挤又让人不知道该填哪个。
+        """
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        for row in rows:
+            lay.addWidget(row)
+        return box
+
+    def bg_row(*widgets):
+        """一行横排（窄排版：内边距 0、间距 2）。"""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        for w, stretch in widgets:
+            lay.addWidget(w, stretch)
+        return row
+
+    # 空扫模式：选图 + 归一化系数
+    bg_blank_btn = QPushButton("选择空扫图")
+    bg_blank_btn.setObjectName("bg_blank_btn")
+    bg_blank_btn.setToolTip("挑一张没有样品的空扫/空白图（同一几何、同一曝光）")
+    bg_blank_btn.setStyleSheet("padding: 2px 5px;")
+    bg_scale_box = QDoubleSpinBox()
+    bg_scale_box.setRange(0.01, 100.0)
+    bg_scale_box.setDecimals(2)
+    bg_scale_box.setSingleStep(0.1)
+    bg_scale_box.setValue(1.0)
+    bg_scale_box.setMaximumWidth(84)
+    bg_scale_box.setToolTip("空扫归一化系数：样品与空扫的曝光时间/束流不一致"
+                            "时填比值（样品÷空扫），一致就保持 1.0")
+    window.params["空扫归一化"] = bg_scale_box
+    blank_row = bg_group([bg_row((bg_blank_btn, 1), (bg_scale_box, 1))])
+    form2.addRow(blank_row)
+
+    # 自动模式：窗口宽度（唯一的旋钮）
+    bg_window_box = QDoubleSpinBox()
+    bg_window_box.setRange(0.1, 10.0)
+    bg_window_box.setDecimals(2)
+    bg_window_box.setSingleStep(0.1)
+    bg_window_box.setValue(1.0)
+    bg_window_box.setMaximumWidth(84)
+    bg_window_box.setToolTip("窗口宽度：多宽的一段算\"背景\"而不是\"峰\"。"
+                             "取最宽峰宽的 3~10 倍（本数据峰宽约 0.1~0.3°，"
+                             "默认 1.0°）；取小了峰会被当背景扣掉，取大了"
+                             "跟不上背景自身的起伏")
+    window.params["背景窗口 (°)"] = bg_window_box
+    auto_row = bg_group([bg_row((bg_window_box, 1), (QWidget(), 1))])
+    form2.addRow(auto_row)
+
+    # 锚点模式：拾取开关 + 清空 + 计数；下一行是拟合方式
+    bg_pick_btn = QPushButton("拾取锚点")
+    bg_pick_btn.setObjectName("bg_pick_btn")
+    bg_pick_btn.setCheckable(True)
+    bg_pick_btn.setToolTip("打开后在 1D 图上左键点选\"只有背景\"的位置；"
+                           "再点已有关键点即可删除。锚点按文件各记各的")
+    bg_clear_btn = QPushButton("清空锚点")
+    bg_clear_btn.setObjectName("bg_clear_btn")
+    bg_clear_btn.setToolTip("清空当前 1D 面板所对应文件的全部锚点")
+    for _b in (bg_pick_btn, bg_clear_btn):
+        _b.setStyleSheet("padding: 2px 5px;")
+    bg_count_lbl = QLabel("")
+    bg_count_lbl.setStyleSheet("color: gray;")
+    bg_fit_combo = QComboBox()
+    for text, data in (("折线（直线连锚点）", "linear"),
+                       ("样条（平滑过渡）", "spline")):
+        bg_fit_combo.addItem(text, data)
+    bg_fit_combo.setToolTip("折线 = 相邻锚点直线相连（实验室惯例、最透明）；"
+                            "样条 = 自然三次样条过点（更平滑，至少 3 个锚点，"
+                            "不足时自动退回折线）")
+    window.params["锚点拟合方式"] = bg_fit_combo
+    anchor_row = bg_group([
+        bg_row((bg_pick_btn, 1), (bg_clear_btn, 1), (bg_count_lbl, 0)),
+        bg_row((bg_fit_combo, 1)),
+    ])
+    form2.addRow(anchor_row)
+
+    bg_show_raw = QCheckBox("显示原始曲线对比")
+    bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"
+                           "（点线）一起画出来，看清扣掉了什么。\n"
+                           "只作用于 1D 单曲线面板——对比/瀑布/热图里多条"
+                           "曲线叠在一起，再叠一层原始线会看不清")
+    window.params["背景显示原始"] = bg_show_raw
+    form2.addRow(bg_show_raw)
+
+    bg_clip = QCheckBox("负值截断为 0")
+    bg_clip.setToolTip("默认不截断：背景是从两侧对称估的，扣完噪声摆到 0 "
+                       "以下是正常的（噪声地板露出），强行截断会把噪声平均"
+                       "抬高约 1σ。只在出图需要非负值时打开")
+    window.params["负值截断为 0"] = bg_clip
+    form2.addRow(bg_clip)
+
+    # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
+    window.bg_rows = {"blank": blank_row, "auto": auto_row,
+                      "anchor": anchor_row}
+    window.bg_blank_btn = bg_blank_btn
+    window.bg_pick_btn = bg_pick_btn
+    window.bg_clear_btn = bg_clear_btn
+    window.bg_count_lbl = bg_count_lbl
+    bg_mode.currentIndexChanged.connect(lambda _=0: _on_bg_mode(window))
+    bg_window_box.valueChanged.connect(lambda _=0.0: _refresh_bg(window))
+    window.params["空扫归一化"].valueChanged.connect(
+        lambda _=0.0: _refresh_bg(window))
+    bg_show_raw.toggled.connect(lambda _=False: _refresh_bg(window))
+    bg_clip.toggled.connect(lambda _=False: _refresh_bg(window))
+    bg_fit_combo.currentIndexChanged.connect(lambda _=0: _refresh_bg(window))
+    bg_blank_btn.clicked.connect(lambda: _on_choose_blank(window))
+    bg_pick_btn.toggled.connect(lambda on: _on_pick_anchor(window, on))
+    bg_clear_btn.clicked.connect(lambda: _on_clear_anchors(window))
+    # 注意：_sync_bg_rows（按模式收起无用行）**不在这里调**——坞的最小
+    # 宽度在本函数末尾按 minimumSizeHint 算一次，隐藏的行不计入尺寸；
+    # 先收起再量会把宽度量小、切模式时被裁。所以放到末尾、量完之后。
+
     # ── 热图显示（小节）：批量热图的显示参数 ──
     # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比
     # 同款语义（热图没有"指定文件"模式）；对数强度 = 弱峰抬起来
@@ -1032,6 +1339,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "热图自动范围": True,
         "热图下限": 1.0,
         "热图上限": 100000.0,
+        "背景扣除模式": "off",
+        "背景窗口 (°)": 1.0,
+        "空扫归一化": 1.0,
+        "锚点拟合方式": "linear",
+        "背景显示原始": True,
+        "负值截断为 0": False,
     }
     btn_reset_img = QPushButton("恢复默认")
     btn_reset_img.setObjectName("reset_image_btn")
@@ -1060,6 +1373,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["热图自动范围"].setChecked(img_defaults["热图自动范围"])
         if window.params["热图自动范围"].isChecked():
             _apply_auto_heatlim(window)   # 已勾着 toggled 不响，手动重算填回
+        # 背景扣除：模式回"关闭"即回到不扣（锚点与空扫图属于"用户挑的
+        # 数据"不是参数，留着手动清理——[清空锚点] / 重选空扫图）
+        window.params["背景扣除模式"].setCurrentIndex(
+            window.params["背景扣除模式"].findData(
+                img_defaults["背景扣除模式"]))
+        window.params["背景窗口 (°)"].setValue(img_defaults["背景窗口 (°)"])
+        window.params["空扫归一化"].setValue(img_defaults["空扫归一化"])
+        window.params["锚点拟合方式"].setCurrentIndex(
+            window.params["锚点拟合方式"].findData(
+                img_defaults["锚点拟合方式"]))
+        window.params["背景显示原始"].setChecked(img_defaults["背景显示原始"])
+        window.params["负值截断为 0"].setChecked(img_defaults["负值截断为 0"])
+        _sync_bg_rows(window)
         # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉
         # 显式视图值（None = 跟随），输入框显示回积分范围
         dock = window.plot_docks.get(window.focus_panel)
@@ -1115,6 +1441,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     dock.setMinimumHeight(
         splitter.minimumSizeHint().height()
         + window.focus_label.minimumSizeHint().height() + 4)
+
+    # 宽度量完再按当前模式收起"背景扣除"的无用行（隐藏的行不计入
+    # minimumSizeHint，先收再量会把坞宽量小、切模式时被裁）
+    _sync_bg_rows(window)
 
     dock.setWidget(content)
     window.addDockWidget(Qt.RightDockWidgetArea, dock)
@@ -1520,18 +1850,25 @@ def _delete_config(window: QMainWindow) -> None:
                  f"已切回默认条目 {config.DEFAULT_CONFIG}")
 
 
-def _checked_1d_results(window: QMainWindow) -> list:
+def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
+                        quiet: bool = False) -> list:
     """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity), ...]。
 
     只认已经算好的 1D 面板缓存（last_tth / last_intensity），按文件
     列表顺序返回；勾选里没算过的文件跳过并记日志（提示先点 [1D]
     出图）。重复文件改名加入的条目按显示名找各自面板。
+
+    want_bg=True 时扣掉背景（锚点按文件路径取，与画图走同一个
+    _bg_curve——导出与屏幕同一个口径）；模式关闭时原样返回。
+    quiet=True 不记日志：导出要拿数量去填弹窗标题，之后再正式收一遍，
+    两遍都记就会把"跳过 X"打两次。
     """
     checked = [window.file_list.item(i)
                for i in range(window.file_list.count())
                if window.file_list.item(i).checkState() == Qt.Checked]
     if not checked:
-        _log(window, "没有选中的文件")
+        if not quiet:
+            _log(window, "没有选中的文件")
         return []
     out = []
     for item in checked:
@@ -1540,13 +1877,17 @@ def _checked_1d_results(window: QMainWindow) -> list:
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
             if dock is not None and getattr(dock, "last_tth", None) is not None:
-                out.append((Path(path).stem, dock.last_tth,
-                            dock.last_intensity))
+                tth, intensity = dock.last_tth, dock.last_intensity
+                if want_bg:
+                    _, intensity, _ = _bg_curve(window, dock, path, tth,
+                                                intensity)
+                out.append((Path(path).stem, tth, intensity))
                 break
-        else:
-            _log(window, f"跳过 {display}：还没有 1D 结果"
-                         f"（先点 [1D] 出图）")
-    if not out:
+        else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
+            if not quiet:
+                _log(window, f"跳过 {display}：还没有 1D 结果"
+                             f"（先点 [1D] 出图）")
+    if not out and not quiet:
         _log(window, "没有可导出的 1D 结果")
     return out
 
@@ -1587,6 +1928,15 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     csv_check.setObjectName("export_csv_check")
     csv_check.setChecked(True)   # 默认顺手出一张总表
     lay.addRow("", csv_check)
+    # 扣背景的成果要能带走：默认关 = 导原始曲线（数据出口不该被显示
+    # 参数悄悄改变——这是显示层的约定）
+    bg_check = QCheckBox("导出扣除背景后的曲线")
+    bg_check.setObjectName("export_bg_check")
+    bg_check.setChecked(False)
+    bg_check.setToolTip("按当前\"背景扣除\"设置（模式/窗口/锚点/空扫）"
+                        "导出扣完背景的曲线；不勾 = 导出原始积分结果。"
+                        "扣完可能出现负值（噪声地板），这是正常的")
+    lay.addRow("", bg_check)
     btn_row = QWidget()
     btn_lay = QHBoxLayout(btn_row)
     btn_lay.setContentsMargins(0, 0, 0, 0)
@@ -1601,7 +1951,7 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     if dlg.exec() != QDialog.Accepted:
         return None
     return {"dir": Path(dir_edit.text()), "suffix": suffix_combo.currentData(),
-            "csv": csv_check.isChecked()}
+            "csv": csv_check.isChecked(), "bg": bg_check.isChecked()}
 
 
 def _write_export(target: Path, tth, intensity) -> None:
@@ -1692,13 +2042,24 @@ def _run_export(window: QMainWindow) -> None:
     失败只记日志、不中断批处理；没算过 1D 的文件跳过并提示先点
     [1D] 出图。
     """
-    results = _checked_1d_results(window)
-    if not results:
-        return   # 原因（没勾选/没结果）已在 _checked_1d_results 里记日志
-    fields = _build_export_dialog(window, len(results))
+    # 先数一遍（确定"扣不扣背景"要等弹窗，但弹窗标题要个数量）——这一遍
+    # 静默：否则"跳过 X：还没有 1D 结果"会在下面第二遍里再打一次
+    n = len(_checked_1d_results(window, quiet=True))
+    if not n:
+        _checked_1d_results(window)   # 让跳过/空结果的原因照常记进日志
+        return
+    fields = _build_export_dialog(window, n)
     if fields is None:
         _log(window, "已取消导出")
         return
+    want_bg = bool(fields.get("bg"))
+    results = _checked_1d_results(window, want_bg=want_bg)
+    if not results:
+        return
+    if want_bg:
+        # 不报具体模式：扣除是**按面板快照**算的（每张图各记各的），
+        # 而此处读到的控件值只反映当前编辑对象
+        _log(window, "导出：按各面板自己的背景扣除设置扣背景")
     outdir, suffix = fields["dir"], fields["suffix"]
     ok = 0
     for stem, tth, intensity in results:
@@ -1752,6 +2113,19 @@ def create_window() -> QMainWindow:
     window._image_cache = {}
     # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
     window.focus_panel = None
+
+    # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
+    # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：
+    # bg_anchors = {文件路径: [(2θ, 强度), ...]}，锚点按文件各记各的；
+    # bg_blank = 空扫曲线 {"path", "tth", "intensity"}，整批实验共用一条
+    window.bg_anchors = {}
+    window.bg_blank = None
+    # 锚点计数标签的刷新入口（plot_views 里点选锚点后回调，避免
+    # plot_views 反向 import app）
+    window._bg_count_refresh = _update_bg_count
+    # 背景扣除专用行的显隐同步入口（panel_state 回放面板快照后回调，
+    # 同样避免反向 import）
+    window._bg_rows_sync = _sync_bg_rows
 
     _build_center(window)
     # 点任何面板窗口内任何位置都选中该面板（应用级过滤器，原因见

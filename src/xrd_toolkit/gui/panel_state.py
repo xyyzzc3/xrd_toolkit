@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QMainWindow, QMdiSubWindow, QWidget)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
+from xrd_toolkit.services.background import (
+    compute_baseline, subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
 
 
@@ -99,6 +101,17 @@ _DISPLAY_DEFAULTS = {
     "热图自动范围": True,
     "热图下限": 1.0,
     "热图上限": 100000.0,
+    # 背景扣除（1D/对比/瀑布/热图四条曲线路径共用；2D 是原始图、剖面是
+    # 沿线的像素强度，都不参与）。模式 off 关闭 / blank 空扫相减 /
+    # auto 自动基线 / anchor 手动锚点；锚点列表与空扫曲线不是参数，
+    # 放窗级属性（window.bg_anchors / window.bg_blank）
+    "背景扣除模式": "off",
+    "背景窗口 (°)": 1.0,
+    "空扫归一化": 1.0,
+    "锚点拟合方式": "linear",
+    # 显示原始曲线对比（实时预览"扣前 vs 扣后"）与负值截断
+    "背景显示原始": True,
+    "负值截断为 0": False,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 
@@ -190,6 +203,23 @@ def _panel_param(window: QMainWindow, dock, name: str,
 
 
 def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
+    """把一份面板快照回放进参数坞控件，期间挂 _param_replaying 旗标。
+
+    旗标的作用：回放是**程序**在写控件，而每个背景扣除控件都连着
+    _refresh_bg（实时预览）。不挂旗标的话回放途中的 setValue 会一路触发
+    _refresh_bg → _display_snapshot，把"正回放到一半的控件状态"当成用户
+    的设置写进当前面板的快照——切一次焦点就把别的面板的显示参数（实测是
+    注册在背景组之后的 热图色图/热图归一化/热图对数/热图范围 这几项）
+    串到本面板上，而且不可逆。详见 _load_params_snapshot_body。
+    """
+    window._param_replaying = True
+    try:
+        _load_params_snapshot_body(window, snap)
+    finally:
+        window._param_replaying = False
+
+
+def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
     """把参数快照填回参数面板（只展示不计算）。
 
     顺序讲究：
@@ -290,6 +320,12 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
         mode = window.params.get("对比归一化")
         if mode is not None:
             norm_target.setEnabled(mode.currentData() == "file")
+    # 背景扣除的专用行按回放后的模式收起/放出（模式是每张图各记各的：
+    # 切面板时控件值跟着变，行也得跟着变）。app 侧的函数经窗级回调
+    # 调用，避免 panel_state 反向 import app
+    bg_sync = getattr(window, "_bg_rows_sync", None)
+    if bg_sync is not None:
+        bg_sync(window)
 
 
 def _set_focus(window: QMainWindow, key: str, title: str) -> None:
@@ -416,6 +452,80 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
                          f"恢复占位默认值")
 
 
+# 决定"先扣图再积分 ≡ 先积分再扣"能否成立的几何量（2θ 范围与点数不在
+# 其中：网格不一致由 interp_onto_grid 重插值处理，几何不一致没法补）
+_BG_GEOM_KEYS = ("pixel_size_m", "wavelength_m", "dist_m", "poni1_m",
+                 "poni2_m", "rot1_deg", "rot2_deg")
+
+
+def _bg_geom_sig(geom) -> tuple:
+    """几何指纹：只取真正影响积分的几何量，浮点取整避免表示误差误报。"""
+    return tuple(round(float(geom.get(k, 0.0)), 12) for k in _BG_GEOM_KEYS)
+
+
+def _bg_params(window: QMainWindow, dock, path) -> dict:
+    """该面板当前的背景扣除参数（显示参数 + 窗级数据 → 纯函数层字典）。
+
+    锚点按文件存（window.bg_anchors[str(path)]）——一套锚点套到不同曲线
+    上是误导：每条曲线的背景形状不一样。空扫是整批实验的属性，所以放
+    window.bg_blank（窗级），天然免疫面板弹出/收回（panels.py 的
+    _PANEL_ATTRS 弹出白名单只搬少量属性，dock 上的新属性会丢）。
+    """
+    return {
+        "mode": _panel_param(window, dock, "背景扣除模式", "off"),
+        "window_deg": _panel_param(window, dock, "背景窗口 (°)", 1.0),
+        "blank_scale": _panel_param(window, dock, "空扫归一化", 1.0),
+        "anchors": (getattr(window, "bg_anchors", None) or {}).get(str(path),
+                                                                  []),
+        "anchor_method": _panel_param(window, dock, "锚点拟合方式", "linear"),
+    }
+
+
+def _bg_curve(window: QMainWindow, dock, path, tth, intensity):
+    """按面板显示参数扣背景，返回 (tth, 扣后强度, 基线或 None)。
+
+    模式关闭（或选了空扫但还没积分）时原样返回、基线为 None——调用方
+    据此决定要不要画"原始/基线"辅助线。**缓存里的曲线永远不动**：扣除
+    只发生在绘制时，所以参数一变重画即可，不需要重新积分（实时预览的
+    前提，见 services/background.py 里关于积分线性的说明）。
+    path 可以是 None（拿不到路径的场景）→ 该曲线按无锚点处理。
+    """
+    params = _bg_params(window, dock, path)
+    blank = getattr(window, "bg_blank", None)
+    blank_curve = None
+    if params["mode"] == "blank" and blank is not None:
+        blank_curve = (blank["tth"], blank["intensity"])
+        # 几何不一致时"两图各自积分再相减"不再等价于"两图相减再积分"
+        # （前提是同一个 2θ 环带）。只在状态翻转时提示一次——本函数在
+        # 每次重画都会跑，每次记日志会刷屏
+        sig = blank.get("geom_sig")
+        bad_geom = (sig is not None
+                    and sig != _bg_geom_sig(_collect_geometry(window)))
+        if bad_geom != getattr(window, "_bg_geom_warned", False):
+            window._bg_geom_warned = bad_geom
+            if bad_geom:
+                _log(window, "背景扣除提示：空扫图与当前几何不一致"
+                             "（像素/波长/距离/束心/倾斜有变化），"
+                             "空扫应重新按相同几何积分")
+        # 空扫没覆盖到的 2θ 区间不扣（interp_onto_grid 在那里返回 0）——
+        # 用户在覆盖范围外看到"没扣"却没有任何提示，会以为功能坏了
+        b_tth = np.asarray(blank["tth"], dtype=float)
+        uncovered = (b_tth.size > 0
+                     and (float(b_tth[0]) > float(tth[0]) + 1e-9
+                          or float(b_tth[-1]) < float(tth[-1]) - 1e-9))
+        if uncovered != getattr(window, "_bg_cover_warned", False):
+            window._bg_cover_warned = uncovered
+            if uncovered and b_tth.size:
+                _log(window, f"背景扣除提示：空扫只覆盖 "
+                             f"{b_tth[0]:.3f}~{b_tth[-1]:.3f}°，"
+                             f"该区间以外的数据未扣背景")
+    base = compute_baseline(tth, intensity, params, blank_curve=blank_curve)
+    if base is None:
+        return tth, intensity, None
+    clip = _panel_param(window, dock, "负值截断为 0", False)
+    return tth, subtract_background(intensity, base, clip_negative=clip), base
+
+
 def _compare_shown_curves(window: QMainWindow, dock) -> list:
     """对比面板实际画上去的曲线：[(tth, shown, display, i), ...]。
 
@@ -450,6 +560,10 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
         if display not in dock.compare_data:
             continue   # 这条还没算成（本函数只在全部到齐后调用）
         tth, raw = dock.compare_data[display]
+        # 背景扣除在归一化**之前**：先扣掉不含结构信息的加性背景，
+        # 再谈"相对强度"才有意义（归一化会把这个尺度信息抹掉）
+        _, raw, _ = _bg_curve(window, dock, path, tth,
+                              np.asarray(raw, dtype=float))
         raw_curves.append((tth, np.asarray(raw, dtype=float), display,
                            i, path))
     divisor = 1.0

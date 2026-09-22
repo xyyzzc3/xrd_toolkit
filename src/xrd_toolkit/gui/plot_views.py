@@ -54,7 +54,7 @@ from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _install_resize_grip, _PanelResizeFilter, _panel_extra,
     _PlotSubWindow, _settle, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
-    _auto_contrast_values, _auto_y_range, _collect_geometry,
+    _auto_contrast_values, _auto_y_range, _bg_curve, _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
     _display_snapshot, _heat_shown, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask
@@ -289,8 +289,11 @@ def _apply_image_params(window: QMainWindow) -> None:
             _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
                          f"计算结果（热图完成后再试）")
             return
-        tth, matrix, stems, _ = dock.heat_data
-        _draw_heatmap(window, dock, tth, matrix, stems)
+        data = _heat_data(window, dock)
+        if data is None:
+            return
+        dock.heat_data = data   # 与画的保持同一份：_apply_auto_heatlim 读它
+        _draw_heatmap(window, dock, data[0], data[1], data[2])
     else:
         _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
                      f"（{view} 视图尚未接线）")
@@ -504,15 +507,35 @@ def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
                      f"（0 点，无有效数据）{suffix}")
 
 
+# 背景扣除的辅助线（原始曲线/基线/锚点标记）统一带这个 gid 前缀。
+# 它们不是"曲线"，凡按线号/线列表做事的逻辑都要排除，否则会错位：
+# _snapshot_canvas 的快照、_restore_line_styles 的按序回填、
+# _hover_motion 的最近线选择、_draw_waterfall 的扇区名回贴。
+# 统一走 _data_lines(ax)，别直接迭代 ax.lines。
+_AUX_GID_PREFIX = "bg:"
+
+
+def _is_aux_line(line) -> bool:
+    """这条线是不是背景扣除的辅助线（不是数据曲线）。"""
+    gid = line.get_gid()
+    return isinstance(gid, str) and gid.startswith(_AUX_GID_PREFIX)
+
+
+def _data_lines(ax):
+    """坐标轴上真正的数据曲线（排除背景扣除的辅助线与悬停点）。"""
+    return [ln for ln in ax.lines if not _is_aux_line(ln)]
+
+
 def _snapshot_canvas(ax):
     """重画前把会被 ax.clear() 抹掉的状态拍下来（Customize 保护用）。
 
     返回 (标题, x 标签, y 标签, 纵轴刻度, [(图例名,颜色,线型,线宽,
-    标记), ...])。曲线只收有数据的（悬停圆点是空数据假线，不算）。
+    标记), ...])。曲线只收有数据的（悬停圆点是空数据假线，不算），
+    背景扣除的辅助线也不收——快照与回填都按线号索引，收进来会错位。
     """
     lines = [(line.get_label(), line.get_color(), line.get_linestyle(),
               line.get_linewidth(), line.get_marker())
-             for line in ax.lines if len(line.get_xdata()) > 0]
+             for line in _data_lines(ax) if len(line.get_xdata()) > 0]
     return (ax.get_title(), ax.get_xlabel(), ax.get_ylabel(),
             ax.get_yscale(), lines)
 
@@ -589,7 +612,7 @@ def _restore_line_styles(ax, old_lines, restore_color=True):
     curve_colors 里，画图时优先于色板（瀑布的 χ 渐变色是程序
     自定、与配色参数无关，仍走 restore_color=True）。
     """
-    for i, line in enumerate(ax.lines):
+    for i, line in enumerate(_data_lines(ax)):
         if i >= len(old_lines):
             break
         label, color, ls, lw, marker = old_lines[i]
@@ -613,6 +636,75 @@ def _refresh_home(dock):
         toolbar.update()
 
 
+def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
+                     path) -> None:
+    """画背景扣除的辅助线：基线（点线）+ 原始曲线（虚线灰）+ 锚点标记。
+
+    全部带 bg: 前缀的 gid——它们不是"曲线"，_snapshot_canvas /
+    _restore_line_styles / _hover_motion 都按线号或最近距离处理线条，
+    辅助线混进去会让样式回填错位、悬停点乱跳。
+    锚点直接从 window.bg_anchors 重建（不存 dock 属性），所以面板
+    弹出/收回、参数重画都不会丢。
+    """
+    ax.plot(tth, base, linestyle=":", lw=1.0, color="#1baf7a",
+            gid=_AUX_GID_PREFIX + "baseline", label="基线")
+    if _panel_param(window, dock, "背景显示原始", True):
+        ax.plot(tth, intensity, linestyle="--", lw=0.6, color="#999999",
+                gid=_AUX_GID_PREFIX + "raw", label="原始")
+    anchors = getattr(window, "bg_anchors", {}).get(str(path), [])
+    if anchors and _panel_param(window, dock, "背景扣除模式", "off") == "anchor":
+        xs = [p[0] for p in anchors]
+        ys = [p[1] for p in anchors]
+        ln = ax.plot(xs, ys, "o", ms=6, mfc="none", mec="#e34948", mew=1.4,
+                     gid=_AUX_GID_PREFIX + "anchor", label="锚点")[0]
+        ln.set_zorder(6)
+
+
+def _bg_path_of(dock):
+    """面板对应的文件路径（锚点按路径存；路径是唯一的，显示名可能重名）。"""
+    return getattr(dock, "panel_file", None)
+
+
+def _refresh_bg(window: QMainWindow) -> None:
+    """背景扣除参数/锚点一变就立刻重画（不重新积分）。
+
+    这是全代码库唯一的"改控件即重画"通路：其余显示参数都等图像组
+    [应用]。锚点点选本身是点击驱动的，每点一次都要 [应用] 不可接受，
+    所以背景这块走实时。基线估计是纯函数、毫秒级（实测 3000 点 1.4 ms），
+    直接拿缓存里的曲线重画一遍就够。
+
+    两步：① 把参数坞里背景控件的当前值推进**编辑对象**面板的快照
+    （与图像组 [应用] 同一个动作，见 _apply_image_params——显示参数按
+    面板各记各的，不推进去的话画图读到的还是旧快照）；② 按各面板
+    自己的快照重画全部曲线面板，编辑对象跟着控件实时走，其余面板
+    维持各自已设的显示参数。
+    """
+    dock = window.plot_docks.get(window.focus_panel)
+    # 回放面板快照期间不许回写快照：那一刻控件值正被程序逐个改写（切焦点
+    # 时 _load_params_snapshot 在跑），把"回放了一半"的控件状态当成用户的
+    # 设置写进当前面板，就会把上一个面板的显示参数串过来（实测串的是
+    # 热图色图等注册在背景组之后的几项），且不可逆。重画本身照做
+    if dock is not None and not getattr(window, "_param_replaying", False):
+        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+    for key, dock in list(window.plot_docks.items()):
+        view = key.split("|", 1)[0]
+        try:
+            if view == "1D" and getattr(dock, "last_tth", None) is not None:
+                _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
+            elif view == "对比":
+                _redraw_compare(window, key)
+            elif view == "瀑布" and getattr(dock, "last_waterfall", None):
+                tth, i2d, chi = dock.last_waterfall
+                _draw_waterfall(window, dock, tth, i2d, chi)
+            elif view == "热图" and getattr(dock, "heat_results", None):
+                data = _heat_data(window, dock)
+                if data is not None:
+                    dock.heat_data = data   # 同 _apply_image_params：与画的同源
+                    _draw_heatmap(window, dock, data[0], data[1], data[2])
+        except Exception as err:                      # 重画失败不该拖垮整窗
+            _log(window, f"背景扣除重画失败：{type(err).__name__}: {err}")
+
+
 def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     """在指定的 1D 面板画出积分曲线（只允许主线程调用）。
 
@@ -632,6 +724,12 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     # Customize 保护：clear 会把标题/标签/刻度/曲线全抹掉，先拍下现状
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    # 背景扣除：在**绘制时**扣，缓存里的原始曲线不动。重绑 intensity，
+    # 后面的纵轴自动范围（_auto_y_range）跟着用扣除后的数据——图与范围
+    # 必须同一个口径
+    path = _bg_path_of(dock)
+    raw = intensity          # 辅助线里的"原始曲线"要的是未扣的那份
+    tth, intensity, base = _bg_curve(window, dock, path, tth, intensity)
     window._setting_limits = True
     try:
         ax.clear()
@@ -639,6 +737,8 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         palette = _panel_param(window, dock, "曲线配色", "高对比")
         ax.plot(tth, intensity, color=_curve_color(palette, 0, single=True),
                 lw=0.8)
+        if base is not None:
+            _draw_bg_overlay(window, dock, ax, tth, raw, base, path)
         lo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         hi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
         if lo is None or hi is None or not lo < hi:
@@ -804,13 +904,32 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     window._setting_limits = True
     try:
         ax.clear()
+        raw2d = np.asarray(i2d, dtype=float)
+        # 背景扣除：用**扇区均值**估一条共同基线，再给每个扇区减同一条。
+        # 不逐扇区各估各的——空气散射这类背景在方位角上是均匀的，逐扇区
+        # 各扣各的会把扇区之间的真实强度差抹平，而"哪个扇区强"正是瀑布图
+        # 存在的意义（择优取向、大晶粒）。
+        # 扇区均值自己算而不用 np.nanmean：坏扇区整行 NaN 时 nanmean 返回
+        # NaN 并往 stderr 打 RuntimeWarning（本模块的坏扇区 NaN 是预期输入）。
+        # 这里逐 2θ 在有效扇区上取均值，全坏的位置取 0 = 该处不扣
+        finite = np.isfinite(raw2d)
+        counts = finite.sum(axis=1)
+        sums = np.where(finite, raw2d, 0.0).sum(axis=1)
+        mean_curve = np.divide(sums, counts, out=np.zeros_like(sums),
+                               where=counts > 0)
+        _, _, base = _bg_curve(window, dock, _bg_path_of(dock), tth,
+                               mean_curve)
+        i2d = raw2d - np.asarray(base, dtype=float)[:, None] \
+            if base is not None else raw2d
         n = i2d.shape[1]
         colors = cm.viridis(np.linspace(0, 1, n))
-        # 每条曲线画到自身第一个 0（截断几何）；未截断的画到末尾
+        # 每条曲线画到自身第一个 0（截断几何）；未截断的画到末尾。
+        # 截断位置要看**原始**数据：扣背景后原来的 0 会变成 -基线（非零），
+        # 拿扣除后的值判 0 会把所有曲线都画到末尾
         curves = []
         for k in range(n):
             v = i2d[:, k]
-            dead = ~np.isfinite(v) | (v == 0)
+            dead = ~np.isfinite(raw2d[:, k]) | (raw2d[:, k] == 0)
             end = int(np.argmax(dead)) if dead.any() else len(v)
             curves.append((tth[:end], v[:end], k))
         # 行间距自适应：行高 = 该行峰值 × 0.7，弱扇区行矮、强扇区
@@ -828,7 +947,7 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         ax.set_yticklabels([f"{c:.0f}°" for c in chi], fontsize=6)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
-        for line, c in zip(ax.lines, chi):
+        for line, c in zip(_data_lines(ax), chi):
             line.set_label(f"{c:.0f}°")   # 重画后重贴扇区名（悬停读数）
         ax.grid(alpha=0.2)
         _content(dock).draw()
@@ -872,7 +991,9 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     if getattr(dock, "_pan_start", None) is not None:
         _hover_leave(window, key)   # 正在按住左键平移：悬停点退场，别乱跳
         return
-    lines = [ln for ln in ax.lines if len(ln.get_xdata()) > 1]
+    # 只在数据曲线上选线：背景扣除的原始曲线/基线/锚点标记不参与，
+    # 否则悬停点会在"扣除后曲线"和"原始曲线"之间跳
+    lines = [ln for ln in _data_lines(ax) if len(ln.get_xdata()) > 1]
     if not lines:
         _hover_leave(window, key)
         return
@@ -899,6 +1020,8 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     if marker is None or marker.axes is not ax:
         marker = ax.plot([], [], "o", ms=7, mec="white", mew=1.0,
                          zorder=5)[0]
+        # 归入辅助线：它是标记不是曲线，快照/样式回填/选线都要跳过它
+        marker.set_gid(_AUX_GID_PREFIX + "hover")
         dock.hover_marker = marker
     marker.set_color(line.get_color())
     marker.set_data([x], [y])
@@ -1346,8 +1469,18 @@ def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
 
 def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
     """1D 面板内容：画布 + 精简工具栏 + 弹出按钮 + 悬停取点 +
-    手势 + 范围写回（x/y 都写）。"""
-    return _build_canvas_panel(window, key, "axes_1d", hover=True, sync="xy")
+    手势 + 范围写回（x/y 都写）+ 背景锚点点选。"""
+    widget = _build_canvas_panel(window, key, "axes_1d", hover=True,
+                                 sync="xy")
+    # 锚点点选：额外挂一组按/放事件（与热图行点击同一扩展点——canvas 上
+    # 的 mpl_connect 不会被 ax.clear() 清掉，通用平移手势照旧并存）
+    canvas = getattr(widget, "canvas", None)
+    if canvas is not None:
+        canvas.mpl_connect("button_press_event",
+                           lambda ev, k=key: _anchor_press(window, k, ev))
+        canvas.mpl_connect("button_release_event",
+                           lambda ev, k=key: _anchor_release(window, k, ev))
+    return widget
 
 
 def _build_2d_widget(window: QMainWindow, key: str) -> QWidget:
@@ -1755,6 +1888,142 @@ def _assemble_heatmap(results):
     return x, np.vstack(rows), [r[0] for r in results], interp
 
 
+def _anchor_enabled(window: QMainWindow, key: str) -> bool:
+    """这个 1D 面板现在该不该响应锚点点选。
+
+    两个条件都要满足：参数坞的模式是"手动锚点"、[拾取锚点] 开着。
+    两个开关分开是故意的——模式决定"用什么算背景"（画图时生效），
+    拾取开关决定"鼠标现在是在画图还是在选点"，不让人在只想看图时
+    误点出锚点。
+    """
+    if key.split("|", 1)[0] != "1D":
+        return False
+    btn = getattr(window, "bg_pick_btn", None)
+    return bool(btn is not None and btn.isChecked())
+
+
+def _anchor_press(window: QMainWindow, key: str, event) -> None:
+    """1D 面板按下：记账候选锚点（没拖动才算"点击"，松手再决定）。
+
+    与热图行点击同套路：左键拖 = 平移（通用手势），点按 = 加/删锚点。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None or event.inaxes is None or event.button != 1:
+        return
+    if not _anchor_enabled(window, key):
+        return
+    if event.xdata is None or event.ydata is None:
+        return
+    # 这里**不切焦点**：按下时还不知道是点击还是拖拽平移，而切焦点会回放
+    # 该面板的快照（模式多半是"关闭"）→ 拾取开关被 _sync_bg_rows 收掉，
+    # 用户只是想在别的图上拖一下就把"拾取锚点"弄丢了（实测日志末行变成
+    # "背景扣除：关闭"）。切焦点挪到 _anchor_release、确认是点击之后
+    dock._anchor_press = (event.x, event.y)
+
+
+def _anchor_release(window: QMainWindow, key: str, event) -> None:
+    """1D 面板松手：按下点没怎么挪（阈值 5 px）→ 在最近的曲线上取一个
+    锚点；点到已有关键点附近（阈值 8 px）→ 删掉它。挪多了 = 平移，不动。
+
+    取点复用悬停那套"最近曲线 + 吸附最近真实数据点"（_hover_motion）：
+    报的是真算出来的值，不是鼠标的原始位置。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return
+    info = getattr(dock, "_anchor_press", None)
+    dock._anchor_press = None
+    if info is None:
+        return
+    x0, y0 = info
+    if (event.x - x0) ** 2 + (event.y - y0) ** 2 > 5 ** 2:
+        return   # 拖过了 = 平移手势，不是点击
+    if not _anchor_enabled(window, key):
+        return
+    if event.inaxes is None or event.xdata is None or event.ydata is None:
+        return
+    path = _bg_path_of(dock)
+    if path is None:
+        return
+    # 点哪张图就编辑哪张图（与点面板选中编辑对象一致）：_refresh_bg 把参数
+    # 坞控件值推进的正是编辑对象的快照，不切焦点会出现"点了没反应"。放在
+    # 这里而不是按下时——此刻已确认是点击，不会误伤平移手势（见 _anchor_press）
+    _set_focus(window, key, dock.panel_display)
+    # 注意不能写 `(... or {}).setdefault(...)`：空 dict 是 falsy，`or`
+    # 会换成临时新字典，锚点全加进临时对象里去（探针实测：日志报"加了
+    # 1 个"而 window.bg_anchors 还是空的）
+    if getattr(window, "bg_anchors", None) is None:
+        window.bg_anchors = {}
+    anchors = window.bg_anchors.setdefault(str(path), [])
+    # 点到已有关键点附近 → 删除（再点恢复的开关语义）
+    ax = event.inaxes
+    for i, (ax_, ay_) in enumerate(anchors):
+        px, py = ax.transData.transform((ax_, ay_))
+        if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
+            anchors.pop(i)
+            _anchor_changed(window, f"删除锚点：2θ = {ax_:.3f}°")
+            return
+    # 取最近曲线上的最近真实数据点
+    lines = [ln for ln in _data_lines(ax) if len(ln.get_xdata()) > 1]
+    if not lines:
+        return
+    best = None
+    for ln in lines:
+        xd = ln.get_xdata()
+        if xd.size < 2 or not (xd[0] <= event.xdata <= xd[-1]):
+            continue
+        yline = float(np.interp(event.xdata, xd, ln.get_ydata()))
+        px, py = ax.transData.transform((event.xdata, yline))
+        d2 = (px - event.x) ** 2 + (py - event.y) ** 2
+        if best is None or d2 < best[0]:
+            best = (d2, xd, ln)
+    if best is None:
+        return
+    _, xd, ln = best
+    i = int(np.argmin(np.abs(xd - event.xdata)))
+    x = float(xd[i])
+    y = _anchor_raw_y(window, dock, ax, xd, i, ln)
+    anchors.append((x, y))
+    _anchor_changed(window, f"加锚点：2θ = {x:.3f}°（{len(anchors)} 个）")
+
+
+def _anchor_raw_y(window: QMainWindow, dock, ax, xd, i, line) -> float:
+    """锚点的 y：**原始**曲线的值，不是屏幕上那条扣过的曲线。
+
+    锚点描述的是原始曲线的背景形状。屏幕上的实线是扣完的（在已有关键点
+    处已经接近 0），照它取值会把新锚点记成 0/负值 → 该处背景等于没扣，
+    而画面上看不出错；锚点还会持久化，把"显示原始曲线对比"重新勾上也不
+    会自愈。
+
+    取法按可靠性排队：
+      ① 画出来的原始叠加线（bg:raw）—— 它是"这张图当时用的原始数据"的
+         权威副本；
+      ② 面板缓存的 last_intensity —— 用户关掉原始叠加时走这条（此时
+         轴上没有 bg:raw，而缓存里的原始曲线仍在，且绘制层从不改它）；
+      ③ 最后的兜底：就用屏幕上那条线的值（只有前两者都拿不到才走到，
+         例如测试直接拿自定义数组调 _draw_1d）。
+    """
+    raw = next((ln_ for ln_ in ax.lines
+                if ln_.get_gid() == _AUX_GID_PREFIX + "raw"), None)
+    if raw is not None and len(raw.get_ydata()) == len(xd):
+        return float(raw.get_ydata()[i])
+    cached_y = getattr(dock, "last_intensity", None)
+    cached_x = getattr(dock, "last_tth", None)
+    if cached_y is not None and cached_x is not None \
+            and len(cached_y) == len(xd) and np.allclose(cached_x, xd):
+        return float(np.asarray(cached_y, dtype=float)[i])
+    return float(line.get_ydata()[i])
+
+
+def _anchor_changed(window: QMainWindow, msg: str) -> None:
+    """锚点变动后的统一收尾：刷新计数 + 立刻重画 + 记日志。"""
+    updater = getattr(window, "_bg_count_refresh", None)
+    if updater is not None:
+        updater(window)
+    _refresh_bg(window)
+    _log(window, msg)
+
+
 def _heat_row_press(window: QMainWindow, key: str, event) -> None:
     """热图按下：记候选行（没拖动才算"点击"，松手再决定）。
 
@@ -1876,13 +2145,33 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
     dock.figure_saved = False
 
 
+def _heat_data(window: QMainWindow, dock):
+    """热图面板的 (tth, matrix, stems, interp)——逐行按各文件自己的参数
+    扣背景后再对齐成矩阵。
+
+    顺序对齐：dock.heat_results 与 dock.heat_files 同序（失败项是 None
+    占位），所以用**原始下标**取路径，压缩掉 None 之后再取会错位。
+    空扫/锚点都按文件走，所以同一张热图里每个样品用的是它自己的基线。
+    """
+    rows = []
+    files = getattr(dock, "heat_files", ()) or ()
+    for i, r in enumerate(getattr(dock, "heat_results", ()) or ()):
+        if r is None:
+            continue
+        stem, tth, intensity = r
+        path = files[i][0] if i < len(files) else None
+        _, sub, _ = _bg_curve(window, dock, path, tth, intensity)
+        rows.append((stem, tth, sub))
+    return _assemble_heatmap(rows)
+
+
 def _finish_heatmap(window: QMainWindow, key: str) -> None:
     """热图全部数据到齐（含失败）：对齐成矩阵 → 整图画出 → 成为编辑
     对象 → 记日志。全部失败 = 面板留空。"""
     dock = window.plot_docks.get(key)
     if dock is None:
         return   # 面板已关：静默丢弃
-    data = _assemble_heatmap([r for r in dock.heat_results if r is not None])
+    data = _heat_data(window, dock)
     dock.heat_data = data
     if data is None:
         _log(window, "热图失败：所有文件的积分都失败了，面板留空")

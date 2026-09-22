@@ -83,6 +83,12 @@ python -m xrd_toolkit.gui
       <sub>Batch heatmap — three real datasets' 1D curves assembled into a 2θ × sample intensity map (per-row normalization), with a single 1D pattern alongside</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/gui/gui_background.png" width="50%"><br>
+      <sub>Background subtraction — manual anchors on a real LMFP pattern: the raw curve (dashed), the baseline through four clicked anchors (dotted) and the subtracted result (solid), previewed live as you tune</sub>
+    </td>
+  </tr>
 </table>
 
 - **Independent plot panels** — every plot is an MDI subwindow with free resizing (each drag remembers the panel's own aspect), pop-out into a separate OS window, cascade / tile arrangements, and a zoomable drawing area (Ctrl + wheel, Excel-style).
@@ -94,6 +100,8 @@ python -m xrd_toolkit.gui
 - **Calibration mode** — a [校准] toggle switches to the calibration workbench: one-click automatic refinement (ring-center localization → pyFAI) or manual point-picking on the rings (≥ 3 points, ≥ 2 rings, ±0.5° snapping), with side-by-side result columns and a Δ-deviation column. The way back is never hidden: the toggle reads [退出校准] while the workbench is open, and the page itself ends in a [返回分析模式] button that flips it back. [Save as config] stores the refined geometry as a named entry (a local user file outside git) that instantly joins the geometry dropdown — selected automatically — survives restarts, and is usable from the CLI via `--config`.
 - **Batch pipeline** — [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window) and any view button processes all checked files at once, with a live progress counter in the log (completion lines end in （k/n）). [导出数据] saves each file's 1D result as a two-column `integrated_2th.txt` or `.chi` under `outputs/{file}/` — byte-identical format to the CLI — with an optional `1d_summary.csv` (one intensity column per file; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch.
 - **Save / load .poni geometry** — the [保存参数] button beside the geometry dropdown writes the currently selected config as a standard pyFAI .poni exchange file (detector distance, center as poni1/poni2 in meters, pixel size, wavelength, tilt rot1/rot2; the optional mask path is not written — the engine has no mask support yet and the .poni format has no mask field), and [加载参数] reads a .poni into a named config entry: stored like [Save as config], auto-selected immediately, surviving restarts — calibrate once, reuse everywhere, no re-calibration needed. Imported or saved user entries can be removed again with the [删除] button (greyed out for builtin registry entries): a confirmation dialog guards the removal, and the selection then falls back to the default entry.
+
+- **Background subtraction** — the parameter dock's 背景扣除 section removes what carries no structural information: air scatter, amorphous diffuse scattering, fluorescence, detector dark current, beam-stop halo. It matters here: both samples' background rises 3.8–5.2× toward low 2θ (LMFP 1429 counts at 1–2° vs 275 at 9–10°), so a constant offset cannot work. Three modes, every one previewed live (parameters change the drawing only — the cached raw curve is never touched, so nothing re-integrates): **empty-scan subtraction** (subtract a blank measurement, with a normalization factor for differing exposure/beam current), **auto baseline** (rolling-window level estimate; set the window to 3–10× the widest peak's width), and **manual anchors** (click points that are background only — the baseline joins them, extrapolated linearly past the first/last anchor). While subtracting, the 1D panel overlays the raw curve (dashed) and the baseline (dotted) on the subtracted one, so before/after is visible as you tune. Anchors are stored per file; Compare / Waterfall / Heatmap apply the same settings (the waterfall subtracts one common sector-mean baseline so sector-to-sector intensity differences survive), and [导出数据] can write the subtracted curves. Negative values after subtraction are kept by default — the noise floor is real, and clipping it at 0 biases the mean up by ~1σ — with an opt-in checkbox to clip. SNIP was implemented and measured as well, but it over-subtracts by 43–98% on these patterns (it clips the broad amorphous hump at ~2.2° as if it were a peak), so the GUI does not offer it.
 
 ## Highlights
 
@@ -113,7 +121,7 @@ python -m xrd_toolkit.gui
 conda env create -f environment.yml
 # 2. Activate it
 conda activate XRD_Toolkit_Environment
-# 3. Install this package in editable mode (numpy / matplotlib / fabio / pyFAI come along)
+# 3. Install this package in editable mode (numpy / scipy / matplotlib / fabio / pyFAI come along)
 pip install -e .
 ```
 
@@ -199,11 +207,11 @@ conda activate XRD_Toolkit_Environment
 python -m unittest discover -s tests -v
 ```
 
-They cover the arc-coverage failure criterion for centered / edge / corner / outside-image beam placements, the geometric failure-point values, and the off-center integration fallback (regression guard for a pyFAI binning bug).
+They cover the arc-coverage failure criterion for centered / edge / corner / outside-image beam placements, the geometric failure-point values, and the off-center integration fallback (regression guard for a pyFAI binning bug). The background-subtraction tests characterise each baseline estimator against synthetic curves with known backgrounds (SNIP preserves a constant background exactly but underestimates a linear ramp; the rolling-window estimate must be told a window 3–10× the peak width), and the GUI tests pin down live preview, per-file anchors and the raw/baseline overlay lines.
 
 ## Roadmap
 
-- Peak finding & profile fitting on the 1D patterns
+- Peak finding & profile fitting on the 1D patterns (background subtraction landed first — net peak heights and areas are only meaningful once the pedestal is gone)
 - Line-profile analysis: Scherrer / Williamson–Hall size–strain
 - Structure-factor simulation
 - A basic Rietveld refinement engine
@@ -228,9 +236,10 @@ They cover the arc-coverage failure criterion for centered / edge / corner / out
 │   ├── services/
 │       ├── data_loader.py         # image I/O (fabio)
 │       ├── integrator.py          # geometry refinement + 1D integration (pyFAI)
+│       ├── background.py          # background subtraction: empty scan / auto baseline / anchors (no Qt)
 │       └── range_selector.py      # automatic 2θ range selection (per-material standards)
 │   └── gui/                       # PySide6 desktop GUI (python -m xrd_toolkit.gui)
-├── tests/                         # synthetic-image unit tests (unittest): partial-ring geometry & DIY integration
+├── tests/                         # synthetic-image unit tests (unittest): partial-ring geometry, DIY integration, background estimators
 ├── docs/                          # Chinese README (original)
 ├── environment.yml                # conda environment (one-command setup)
 ├── pyproject.toml                 # package metadata & dependencies

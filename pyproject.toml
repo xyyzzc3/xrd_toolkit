@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Modular Python toolkit for 2D X-ray diffraction analysis: ring-center localization, LaB6 geometric calibration, azimuthal integration, sector analysis"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy", "matplotlib", "fabio", "pyfai"]
+dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
