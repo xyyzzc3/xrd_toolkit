@@ -19,8 +19,11 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
     立即出现并自动选中（几何填进参数坞）。内置 config.py 注册表
     仍走 CLI 模板人工登记（见 config.py 文件头）。
   - 中央校准图面板 = _CalibSubWindow（MDI 子窗口，imshow + 理论环
-    圆圈 + 控制点/用户点标记，只接鼠标点击）。不进 plot_docks：
-    不掺和编辑对象焦点、平铺、总缩放；无手势无抓手（v1 从简）。
+    路径 + 控制点/用户点标记，只接鼠标点击）。理论环由
+    theoretical_ring_paths 精确反解（倾斜时是椭圆、圆心是直射束
+    落点），不用"圆心 + 半径"的正圆近似——后者会整体偏 8~23 px。
+    不进 plot_docks：不掺和编辑对象焦点、平铺、总缩放；无手势无
+    抓手（v1 从简）。
 
 状态（都挂在 window 上）：
   calib_dock / calib_key / calib_path / calib_display / calib_canvas
@@ -38,7 +41,6 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
-from matplotlib.patches import Circle
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QGridLayout, QGroupBox,
@@ -54,8 +56,8 @@ from xrd_toolkit.gui.panel_state import (
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import (
-    calibrate_lab6, lab6_theoretical_2theta, refine_lab6_from_points,
-    snap_lab6_ring)
+    calibrate_lab6, refine_lab6_from_points, snap_lab6_ring,
+    theoretical_ring_paths)
 
 SNAP_TOL_DEG = 0.5      # 判环容差（2θ 度；与 snap_lab6_ring 默认一致）
 MIN_POINTS = 3          # 手动校准最低点数
@@ -222,32 +224,43 @@ def _close_calib_panel(window: QMainWindow) -> None:
 
 def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
                       control_points=None, ring_marks=None) -> None:
-    """整幅重画校准图：图像 + 理论环圆圈 + 可选绿点/用户点标记。
+    """整幅重画校准图：图像 + 理论环路径 + 可选绿点/用户点标记。
 
     对齐 scripts/view_diffraction.py 的显示：magma + LogNorm、自动
-    对比度 1%/99.9% 分位、vmin 下限 1.0、origin="lower"。理论环
-    半径 r = dist·tan(2θ)/pixel、圆心 = PONI px（geometry 里的 px
-    键）；用户点 = 青圈 + 环号（点图找环的依据），控制点 = 绿点
-    （pyFAI 实际取点，验证精修效果）。
+    对比度 1%/99.9% 分位、vmin 下限 1.0、origin="lower"。理论环用
+    theoretical_ring_paths 精确反解，不是"圆心 + 半径"的正圆：探测
+    器有倾斜时环是椭圆、公共圆心是直射束落点而非 PONI，写正圆会整体
+    偏 8~23 px（实测本数据）。用户点 = 青圈 + 环号（点图找环的依据），
+    控制点 = 绿点（pyFAI 实际取点，验证精修效果）。
+
+    几何把环全推出图像时（距离/像素/波长填错、校准跑出离谱解）不静默
+    画一堆看不见的线，而是放大视野 + 红字说明（_warn_rings_off_image）。
     """
     ax = window.calib_ax
     ax.clear()
+    h, w = image.shape
     lo, hi = _auto_contrast_values(image)
     vmin = max(1.0, lo)
     vmax = max(hi, vmin * 10.0)
     ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
               origin="lower")
     ax.set_aspect("equal")
-    theo = lab6_theoretical_2theta(geometry["wavelength_m"])
-    for i, tth_deg in enumerate(theo):
-        r_px = geometry["dist_m"] * np.tan(np.radians(tth_deg)) \
-            / geometry["pixel_size_m"]
-        ax.add_patch(Circle((geometry["poni1_px"], geometry["poni2_px"]),
-                            r_px, fill=False, color=RING_COLOR, lw=0.7,
-                            alpha=0.65))
-        ax.annotate(str(i), (geometry["poni1_px"] + r_px,
-                             geometry["poni2_px"]),
-                    color=RING_COLOR, fontsize=7, va="center")
+    paths = theoretical_ring_paths(
+        pixel_size_m=geometry["pixel_size_m"],
+        wavelength_m=geometry["wavelength_m"],
+        dist_m=geometry["dist_m"], poni1_px=geometry["poni1_px"],
+        poni2_px=geometry["poni2_px"], rot1_deg=geometry["rot1_deg"],
+        rot2_deg=geometry["rot2_deg"], image_shape=image.shape)
+    for ring, xy in paths["rings"]:
+        ax.plot(xy[:, 0], xy[:, 1], color=RING_COLOR, lw=0.7, alpha=0.65)
+        # 环号标在"路径上、落在图像内、最靠右"的点（标到图外看不见）
+        inside = ((xy[:, 0] >= 0) & (xy[:, 0] < w)
+                  & (xy[:, 1] >= 0) & (xy[:, 1] < h))
+        cand = np.flatnonzero(inside)
+        if cand.size:
+            j = cand[int(np.argmax(xy[cand, 0]))]
+            ax.annotate(str(ring), (xy[j, 0], xy[j, 1]), color=RING_COLOR,
+                        fontsize=7, va="center", ha="left")
     if control_points is not None and len(control_points):
         # 控制点可达数千个：抽稀到 1000 以内（绿点只是视觉验证）
         stride = max(1, len(control_points) // 1000)
@@ -258,10 +271,43 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
             ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)
             ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
                         va="bottom", ha="left")
+    span = ("环半径 %.0f~%.0f px" % (paths["r_min_px"], paths["r_max_px"])
+            if np.isfinite(paths["r_min_px"]) else "环半径：无解")
     ax.set_xlabel("横向 (px)")
     ax.set_ylabel("纵向 (px)")
-    ax.set_title(window.calib_display)
+    ax.set_title(f"{window.calib_display}  ·  {span}")
+    if not paths["n_inside"]:
+        _warn_rings_off_image(window, ax, image, paths, geometry)
     window.calib_canvas.draw_idle()
+
+
+def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
+                          geometry) -> None:
+    """守卫：几何把理论环全推出图像时，明说 + 放大视野让人看见它们。
+
+    静默画一圈看不见的青线是最坏的失败方式（用户只会觉得"校准没
+    反应"）。视野扩到包住环路径、左上角红字标注原因；日志按几何指纹
+    去重（撤销/清空选点的重画不重复刷屏）。
+    """
+    h, w = image.shape
+    note = (f"当前几何下 {len(paths['rings'])} 条环全部落在图像外"
+            f"（环半径 {paths['r_min_px']:.0f}~{paths['r_max_px']:.0f} px，"
+            f"图像 {w}×{h}）：请核对像素尺寸/波长/距离")
+    xy = np.vstack([p for _, p in paths["rings"]])
+    fin = np.isfinite(xy).all(axis=1)
+    if fin.any():
+        x0, x1 = float(xy[fin, 0].min()), float(xy[fin, 0].max())
+        y0, y1 = float(xy[fin, 1].min()), float(xy[fin, 1].max())
+        pad_x = 0.05 * max(x1 - x0, w)
+        pad_y = 0.05 * max(y1 - y0, h)
+        ax.set_xlim(min(0.0, x0) - pad_x, max(w, x1) + pad_x)
+        ax.set_ylim(min(0.0, y0) - pad_y, max(h, y1) + pad_y)
+    ax.text(0.02, 0.98, "⚠ " + note, transform=ax.transAxes, color="#ff6666",
+            fontsize=8, va="top", ha="left")
+    key = tuple(round(float(geometry[k]), 6) for k in sorted(geometry))
+    if getattr(window, "_calib_span_warned", None) != key:
+        window._calib_span_warned = key
+        _log(window, note)
 
 
 def _add_calib_marker(window: QMainWindow, x, y, ring: int) -> None:
@@ -483,8 +529,10 @@ def _calib_sync(window: QMainWindow) -> None:
 def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     """校准图点击：判环吸附 → 记录点 + 图上标记；吸不上 → 日志忽略。
 
-    判环用参数面板当前几何（自动校准完成后用户点仍按面板初值判——
-    判环只需要大致几何，容差内不受影响）。
+    判环用**屏幕上画青线的那套几何**（_calib_draw_geometry：最近一次
+    校准结果覆盖面板初值）——与 _draw_calib_image 同源。用别的几何判，
+    会出现"点着你看到的那条线、却判成隔壁环号"（几何偏差 23 px 在
+    r=235 px 处约合 0.17°，而环间距只有 0.24~0.7°）。
     """
     if event.xdata is None or event.ydata is None:
         return   # 点在坐标轴外
@@ -493,11 +541,12 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     if getattr(window, "calib_dock", None) is None \
             or getattr(window, "calib_key", None) != key:
         return   # 面板已关/换过：迟到点击忽略
-    g = _collect_geometry(window)
+    g = _calib_draw_geometry(window)
     ring = snap_lab6_ring(
         float(event.xdata), float(event.ydata),
         pixel_size_m=g["pixel_size_m"], wavelength_m=g["wavelength_m"],
-        dist_m=g["dist_m"], poni1_m=g["poni1_m"], poni2_m=g["poni2_m"],
+        dist_m=g["dist_m"], poni1_m=g["poni1_px"] * g["pixel_size_m"],
+        poni2_m=g["poni2_px"] * g["pixel_size_m"],
         rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"],
         tol_deg=SNAP_TOL_DEG)
     state = _calib_state(window)

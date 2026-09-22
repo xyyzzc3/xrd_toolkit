@@ -19,10 +19,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from pyFAI.detectors import Detector
+from pyFAI.goniometer import Geometry
+
 from xrd_toolkit.config import config_entry_template
 from xrd_toolkit.services.integrator import (
     calibrate_lab6, lab6_theoretical_2theta, refine_lab6_from_points,
-    snap_lab6_ring)
+    snap_lab6_ring, theoretical_ring_paths)
 
 PIXEL_M = 200e-6
 WAVELENGTH_M = 0.1223e-10
@@ -34,11 +37,15 @@ THEO = lab6_theoretical_2theta(WAVELENGTH_M, 16)
 
 
 def _ring_point(ring, ang_deg=0.0, d2th=0.0):
-    """环 ring 上一点的像素坐标：距 PONI r = dist·tan(2θ)/pixel 处、
-    方位角 ang_deg；d2th = 2θ 偏移（度，测吸附容差用）。"""
+    """环 ring 上一点的像素坐标 (x=列, y=行)：距 PONI r = dist·tan(2θ)/pixel
+    处、方位角 ang_deg；d2th = 2θ 偏移（度，测吸附容差用）。
+
+    注意行列：pyFAI 惯例 poni1↔行/y、poni2↔列/x，而绘图坐标是
+    (x=列, y=行)——两者交叉，写反会让点整体偏离真实环 23 px。
+    """
     r = DIST_M * np.tan(np.radians(THEO[ring] + d2th)) / PIXEL_M
     a = np.radians(ang_deg)
-    return (PONI1_PX + r * np.cos(a), PONI2_PX + r * np.sin(a))
+    return (PONI2_PX + r * np.cos(a), PONI1_PX + r * np.sin(a))
 
 
 def _synthetic_rings(shape=(2048, 2048), cx=1024.0, cy=1024.0, n_rings=11):
@@ -66,8 +73,8 @@ class TestSnapLab6Ring(unittest.TestCase):
     def test_on_ring_point_snaps_to_that_ring(self):
         """环上一点（零倾斜几何）→ 判出它所属的环。
 
-        判环几何带倾斜时环上点会整体偏移（高角环间距窄，可能滑到
-        邻环），倾斜下的容差行为由 GUI 集成测试覆盖。
+        高角环间距窄（0.24°），判环几何若差半个环（行列写反 23 px
+        ≈ 0.17°）就会滑到邻环——所以这组断言同时是行列约定的护栏。
         """
         for ring in (0, 3, 6, 9):
             x, y = _ring_point(ring, ang_deg=ring * 37)
@@ -77,6 +84,145 @@ class TestSnapLab6Ring(unittest.TestCase):
         """低于首环 1°（> 容差 0.5°、下面无邻环可吸）→ None。"""
         x, y = _ring_point(0, d2th=-1.0)
         self.assertIsNone(self._snap(x, y))
+
+
+class TestSnapLab6RingOffDiagonal(unittest.TestCase):
+    """判环的行列约定护栏：偏置摆法（束心远离图像对角线）下才不会互相
+    掩盖——本数据的束心几乎在对角线上，行列写反时对角线镜像不改变到
+    束心的距离，错误被掩盖（见 snap_lab6_ring 的备注）。"""
+
+    def _snap(self, x, y, poni1_px, poni2_px):
+        return snap_lab6_ring(
+            x, y, pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
+            dist_m=DIST_M, poni1_m=poni1_px * PIXEL_M,
+            poni2_m=poni2_px * PIXEL_M)
+
+    def test_off_diagonal_center_snaps_correctly(self):
+        for poni1_px, poni2_px in ((200.0, 1800.0), (1800.0, 200.0)):
+            for ring, ang in ((0, 0.0), (6, 37.0), (9, 250.0)):
+                r = DIST_M * np.tan(np.radians(THEO[ring])) / PIXEL_M
+                a = np.radians(ang)
+                # (x=列, y=行)：列用 poni2、行用 poni1
+                x = poni2_px + r * np.cos(a)
+                y = poni1_px + r * np.sin(a)
+                self.assertEqual(self._snap(x, y, poni1_px, poni2_px), ring,
+                                 f"PONI=({poni1_px},{poni2_px}) 环{ring}")
+
+
+class TestTheoreticalRingPaths(unittest.TestCase):
+    """理论环路径：精确反解（不是"圆心 + 半径"的正圆近似）。"""
+
+    def _paths(self, **kw):
+        base = dict(pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
+                    dist_m=DIST_M, poni1_px=PONI1_PX, poni2_px=PONI2_PX,
+                    image_shape=(2048, 2048))
+        base.update(kw)
+        return theoretical_ring_paths(**base)
+
+    def test_zero_tilt_is_circle_centered_at_poni(self):
+        """零倾斜：路径 = 圆心 PONI、半径 dist·tan(2θ)/pixel 的正圆。
+
+        这条同时是坐标约定的护栏：poni/getFit2D 是"索引 + 0.5"
+        （见 PIXEL_CENTER_OFFSET），漏换算或换算两次都会让整条路径
+        偏 0.707 px——够让判环在高角环上滑到邻环（环间距 0.24°）。
+        """
+        p = self._paths()
+        # 零倾斜时直射束落点 B = PONI − 0.5（索引坐标）
+        b_row, b_col = p["beam_center_rc"]
+        self.assertAlmostEqual(b_row, PONI1_PX - 0.5, places=6)
+        self.assertAlmostEqual(b_col, PONI2_PX - 0.5, places=6)
+        for k, xy in p["rings"]:
+            r_nom = DIST_M * np.tan(np.radians(THEO[k])) / PIXEL_M
+            r = np.hypot(xy[:, 0] - b_col, xy[:, 1] - b_row)
+            self.assertLess(float(np.abs(r - r_nom).max()), 1e-3)
+        self.assertEqual(p["n_inside"], 16)
+        self.assertAlmostEqual(p["r_min_px"],
+                               DIST_M * np.tan(np.radians(THEO[0])) / PIXEL_M,
+                               places=2)
+
+    def test_tilted_path_is_ellipse_at_beam_center_not_poni(self):
+        """有倾斜：圆心 = 直射束落点（getFit2D − 0.5），不是 PONI；且
+        半径随方位角起伏（真椭圆）——正圆近似画不出这个，会整体偏
+        21~23 px（本数据实测）。"""
+        rot1, rot2 = -0.005, -0.163
+        p = self._paths(rot1_deg=rot1, rot2_deg=rot2)
+        geo = Geometry(dist=DIST_M, poni1=PONI1_PX * PIXEL_M,
+                       poni2=PONI2_PX * PIXEL_M,
+                       rot1=np.radians(rot1), rot2=np.radians(rot2),
+                       detector=Detector(pixel1=PIXEL_M, pixel2=PIXEL_M),
+                       wavelength=WAVELENGTH_M)
+        fit = geo.getFit2D()
+        b_row, b_col = p["beam_center_rc"]
+        self.assertAlmostEqual(b_row, fit["centerY"] - 0.5, places=6)
+        self.assertAlmostEqual(b_col, fit["centerX"] - 0.5, places=6)
+        # 与 PONI 拉开 ~23 px（正是画正圆会错掉的量）
+        self.assertGreater(np.hypot(b_col - PONI2_PX, b_row - PONI1_PX), 20.0)
+        # 每条路径点都落在自己的理论上（1e-4° 以内）
+        for k, xy in p["rings"]:
+            t = np.degrees(geo.tth(xy[:, 1], xy[:, 0]))
+            self.assertLess(float(np.abs(t - THEO[k]).max()), 1e-4)
+        # 真椭圆：半径随方位角有起伏（正圆近似画不出这一项）。本数据
+        # 倾角小，起伏只有 0.7 px；倾角每增大 1° 约放大 5 倍。
+        xy = p["rings"][15][1]
+        r = np.hypot(xy[:, 0] - b_col, xy[:, 1] - b_row)
+        self.assertGreater(float(r.max() - r.min()), 0.3)
+        self.assertLess(float(r.max() - r.min()), 3.0)
+
+    def test_matches_matplotlib_contour(self):
+        """独立实现交叉验证：与 matplotlib 等值线（marching squares）
+        给出的同一条环重合到 0.05 px 以内。"""
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+
+        rot1, rot2 = -0.005, -0.163
+        p = self._paths(rot1_deg=rot1, rot2_deg=rot2)
+        geo = Geometry(dist=DIST_M, poni1=PONI1_PX * PIXEL_M,
+                       poni2=PONI2_PX * PIXEL_M,
+                       rot1=np.radians(rot1), rot2=np.radians(rot2),
+                       detector=Detector(pixel1=PIXEL_M, pixel2=PIXEL_M),
+                       wavelength=WAVELENGTH_M)
+        step = 8.0
+        xs = np.arange(0.0, 2048.0, step)
+        X, Y = np.meshgrid(xs, xs)
+        tth_map = geo.tth(Y, X)          # 行, 列
+        level = np.radians(THEO[10])
+        fig = Figure()
+        ax = fig.add_subplot(111)
+        cs = ax.contour(X, Y, tth_map, levels=[level])
+        vertices = np.vstack(cs.allsegs[0])   # 该 2θ 的全部等值线段
+        b_row, b_col = p["beam_center_rc"]
+        phi_c = np.arctan2(vertices[:, 1] - b_row, vertices[:, 0] - b_col)
+        r_c = np.hypot(vertices[:, 0] - b_col, vertices[:, 1] - b_row)
+        xy = p["rings"][10][1]
+        phi_p = np.arctan2(xy[:, 1] - b_row, xy[:, 0] - b_col)
+        r_p = np.hypot(xy[:, 0] - b_col, xy[:, 1] - b_row)
+        order = np.argsort(phi_c)
+        r_interp = np.interp(phi_p, phi_c[order], r_c[order])
+        self.assertLess(float(np.abs(r_p - r_interp).max()), 0.05)
+
+    def test_rings_off_image_are_counted(self):
+        """守卫数据：把距离按"米"填（1000 倍，即 1595.8 m）→ 16 条环
+        全在图像外；反过来小探测器（256²、距离 0.4 m）→ 内环在里面、
+        外环被截断。"""
+        p = self._paths(dist_m=1595.8)
+        self.assertEqual(p["n_inside"], 0)
+        self.assertGreater(p["r_min_px"], 1e5)
+        p_small = self._paths(image_shape=(256, 256), dist_m=0.4,
+                              poni1_px=128.5, poni2_px=128.5)
+        self.assertGreater(p_small["n_inside"], 0)
+        self.assertLess(p_small["n_inside"], 16)
+
+    def test_unreachable_ring_yields_nan_not_fake_points(self):
+        """退化几何（大倾角下外侧环被拉成开口锥面）时输出 NaN 而不是
+        硬凑点——画出来就是一条假线，比不画更糟。60° 起外侧环反解
+        不出，80° 全部反解不出（实测）。"""
+        p60 = self._paths(rot2_deg=-60.0)
+        self.assertTrue(any(np.isnan(xy[:, 0]).any()
+                            for _, xy in p60["rings"]))
+        p80 = self._paths(rot2_deg=-80.0)
+        self.assertTrue(all(np.isnan(xy[:, 0]).any()
+                            for _, xy in p80["rings"]))
 
 
 class TestRefineLab6FromPoints(unittest.TestCase):

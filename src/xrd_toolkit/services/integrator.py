@@ -26,12 +26,33 @@ LAB6_NAME = "LaB6"
 # 衰减可忽略，保持 pyFAI 路径（输出与已验证的历史结果一致）。
 OFF_CENTER_PX = 100.0
 
+# pyFAI 的两种像素坐标差半像素，混用会整体偏 (0.5, 0.5) px（合 0.707 px）：
+#   - tth(d1, d2) 的入参 = **图像索引坐标**（与 matplotlib imshow、
+#     点击事件的 xdata/ydata 同一套）：索引 i 的像素中心在物理位置
+#     (i + 0.5)·pixel（detectors/_common.py 的 calc_cartesian_positions
+#     里 d1c = d1 + 0.5，注释 "The half pixel offset is taken into
+#     account here !!!"）。
+#   - 但 poni1/poni2 与 getFit2D 的输出 = **物理位置 / pixel**，即
+#     "索引 + 0.5"。
+# 实测（零倾斜、poni=1024.5）：tth(1024.0, 1024.0) 恰为 0°，即直射束
+# 落点的索引坐标是 1024.0 = getFit2D(1024.5) − 0.5 ✓。这也解释了长期
+# 记为"~0.5 px 精修噪声"的那处差：内置几何 getFit2D (1022.50, 1022.70)
+# 减 0.5 得 (1022.00, 1022.20)，与图像实测环心 (1021.65, 1022.23)
+# 只差 0.35 px；不减则差 0.85 px——是约定差，不是噪声。
+# 用法：把 poni/getFit2D 换算成索引坐标一次，之后全链路都用索引坐标。
+PIXEL_CENTER_OFFSET = 0.5
+
 
 def _is_off_center(image_shape, poni1_m, poni2_m, pixel_size_m) -> bool:
-    """束心是否偏离探测器中心超过 OFF_CENTER_PX（触发自研积分）。"""
+    """束心是否偏离探测器中心超过 OFF_CENTER_PX（触发自研积分）。
+
+    行列：poni1↔行/y、poni2↔列/x（pyFAI 惯例，与 _draw_2d 的束心
+    标记同一套）。hypot 对角交换对称，写反不影响本判据的取值，
+    但语义要写对，免得以后按 dx/dy 做别的判断时踩坑。
+    """
     h, w = image_shape
-    dx = poni1_m / pixel_size_m - w / 2.0
-    dy = poni2_m / pixel_size_m - h / 2.0
+    dx = poni2_m / pixel_size_m - w / 2.0
+    dy = poni1_m / pixel_size_m - h / 2.0
     return float(np.hypot(dx, dy)) > OFF_CENTER_PX
 
 
@@ -89,13 +110,129 @@ def snap_lab6_ring(x_px: float, y_px: float, *, pixel_size_m: float,
         detector=Detector(pixel1=pixel_size_m, pixel2=pixel_size_m),
         wavelength=wavelength_m,
     )
-    # pyFAI 的 tth 需要数组输入（内部会访问 .size），标量直接传会报错
-    tth_deg = float(np.degrees(geo.tth(np.array([x_px]), np.array([y_px]))[0]))
+    # pyFAI 的 tth 需要数组输入（内部会访问 .size），标量直接传会报错。
+    # 形参顺序是 (d1=行, d2=列)，与绘图坐标 (x=列, y=行) 相反——传反会
+    # 让偏置摆法（束心远离图像对角线）判错环号；本数据束心几乎在
+    # 对角线上，传反被掩盖（对角线镜像不改变到束心的距离）。
+    # 入参就是图像索引坐标，与 tth 的约定一致，无需半像素换算
+    # （poni/getFit2D 才需要，见 PIXEL_CENTER_OFFSET）。
+    tth_deg = float(np.degrees(geo.tth(np.array([y_px]), np.array([x_px]))[0]))
     theo = lab6_theoretical_2theta(wavelength_m, max_rings)
     i = int(np.argmin(np.abs(theo - tth_deg)))
     if abs(theo[i] - tth_deg) > tol_deg:
         return None
     return i
+
+
+# 环路径二分迭代次数：括号宽度 = 2×名义半径 + 图像对角线（几何离谱时
+# 名义半径可达 1e6 px 也要包住真解），36 次后相对精度 ~1e-11。
+RING_PATH_ITER = 36
+
+
+def theoretical_ring_paths(*, pixel_size_m: float, wavelength_m: float,
+                           dist_m: float, poni1_px: float, poni2_px: float,
+                           rot1_deg: float = 0.0, rot2_deg: float = 0.0,
+                           image_shape=None, n_rings: int = 16,
+                           n_azim: int = 180) -> dict:
+    """当前几何预测的理论环路径（校准面板画青线、判环共用）。
+
+    为什么不用"圆心 + 半径"的正圆：探测器有倾斜时衍射环不是正圆——它
+    是衍射圆锥与倾斜平面的交线（椭圆），且环的公共圆心是直射束落点
+    B、不是 PONI（两者差 dist·tan(倾角)/pixel，本数据 23 px）。实测
+    正圆近似的残余偏差：本数据 0.54~1.0 px，倾角每增大 1° 约恶化
+    3 px。本函数直接反解真实交线——沿 B 周围各方位角，对 pyFAI 的
+    tth 做二分求每个理论 2θ 等值线的半径：几何怎么说就怎么画，倾斜
+    大时自动画出椭圆，与 pyFAI 的旋转约定无关（不用自己复刻公式）。
+
+    参数（几何用 px 键，与面板/结果字典一致）：
+        pixel_size_m / wavelength_m / dist_m
+                     像素尺寸（米）/ 波长（米）/ 探测器距离（米）
+        poni1_px / poni2_px
+                     PONI 像素坐标（行、列——pyFAI 惯例：poni1↔Y/行、
+                     poni2↔X/列）
+        rot1_deg / rot2_deg  倾斜角（度）
+        image_shape  (行, 列) 图像尺寸；用于统计"有多少条环落在图像
+                     内"，None 时不做统计
+        n_rings      环数（默认 16，与 lab6_theoretical_2theta 一致）
+        n_azim       方位角采样数（默认 180，即每条折线 180 个点）
+
+    返回：
+        dict：
+            rings          [(环号, (n_azim, 2) 数组 [x=列, y=行]), ...]；
+                           反解不出解的点为 NaN（matplotlib 画折线时
+                           自动断开，不会连出假线）
+            beam_center_rc 环的公共圆心 = 直射束落点 B（行, 列），取
+                           pyFAI getFit2D（含倾斜修正，与几何严格自洽）
+            r_min_px / r_max_px  全部有效路径点的半径范围（px）
+            n_inside      至少有一个采样点落在图像内的环数（0 = 几何
+                           把环全推出图像，调用方应提示用户）
+
+    坐标约定（两个坑，都踩过）：
+        - pyFAI 的 tth(d1, d2) 形参顺序是 (行, 列)，与绘图坐标
+          (x=列, y=行) 相反；写反会让偏置摆法（束心远离图像对角线）
+          判错位置——本数据束心几乎在对角线上，写反会被掩盖。
+        - poni/getFit2D 是"物理位置/pixel"（= 索引 + 0.5），而 tth 的
+          入参是索引坐标（见 PIXEL_CENTER_OFFSET）。本函数输入输出
+          一律用**图像索引坐标**（与 config 的 beam_center、imshow、
+          点击事件同一套），只在取 getFit2D 时换算一次；漏换算或换算
+          两次都会让画出来的环整体偏 0.707 px。
+    """
+    levels = np.radians(lab6_theoretical_2theta(wavelength_m, n_rings))
+    geo = Geometry(
+        dist=dist_m, poni1=poni1_px * pixel_size_m,
+        poni2=poni2_px * pixel_size_m,
+        rot1=np.radians(rot1_deg), rot2=np.radians(rot2_deg), rot3=0.0,
+        detector=Detector(pixel1=pixel_size_m, pixel2=pixel_size_m,
+                          max_shape=image_shape),
+        wavelength=wavelength_m)
+    fit = geo.getFit2D()
+    # 换算成图像索引坐标（只此一次，之后全链路都是索引坐标）
+    b_row = float(fit["centerY"]) - PIXEL_CENTER_OFFSET
+    b_col = float(fit["centerX"]) - PIXEL_CENTER_OFFSET
+
+    phi = np.linspace(0.0, 2.0 * np.pi, n_azim, endpoint=False)
+    cos_p, sin_p = np.cos(phi), np.sin(phi)
+    # 括号上界：名义半径的 2 倍 + 图像对角线（名义半径按正圆公式估，
+    # 只用来定括号，不参与结果）
+    diag = float(np.hypot(*image_shape)) if image_shape is not None else 0.0
+    nominal = dist_m * np.tan(levels) / pixel_size_m
+    hi = 2.0 * nominal[:, None] + diag + 1.0
+    lo = np.ones_like(hi)
+    # 每条射线从 B 出发、半径递增时 tth 单调递增（环是凸的、B 在环内），
+    # 所以对"半径矩阵 (n_rings, n_azim)"整体二分即可
+    for _ in range(RING_PATH_ITER):
+        mid = 0.5 * (lo + hi)
+        tth = geo.tth(b_row + mid * sin_p[None, :], b_col + mid * cos_p[None, :])
+        pos = tth > levels[:, None]
+        hi = np.where(pos, mid, hi)
+        lo = np.where(pos, lo, mid)
+    r = 0.5 * (lo + hi)
+
+    # 有效性：把解代回 tth 复核（射线扫不到该环时无解，二分只会停在
+    # 括号上界，必须丢掉而不是画一条假的线）
+    x = b_col + r * cos_p[None, :]
+    y = b_row + r * sin_p[None, :]
+    resid = geo.tth(y, x) - levels[:, None]
+    bad = ~np.isfinite(resid) | (np.abs(resid) > 1e-6)
+    x = np.where(bad, np.nan, x)
+    y = np.where(bad, np.nan, y)
+    rings = [(k, np.column_stack([x[k], y[k]])) for k in range(len(levels))]
+
+    valid_r = r[~bad]
+    n_inside = 0
+    if image_shape is not None:
+        h, w = image_shape
+        for _, xy in rings:
+            inside = ((xy[:, 0] >= 0) & (xy[:, 0] <= w - 1)
+                      & (xy[:, 1] >= 0) & (xy[:, 1] <= h - 1))
+            n_inside += int(bool(inside.any()))
+    return {
+        "rings": rings,
+        "beam_center_rc": (b_row, b_col),
+        "r_min_px": float(valid_r.min()) if valid_r.size else float("nan"),
+        "r_max_px": float(valid_r.max()) if valid_r.size else float("nan"),
+        "n_inside": n_inside,
+    }
 
 
 # 迭代精修收敛参数（calibrate_lab6）：残差目标、改善阈值、最大轮数。

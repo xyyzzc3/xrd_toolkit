@@ -75,6 +75,7 @@ from PySide6.QtWidgets import (
     QSplitter, QSpinBox, QVBoxLayout)
 
 from xrd_toolkit import config as config_mod
+from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui import customize as gui_customize
 from xrd_toolkit.gui.app import create_window
@@ -4799,15 +4800,19 @@ class TestCalibration(unittest.TestCase):
 
     def _click_rings(self, w, specs):
         """按 lmfp1 配置几何在指定 (环号, 方位角) 处模拟校准图点击
-        （等价于点图时点中该环：吸附判环应判回同一环）。"""
+        （等价于点图时点中该环：吸附判环应判回同一环）。
+
+        行列注意：配置里 poni1_m↔行/y、poni2_m↔列/x，而点击坐标是
+        (x=列, y=行)——x 用 poni2、y 用 poni1。
+        """
         cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
-        theo = gui_calib.lab6_theoretical_2theta(cfg["wavelength_m"])
+        theo = lab6_theoretical_2theta(cfg["wavelength_m"])
         for ring, ang in specs:
             r = cfg["dist_m"] * np.tan(np.radians(theo[ring])) \
                 / cfg["pixel_size_m"]
             a = np.radians(ang)
-            x = cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.cos(a)
-            y = cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.sin(a)
+            x = cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.cos(a)
+            y = cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.sin(a)
             gui_calib._on_calib_click(w, w.calib_key,
                                       SimpleNamespace(xdata=x, ydata=y,
                                                       inaxes=w.calib_ax))
@@ -4836,8 +4841,12 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(w.calib_key, "校准|data/fake_a.tif")
             self.assertIn("打开校准面板", self._logs(w))
             self.assertIn("校准模式", w.mode_label.text())
-            # 16 个理论环圆圈按当前几何画上
-            self.assertGreaterEqual(len(w.calib_ax.patches), 16)
+            # 16 条理论环路径按当前几何画上（青线；精确反解后不再是
+            # Circle patch，见 theoretical_ring_paths）
+            rings = [ln for ln in w.calib_ax.lines
+                     if str(ln.get_color()).lower()
+                     == gui_calib.RING_COLOR.lower()]
+            self.assertGreaterEqual(len(rings), 16)
             # 退出：面板关、参数坞还原
             w.calib_btn.click()
             self.assertEqual(w.param_stack.currentIndex(), 0)
@@ -4911,6 +4920,74 @@ class TestCalibration(unittest.TestCase):
             self.assertTrue(w.calib_save_btn.isEnabled())
             self.assertEqual(w.calib_save_hint.text(),
                              "将保存：自动校准（距离 1595.80 mm，残差 0.0040°）")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_rings_off_image_guard_expands_view_and_logs_once(self):
+        """守卫：几何把理论环全推出图像时，明说 + 视野放大到看得见
+        （静默画一圈看不见的青线是最坏的失败方式）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                # 距离按"米"填进"毫米"框 → 大 1000 倍 → 16 条环全在外
+                w.params["初始距离 (mm)"].setValue(1595800.0)
+                self._enter_with_fake_a(w)
+            self.assertIn("全部落在图像外", self._logs(w))
+            self.assertGreater(w.calib_ax.get_xlim()[1], 256.0)
+            # 同一几何重画（撤销/清空选点）不重复刷屏
+            n = self._logs(w).count("全部落在图像外")
+            gui_calib._redraw_calib(w)
+            self.assertEqual(self._logs(w).count("全部落在图像外"), n)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_rings_and_snapping_follow_result_geometry(self):
+        """青线与判环同源：都按"最近一次校准结果"的几何画/判。
+
+        结果几何（PONI 980/1060、rot2 −0.5°）与配置条目（1045.2/1022.0、
+        −0.163°）明显不同：用前者画的环上点，若按后者判会滑到隔壁环号
+        （实测环 2/6/9 → 3/7/10）。"""
+        w = create_window()
+        res = dict(self.FAKE_AUTO, dist_m=1.58, poni1_px=980.0,
+                   poni2_px=1060.0, rot1_deg=0.02, rot2_deg=-0.50)
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            calls = []
+            real_paths = gui_calib.theoretical_ring_paths
+
+            def spy(**kw):
+                calls.append(kw)
+                return real_paths(**kw)
+
+            with mock.patch.object(gui_calib, "theoretical_ring_paths",
+                                   side_effect=spy):
+                gui_calib._on_auto_done(w, res)
+            self.assertEqual(calls[-1]["poni1_px"], 980.0)
+            self.assertEqual(calls[-1]["poni2_px"], 1060.0)
+            self.assertAlmostEqual(calls[-1]["rot2_deg"], -0.50)
+            # 按结果几何取环上的点 → 点它应判回同一环
+            paths = real_paths(
+                pixel_size_m=calls[-1]["pixel_size_m"],
+                wavelength_m=calls[-1]["wavelength_m"], dist_m=res["dist_m"],
+                poni1_px=res["poni1_px"], poni2_px=res["poni2_px"],
+                rot1_deg=res["rot1_deg"], rot2_deg=res["rot2_deg"],
+                image_shape=(256, 256))
+            for ring in (2, 6, 9):
+                x, y = paths["rings"][ring][1][0]
+                gui_calib._on_calib_click(
+                    w, w.calib_key,
+                    SimpleNamespace(xdata=float(x), ydata=float(y),
+                                    inaxes=w.calib_ax))
+                self.assertEqual(w.calib_state["points"][-1][2], ring)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -5129,6 +5206,13 @@ class TestSaveCalibConfig(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self._user_backup = dict(config_mod.USER_CONFIGS)
         self._confs_backup = dict(config_mod.CONFIGS)
+        # 清空用户条目再测：真 config_user.json 里若有同名 key（本地标定
+        # 存档，如 lmfp2_lab6），保存/删除会撞上"覆盖确认"等模态框——
+        # offscreen 下没人应答，测试原地挂死。隔离不能依赖真文件内容
+        # （test_config_user 已踩过同一个坑）。tearDown 负责还原。
+        config_mod.USER_CONFIGS.clear()
+        for key in self._user_backup:
+            config_mod.CONFIGS.pop(key, None)
 
     def tearDown(self):
         config_mod.USER_CONFIGS.clear()
@@ -5661,6 +5745,13 @@ class TestPoniImport(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self._user_backup = dict(config_mod.USER_CONFIGS)
         self._confs_backup = dict(config_mod.CONFIGS)
+        # 清空用户条目再测：真 config_user.json 里若有同名 key（本地标定
+        # 存档，如 lmfp2_lab6），保存/删除会撞上"覆盖确认"等模态框——
+        # offscreen 下没人应答，测试原地挂死。隔离不能依赖真文件内容
+        # （test_config_user 已踩过同一个坑）。tearDown 负责还原。
+        config_mod.USER_CONFIGS.clear()
+        for key in self._user_backup:
+            config_mod.CONFIGS.pop(key, None)
 
     def tearDown(self):
         config_mod.USER_CONFIGS.clear()
@@ -5780,6 +5871,13 @@ class TestDeleteConfig(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self._user_backup = dict(config_mod.USER_CONFIGS)
         self._confs_backup = dict(config_mod.CONFIGS)
+        # 清空用户条目再测：真 config_user.json 里若有同名 key（本地标定
+        # 存档，如 lmfp2_lab6），保存/删除会撞上"覆盖确认"等模态框——
+        # offscreen 下没人应答，测试原地挂死。隔离不能依赖真文件内容
+        # （test_config_user 已踩过同一个坑）。tearDown 负责还原。
+        config_mod.USER_CONFIGS.clear()
+        for key in self._user_backup:
+            config_mod.CONFIGS.pop(key, None)
 
     def tearDown(self):
         config_mod.USER_CONFIGS.clear()
