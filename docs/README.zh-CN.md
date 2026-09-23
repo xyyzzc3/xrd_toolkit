@@ -15,6 +15,8 @@ pip install -e .
 
 > 环境自检：`python scripts/check_env.py` 一条命令回答"现在能不能跑"（解释器、依赖、安装指向、GUI 导入、测试与数据）。**搬动或重命名过项目文件夹之后**要重跑上面的 `pip install -e .`——可编辑安装记的是绝对路径，搬家会让 `import xrd_toolkit` 失败，但源码一个字都没坏。
 
+> 界面链路探针：`python scripts/check_gui.py` 用真数据把界面走一遍（真积分 + 真鼠标事件：悬停/锚点点选/滚轮缩放/对比/热图）。单元测试全绿也可能藏着"点了没反应"的接线断点——它在画布回调那一层验，搬动过 GUI 模块之后值得跑一次。
+
 ## 使用
 
 典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。
@@ -149,7 +151,9 @@ python -m xrd_toolkit.gui
 │   ├── view_diffraction.py     # 衍射图查看器（画图 + 线剖面）
 │   ├── calibrate_integrate.py  # LaB₆ 几何校准 + 方位角积分（2D→1D）
 │   ├── integrate_pattern.py    # 全角度积分：2D 图 → 标准 1D 谱（两列 txt）
-│   └── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
+│   ├── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
+│   ├── check_env.py            # 环境自检（"现在能不能跑"，搬家后先跑它）
+│   └── check_gui.py            # 界面链路探针（真数据 + 真画布事件，拆模块后跑）
 ├── src/xrd_toolkit/
 │   ├── config.py               # 几何配置注册表（每批实验一个条目，--config 选择）
 │   ├── cli.py                  # 命令行共用交互选文件菜单（四个脚本共用）
