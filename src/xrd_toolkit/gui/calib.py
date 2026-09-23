@@ -185,9 +185,12 @@ def _fill_slot(state: dict, name: str) -> str:
 def _adopt_decision(state: dict, name: str) -> tuple:
     """"拟合得好不好"决定当前配置要不要换成这条结果：返回 (是否采纳, 说明)。
 
-    纯函数（不碰 window），便于直接单测。规则三条：
+    纯函数（不碰 window），便于直接单测。规则四条：
       * 手改/手输过（custom）→ 永不自动替换，只说明；
-      * 两边**都**有可用指标时才比：新结果要赢过门槛
+      * 当前配置还是**借来的出发点**（槽为空）→ 直接采纳：借来的几何是在
+        别的批次的图上量出来的，它的环位偏差在这张图上没有可比性——它是
+        起点，不是候选者（新批次的第一条结果总是采纳）；
+      * 两者都是"跑出来的"（当前配置指向某条结果）→ 新结果要赢过门槛
         SOURCE_IMPROVE_MIN_PX 才采纳（"没变好就不替换"，避免在噪声里
         来回跳）；
       * 比不出来（任一侧无指标）→ 采纳：它是用户刚跑出来的，没有证据
@@ -203,6 +206,9 @@ def _adopt_decision(state: dict, name: str) -> tuple:
     if state.get("custom"):
         return False, (f"当前配置是你手动改过的几何（自定义），"
                        f"不自动替换为 {name}")
+    if state["slots"]["current"] is None:
+        return True, (f"当前配置 → {name}（新批次的第一条结果，直接采纳；"
+                      f"原先是{cur_txt}，{dev_txt}）")
     if state.get("current_geom") is None or cur_dev is None or dev is None:
         # 没有当前几何（第一次）或两边比不出来 → 采纳
         return True, f"当前配置 → {name}（{dev_txt}）"

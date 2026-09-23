@@ -5084,30 +5084,36 @@ class TestCalibration(unittest.TestCase):
                                     "a": {"spread_ppm": 500.0}}):
                 self._enter_with_fake_a(w)
                 self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
-                # 只跑手动 → 结果进列表并填 A 槽；基准默认"当前配置"
+                # 只跑手动 → 结果进列表并填 A 槽；当前配置是"借来的起点"
+                # → 第一条结果**总是采纳**（新批次规则）
                 w.calib_start_manual.click()
                 self.assertTrue(_wait_until(
                     lambda: w.calib_state["slots"]["A"] == "手动1", 8000))
                 self.assertEqual([r["name"] for r in w.calib_state["results"]],
                                  ["原始1", "手动1"])
+                self.assertEqual(w.calib_state["current_from"], "手动1")
+                self.assertIn("新批次的第一条结果",
+                              w.log_text.toPlainText())
                 d = w.calib_vals["delta"]
                 self.assertEqual(d["dist"]["current"].text(), "—")   # 基准自身
-                self.assertEqual(d["dist"]["A"].text(), "+0.40")     # 手动−借用
-                self.assertEqual(d["dev"]["A"].text(), "+0.30")      # 0.50−0.20
-                # 再跑自动 → 轮换填进 B（A 留着手动）
+                self.assertEqual(d["dist"]["A"].text(), "+0.00")     # 就是它自己
+                # 再跑自动（环位偏差 0.20 < 手动 0.50）→ 轮换填 B 并采纳
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
                     lambda: w.calib_state["slots"]["B"] == "自动1", 8000))
                 self.assertEqual(w.calib_state["slots"]["A"], "手动1")
-                self.assertEqual(d["dist"]["B"].text(), "+0.00")     # 自动−借用
-                self.assertEqual(d["dev"]["B"].text(), "+0.00")
+                self.assertEqual(w.calib_state["current_from"], "自动1")
+                # Δ = 该列 − 基准（基准 = 当前配置 = 自动1）
+                self.assertEqual(d["dist"]["A"].text(), "+0.40")     # 手动−自动
+                self.assertEqual(d["dev"]["A"].text(), "+0.30")      # 0.50−0.20
+                self.assertEqual(d["dist"]["B"].text(), "+0.00")
                 # 基准可选：切成 A 之后，B 的 Δ 变成 自动 − 手动
                 w.calib_base_combo.setCurrentIndex(
                     w.calib_base_combo.findData("A"))
                 self.assertEqual(d["dist"]["B"].text(), "-0.40")
                 self.assertEqual(d["dist"]["A"].text(), "—")
-                # 保存对象 = 当前配置（没被采纳时仍是借来的那一条）
-                self.assertIn("借用 lmfp1_lab6", w.calib_save_hint.text())
+                # 保存对象 = 当前配置（此时是被采纳的 自动1）
+                self.assertIn("自动1", w.calib_save_hint.text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -5714,22 +5720,44 @@ class TestCalibModel(unittest.TestCase):
 
     # ── 采纳判据（"拟合得好不好"）─────────────────────────
     def test_first_result_adopted_when_nothing_to_compare(self):
-        st = self._state()          # current_metrics 为空 → 比不出来
+        st = self._state()          # 借来的起点 → 直接采纳
         name = self._with(st, "auto", dev=0.30)
         take, note = gui_calib._adopt_decision(st, name)
         self.assertTrue(take)
         self.assertIn("当前配置 → 自动1", note)
 
+    def _from_result(self, dev, **kw):
+        """当前配置 = 某条跑出来的结果（这时才用得上 0.05 px 门槛）。"""
+        st = self._state(**kw)
+        st["slots"]["current"] = "自动1"
+        st["current_from"] = "自动1"
+        st["current_metrics"] = {"dev_px": dev}
+        # 走 _add_result：计数器要跟着推进，否则下一条又命名成"自动1"
+        gui_calib._add_result(st, "auto", self._res(dev=dev))
+        return st
+
+    def test_borrowed_start_is_replaced_by_the_first_result(self):
+        """新批次：当前配置还是借来的出发点 → 第一条结果**总是**采纳。
+
+        借来的几何是在别的批次的图上量出来的，它的环位偏差在这张图上没有
+        可比性——它是起点，不是候选者。"""
+        st = self._state(current_metrics={"dev_px": 0.10})   # 借来的"看着更好"
+        name = self._with(st, "auto", dev=0.40)
+        take, note = gui_calib._adopt_decision(st, name)
+        self.assertTrue(take)
+        self.assertIn("新批次的第一条结果", note)
+
     def test_better_result_is_adopted(self):
-        st = self._state(current_metrics={"dev_px": 0.52})
+        st = self._from_result(0.52)
         name = self._with(st, "auto", dev=0.28)
         take, note = gui_calib._adopt_decision(st, name)
         self.assertTrue(take)
-        self.assertIn("优于 借用 lmfp1_lab6", note)
+        self.assertIn("自动2", note)
+        self.assertIn("优于", note)
 
     def test_marginally_better_is_not_adopted(self):
-        """改善小于门槛（0.05 px）→ 不采纳：那是跑动噪声，不是变好。"""
-        st = self._state(current_metrics={"dev_px": 0.30})
+        """两者都是跑出来的 → 改善小于门槛（0.05 px）就不换，那是跑动噪声。"""
+        st = self._from_result(0.30)
         name = self._with(st, "auto", dev=0.28)
         take, note = gui_calib._adopt_decision(st, name)
         self.assertFalse(take)
@@ -5737,7 +5765,7 @@ class TestCalibModel(unittest.TestCase):
         self.assertIn("改善不足", note)
 
     def test_worse_result_is_not_adopted(self):
-        st = self._state(current_metrics={"dev_px": 0.24})
+        st = self._from_result(0.24)
         name = self._with(st, "manual", dev=0.31)
         take, _note = gui_calib._adopt_decision(st, name)
         self.assertFalse(take)

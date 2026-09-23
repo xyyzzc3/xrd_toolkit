@@ -92,7 +92,7 @@ python -m xrd_toolkit.gui
   <tr>
     <td align="center" colspan="2">
       <img src="showcase/gui/gui_calib.png" width="50%"><br>
-      <sub>Calibration page on the LaB₆ standard — the current config (borrowed from the selected entry) beside comparison slots A and B, each column carrying distance / ring centre / ring-position deviation, with base-relative Δ rows and a verdict line; ① and ② improved the ring-position deviation by 0.022 and 0.009 px over the borrowed geometry — both under the 0.05 px threshold — so the log keeps the borrowed config in use</sub>
+      <sub>Calibration page on the LaB₆ standard — the current config beside comparison slots A and B, each column carrying distance / ring centre / ring-position deviation, with base-relative Δ rows and a verdict line. The borrowed start (0.259 px) is replaced by the first calibration result (0.236 px) — the rule for a new batch; the second run lands at 0.239 px, slightly worse, so it stays a comparison column instead of replacing anything</sub>
     </td>
   </tr>
 </table>
