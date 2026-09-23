@@ -4919,7 +4919,7 @@ class TestCalibration(unittest.TestCase):
             # 保存区：来源提示 + 保存按钮启用（保存流程另测）
             self.assertTrue(w.calib_save_btn.isEnabled())
             self.assertEqual(w.calib_save_hint.text(),
-                             "将保存：自动校准（距离 1595.80 mm，残差 0.0040°）")
+                             "将保存：自动定位（距离 1595.80 mm，残差 0.0040°）")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -5071,8 +5071,9 @@ class TestCalibration(unittest.TestCase):
                 self.assertEqual(d["dist"].text(), "+0.40")
                 self.assertEqual(d["poni"].text(), "1.56")
                 self.assertEqual(d["resid"].text(), "+0.0080")
-                # 保存来源 = 最近一次完成的模式（自动后跑 → 自动结果）
-                self.assertIn("将保存：自动校准",
+                # 保存来源 = "当前使用"的来源（两个 fake 结果都没带指标 →
+                # 比不出来 → 采用刚完成的自动；见 _update_current 规则）
+                self.assertIn("将保存：自动定位",
                               w.calib_save_hint.text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -5554,6 +5555,116 @@ class TestCalibMetrics(unittest.TestCase):
             self.assertIn("自动校准完成", logs)
             self.assertIn("环位偏差中位 0.52 px（初值 3.14）", logs)
             self.assertIn("a 离散 812 ppm", logs)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+
+class TestCalibSources(unittest.TestCase):
+    """来源模型（纯函数，不建窗）：谁好用谁 / 门槛 / 自定义冻结 / 无指标时的取舍。"""
+
+    @staticmethod
+    def _state(**results):
+        st = {"points": [], "auto": None, "manual": None, "refined": None,
+              "current": None, "custom": False}
+        st.update(results)
+        return st
+
+    @staticmethod
+    def _res(dev=None, n_complete=16):
+        """fake 结果：dev=None → 没有可用指标（缺 metrics）。"""
+        if dev is None:
+            return {"dist_m": 1.6, "metrics": None,
+                    "metrics_error": "RuntimeError: boom"}
+        return {"dist_m": 1.6,
+                "metrics": {"dev_px": dev, "clip_frac": 0.0,
+                            "n_complete": n_complete, "rings": [{}] * 16,
+                            "a": {"spread_ppm": 500.0}}}
+
+    def test_first_source_becomes_current(self):
+        st = self._state(auto=self._res(0.30))
+        note = gui_calib._update_current(st, "auto")
+        self.assertEqual(st["current"], "auto")
+        self.assertIn("当前使用 → 自动定位", note)
+        self.assertIn("0.30 px", note)
+
+    def test_clearly_better_source_replaces(self):
+        st = self._state(auto=self._res(0.52), current="auto")
+        st["manual"] = self._res(0.28)
+        note = gui_calib._update_current(st, "manual")
+        self.assertEqual(st["current"], "manual")
+        self.assertIn("优于 自动定位", note)
+
+    def test_marginally_better_does_not_replace(self):
+        """改善小于门槛（0.05 px）→ 不替换：那是跑动噪声，不是变好。"""
+        st = self._state(auto=self._res(0.30), current="auto")
+        st["manual"] = self._res(0.28)          # 好 0.02 px
+        note = gui_calib._update_current(st, "manual")
+        self.assertEqual(st["current"], "auto")
+        self.assertIn("当前使用保持 自动定位", note)
+        self.assertIn("改善不足", note)
+
+    def test_worse_source_keeps_current(self):
+        st = self._state(auto=self._res(0.24), current="auto")
+        st["refined"] = self._res(0.31)
+        note = gui_calib._update_current(st, "refined")
+        self.assertEqual(st["current"], "auto")
+        self.assertIn("当前使用保持 自动定位", note)
+
+    def test_custom_choice_freezes_auto_switch(self):
+        """用户手动指定过后，更好的新结果也不抢位（只记一条日志）。"""
+        st = self._state(auto=self._res(0.24), current="manual", custom=True)
+        st["manual"] = self._res(0.52)
+        st["refined"] = self._res(0.10)          # 明显更好
+        note = gui_calib._update_current(st, "refined")
+        self.assertEqual(st["current"], "manual")
+        self.assertTrue(st["custom"])
+        self.assertIn("自定义，不自动替换", note)
+
+    def test_without_metrics_the_newest_is_adopted(self):
+        """两边都比不出来（缺指标）→ 采用刚完成的：用户刚点的路径。"""
+        st = self._state(auto=self._res(None), current="auto")
+        st["manual"] = self._res(None)
+        note = gui_calib._update_current(st, "manual")
+        self.assertEqual(st["current"], "manual")
+        self.assertIn("无可用环信号", note)
+
+    def test_source_dev_ignores_non_finite(self):
+        self.assertIsNone(gui_calib._source_dev(None))
+        self.assertIsNone(gui_calib._source_dev({}))
+        self.assertIsNone(gui_calib._source_dev({"metrics_error": "x"}))
+        self.assertIsNone(gui_calib._source_dev(
+            {"metrics": {"dev_px": float("nan")}}))
+        self.assertEqual(gui_calib._source_dev({"metrics": {"dev_px": 0.25}}),
+                         0.25)
+
+    def test_set_current_custom_marks_and_requires_a_result(self):
+        st = self._state(auto=self._res(0.24), manual=self._res(0.52))
+        note = gui_calib._set_current_custom(st, "manual")
+        self.assertEqual(st["current"], "manual")
+        self.assertTrue(st["custom"])
+        self.assertIn("自定义", note)
+        self.assertIn("0.52 px", note)
+        # 没结果的来源不许指定（返回提示、状态不动）
+        st2 = self._state(auto=self._res(0.24))
+        note2 = gui_calib._set_current_custom(st2, "refined")
+        self.assertIsNone(st2["current"])
+        self.assertFalse(st2["custom"])
+        self.assertIn("还没有结果", note2)
+
+    def test_new_state_shape_has_all_three_sources(self):
+        """状态字典必须带齐三条来源键（结果区与保存都按它取用）。"""
+        w = create_window()
+        try:
+            state = gui_calib._calib_state(w)
+            self.assertEqual(set(gui_calib.SOURCE_LABELS),
+                             {"auto", "manual", "refined"})
+            for key in gui_calib.SOURCE_LABELS:
+                self.assertIn(key, state)
+                self.assertIsNone(state[key])
+            self.assertIsNone(state["current"])
+            self.assertFalse(state["custom"])
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):

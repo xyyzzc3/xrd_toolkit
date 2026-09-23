@@ -17,10 +17,15 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
 迭代自洽（两种解分支都能报 0.004°），不说明环对不对。指标算不出来时
 只记 metrics_error、日志如实说明，不影响校准结果本身。
 
+三条来源（自动定位 / 手动选点 / 二次精修）各出一个结果，**"当前使用"
+由"谁好用谁"决定**：新来源的环位偏差比当前的好 ≥ SOURCE_IMPROVE_MIN_PX
+才替换（用户手动指定过的则永不自动替换，标成"自定义"）。画图与
+[保存为配置] 都取"当前使用"那一份。
+
 界面分工：
   - 参数坞第 2 页 = _build_calib_form（模式单选 + 自动/手动按钮区 +
-    结果三列区 自动|手动|Δ偏差 + 保存为配置区）。两种模式共用同一
-    结果区与保存机制：最近完成模式的结果可直接存成命名用户条目
+    结果三列区 自动|手动|Δ偏差 + 保存为配置区）。各来源共用同一
+    结果区与保存机制："当前使用"的结果可直接存成命名用户条目
     （config_user.json，不进 git），保存后分析页"几何配置"下拉框
     立即出现并自动选中（几何填进参数坞）。内置 config.py 注册表
     仍走 CLI 模板人工登记（见 config.py 文件头）。
@@ -36,9 +41,10 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
   / calib_ax   面板与画布（None = 没开面板）
   calib_gen    代计数：面板关闭/重开/退出模式时 +1，在飞任务回调
                核对代数，迟到结果静默作废
-  calib_state  {"points": [(x, y, 环号), ...], "auto": 结果|None,
-                "manual": 结果|None, "last": 最近完成模式}——关闭
-                面板即全清（关闭即遗忘）
+  calib_state  {"points": [(x, y, 环号), ...], "auto"/"manual"/"refined":
+                各来源结果|None, "current": 当前使用的来源键,
+                "custom": 用户是否手动指定过}——关闭面板即全清
+                （关闭即遗忘）
 """
 import re
 from pathlib import Path
@@ -73,15 +79,88 @@ PANEL_SCALE = 560       # 校准图面板最长边（像素，图太大就按此
 RING_COLOR = "#00e5ff"  # 理论环 / 用户点标记色（青）
 CP_COLOR = "#3dff3d"    # pyFAI 控制点标记色（绿）
 
+# 校准来源（三步流程的三条路径 = 结果区可对比的来源集合）。
+# 键同时是 state 里的结果键（state[key] = 该来源的结果 dict）。
+SOURCE_LABELS = {"auto": "自动定位", "manual": "手动选点",
+                 "refined": "二次精修"}
+# "当前使用"的替换门槛（px）：新来源的环位偏差要比当前的好**这么多**才
+# 替换。依据：同一张图重复跑，几何参数会抖（PONI 1.6~2.2 px）而环位偏差
+# 只抖 0.014~0.029 px——改善小于 0.05 px 时"变好"是跑动噪声，不是真的。
+SOURCE_IMPROVE_MIN_PX = 0.05
+
 
 # ══ 小工具：状态 / 文件 / 图像 ══════════════════════════════════
 def _calib_state(window: QMainWindow) -> dict:
-    """校准状态（懒创建）：选点列表 + 两种模式的结果。"""
+    """校准状态（懒创建）：选点列表 + 各来源结果 + 当前使用。
+
+    键：
+      points    [(x, y, 环号), ...] 用户点的点
+      auto/manual/refined  各来源的结果 dict（None = 没跑过）
+      current   "当前使用"的来源键（None = 还没有可用几何）——画图、
+                [保存为配置] 都用它
+      custom    True = 用户手动指定过"当前使用"（标成"自定义"，此后新
+                结果不自动抢位）
+    """
     state = getattr(window, "calib_state", None)
     if state is None:
-        state = window.calib_state = {"points": [], "auto": None,
-                                      "manual": None, "last": None}
+        state = window.calib_state = {
+            "points": [], "auto": None, "manual": None, "refined": None,
+            "current": None, "custom": False}
     return state
+
+
+# ── 来源模型："谁好用谁" ────────────────────────────────────
+def _source_dev(result) -> float:
+    """该来源的环位偏差（px）。没有可用指标（缺 metrics / 无环信号）→ None。"""
+    m = (result or {}).get("metrics") or {}
+    dev = m.get("dev_px")
+    return float(dev) if dev is not None and np.isfinite(dev) else None
+
+
+def _update_current(state: dict, key: str) -> str:
+    """来源完成后的"谁好用谁"：必要时切换"当前使用"，返回一句日志说明。
+
+    纯函数（不碰 window），便于直接单测。规则三条：
+      * 用户手动指定过（custom）→ 永不自动替换，只说明；
+      * 两边**都**有可用指标时才比：新来源要赢过门槛
+        SOURCE_IMPROVE_MIN_PX 才替换（"没变好就不替换"，避免在噪声里
+        来回跳）；
+      * 比不出来（任一侧无可用指标）→ 采用刚完成的这条：它是用户刚点
+        的那条路径，而没有任何证据说它更差。
+    """
+    label = SOURCE_LABELS[key]
+    cur = state.get("current")
+    dev = _source_dev(state.get(key))
+    cur_dev = _source_dev(state.get(cur)) if cur else None
+    dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
+
+    if state.get("custom"):
+        return (f"{label}完成；当前使用仍是你指定的 "
+                f"{SOURCE_LABELS.get(cur, '—')}（自定义，不自动替换）")
+    if cur is None or cur == key or dev is None or cur_dev is None:
+        state["current"] = key
+        tail = ("；之前的 " + SOURCE_LABELS[cur] + " 无可用环信号"
+                if cur and cur != key and cur_dev is None and dev is not None
+                else "")
+        return f"当前使用 → {label}（{dev_txt}{tail}）"
+    if cur_dev - dev >= SOURCE_IMPROVE_MIN_PX:
+        state["current"] = key
+        return (f"当前使用 → {label}（环位偏差 {dev:.2f} px，优于 "
+                f"{SOURCE_LABELS[cur]} 的 {cur_dev:.2f} px）")
+    return (f"当前使用保持 {SOURCE_LABELS[cur]}（环位偏差 {cur_dev:.2f} px "
+            f"vs {label} 的 {dev:.2f} px，改善不足 {SOURCE_IMPROVE_MIN_PX:.2f} px）")
+
+
+def _set_current_custom(state: dict, key: str) -> str:
+    """用户手动指定"当前使用"→ 标成"自定义"（此后不自动替换）。返回日志说明。"""
+    if state.get(key) is None:
+        return f"该来源还没有结果：{SOURCE_LABELS[key]}"
+    state["current"] = key
+    state["custom"] = True
+    dev = _source_dev(state.get(key))
+    dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
+    return (f"当前使用改为 {SOURCE_LABELS[key]}（{dev_txt}，"
+            f"自定义——之后的新结果不再自动替换）")
 
 
 def _calib_standard_path(window: QMainWindow):
@@ -118,18 +197,18 @@ def _geom_px_keys(g: dict) -> dict:
 
 
 def _calib_draw_geometry(window: QMainWindow) -> dict:
-    """画图几何（统一 px 键）：最近一次校准结果覆盖参数面板初值。
+    """画图几何（统一 px 键）：**当前使用**的来源覆盖参数面板初值。
 
-    自动/手动校准完成后理论环按新几何重画（用户验证精修效果）；
+    校准完成后理论环按"当前使用"的几何重画（用户验证精修效果）；
     没跑过校准则按参数面板当前值画预测环。
     """
     draw = _geom_px_keys(_collect_geometry(window))
     state = _calib_state(window)
-    mode = state.get("last")
-    result = state.get(mode) if mode else None
+    key = state.get("current")
+    result = state.get(key) if key else None
     if result is not None:
-        for key in ("dist_m", "poni1_px", "poni2_px", "rot1_deg", "rot2_deg"):
-            draw[key] = result[key]
+        for k in ("dist_m", "poni1_px", "poni2_px", "rot1_deg", "rot2_deg"):
+            draw[k] = result[k]
     return draw
 
 
@@ -335,9 +414,14 @@ def _redraw_calib(window: QMainWindow) -> None:
     """按当前状态整幅重画：理论环（最近结果几何）+ 用户点 + 自动校准
     控制点（若有）。撤销/清空/校准完成后调用。"""
     state = _calib_state(window)
+    # 控制点来自 pyFAI extract_cp（自动/二次精修都会产出）：优先当前
+    # 使用的那份，没有就退回自动定位的
     cps = None
-    if state.get("auto"):
-        cps = state["auto"].get("control_points")
+    for key in (state.get("current"), "auto"):
+        res = state.get(key) if key else None
+        if res and res.get("control_points"):
+            cps = res["control_points"]
+            break
     _draw_calib_image(window, window.calib_key,
                       _calib_image(window, window.calib_path),
                       _calib_draw_geometry(window), control_points=cps,
@@ -451,7 +535,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # 模板区——不再复制粘贴，保存即登记；保存后下拉框自动选中新条目）
     save_box = QGroupBox("保存为几何配置")
     save_lay = QVBoxLayout(save_box)
-    save_hint = QLabel("把最近完成的校准结果存成命名配置条目：保存后"
+    save_hint = QLabel("把「当前使用」的校准结果存成命名配置条目：保存后"
                        "立即出现在分析页“几何配置”下拉框（重启后仍在，"
                        "命令行脚本同样可用 --config 选取）。条目写入"
                        "本地文件 config_user.json（不进 git），与人工"
@@ -512,8 +596,8 @@ def _reset_calib_form(window: QMainWindow) -> None:
 def _calib_sync(window: QMainWindow) -> None:
     """点数标签 + 手动按钮启用逻辑 + 保存按钮/来源提示同步。
 
-    手动按钮：≥3 点且 ≥2 环才可开始；保存按钮：最近一次完成的校准
-    结果存在才可存（无结果时置灰，来源提示随"最近完成模式"更新）。
+    手动按钮：≥3 点且 ≥2 环才可开始；保存按钮："当前使用"的来源存在
+    才可存（无结果时置灰，来源提示写明是哪条来源、"自定义"时标出来）。
     """
     state = _calib_state(window)
     points = state["points"]
@@ -523,15 +607,16 @@ def _calib_sync(window: QMainWindow) -> None:
     window.calib_start_manual.setEnabled(ok)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
-    mode = state.get("last")
+    mode = state.get("current")
     result = state.get(mode) if mode else None
     if result is None:
         window.calib_save_btn.setEnabled(False)
         window.calib_save_hint.setText("尚未有校准结果")
     else:
         window.calib_save_btn.setEnabled(True)
+        mark = "（自定义）" if state.get("custom") else ""
         window.calib_save_hint.setText(
-            f"将保存：{'自动' if mode == 'auto' else '手动'}校准"
+            f"将保存：{SOURCE_LABELS[mode]}{mark}"
             f"（距离 {result['dist_m'] * 1000:.2f} mm，"
             f"残差 {result['residual_deg']:.4f}°）")
 
@@ -815,29 +900,32 @@ def _on_auto_done(window: QMainWindow, result: dict) -> None:
     绿点控制点）+ 模板刷新。"""
     state = _calib_state(window)
     state["auto"] = result
-    state["last"] = "auto"
     _fill_calib_result(window, "auto", result)
     _fill_calib_delta(window)
+    # 先定"当前使用"再重画/同步——画的是当前几何、保存按钮看的是当前结果
+    note = _update_current(state, "auto")
     _redraw_calib(window)
     _calib_sync(window)
     _log(window, f"自动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
                  f"残差 {result['residual_deg']:.4f}°"
                  f"{_metrics_note(result)}")
+    _log(window, note)
 
 
 def _on_manual_done(window: QMainWindow, result: dict) -> None:
     """手动校准完成（主线程）：手动列填值 + Δ 列 + 图按新几何重画。"""
     state = _calib_state(window)
     state["manual"] = result
-    state["last"] = "manual"
     _fill_calib_result(window, "manual", result)
     _fill_calib_delta(window)
+    note = _update_current(state, "manual")
     _redraw_calib(window)
     _calib_sync(window)
     _log(window, f"手动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"残差 {result['residual_deg']:.4f}°"
                  f"{_metrics_note(result)}")
+    _log(window, note)
     if state.get("manual_n", 99) < 6:
         # 点数少时最小二乘对单点点击误差敏感（可能滑向退化解），
         # 残差小也不代表可信——如实提示，Δ 列让用户自己判断
@@ -896,7 +984,7 @@ def _confirm_overwrite(window: QMainWindow, key: str) -> bool:
 
 
 def _save_calib_config(window: QMainWindow) -> None:
-    """[保存为配置]：最近完成的校准结果 → 命名用户条目（本地落盘）。
+    """[保存为配置]："当前使用"的校准结果 → 命名用户条目（本地落盘）。
 
     校验 key/label → 与内置条目撞名拒绝、与已存用户条目撞名弹确认
     覆盖 → config.save_user_config 落盘 → 下拉框重建并自动选中新
@@ -907,7 +995,7 @@ def _save_calib_config(window: QMainWindow) -> None:
     手动 = 初值 B）；residual_deg 一并存入作诊断量（消费方忽略）。
     """
     state = _calib_state(window)
-    mode = state.get("last")
+    mode = state.get("current")
     result = state.get(mode) if mode else None
     if result is None:
         _log(window, "没有可保存的校准结果（先跑一次自动或手动校准）")
