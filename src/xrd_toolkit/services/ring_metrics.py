@@ -25,11 +25,17 @@
          等价于 (Σg)²/(n·Σg²)，见 _spectral_coverage）。对 0/1 指示
          函数它恰好是覆盖比例（弧长 Δφ → Δφ/2π），不需要选阈值。
          由于 g 只在检出样本上非零，恒有 coverage_fft ≤ coverage：两者
-         相等 = 信号整圈均匀；明显偏小 = 环强但不匀（纹理/大晶粒）或
-         刚过阈值的弱环在噪声里浮沉。**但要注意它只回答"信不信得匀"，
-         不回答"有没有环"**——若拿全窗噪声当 g（无环），它反而接近 1。
-         所以判据用 coverage（不完整以取点为准），FFT 值并列记录，
-         两者差得远时置 disagree 标志（该环信号可疑）。
+         相等 = 信号整圈均匀；偏小 = 环强但不匀（纹理/大晶粒/探测器
+         响应不均）或刚过阈值的弱环在噪声里浮沉。**但要注意它只回答
+         "信不信得匀"，不回答"有没有环"**——若拿全窗噪声当 g（无环），
+         它反而接近 1。所以判据用 coverage（不完整以取点为准），FFT 值
+         并列记录。
+         **实测（lab6 真数据，16 环全部完整）**：coverage 全为 1.00 而
+         coverage_fft 只有 0.37~0.77——真实标样环强度本就沿方位角起伏，
+         所以"两者有差"是常态、不是告警信号。曾经按 0.15 的差值阈值
+         置过 disagree 标志，真数据上 16 环全亮、等于永远报警，已删
+         （谁都不读的标志留着只会误导）——要判断均匀性请直接看 FFT 值
+         本身。
 
   3. a 自洽
      每条环按实测 2θ 反推 LaB₆ 晶格常数 a（a_k = d_k · a_ref/d_ref_k，
@@ -87,8 +93,6 @@ COMPLETE_COV = 0.9
 # 参与"环位偏差"汇总量（dev_px 等）的最低覆盖：覆盖太低的环里剩下的
 # "峰"多半是噪声，纳入汇总只会污染主指标。
 MIN_COVER_FOR_DEV = 0.5
-# 两法覆盖差超过该值 → 记 disagree（见模块 docstring 第 2 条）。
-FFT_DISAGREE = 0.15
 # 反推 a 需要的最少实测方位角数（太少则中位 2θ 不足以代表该环）。
 MIN_AZIM_FOR_A = 8
 
@@ -122,8 +126,9 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
                         dev_px, dev_signed_px, dev_rms_px  该环的偏差
                         n_valid, n_detected    窗口在图像内 / 测到峰的方位角数
                         fov_frac               窗口在图像内的方位角比例
-                        coverage, coverage_fft 两种覆盖估计
-                        fft_disagree           两法不一致（覆盖差 > FFT_DISAGREE）
+                        coverage, coverage_fft 两种覆盖估计（后者是
+                                               下界，真实数据上明显更低，
+                                               见模块 docstring 第 2 条）
                         complete, prom_med     完整环标志 / 峰高中位
                         clip_frac              峰顶到窗边的比例（>0 说明真峰
                                                可能在窗外，偏差被截断）
@@ -382,15 +387,11 @@ def _ring_row(k, r_pred, phi, st, valid, n_azim, b_row, b_col, geo,
         "coverage": n_det / float(n_azim),
         "coverage_fft": _spectral_coverage(np.where(det, prom, 0.0)),
         "complete": False,      # 下面按 coverage 覆盖
-        "fft_disagree": False,
         "prom_med": (float(np.median(prom[det])) if n_det else float("nan")),
         "clip_frac": float(st["clipped"][valid].mean()) if valid.any()
                      else float("nan"),
         "a_angstrom": float("nan"),
     }
-    row["fft_disagree"] = bool(
-        np.isfinite(row["coverage_fft"])
-        and row["coverage"] - row["coverage_fft"] > FFT_DISAGREE)
     row["complete"] = bool(row["coverage"] >= COMPLETE_COV)
 
     # 反推晶格常数：该环实测峰点的 2θ（逐方位角取中位，避免个别方位角
