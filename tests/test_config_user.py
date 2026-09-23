@@ -35,6 +35,30 @@ def _tmpfile(text=None):
     return p
 
 
+class TestProvenance(unittest.TestCase):
+    """血缘字段（derived_from / method / created）：可选、非空字符串才留。"""
+
+    def test_strings_survive_validation(self):
+        entry = dict(ENTRY, derived_from="lmfp1_lab6", method="refined",
+                     created="2026-09-23T16:30:00")
+        out = config._validate_user_entry("k", entry)
+        self.assertEqual(out["derived_from"], "lmfp1_lab6")
+        self.assertEqual(out["method"], "refined")
+        self.assertEqual(out["created"], "2026-09-23T16:30:00")
+        # 几何等标准字段不受影响
+        self.assertEqual(out["label"], ENTRY["label"])
+        self.assertEqual(out["beam_center"], (1022.0, 1022.3))
+
+    def test_empty_or_wrong_type_dropped(self):
+        out = config._validate_user_entry(
+            "k", dict(ENTRY, derived_from="", method=3, created=None))
+        for key in ("derived_from", "method", "created"):
+            self.assertNotIn(key, out)
+        # 旧条目（完全没有这些键）照常合法
+        self.assertNotIn("derived_from",
+                         config._validate_user_entry("k", dict(ENTRY)))
+
+
 class TestReadUserConfig(unittest.TestCase):
     """_read_user_config：容错读取（坏文件不拖垮程序启动）。"""
 

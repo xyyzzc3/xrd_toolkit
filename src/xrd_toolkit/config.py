@@ -79,6 +79,11 @@ def _validate_user_entry(name, entry):
     副本：geometry 只保留 7 个标准键（多余键丢弃，如控制点），
     beam_center 列表 → (row, col) 元组，residual_deg 可选保留
     （诊断量，消费方忽略）。
+
+    血缘/溯源字段（可选，都是字符串，GUI 保存时写入）：derived_from
+    = 校准初值借自哪条条目（手输时没有这个键）、method = 哪个来源
+    产出的（auto/manual/refined，对应三步流程）、created = 保存时间
+    （ISO 8601，本地时区）。
     """
     if not isinstance(entry, dict):
         raise ValueError(f"条目 {name!r} 必须是 dict")
@@ -103,6 +108,11 @@ def _validate_user_entry(name, entry):
     }
     if isinstance(entry.get("residual_deg"), (int, float)):
         out["residual_deg"] = float(entry["residual_deg"])
+    # 血缘字段：可选、非空字符串才收（旧条目没有这些键也照常工作）
+    for key in ("derived_from", "method", "created"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
     return out
 
 
