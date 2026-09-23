@@ -77,6 +77,12 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import config as config_mod
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
+from xrd_toolkit.gui import file_dock as gui_file_dock
+from xrd_toolkit.gui import plot_export as gui_plot_export
+from xrd_toolkit.gui import config_ops as gui_config_ops
+from xrd_toolkit.gui import calib_panel as gui_calib_panel
+from xrd_toolkit.gui import calib_model as gui_calib_model
+from xrd_toolkit.gui import plot_export as gui_export
 from xrd_toolkit.gui import customize as gui_customize
 from xrd_toolkit.gui.app import create_window
 # 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
@@ -669,9 +675,9 @@ class TestSaveFigures(unittest.TestCase):
         try:
             dock = _draw_one_1d(w)
             fig = gui_app._content(dock).figure
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
-                 mock.patch.object(gui_app, "_ask_save_options",
+                 mock.patch.object(gui_export, "_ask_save_options",
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/out", "PNG 图片 (*.png)")) as dlg, \
@@ -689,10 +695,10 @@ class TestSaveFigures(unittest.TestCase):
         w = create_window()
         try:
             _draw_one_1d(w)
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=None), \
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
-                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(gui_export._save_figures(w))
                 self.assertFalse(dlg.called)
                 self.assertIn("已取消保存", w.log_text.toPlainText())
         finally:
@@ -703,10 +709,10 @@ class TestSaveFigures(unittest.TestCase):
         w = create_window()
         try:
             _draw_one_1d(w)
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[]), \
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
-                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(gui_export._save_figures(w))
                 self.assertFalse(dlg.called)
                 self.assertIn("没有勾选要保存的图",
                               w.log_text.toPlainText())
@@ -728,15 +734,15 @@ class TestSaveFigures(unittest.TestCase):
                     > 0))
             d1 = _dock(w, "1D", "data/fake_a.tif")
             d2 = _dock(w, "1D", "data/fake_b.tif")
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[d1, d2]), \
-                 mock.patch.object(gui_app, "_ask_save_options",
+                 mock.patch.object(gui_export, "_ask_save_options",
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    side_effect=[("/tmp/a", ""),
                                                 ("", "")]) as dlg, \
                  mock.patch.object(gui_app._content(d1).figure, "savefig"):
-                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(gui_export._save_figures(w))
             self.assertEqual(dlg.call_count, 2)
             log = w.log_text.toPlainText()
             self.assertIn("已跳过保存 1D_fake_b.tif", log)
@@ -750,15 +756,15 @@ class TestSaveFigures(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
-                 mock.patch.object(gui_app, "_ask_save_options",
+                 mock.patch.object(gui_export, "_ask_save_options",
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/no/such/dir/out.png", "")), \
                  mock.patch.object(gui_app._content(dock).figure, "savefig",
                                    side_effect=OSError("磁盘写不进")):
-                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(gui_export._save_figures(w))
             log = w.log_text.toPlainText()
             self.assertIn("保存失败 1D_fake_b.tif", log)
         finally:
@@ -809,12 +815,12 @@ class TestSaveOptions(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
-                 mock.patch.object(gui_app, "_ask_save_options",
+                 mock.patch.object(gui_export, "_ask_save_options",
                                    return_value=None), \
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
-                self.assertFalse(gui_app._save_figures(w))
+                self.assertFalse(gui_export._save_figures(w))
                 self.assertFalse(dlg.called)
                 self.assertIn("已取消保存", w.log_text.toPlainText())
         finally:
@@ -826,14 +832,14 @@ class TestSaveOptions(unittest.TestCase):
         try:
             dock = _draw_one_1d(w)
             fig = gui_app._content(dock).figure
-            with mock.patch.object(gui_app, "_choose_panels",
+            with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
-                 mock.patch.object(gui_app, "_ask_save_options",
+                 mock.patch.object(gui_export, "_ask_save_options",
                                    return_value={"dpi": 600, "fmt": "tif"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/b", "TIF 图片 (*.tif)")) as dlg, \
                  mock.patch.object(fig, "savefig") as savefig:
-                self.assertTrue(gui_app._save_figures(w))
+                self.assertTrue(gui_export._save_figures(w))
                 self.assertIn("TIF", dlg.call_args[0][3])
                 savefig.assert_called_once_with("/tmp/b.tif", dpi=600)
         finally:
@@ -1335,7 +1341,7 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="overwrite"):
                 w.add_files(["data/fake_a.tif"])   # 再拖入一次
             self.assertEqual(w.file_list.count(), 1)
@@ -1352,7 +1358,7 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
                 w.add_files(["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 2)
@@ -1364,7 +1370,7 @@ class TestDuplicateFiles(unittest.TestCase):
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
             self.assertEqual(w.file_label.text(), "已选 2 个文件")
             # 第三次加入 → 编号继续涨，不与 (1) 撞名
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
                 w.add_files(["data/fake_a.tif"])
             texts = [w.file_list.item(i).text()
@@ -1378,7 +1384,7 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="cancel"):
                 w.add_files(["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 1)
@@ -1391,9 +1397,9 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
-                 mock.patch.object(gui_app, "_ask_rename",
+                 mock.patch.object(gui_file_dock, "_ask_rename",
                                    return_value="我的数据.tif"):
                 w.add_files(["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 2)
@@ -1411,9 +1417,9 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
-                 mock.patch.object(gui_app, "_ask_rename",
+                 mock.patch.object(gui_file_dock, "_ask_rename",
                                    return_value=None):
                 w.add_files(["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 1)
@@ -1426,9 +1432,9 @@ class TestDuplicateFiles(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
-            with mock.patch.object(gui_app, "_ask_duplicate",
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
-                 mock.patch.object(gui_app, "_ask_rename",
+                 mock.patch.object(gui_file_dock, "_ask_rename",
                                    side_effect=["fake_b.tif", "自定义.tif"]):
                 w.add_files(["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 3)
@@ -1462,7 +1468,7 @@ class TestDuplicateFiles(unittest.TestCase):
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files(["data/fake_a.tif"])
-                with mock.patch.object(gui_app, "_ask_duplicate",
+                with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                        return_value="rename"):
                     w.add_files(["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -4823,7 +4829,7 @@ class TestCalibration(unittest.TestCase):
             a = np.radians(ang)
             x = cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.cos(a)
             y = cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.sin(a)
-            gui_calib._on_calib_click(w, w.calib_key,
+            gui_calib_panel._on_calib_click(w, w.calib_key,
                                       SimpleNamespace(xdata=x, ydata=y,
                                                       inaxes=w.calib_ax))
 
@@ -4846,7 +4852,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             self.assertEqual(w.calib_key, "校准|data/fake_a.tif")
@@ -4873,7 +4879,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             self.assertEqual(w.calib_btn.text(), "退出校准")
@@ -4904,7 +4910,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -4947,18 +4953,18 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
                 # 几何只认当前配置（分析页字段是只读显示）→ 直接把距离
                 # 改大 1000 倍（16 条环全被推出图像）
                 w.calib_state["current_geom"]["dist_m"] *= 1000.0
-                gui_calib._redraw_calib(w)
+                gui_calib_panel._redraw_calib(w)
             self.assertIn("全部落在图像外", self._logs(w))
             self.assertGreater(w.calib_ax.get_xlim()[1], 256.0)
             # 同一几何重画（撤销/清空选点）不重复刷屏
             n = self._logs(w).count("全部落在图像外")
-            gui_calib._redraw_calib(w)
+            gui_calib_panel._redraw_calib(w)
             self.assertEqual(self._logs(w).count("全部落在图像外"), n)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -4976,17 +4982,17 @@ class TestCalibration(unittest.TestCase):
                    poni2_px=1060.0, rot1_deg=0.02, rot2_deg=-0.50)
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             calls = []
-            real_paths = gui_calib.theoretical_ring_paths
+            real_paths = gui_calib_panel.theoretical_ring_paths
 
             def spy(**kw):
                 calls.append(kw)
                 return real_paths(**kw)
 
-            with mock.patch.object(gui_calib, "theoretical_ring_paths",
+            with mock.patch.object(gui_calib_panel, "theoretical_ring_paths",
                                    side_effect=spy):
                 gui_calib._on_calib_result(w, "auto", res)
             self.assertEqual(calls[-1]["poni1_px"], 980.0)
@@ -5001,7 +5007,7 @@ class TestCalibration(unittest.TestCase):
                 image_shape=(256, 256))
             for ring in (2, 6, 9):
                 x, y = paths["rings"][ring][1][0]
-                gui_calib._on_calib_click(
+                gui_calib_panel._on_calib_click(
                     w, w.calib_key,
                     SimpleNamespace(xdata=float(x), ydata=float(y),
                                     inaxes=w.calib_ax))
@@ -5015,7 +5021,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             # 初始：0 点，手动按钮置灰
@@ -5028,7 +5034,7 @@ class TestCalibration(unittest.TestCase):
             self.assertTrue(w.calib_start_manual.isEnabled())
             self.assertIn("已记录第 3 个点", self._logs(w))
             # 束心附近点（离首环 1.7°）吸不上：日志忽略、列表不变
-            gui_calib._on_calib_click(
+            gui_calib_panel._on_calib_click(
                 w, w.calib_key,
                 SimpleNamespace(xdata=1022.0, ydata=1022.0,
                                 inaxes=w.calib_ax))
@@ -5067,7 +5073,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -5132,7 +5138,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -5165,7 +5171,7 @@ class TestCalibration(unittest.TestCase):
             w.show()
             w.resize(420, 700)
             QApplication.processEvents()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             w.param_dock.setMinimumWidth(w.param_dock.minimumWidth())
@@ -5204,7 +5210,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -5237,7 +5243,7 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
                 self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
@@ -5296,7 +5302,7 @@ class TestSaveCalibConfig(unittest.TestCase):
 
     def _auto_calib(self, w):
         """进校准模式跑一次 mock 自动校准（worker 真跑、引擎 mock）。"""
-        with mock.patch.object(gui_calib, "load_diffraction_image",
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((256, 256)) * 10), \
              mock.patch.object(gui_calib, "fit_center_from_rings",
                                return_value=TestCalibration.FAKE_CENTER), \
@@ -5402,12 +5408,12 @@ class TestSaveCalibConfig(unittest.TestCase):
 
     def test_suggest_config_key(self):
         """key 建议名：第一个数字段 +1，后缀数字（_lab6 的 6）不动。"""
-        self.assertEqual(gui_calib._suggest_config_key("lmfp1_lab6"),
+        self.assertEqual(gui_config_ops._suggest_config_key("lmfp1_lab6"),
                          "lmfp2_lab6")
-        self.assertEqual(gui_calib._suggest_config_key("lmfp12_lab6"),
+        self.assertEqual(gui_config_ops._suggest_config_key("lmfp12_lab6"),
                          "lmfp13_lab6")
-        self.assertEqual(gui_calib._suggest_config_key("n7m3"), "n8m3")
-        self.assertEqual(gui_calib._suggest_config_key("no_digits"),
+        self.assertEqual(gui_config_ops._suggest_config_key("n7m3"), "n8m3")
+        self.assertEqual(gui_config_ops._suggest_config_key("no_digits"),
                          "lab6_calib")
 
     def test_save_requires_a_geometry(self):
@@ -5420,7 +5426,7 @@ class TestSaveCalibConfig(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -5428,11 +5434,11 @@ class TestSaveCalibConfig(unittest.TestCase):
             self.assertTrue(w.calib_save_btn.isEnabled())
             self.assertIn("借用 lmfp1_lab6", w.calib_save_hint.text())
             # 把几何清掉 → 置灰 + 直调拒绝
-            gui_calib._calib_state(w)["current_geom"] = None
+            gui_calib_model._calib_state(w)["current_geom"] = None
             gui_calib._calib_sync(w)
             self.assertFalse(w.calib_save_btn.isEnabled())
             self.assertEqual(w.calib_save_hint.text(), "尚未有可保存的几何")
-            gui_calib._save_calib_config(w)   # 按钮置灰点不到：直调处理函数
+            gui_config_ops._save_calib_config(w)   # 按钮置灰点不到：直调处理函数
             self.assertIn("还没有可保存的几何", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -5444,7 +5450,7 @@ class TestSaveCalibConfig(unittest.TestCase):
         image = np.ones((256, 256)) * 10
         geom = {"pixel_size_m": 200e-6, "wavelength_m": 0.1223e-10,
                 "dist_m": 1.5958}   # worker 先读几何键再调引擎（引擎 mock）
-        with mock.patch.object(gui_calib, "load_diffraction_image",
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=image), \
              mock.patch.object(gui_calib, "fit_center_from_rings",
                                return_value=TestCalibration.FAKE_CENTER), \
@@ -5455,7 +5461,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                          (TestCalibration.FAKE_CENTER["cy"],
                           TestCalibration.FAKE_CENTER["cx"]))
         # 取点拟合失败 → FFT 兜底同样附带
-        with mock.patch.object(gui_calib, "load_diffraction_image",
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=image), \
              mock.patch.object(gui_calib, "fit_center_from_rings",
                                return_value=None), \
@@ -5506,7 +5512,7 @@ class TestCalibMetrics(unittest.TestCase):
             seen.append(kw["dist_m"])
             return dict(self.METRICS)
 
-        with mock.patch.object(gui_calib, "load_diffraction_image",
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
              mock.patch.object(gui_calib, "fit_center_from_rings",
                                return_value=self.FAKE_CENTER), \
@@ -5525,7 +5531,7 @@ class TestCalibMetrics(unittest.TestCase):
         """手动 worker：给了标样路径才读图算指标；没路径就跳过（不写键）。"""
         with mock.patch.object(gui_calib, "refine_lab6_from_points",
                                return_value=dict(self.FAKE_MANUAL)), \
-             mock.patch.object(gui_calib, "load_diffraction_image",
+             mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
              mock.patch.object(gui_calib, "ring_metrics",
                                return_value=dict(self.METRICS)):
@@ -5551,7 +5557,7 @@ class TestCalibMetrics(unittest.TestCase):
 
     def test_worker_survives_engine_exception(self):
         """引擎抛异常 → 只丢指标；校准结果与束心完好（指标是显示器）。"""
-        with mock.patch.object(gui_calib, "load_diffraction_image",
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
              mock.patch.object(gui_calib, "fit_center_from_rings",
                                return_value=self.FAKE_CENTER), \
@@ -5570,7 +5576,7 @@ class TestCalibMetrics(unittest.TestCase):
         """手动侧读图失败（文件被挪走）→ 只丢指标，精修结果照常返回。"""
         with mock.patch.object(gui_calib, "refine_lab6_from_points",
                                return_value=dict(self.FAKE_MANUAL)), \
-             mock.patch.object(gui_calib, "load_diffraction_image",
+             mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                side_effect=OSError("文件不见了")):
             res = gui_calib._manual_calib_worker(
                 "data/gone.tif", [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
@@ -5621,7 +5627,7 @@ class TestCalibMetrics(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -5677,7 +5683,7 @@ class TestCalibModel(unittest.TestCase):
 
     def _with(self, st, kind, **kw):
         """往状态里挂一条结果，返回名字。"""
-        return gui_calib._add_result(st, kind, self._res(**kw))
+        return gui_calib_model._add_result(st, kind, self._res(**kw))
 
     # ── 累积命名 ──────────────────────────────────────────
     def test_names_accumulate_per_kind(self):
@@ -5693,19 +5699,19 @@ class TestCalibModel(unittest.TestCase):
     def test_slots_fill_a_then_b(self):
         st = self._state()
         n1 = self._with(st, "auto")
-        self.assertIn("A", gui_calib._fill_slot(st, n1))
+        self.assertIn("A", gui_calib_model._fill_slot(st, n1))
         n2 = self._with(st, "auto")
-        self.assertIn("B", gui_calib._fill_slot(st, n2))
+        self.assertIn("B", gui_calib_model._fill_slot(st, n2))
         self.assertEqual((st["slots"]["A"], st["slots"]["B"]), (n1, n2))
         n3 = self._with(st, "manual")
-        gui_calib._fill_slot(st, n3)
+        gui_calib_model._fill_slot(st, n3)
         self.assertEqual(st["slots"]["A"], n3)      # 回到 A（轮换）
 
     def test_pinned_slot_is_skipped(self):
         st = self._state()
         st["slots"]["A"] = "手动1"
         st["pinned"]["A"] = True
-        note = gui_calib._fill_slot(st, "自动1")
+        note = gui_calib_model._fill_slot(st, "自动1")
         self.assertIn("B", note)
         self.assertEqual(st["slots"]["A"], "手动1")   # 钉住的没被覆盖
         self.assertEqual(st["slots"]["B"], "自动1")
@@ -5713,7 +5719,7 @@ class TestCalibModel(unittest.TestCase):
     def test_both_slots_pinned_keeps_result_only_in_list(self):
         st = self._state()
         st["pinned"] = {"A": True, "B": True}
-        note = gui_calib._fill_slot(st, "自动1")
+        note = gui_calib_model._fill_slot(st, "自动1")
         self.assertIn("只进列表", note)
         self.assertIsNone(st["slots"]["A"])
         self.assertIsNone(st["slots"]["B"])
@@ -5722,7 +5728,7 @@ class TestCalibModel(unittest.TestCase):
     def test_first_result_adopted_when_nothing_to_compare(self):
         st = self._state()          # 借来的起点 → 直接采纳
         name = self._with(st, "auto", dev=0.30)
-        take, note = gui_calib._adopt_decision(st, name)
+        take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
         self.assertIn("当前配置 → 自动1", note)
 
@@ -5733,7 +5739,7 @@ class TestCalibModel(unittest.TestCase):
         st["current_from"] = "自动1"
         st["current_metrics"] = {"dev_px": dev}
         # 走 _add_result：计数器要跟着推进，否则下一条又命名成"自动1"
-        gui_calib._add_result(st, "auto", self._res(dev=dev))
+        gui_calib_model._add_result(st, "auto", self._res(dev=dev))
         return st
 
     def test_borrowed_start_is_replaced_by_the_first_result(self):
@@ -5743,14 +5749,14 @@ class TestCalibModel(unittest.TestCase):
         可比性——它是起点，不是候选者。"""
         st = self._state(current_metrics={"dev_px": 0.10})   # 借来的"看着更好"
         name = self._with(st, "auto", dev=0.40)
-        take, note = gui_calib._adopt_decision(st, name)
+        take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
         self.assertIn("新批次的第一条结果", note)
 
     def test_better_result_is_adopted(self):
         st = self._from_result(0.52)
         name = self._with(st, "auto", dev=0.28)
-        take, note = gui_calib._adopt_decision(st, name)
+        take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
         self.assertIn("自动2", note)
         self.assertIn("优于", note)
@@ -5759,7 +5765,7 @@ class TestCalibModel(unittest.TestCase):
         """两者都是跑出来的 → 改善小于门槛（0.05 px）就不换，那是跑动噪声。"""
         st = self._from_result(0.30)
         name = self._with(st, "auto", dev=0.28)
-        take, note = gui_calib._adopt_decision(st, name)
+        take, note = gui_calib_model._adopt_decision(st, name)
         self.assertFalse(take)
         self.assertIn("当前配置保持", note)
         self.assertIn("改善不足", note)
@@ -5767,43 +5773,43 @@ class TestCalibModel(unittest.TestCase):
     def test_worse_result_is_not_adopted(self):
         st = self._from_result(0.24)
         name = self._with(st, "manual", dev=0.31)
-        take, _note = gui_calib._adopt_decision(st, name)
+        take, _note = gui_calib_model._adopt_decision(st, name)
         self.assertFalse(take)
 
     def test_hand_edited_geometry_freezes_adoption(self):
         """手改/手输过（自定义）→ 再好的结果也不自动替换。"""
         st = self._state(custom=True, current_metrics={"dev_px": 0.52})
         name = self._with(st, "auto", dev=0.10)
-        take, note = gui_calib._adopt_decision(st, name)
+        take, note = gui_calib_model._adopt_decision(st, name)
         self.assertFalse(take)
         self.assertIn("自定义", note)
 
     def test_metrics_dev_accepts_both_shapes(self):
         """口径：结果 dict 里套着 metrics，而"当前配置"的指标就是 metrics。"""
         self.assertEqual(
-            gui_calib._result_dev({"metrics": {"dev_px": 0.25}}), 0.25)
-        self.assertEqual(gui_calib._metrics_dev({"dev_px": 0.25}), 0.25)
+            gui_calib_model._result_dev({"metrics": {"dev_px": 0.25}}), 0.25)
+        self.assertEqual(gui_calib_model._metrics_dev({"dev_px": 0.25}), 0.25)
         for bad in (None, {}, {"dev_px": float("nan")}):
-            self.assertIsNone(gui_calib._metrics_dev(bad))
-            self.assertIsNone(gui_calib._result_dev({"metrics": bad}))
-            self.assertIsNone(gui_calib._result_dev(bad))
+            self.assertIsNone(gui_calib_model._metrics_dev(bad))
+            self.assertIsNone(gui_calib_model._result_dev({"metrics": bad}))
+            self.assertIsNone(gui_calib_model._result_dev(bad))
 
     # ── 表格：取值 / Δ 行 / 结论 ──────────────────────────
     def test_row_values_and_delta_text(self):
         a = self._res(dist=1.5962, dev=0.28, center=(1021.0, 1022.0))
         base = self._res(dist=1.5958, dev=0.52, center=(1024.0, 1022.0))
-        vals = gui_calib._row_values(a)
+        vals = gui_calib_model._row_values(a)
         self.assertAlmostEqual(vals["dist"], 1.5962)
         self.assertAlmostEqual(vals["center_r"], 1021.0)
         self.assertEqual(vals["dev"], 0.28)
-        self.assertEqual(gui_calib._fmt_row("dist", vals["dist"]), "1596.20")
-        self.assertEqual(gui_calib._delta_text(base, a, "dist"), "+0.40")
-        self.assertEqual(gui_calib._delta_text(base, a, "dev"), "-0.24")
+        self.assertEqual(gui_calib_model._fmt_row("dist", vals["dist"]), "1596.20")
+        self.assertEqual(gui_calib_model._delta_text(base, a, "dist"), "+0.40")
+        self.assertEqual(gui_calib_model._delta_text(base, a, "dev"), "-0.24")
         # Δ 只给"距离 / 环位偏差"两行（白名单），其余量显示 —
-        self.assertEqual(gui_calib._delta_text(base, a, "center_r"), "—")
-        self.assertEqual(gui_calib._delta_text(base, a, "poni1"), "—")
+        self.assertEqual(gui_calib_model._delta_text(base, a, "center_r"), "—")
+        self.assertEqual(gui_calib_model._delta_text(base, a, "poni1"), "—")
         # 基准列自身 → —
-        self.assertEqual(gui_calib._delta_text(a, a, "dist"), "—")
+        self.assertEqual(gui_calib_model._delta_text(a, a, "dist"), "—")
 
     def test_delta_rows_are_whitelisted(self):
         rows = [k for k, _n, _s, _f, has_d in gui_calib.COMPARE_ROWS]
@@ -5817,31 +5823,31 @@ class TestCalibModel(unittest.TestCase):
 
     def test_verdict_by_ring_deviation(self):
         base, other = self._res(dev=0.52), self._res(dev=0.28)
-        v = gui_calib._verdict(base, other, "当前配置", "A")
+        v = gui_calib_model._verdict(base, other, "当前配置", "A")
         self.assertIn("A 拟合得更好", v)
         self.assertIn("0.28 vs 0.52 px", v)
         # 基准自己更好时 → 结论指向基准
         self.assertIn("当前配置 拟合得更好",
-                      gui_calib._verdict(self._res(dev=0.28),
+                      gui_calib_model._verdict(self._res(dev=0.28),
                                          self._res(dev=0.52),
                                          "当前配置", "A"))
-        tie = gui_calib._verdict(self._res(dev=0.30), self._res(dev=0.28),
+        tie = gui_calib_model._verdict(self._res(dev=0.30), self._res(dev=0.28),
                                  "当前配置", "A")
         self.assertIn("差不多", tie)
         self.assertIn("判不了",
-                      gui_calib._verdict(self._res(dev=None),
+                      gui_calib_model._verdict(self._res(dev=None),
                                          self._res(dev=0.28), "当前配置", "A"))
         # 缺值显示 —（不许把 nan 打给用户）
-        self.assertEqual(gui_calib._fmt_row("dev", float("nan")), "—")
+        self.assertEqual(gui_calib_model._fmt_row("dev", float("nan")), "—")
 
     def test_slot_label_states(self):
         st = self._state()
-        self.assertEqual(gui_calib._slot_label(st, "current"), "借用 lmfp1_lab6")
-        self.assertEqual(gui_calib._slot_label(st, "A"), "—")
+        self.assertEqual(gui_calib_model._slot_label(st, "current"), "借用 lmfp1_lab6")
+        self.assertEqual(gui_calib_model._slot_label(st, "A"), "—")
         st["custom"] = True
-        self.assertEqual(gui_calib._slot_label(st, "current"), "自定义")
+        self.assertEqual(gui_calib_model._slot_label(st, "current"), "自定义")
         st["slots"]["A"] = "自动1"
-        self.assertEqual(gui_calib._slot_label(st, "A"), "自动1")
+        self.assertEqual(gui_calib_model._slot_label(st, "A"), "自动1")
 
 
 class TestCalibCurrent(unittest.TestCase):
@@ -5852,7 +5858,7 @@ class TestCalibCurrent(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -5874,7 +5880,7 @@ class TestCalibCurrent(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -5894,7 +5900,7 @@ class TestCalibCurrent(unittest.TestCase):
                 st = w.calib_state
                 self.assertTrue(st["custom"])
                 self.assertEqual(st["current_from"], "手输")
-                self.assertEqual(gui_calib._slot_label(st, "current"), "自定义")
+                self.assertEqual(gui_calib_model._slot_label(st, "current"), "自定义")
                 self.assertIsNone(st["slots"]["current"])
                 self.assertIn("自定义", w.log_text.toPlainText())
                 # 规则 (b)：数值没动过 → 像素确认**保持**（不打扰）
@@ -5918,7 +5924,7 @@ class TestCalibCurrent(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -5956,7 +5962,7 @@ class TestCalibCurrent(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -5987,7 +5993,7 @@ class TestCalibFlow(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -6029,7 +6035,7 @@ class TestCalibFlow(unittest.TestCase):
                 calls.append(kw)
                 return dict(self.FAKE_AUTO, dist_m=1.5965)
 
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -6066,7 +6072,7 @@ class TestCalibFlow(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
@@ -6112,7 +6118,7 @@ class TestCalibFlow(unittest.TestCase):
         try:
             w.show()
             before = w.param_dock.width()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -6136,12 +6142,12 @@ class TestCalibFlow(unittest.TestCase):
         saved = {}
         try:
             w.show()
-            with mock.patch.object(gui_calib, "load_diffraction_image",
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
                  mock.patch.object(gui_calib.config, "save_user_config",
                                    side_effect=lambda k, e: saved.update(
                                        {k: e}) or True), \
-                 mock.patch.object(gui_app, "_reload_config_combo"):
+                 mock.patch.object(gui_config_ops, "_reload_config_combo"):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_key_edit.setText("lmfp9_lab6")
@@ -6297,11 +6303,11 @@ class TestExportData(unittest.TestCase):
         try:
             self._two_1d_results(w)
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_build_export_dialog",
+            with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
                                                  "csv": False}):
-                gui_app._run_export(w)
+                gui_export._run_export(w)
             target = outdir / "fake_a" / "integrated_2th.txt"
             self.assertTrue(target.is_file())
             lines = target.read_text(encoding="utf-8").splitlines()
@@ -6321,11 +6327,11 @@ class TestExportData(unittest.TestCase):
         try:
             self._two_1d_results(w)
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_build_export_dialog",
+            with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".chi",
                                                  "csv": False}):
-                gui_app._run_export(w)
+                gui_export._run_export(w)
             self.assertTrue(
                 (outdir / "fake_b" / "integrated_2th.chi").is_file())
         finally:
@@ -6336,9 +6342,9 @@ class TestExportData(unittest.TestCase):
         try:
             self._two_1d_results(w)
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_build_export_dialog",
+            with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value=None):
-                gui_app._run_export(w)
+                gui_export._run_export(w)
             self.assertIn("已取消导出", w.log_text.toPlainText())
             self.assertEqual(list(outdir.iterdir()), [])
         finally:
@@ -6349,8 +6355,8 @@ class TestExportData(unittest.TestCase):
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
-            with mock.patch.object(gui_app, "_build_export_dialog") as dlg:
-                gui_app._run_export(w)
+            with mock.patch.object(gui_export, "_build_export_dialog") as dlg:
+                gui_export._run_export(w)
             dlg.assert_not_called()
             log = w.log_text.toPlainText()
             self.assertIn("跳过 fake_a.tif：还没有 1D 结果", log)
@@ -6365,7 +6371,7 @@ class TestExportData(unittest.TestCase):
         try:
             self._two_1d_results(w)
             outdir = Path(tempfile.mkdtemp())
-            real_write = gui_app._write_export
+            real_write = gui_export._write_export
             calls = {"n": 0}
 
             def flaky_write(target, tth, intensity):
@@ -6374,13 +6380,13 @@ class TestExportData(unittest.TestCase):
                     raise OSError("磁盘已满")
                 real_write(target, tth, intensity)
 
-            with mock.patch.object(gui_app, "_build_export_dialog",
+            with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
                                                  "csv": False}), \
-                 mock.patch.object(gui_app, "_write_export",
+                 mock.patch.object(gui_export, "_write_export",
                                    side_effect=flaky_write):
-                gui_app._run_export(w)
+                gui_export._run_export(w)
             log = w.log_text.toPlainText()
             self.assertIn("导出失败 fake_a", log)
             self.assertIn("导出完成：1 个文件", log)
@@ -6400,8 +6406,8 @@ class TestExportCsv(unittest.TestCase):
             results = [("a", tth, np.array([1.0, 2.0, 3.0])),
                        ("b", tth, np.array([4.0, 5.0, 6.0]))]
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_ask_csv_range") as ask:
-                gui_app._write_csv_summary(w, results, outdir)
+            with mock.patch.object(gui_export, "_ask_csv_range") as ask:
+                gui_export._write_csv_summary(w, results, outdir)
             ask.assert_not_called()   # 网格一致不打扰用户
             target = outdir / "1d_summary.csv"
             self.assertEqual(target.read_text().splitlines()[0],
@@ -6422,9 +6428,9 @@ class TestExportCsv(unittest.TestCase):
                        ("b", np.array([2.0, 3.0, 4.0]),
                         np.array([2.0, 3.0, 4.0]))]
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_ask_csv_range",
+            with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="intersect"):
-                gui_app._write_csv_summary(w, results, outdir)
+                gui_export._write_csv_summary(w, results, outdir)
             data = np.loadtxt(str(outdir / "1d_summary.csv"),
                               delimiter=",", skiprows=1)
             # 公共交集 2~3° 按最大点数均匀取样，两列都重插到公共网格
@@ -6444,9 +6450,9 @@ class TestExportCsv(unittest.TestCase):
                        ("b", np.array([0.0, 1.0]),
                         np.array([2.0, 2.0]))]
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_ask_csv_range",
+            with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="skip"):
-                gui_app._write_csv_summary(w, results, outdir)
+                gui_export._write_csv_summary(w, results, outdir)
             data = np.loadtxt(str(outdir / "1d_summary.csv"),
                               delimiter=",", skiprows=1)
             self.assertEqual(data.shape, (3, 2))   # 只留网格一致的文件
@@ -6460,9 +6466,9 @@ class TestExportCsv(unittest.TestCase):
             results = [("a", np.array([1.0, 2.0]), np.array([1.0, 1.0])),
                        ("b", np.array([3.0, 4.0]), np.array([2.0, 2.0]))]
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_ask_csv_range",
+            with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="cancel"):
-                gui_app._write_csv_summary(w, results, outdir)
+                gui_export._write_csv_summary(w, results, outdir)
             self.assertIn("已取消 CSV 总表", w.log_text.toPlainText())
             self.assertEqual(list(outdir.iterdir()), [])
         finally:
@@ -6472,7 +6478,7 @@ class TestExportCsv(unittest.TestCase):
         """窗口未显示（测试环境）：问询对话框不弹，直接按"跳过"处理。"""
         w = create_window()
         try:
-            self.assertEqual(gui_app._ask_csv_range(w), "skip")
+            self.assertEqual(gui_export._ask_csv_range(w), "skip")
         finally:
             w.close()
 
@@ -6488,11 +6494,11 @@ class TestExportCsv(unittest.TestCase):
                     lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
                                     "last_tth", None) is not None))
             outdir = Path(tempfile.mkdtemp())
-            with mock.patch.object(gui_app, "_build_export_dialog",
+            with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
                                                  "csv": True}):
-                gui_app._run_export(w)
+                gui_export._run_export(w)
             self.assertTrue((outdir / "fake_b" / "integrated_2th.txt")
                             .is_file())
             csv = outdir / "1d_summary.csv"
@@ -6715,7 +6721,7 @@ class TestDeleteConfig(unittest.TestCase):
             self.assertFalse(w.del_config_btn.isEnabled())
             # 置灰是体验层，处理函数是安全层：直调也被拒
             with mock.patch.object(gui_app.QMessageBox, "question") as ask:
-                gui_calib._delete_config(w)   # 处理函数归校准页
+                gui_config_ops._delete_config(w)   # 处理函数归校准页
             ask.assert_not_called()
             self.assertIn("内置条目", w.log_text.toPlainText())
         finally:
@@ -7747,8 +7753,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
         try:
             self._open_1d(w)
             self._set_mode(w, "auto")
-            plain = gui_app._checked_1d_results(w, want_bg=False)
-            with_bg = gui_app._checked_1d_results(w, want_bg=True)
+            plain = gui_export._checked_1d_results(w, want_bg=False)
+            with_bg = gui_export._checked_1d_results(w, want_bg=True)
             self.assertEqual(len(plain), 1)
             raw = np.asarray(plain[0][2], dtype=float)
             sub = np.asarray(with_bg[0][2], dtype=float)
@@ -7772,7 +7778,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 return QDialog.Rejected
 
             with mock.patch.object(QDialog, "exec", new=fake_exec):
-                self.assertIsNone(gui_app._build_export_dialog(w, 1))
+                self.assertIsNone(gui_export._build_export_dialog(w, 1))
             self.assertIsNotNone(captured.get("check"))
             self.assertFalse(captured["bg"], "默认不勾 = 导出原始曲线")
         finally:

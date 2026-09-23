@@ -53,6 +53,7 @@ from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _install_resize_grip, _PanelResizeFilter, _panel_extra,
     _PlotSubWindow, _settle, _toggle_pop_out)
+from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _bg_curve, _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
@@ -1106,41 +1107,6 @@ class _SlimToolbar(NavigationToolbar2QT):
             super().save_figure(*args)
 
 
-def _ask_save_options(window: QMainWindow):
-    """保存图片选项弹窗：分辨率 dpi + 格式（PNG/TIF）。
-
-    返回 {"dpi": int, "fmt": "png"|"tif"} 或 None（取消 = 整个保存
-    流程中止，不继续弹文件名框）。fmt 既是 currentData 也是扩展名，
-    文件名框的过滤器与自动补后缀都从它来。默认 300 dpi：屏幕看 100
-    dpi 够用，论文/报告印刷要求 300 起步，图大了再往上加。
-    """
-    dlg = QDialog(window)
-    dlg.setWindowTitle("保存图片选项")
-    lay = QFormLayout(dlg)
-    dpi_spin = QSpinBox()
-    dpi_spin.setObjectName("save_dpi_spin")
-    dpi_spin.setRange(72, 1200)
-    dpi_spin.setValue(300)
-    lay.addRow("分辨率 (dpi)", dpi_spin)
-    fmt_combo = QComboBox()
-    fmt_combo.setObjectName("save_fmt_combo")
-    fmt_combo.addItem("PNG（通用，文件小）", "png")
-    fmt_combo.addItem("TIF（无损，论文常用）", "tif")
-    lay.addRow("格式", fmt_combo)
-    btn_row = QWidget()
-    btn_lay = QHBoxLayout(btn_row)
-    btn_lay.setContentsMargins(0, 0, 0, 0)
-    ok = QPushButton("确定")
-    ok.setObjectName("save_opt_ok_btn")
-    cancel = QPushButton("取消")
-    ok.clicked.connect(dlg.accept)
-    cancel.clicked.connect(dlg.reject)
-    btn_lay.addWidget(ok)
-    btn_lay.addWidget(cancel)
-    lay.addRow("", btn_row)
-    if dlg.exec() != QDialog.Accepted:
-        return None
-    return {"dpi": dpi_spin.value(), "fmt": fmt_combo.currentData()}
 
 
 def _save_panel(window: QMainWindow, key: str) -> None:
