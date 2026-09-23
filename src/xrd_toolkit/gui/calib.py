@@ -56,10 +56,10 @@ from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMdiSubWindow, QMessageBox, QPushButton, QScrollArea, QVBoxLayout,
-    QWidget)
+    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QMainWindow, QMdiSubWindow, QMessageBox, QPushButton,
+    QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
@@ -80,313 +80,525 @@ PANEL_SCALE = 560       # 校准图面板最长边（像素，图太大就按此
 RING_COLOR = "#00e5ff"  # 理论环 / 用户点标记色（青）
 CP_COLOR = "#3dff3d"    # pyFAI 控制点标记色（绿）
 
-# 校准来源（三步流程的三条路径 = 结果区可对比的来源集合）。
-# 键同时是 state 里的结果键（state[key] = 该来源的结果 dict）。
-SOURCE_LABELS = {"auto": "自动定位", "manual": "手动选点",
-                 "refined": "二次精修"}
-# "当前使用"的替换门槛（px）：新来源的环位偏差要比当前的好**这么多**才
-# 替换。依据：同一张图重复跑，几何参数会抖（PONI 1.6~2.2 px）而环位偏差
-# 只抖 0.014~0.029 px——改善小于 0.05 px 时"变好"是跑动噪声，不是真的。
+# 结果种类（校准功能页的累积命名前缀）。原始 = 起点（借来的条目 / 手输 /
+# 手改的几何），其余三个是校准动作产出的结果。
+KIND_LABELS = {"raw": "原始", "auto": "自动", "manual": "手动",
+               "refined": "精修"}
+SLOT_LABELS = {"current": "当前配置", "A": "A", "B": "B"}
+# "当前配置"的替换门槛（px）：新结果的环位偏差要比当前配置好**这么多**
+# 才自动采纳。依据：同一张图重复跑，几何参数会抖（PONI 1.6~2.2 px）而环
+# 位偏差只抖 0.014~0.029 px——改善小于 0.05 px 时"变好"是跑动噪声。
 SOURCE_IMPROVE_MIN_PX = 0.05
+# 校准模式的坞宽上限：给绘图区留出的宽度（校准图面板 560 px 缩放目标 +
+# 边距）。点环选点是在图上做的，坞再宽就把图挤到没法点了。
+CALIB_PANEL_RESERVE_PX = 620
 
 
 # ══ 小工具：状态 / 文件 / 图像 ══════════════════════════════════
 def _calib_state(window: QMainWindow) -> dict:
-    """校准状态（懒创建）：选点列表 + 各来源结果 + 当前使用。
+    """校准状态（懒创建）：选点 + 累积结果 + 三个槽（当前配置 / A / B）。
 
     键：
-      points    [(x, y, 环号), ...] 用户点的点
-      auto/manual/refined  各来源的结果 dict（None = 没跑过）
-      current   "当前使用"的来源键（None = 还没有可用几何）——画图、
-                [保存为配置] 都用它
-      custom    True = 用户手动指定过"当前使用"（标成"自定义"，此后新
-                结果不自动抢位）
+      points        [(x, y, 环号), ...] 用户点的点
+      results       累积的几何结果，按产生顺序：
+                    [{"name": 原始/自动1/手动1/…, "kind": raw|auto|manual|
+                     refined, "result": 几何 dict（带 metrics）}]
+      slots         {"current"/"A"/"B": 结果名 | None}——三个槽各指向一条
+                    结果；A/B 默认空。current 为 None 时"当前配置"是手输/
+                    手改的独立几何（显示"自定义"）
+      pinned        {"A": bool, "B": bool} 槽被用户手动选过 → 新结果不覆盖
+      next_slot     轮换指针（A→B→A…），新结果按它填没被钉住的槽
+      current_geom  当前配置的几何（_collect_geometry 的 7 键 + beam_center_rc）
+      current_from  它的来处说明（"借用 lmfp1_lab6" / "手输" / 结果名）
+      current_metrics / current_error  当前配置的指标（异步算）
+      custom        True = 手输或手改过（表头显示"自定义"）
+      counters      {"auto": n, ...} 累积命名计数
     """
     state = getattr(window, "calib_state", None)
     if state is None:
         state = window.calib_state = {
-            "points": [], "auto": None, "manual": None, "refined": None,
-            "current": None, "custom": False}
+            "points": [], "results": [],
+            "slots": {"current": None, "A": None, "B": None},
+            "pinned": {"A": False, "B": False}, "next_slot": "A",
+            "current_geom": None, "current_from": None,
+            "current_metrics": None, "current_error": None,
+            "custom": False, "counters": {}}
     return state
 
 
-# ── 来源模型："谁好用谁" ────────────────────────────────────
-def _source_dev(result) -> float:
-    """该来源的环位偏差（px）。没有可用指标（缺 metrics / 无环信号）→ None。"""
-    m = (result or {}).get("metrics") or {}
-    dev = m.get("dev_px")
+# ── 结果列表与三个槽 ────────────────────────────────────────
+def _metrics_dev(metrics) -> float:
+    """指标 dict 的环位偏差（px）。没有指标 / 无可用环信号 → None。"""
+    dev = (metrics or {}).get("dev_px")
     return float(dev) if dev is not None and np.isfinite(dev) else None
 
 
-def _update_current(state: dict, key: str) -> str:
-    """来源完成后的"谁好用谁"：必要时切换"当前使用"，返回一句日志说明。
+def _result_dev(result) -> float:
+    """这条结果的环位偏差（px）——取它附带的 metrics。没有 → None。
+
+    注意口径：结果 dict 里**套着** metrics；而"当前配置"的指标本身就是
+    metrics（state["current_metrics"]）——混用会让比较永远判"比不出来"
+    （踩过：cur_dev 恒为 None，于是每条新结果都被无条件采纳）。
+    """
+    return _metrics_dev((result or {}).get("metrics"))
+
+
+def _result_by_name(state: dict, name):
+    """按名字取结果条目（{"name","kind","result"}）；没有 → None。"""
+    for item in state["results"]:
+        if item["name"] == name:
+            return item
+    return None
+
+
+def _next_name(state: dict, kind: str) -> str:
+    """累积命名：自动1、手动1、自动2…（每种各数各的）。"""
+    n = state["counters"].get(kind, 0) + 1
+    state["counters"][kind] = n
+    return f"{KIND_LABELS[kind]}{n}"
+
+
+def _add_result(state: dict, kind: str, result: dict) -> str:
+    """把一次校准结果挂进累积列表，返回它的名字。"""
+    name = _next_name(state, kind)
+    state["results"].append({"name": name, "kind": kind, "result": result})
+    return name
+
+
+def _fill_slot(state: dict, name: str) -> str:
+    """新结果按 A→B→A… 填进**没被钉住**的槽，返回日志说明片段。
+
+    槽被手动选过（pinned）就跳过；两个都钉住 → 只进列表、不占槽（否则
+    你正在看的对比会被悄悄换掉）。
+    """
+    order = ("A", "B")
+    start = order.index(state.get("next_slot", "A"))
+    for i in range(2):
+        slot = order[(start + i) % 2]
+        if not state["pinned"][slot]:
+            state["slots"][slot] = name
+            state["next_slot"] = order[(start + i + 1) % 2]
+            return f"填进 {slot} 槽"
+    return "A/B 槽都被你钉住了，只进列表"
+
+
+def _adopt_decision(state: dict, name: str) -> tuple:
+    """"拟合得好不好"决定当前配置要不要换成这条结果：返回 (是否采纳, 说明)。
 
     纯函数（不碰 window），便于直接单测。规则三条：
-      * 用户手动指定过（custom）→ 永不自动替换，只说明；
-      * 两边**都**有可用指标时才比：新来源要赢过门槛
-        SOURCE_IMPROVE_MIN_PX 才替换（"没变好就不替换"，避免在噪声里
+      * 手改/手输过（custom）→ 永不自动替换，只说明；
+      * 两边**都**有可用指标时才比：新结果要赢过门槛
+        SOURCE_IMPROVE_MIN_PX 才采纳（"没变好就不替换"，避免在噪声里
         来回跳）；
-      * 比不出来（任一侧无可用指标）→ 采用刚完成的这条：它是用户刚点
-        的那条路径，而没有任何证据说它更差。
+      * 比不出来（任一侧无指标）→ 采纳：它是用户刚跑出来的，没有证据
+        说它更差。
     """
-    label = SOURCE_LABELS[key]
-    cur = state.get("current")
-    dev = _source_dev(state.get(key))
-    cur_dev = _source_dev(state.get(cur)) if cur else None
+    item = _result_by_name(state, name)
+    if item is None:
+        return False, f"没有这条结果：{name}"
+    dev = _result_dev(item["result"])
+    cur_dev = _metrics_dev(state.get("current_metrics"))
+    cur_txt = state.get("current_from") or "当前配置"
     dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-
     if state.get("custom"):
-        return (f"{label}完成；当前使用仍是你指定的 "
-                f"{SOURCE_LABELS.get(cur, '—')}（自定义，不自动替换）")
-    if cur is None or cur == key or dev is None or cur_dev is None:
-        state["current"] = key
-        tail = ("；之前的 " + SOURCE_LABELS[cur] + " 无可用环信号"
-                if cur and cur != key and cur_dev is None and dev is not None
-                else "")
-        return f"当前使用 → {label}（{dev_txt}{tail}）"
+        return False, (f"当前配置是你手动改过的几何（自定义），"
+                       f"不自动替换为 {name}")
+    if state.get("current_geom") is None or cur_dev is None or dev is None:
+        # 没有当前几何（第一次）或两边比不出来 → 采纳
+        return True, f"当前配置 → {name}（{dev_txt}）"
     if cur_dev - dev >= SOURCE_IMPROVE_MIN_PX:
-        state["current"] = key
-        return (f"当前使用 → {label}（环位偏差 {dev:.2f} px，优于 "
-                f"{SOURCE_LABELS[cur]} 的 {cur_dev:.2f} px）")
-    return (f"当前使用保持 {SOURCE_LABELS[cur]}（环位偏差 {cur_dev:.2f} px "
-            f"vs {label} 的 {dev:.2f} px，改善不足 {SOURCE_IMPROVE_MIN_PX:.2f} px）")
+        return True, (f"当前配置 → {name}（环位偏差 {dev:.2f} px，优于 "
+                      f"{cur_txt} 的 {cur_dev:.2f} px）")
+    return False, (f"当前配置保持 {cur_txt}（环位偏差 {cur_dev:.2f} px vs "
+                   f"{name} 的 {dev:.2f} px，改善不足 "
+                   f"{SOURCE_IMPROVE_MIN_PX:.2f} px）")
 
 
-def _set_current_custom(state: dict, key: str) -> str:
-    """用户手动指定"当前使用"→ 标成"自定义"（此后不自动替换）。返回日志说明。"""
-    if state.get(key) is None:
-        return f"该来源还没有结果：{SOURCE_LABELS[key]}"
-    state["current"] = key
-    state["custom"] = True
-    dev = _source_dev(state.get(key))
-    dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-    return (f"当前使用改为 {SOURCE_LABELS[key]}（{dev_txt}，"
-            f"自定义——之后的新结果不再自动替换）")
+def _result_to_geom(result: dict, base: dict) -> dict:
+    """结果（px 键）→ 当前配置几何（_collect_geometry 形状）。
 
-
-# ── 校准初值：新批次的出发点（借条目 / 手输 / 导入 .poni）──────
-def _calib_init_state(window: QMainWindow) -> dict:
-    """校准初值状态（懒创建，挂在 window 上：面板开关不清它）。
-
-    键：
-      source       借用哪条配置条目的 key；或 "manual"（手输）
-      pixel_um / wavelength_a / dist_mm   手输通道的三个值
-      confirmed    像素尺寸是否已被用户显式确认（**强制确认**：像素
-                   尺寸填错时整幅几何都会错，而结果看起来很正常）
+    像素尺寸与波长沿用当前配置（它们不参与拟合），距离 / PONI / 倾斜角 /
+    束心取结果。
     """
-    st = getattr(window, "calib_init", None)
-    if st is None:
-        # 版面建序：校准页可能先于"分析页应用默认配置"建好，此刻
-        # window.config / config_name 还不存在 → 退回默认条目。等
-        # _apply_config 跑过之后，用户换条目会自动更新这里的来源。
-        entry = getattr(window, "config", None) \
-            or config.CONFIGS[config.DEFAULT_CONFIG]
-        g = entry["geometry"]
-        st = window.calib_init = {
-            "source": getattr(window, "config_name", config.DEFAULT_CONFIG),
-            "pixel_um": g["pixel_size_m"] * 1e6,
-            "wavelength_a": g["wavelength_m"] * 1e10,
-            "dist_mm": g["dist_m"] * 1e3,
-            "confirmed": False,
-        }
-    return st
-
-
-def _calib_initial(window: QMainWindow) -> dict:
-    """校准初值（_collect_geometry 形状、米制）——按"校准初值"区选择取。
-
-    借条目 → 那条条目的几何（7 个几何键齐全）；手输 → 三个输入框的
-    值 + 分析配置的 PONI/倾斜角（它们不在 pyFAI 的拟合初值里——精修
-    只吃距离 + 环心——只用于日志"初值"那一栏与指标对照）。2θ 范围
-    沿用面板设置；面板还没建好就略过（初值本身不用它）。
-    """
-    st = _calib_init_state(window)
-    entry = config.CONFIGS.get(st["source"])
-    if entry is not None:
-        out = dict(entry["geometry"])
-    else:
-        g = (getattr(window, "config", None)
-             or config.CONFIGS[config.DEFAULT_CONFIG])["geometry"]
-        out = dict(g, pixel_size_m=st["pixel_um"] * 1e-6,
-                   wavelength_m=st["wavelength_a"] * 1e-10,
-                   dist_m=st["dist_mm"] * 1e-3)
-    params = getattr(window, "params", None) or {}
-    for key, name in (("tth_min_deg", "2θ 下限 (°)"),
-                      ("tth_max_deg", "2θ 上限 (°)")):
-        box = params.get(name)
-        if box is not None:
-            out[key] = box.value()
+    out = dict(base or {})
+    pixel = out.get("pixel_size_m")
+    out["dist_m"] = result["dist_m"]
+    out["rot1_deg"] = result["rot1_deg"]
+    out["rot2_deg"] = result["rot2_deg"]
+    out["beam_center_rc"] = result.get("beam_center_rc")
+    if pixel:
+        out["poni1_m"] = result["poni1_px"] * pixel
+        out["poni2_m"] = result["poni2_px"] * pixel
     return out
 
 
-def _init_source_text(window: QMainWindow) -> str:
-    """初值来源的中文说明（标签与日志共用）。"""
-    st = _calib_init_state(window)
-    if st["source"] in config.CONFIGS:
-        g = _calib_initial(window)
-        return (f"借用条目 {st['source']}（距离 {g['dist_m'] * 1e3:.2f} mm、"
-                f"像素 {g['pixel_size_m'] * 1e6:.1f} µm）")
-    return "手动输入"
+def _adopt_result(window: QMainWindow, name: str, why: str = "自动采纳") -> None:
+    """把当前配置换成这条结果（几何 / 指标 / 来处一起换）+ 重画青线。"""
+    state = _calib_state(window)
+    item = _result_by_name(state, name)
+    if item is None:
+        return
+    state["slots"]["current"] = name
+    state["current_geom"] = _result_to_geom(item["result"],
+                                            state["current_geom"])
+    state["current_metrics"] = item["result"].get("metrics")
+    state["current_error"] = item["result"].get("metrics_error")
+    state["current_from"] = name
+    state["custom"] = False
+    if why:
+        dev = _result_dev(item["result"])
+        dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
+        _log(window, f"当前配置 ← {name}（{why}，{dev_txt}）")
+    _redraw_calib(window)
+
+
+def _geom_to_result_shape(geom: dict) -> dict:
+    """当前配置几何（_collect_geometry 形状）→ 结果形状（px 键），
+    这样三个槽里的东西长得一样，对比代码只认一种形状。"""
+    g = _geom_px_keys(geom)
+    return {"dist_m": g["dist_m"], "poni1_px": g["poni1_px"],
+            "poni2_px": g["poni2_px"], "rot1_deg": g["rot1_deg"],
+            "rot2_deg": g["rot2_deg"],
+            "beam_center_rc": geom.get("beam_center_rc")}
+
+
+def _slot_result(state: dict, slot: str):
+    """某个槽当前指向的结果 dict（结果形状）；空 → None。
+
+    "当前配置"槽为空时返回手输/手改的几何（按结果形状转换，指标取
+    current_metrics）——三个槽在对比表里因此是同一种东西。
+    """
+    name = state["slots"].get(slot)
+    if name:
+        item = _result_by_name(state, name)
+        if item is not None:
+            out = dict(item["result"])
+            out.setdefault("metrics", None)
+            return out
+    if slot == "current" and state.get("current_geom") is not None:
+        out = _geom_to_result_shape(state["current_geom"])
+        out["metrics"] = state.get("current_metrics")
+        return out
+    return None
+
+
+def _slot_label(state: dict, slot: str) -> str:
+    """槽在表头显示的说明：结果名 / "自定义" / "借用 …"。"""
+    name = state["slots"].get(slot)
+    if name:
+        return name
+    if slot == "current":
+        return "自定义" if state.get("custom") else (state.get("current_from")
+                                                      or "—")
+    return "—"
+
+
+# ── 当前配置：起点（借用条目 / 手输手改）、像素确认、指标 ──────
+def _ensure_current(window: QMainWindow) -> None:
+    """当前配置还没设定时：默认借分析页选中的配置条目。
+
+    借来的这条几何同时登记成累积列表的第一条（"原始"）——这样 A/B 随时
+    能拿精修结果跟"没校准过"的样子比，回答"校准到底有没有用"。
+    """
+    state = _calib_state(window)
+    if state["current_geom"] is None:
+        _borrow_entry(window, getattr(window, "config_name",
+                                      config.DEFAULT_CONFIG), silent=True)
+
+
+def _borrow_entry(window: QMainWindow, key: str, silent: bool = False) -> str:
+    """当前配置 ← 借一条配置条目的几何（已在累积的结果不动）。"""
+    entry = config.CONFIGS.get(key)
+    if entry is None:
+        return f"没有配置条目 {key}"
+    state = _calib_state(window)
+    geom = dict(entry["geometry"])
+    geom["beam_center_rc"] = tuple(entry.get("beam_center", (None, None)))
+    state["current_geom"] = geom
+    state["slots"]["current"] = None
+    state["current_from"] = f"借用 {key}"
+    state["base_key"] = key          # 血缘：这一批的起点是从哪条借的
+    state["custom"] = False
+    state["current_metrics"] = None
+    state["current_error"] = None
+    if not state["results"]:          # 累积列表的第一条 = "原始"
+        state["results"].append(
+            {"name": _next_name(state, "raw"), "kind": "raw",
+             "result": _geom_to_result_shape(geom)})
+    if not silent:
+        _log(window, f"当前配置 ← 借用条目 {key}"
+                     f"（距离 {geom['dist_m'] * 1e3:.2f} mm）")
+    _refresh_current_metrics(window)
+    return state["current_from"]
+
+
+def _pixel_ok(window: QMainWindow) -> bool:
+    """像素尺寸确认（规则 (b)）：只在**像素值真的变了**时才要重确认。
+
+    为什么非要这一步：环落在哪个像素半径上，只由 λ、像素尺寸、距离三者
+    的**组合**决定（tan 2θ = 半径 × 像素 / 距离）——三者同比例缩放时环
+    一模一样。λ 与像素尺寸是能从光源/探测器规格确认的已知量；两个都确认
+    了，精修出的距离才是真距离。像素尺寸填错时拟合会把距离按同比例凑
+    回来：环位偏差、a 离散度、完整环数**全都正常**，只有报出来的距离是
+    错的（还会一路写进 .poni 与报告）。
+    """
+    want = (_calib_state(window)["current_geom"] or {}).get("pixel_size_m")
+    ok = getattr(window, "calib_pixel_ok_m", None)
+    return want is not None and ok is not None and abs(ok - want) < 1e-12
+
+
+def _set_pixel_ok(window: QMainWindow, on: bool) -> None:
+    """勾选/取消「像素尺寸已确认」（记下确认时的像素值，规则 (b)）。"""
+    geom = _calib_state(window)["current_geom"] or {}
+    pixel = geom.get("pixel_size_m")
+    window.calib_pixel_ok_m = pixel if on else None
+    if on and pixel is not None:
+        _log(window, f"像素尺寸已确认：{pixel * 1e6:.1f} µm"
+                     f"（当前配置：{_slot_label(_calib_state(window), 'current')}）")
 
 
 def _initial_ready(window: QMainWindow) -> bool:
-    """能不能开跑校准：像素尺寸必须显式确认过（否则只提示、不建任务）。"""
-    if _calib_init_state(window).get("confirmed"):
+    """能不能开跑校准：当前配置的像素尺寸必须确认过（否则只提示、不建任务）。"""
+    if _pixel_ok(window):
         return True
-    _log(window, "请先确认「校准初值」里的像素尺寸（勾上确认框）——"
-                 "像素尺寸填错时整幅几何都会错，而结果看起来很正常")
+    _log(window, "请先确认「当前配置」的像素尺寸（勾上确认框）——像素尺寸"
+                 "与波长、距离同比例缩放时环一模一样，填错时拟合会把距离"
+                 "凑回来：环位偏差看着正常，但报出来的距离是错的")
     return False
 
 
-def _sync_init_combo(window: QMainWindow) -> None:
-    """把当前注册表里的条目填进「校准初值」的来源下拉框（保留选择）。
+def _current_geom_text(window: QMainWindow) -> str:
+    """当前配置一行的说明文字（表头下面的小字）。"""
+    state = _calib_state(window)
+    geom = state["current_geom"] or {}
+    from_txt = _slot_label(state, "current")
+    if geom.get("dist_m") is None:
+        return f"当前配置：{from_txt}"
+    return (f"当前配置：{from_txt}（距离 {geom['dist_m'] * 1e3:.2f} mm、"
+            f"像素 {(geom.get('pixel_size_m') or 0) * 1e6:.1f} µm）")
 
-    由 _sync_calib_init 调用：新存/新导入/删掉的条目都能立刻出现在
-    这里；借的那条被删掉就回落到"手动输入"。
+
+def _edit_current(window: QMainWindow) -> None:
+    """[编辑…]：对话框里改当前配置的几何（改完标成"自定义"）。
+
+    对话框顶部可以先"从条目预填"（= 借另一条条目的几何），再逐个改数值
+    ——于是"借用其它批次"与"手输"是同一件事的两个入口，页面上不占地方。
     """
-    st = _calib_init_state(window)
-    combo = getattr(window, "calib_init_combo", None)
-    if combo is None:
+    state = _calib_state(window)
+    geom = dict(state["current_geom"] or {})
+    if not geom:
+        _log(window, "当前配置还没设定（先选一个标准文件进校准模式）")
         return
-    combo.blockSignals(True)          # 重填不触发 _set_init_source
-    combo.clear()
-    combo.addItem("手动输入", "manual")
+    px = _geom_px_keys(geom)
+    dlg = QDialog(window)
+    dlg.setWindowTitle("编辑当前配置")
+    form = QFormLayout(dlg)
+    pre = QComboBox()
+    pre.addItem("（不改，只逐个编辑数值）", None)
     for name in config.CONFIGS:
-        combo.addItem(f"借用 {name}", name)
-    idx = combo.findData(st["source"]) if st["source"] != "manual" else 0
-    if idx < 0:
-        st["source"] = "manual"       # 借的条目没了：回落到手输
-        idx = 0
-    combo.setCurrentIndex(idx)
-    combo.blockSignals(False)
+        pre.addItem(f"从条目预填：{name}", name)
+    form.addRow("预填", pre)
+    fields = (
+        ("像素尺寸 (µm)", "pixel_um", px["pixel_size_m"] * 1e6, 1, " µm"),
+        ("波长 (Å)", "wavelength_a", px["wavelength_m"] * 1e10, 4, " Å"),
+        ("距离 (mm)", "dist_mm", px["dist_m"] * 1e3, 2, " mm"),
+        ("PONI1 (px)", "poni1_px", px["poni1_px"], 2, ""),
+        ("PONI2 (px)", "poni2_px", px["poni2_px"], 2, ""),
+        ("rot1 (°)", "rot1_deg", px["rot1_deg"], 4, " °"),
+        ("rot2 (°)", "rot2_deg", px["rot2_deg"], 4, " °"),
+    )
+    boxes = {}
+    for text, key_, value, dec, suffix in fields:
+        box = QDoubleSpinBox()
+        box.setRange(-1e5, 1e5)
+        box.setDecimals(dec)
+        if suffix:
+            box.setSuffix(suffix)
+        box.setValue(float(value))
+        form.addRow(text, box)
+        boxes[key_] = box
+
+    def prefill(_idx):
+        key = pre.currentData()
+        if key is None:
+            return
+        g = config.CONFIGS[key]["geometry"]
+        boxes["pixel_um"].setValue(g["pixel_size_m"] * 1e6)
+        boxes["wavelength_a"].setValue(g["wavelength_m"] * 1e10)
+        boxes["dist_mm"].setValue(g["dist_m"] * 1e3)
+        boxes["poni1_px"].setValue(g["poni1_m"] / g["pixel_size_m"])
+        boxes["poni2_px"].setValue(g["poni2_m"] / g["pixel_size_m"])
+        boxes["rot1_deg"].setValue(g["rot1_deg"])
+        boxes["rot2_deg"].setValue(g["rot2_deg"])
+        boxes["_beam"] = tuple(config.CONFIGS[key].get("beam_center", (None, None)))
+
+    pre.currentIndexChanged.connect(prefill)
+    row = QHBoxLayout()
+    ok_btn = QPushButton("确定")
+    cancel_btn = QPushButton("取消")
+    ok_btn.setObjectName("edit_current_ok")
+    ok_btn.clicked.connect(dlg.accept)
+    cancel_btn.clicked.connect(dlg.reject)
+    row.addWidget(ok_btn)
+    row.addWidget(cancel_btn)
+    form.addRow(row)
+    if dlg.exec() != QDialog.Accepted:
+        return
+    pixel = boxes["pixel_um"].value() * 1e-6
+    new_geom = {
+        "pixel_size_m": pixel,
+        "wavelength_m": boxes["wavelength_a"].value() * 1e-10,
+        "dist_m": boxes["dist_mm"].value() * 1e-3,
+        "poni1_m": boxes["poni1_px"].value() * pixel,
+        "poni2_m": boxes["poni2_px"].value() * pixel,
+        "rot1_deg": boxes["rot1_deg"].value(),
+        "rot2_deg": boxes["rot2_deg"].value(),
+        "beam_center_rc": geom.get("beam_center_rc"),
+    }
+    for key in ("tth_min_deg", "tth_max_deg"):
+        if key in geom:
+            new_geom[key] = geom[key]
+    state["current_geom"] = new_geom
+    state["slots"]["current"] = None
+    state["current_from"] = "手输"
+    state["custom"] = True                    # 改过就是"自定义"
+    state["current_metrics"] = None
+    state["current_error"] = None
+    _log(window, f"当前配置已手动修改（自定义）：距离 "
+                 f"{new_geom['dist_m'] * 1e3:.2f} mm、像素 {pixel * 1e6:.1f} µm")
+    _refresh_current_metrics(window)
+    _calib_sync(window)
 
 
-def _sync_calib_init(window: QMainWindow) -> None:
-    """"校准初值"区的显隐与文案同步（换来源/改数值都要重新确认像素）。"""
-    _sync_init_combo(window)
-    st = _calib_init_state(window)
-    manual = st["source"] not in config.CONFIGS
-    for row in getattr(window, "calib_init_manual_rows", []):
-        row.setVisible(manual)
-    g = _calib_initial(window)
-    window.calib_init_src.setText(f"初值来源：{_init_source_text(window)}")
-    window.calib_init_chk.setText(
-        f"像素尺寸已确认（{g['pixel_size_m'] * 1e6:.1f} µm）")
-    window.calib_init_chk.setChecked(bool(st.get("confirmed")))
+def _metrics_worker(path_str: str, geom: dict) -> dict:
+    """后台线程：算一份几何的指标（当前配置的环位偏差专用）。
+
+    `_attach_metrics(result, ...)` 的第一个参数就是**被量的那份几何**，
+    所以这里用几何本身当载体（空 dict 会 KeyError: 'dist_m'——踩过）。
+    """
+    image = load_diffraction_image(path_str)
+    out = dict(geom)
+    _attach_metrics(out, image, geom)     # initial=None：不重复算初值那一份
+    return out
 
 
-def _set_init_source(window: QMainWindow) -> None:
-    """初值来源换了：换 key 并**取消确认**（像素尺寸可能变了）。"""
-    st = _calib_init_state(window)
-    st["source"] = window.calib_init_combo.currentData() or "manual"
-    st["confirmed"] = False
-    _sync_calib_init(window)
+def _refresh_current_metrics(window: QMainWindow) -> None:
+    """异步算当前配置的环位偏差（换条目 / 手改之后要重算）。
+
+    算不出来（没开面板、图读不到、几何离谱）只让那一格显示"—"，绝不阻塞
+    界面、也不动别的槽。
+    """
+    state = _calib_state(window)
+    path = getattr(window, "calib_path", None)
+    geom = state.get("current_geom")
+    if path is None or geom is None:
+        return
+    gen = getattr(window, "calib_gen", 0)
+    key = "calib_metrics"
+    task = None
+
+    def done(result):
+        window._tasks.remove(task)
+        if window._latest_task.get(key) is not task:
+            return
+        del window._latest_task[key]
+        if gen != getattr(window, "calib_gen", -1):
+            return
+        state["current_metrics"] = result.get("metrics")
+        state["current_error"] = result.get("metrics_error")
+        _calib_sync(window)
+
+    def error(msg):
+        window._tasks.remove(task)
+        window._latest_task.pop(key, None)
+        if gen != getattr(window, "calib_gen", -1):
+            return
+        state["current_metrics"] = None
+        state["current_error"] = msg
+        _calib_sync(window)
+
+    task = BackgroundTask(_metrics_worker, str(path), dict(geom),
+                          on_done=done, on_error=error)
+    window._latest_task[key] = task
+    window._tasks.append(task)
+    task.start()
 
 
-def _set_manual_init(window: QMainWindow, key_: str, value: float) -> None:
-    """手输通道的值改了：写进状态并**取消确认**（值变了要重新确认）。"""
-    st = _calib_init_state(window)
-    st[key_] = float(value)
-    st["confirmed"] = False
-    _sync_calib_init(window)
-
-
-def _set_confirmed(window: QMainWindow, on: bool) -> None:
-    """像素尺寸确认框（勾上才允许跑校准）。"""
-    st = _calib_init_state(window)
-    st["confirmed"] = bool(on)
-    if on:
-        g = _calib_initial(window)
-        _log(window, f"像素尺寸已确认：{g['pixel_size_m'] * 1e6:.1f} µm"
-                     f"（初值来源：{_init_source_text(window)}）")
-    _sync_calib_init(window)
-
-
-# ── 对比区：任选两个来源 A|B|Δ + 结论行 ──────────────────────
-# 只比这些量（白名单）：主量是"用户在图上看得见的那件事"——距离、
-# 环的公共圆心 B、环位偏差。PONI 与倾斜角**标 ⚠**：它们与距离/波长
-# 近简并（两组解残差相当、PONI 能差 1~2 px 而环位不变），数值差异大
-# 不等于更准，别按它们判优劣。自洽残差**不入表**：它只说明迭代自洽
-# （两种解都报 0.004°），量不到准不准。
+# ── 对比：三列（当前配置 / A / B）+ 基准可选的 Δ 行 ───────────
+# 量白名单：一行一个标量。前四个是"判拟合好坏"要看的（环位偏差）与
+# "几何尺度差多少"要看的（距离 / 环心）；PONI 与倾斜角标 ⚠ —— 它们与
+# 距离/波长近简并，差异大不等于更准。自洽残差**不入表**：它量的是迭代
+# 收没收敛，不是拟合得好不好。
+# (行键, 行名, 显示缩放, 格式, 是否给 Δ 行)
+COMPARE_ROWS = (
+    ("dist", "距离 (mm)", 1e3, ".2f", True),
+    ("center_r", "环心行 (px)", 1.0, ".2f", False),
+    ("center_c", "环心列 (px)", 1.0, ".2f", False),
+    ("dev", "环位偏差 (px)", 1.0, ".2f", True),
+    ("poni1", "PONI1 (px) ⚠", 1.0, ".2f", False),
+    ("poni2", "PONI2 (px) ⚠", 1.0, ".2f", False),
+    ("rot1", "rot1 (°) ⚠", 1.0, ".4f", False),
+    ("rot2", "rot2 (°) ⚠", 1.0, ".4f", False),
+)
 COMPARE_HINT = ("⚠ = 退化方向：距离与波长、PONI 与倾斜角近简并，差异大"
                 "不等于更准；判优劣只看环位偏差（以及你在图上看到的重合度）。")
-# 对比区的行（就是上面说的白名单）：(行键, 行名)——顺序即表格顺序。
-# 一律**一行一个标量**：参数坞只有 ~276 px 可用宽，而 (行, 列) 元组
-# 串（"(1045.20, 1022.00)"）三列并排就会把页面撑到 312 px 被裁掉
-# （水平滚动条是关的，超宽够不着）。环心分"行/列"两行，不叫 "B 行"
-# 以免和来源列 A/B 混淆。
-COMPARE_ROWS = (("dist", "距离 (mm)"),
-                ("center_r", "环心行 (px)"),
-                ("center_c", "环心列 (px)"),
-                ("dev", "环位偏差 (px)"),
-                ("poni1", "PONI1 (px) ⚠"),
-                ("poni2", "PONI2 (px) ⚠"),
-                ("rot1", "rot1 (°) ⚠"),
-                ("rot2", "rot2 (°) ⚠"))
 
 
-def _cell(value, fmt: str, na="—") -> str:
-    """单个标量格式化；无值（None/NaN）给 na。"""
+def _row_spec(key_: str):
+    """按行键取 (行名, 缩放, 格式, 有无 Δ 行)。"""
+    for spec in COMPARE_ROWS:
+        if spec[0] == key_:
+            return spec
+    raise KeyError(key_)
+
+
+def _row_values(res) -> dict:
+    """一条结果（结果形状，可为 None）的各行数值：行键 → float|None。"""
+    if res is None:
+        return {key: None for key, *_ in COMPARE_ROWS}
+    bc = res.get("beam_center_rc") or (None, None)
+    return {"dist": res.get("dist_m"),
+            "center_r": bc[0] if len(bc) == 2 else None,
+            "center_c": bc[1] if len(bc) == 2 else None,
+            "dev": _result_dev(res),
+            "poni1": res.get("poni1_px"), "poni2": res.get("poni2_px"),
+            "rot1": res.get("rot1_deg"), "rot2": res.get("rot2_deg")}
+
+
+def _fmt_row(key_: str, value) -> str:
+    """某行数值的显示串（无值 / NaN → "—"）。"""
     if value is None or not np.isfinite(value):
-        return na
-    return f"{value:{fmt}}"
+        return "—"
+    _key, _name, scale, fmt, _d = _row_spec(key_)
+    return f"{value * scale:{fmt}}"
 
 
-def _fmt_center(res: dict, which: int) -> str:
-    """环的公共圆心（直射束落点）的某一分量：which=0 行、1 列。"""
-    bc = res.get("beam_center_rc")
-    return _cell(float(bc[which]) if bc else None, ".2f")
+def _delta_text(base_res, res, key_: str) -> str:
+    """Δ 行：该列 − 基准列（只给开了 Δ 的行；基准列自身显示 "—"）。"""
+    if base_res is res or not _row_spec(key_)[4]:
+        return "—"
+    b = _row_values(base_res)[key_]
+    v = _row_values(res)[key_]
+    if b is None or v is None or not (np.isfinite(b) and np.isfinite(v)):
+        return "—"
+    return f"{(v - b) * _row_spec(key_)[2]:+.2f}"
 
 
-def _fmt_dev(res: dict) -> str:
-    return _cell(_source_dev(res), ".2f")
-
-
-def _compare_rows(a: dict, b: dict) -> list:
-    """两个来源的对比行：[(行键, A 值, B 值, Δ), ...]（Δ = B − A）。
-
-    行键与行名见 COMPARE_ROWS（白名单），界面按行键填表。所有值都是
-    单标量（见 COMPARE_ROWS 的说明）。
-    """
-    def dnum(x, y, fmt):
-        return _cell(None if x is None or y is None else y - x, fmt)
-
-    ca = a.get("beam_center_rc")
-    cb = b.get("beam_center_rc")
-    da, db = _source_dev(a), _source_dev(b)
-    return [
-        ("dist", f"{a['dist_m'] * 1000:.2f}", f"{b['dist_m'] * 1000:.2f}",
-         dnum(a["dist_m"] * 1000, b["dist_m"] * 1000, "+.2f")),
-        ("center_r", _fmt_center(a, 0), _fmt_center(b, 0),
-         dnum(ca[0] if ca else None, cb[0] if cb else None, "+.2f")),
-        ("center_c", _fmt_center(a, 1), _fmt_center(b, 1),
-         dnum(ca[1] if ca else None, cb[1] if cb else None, "+.2f")),
-        ("dev", _fmt_dev(a), _fmt_dev(b), dnum(da, db, "+.2f")),
-        ("poni1", _cell(a["poni1_px"], ".2f"), _cell(b["poni1_px"], ".2f"),
-         dnum(a["poni1_px"], b["poni1_px"], "+.2f")),
-        ("poni2", _cell(a["poni2_px"], ".2f"), _cell(b["poni2_px"], ".2f"),
-         dnum(a["poni2_px"], b["poni2_px"], "+.2f")),
-        ("rot1", _cell(a["rot1_deg"], ".3f"), _cell(b["rot1_deg"], ".3f"),
-         dnum(a["rot1_deg"], b["rot1_deg"], "+.3f")),
-        ("rot2", _cell(a["rot2_deg"], ".3f"), _cell(b["rot2_deg"], ".3f"),
-         dnum(a["rot2_deg"], b["rot2_deg"], "+.3f")),
-    ]
-
-
-def _verdict(a: dict, b: dict, label_a: str = "A", label_b: str = "B") -> str:
-    """结论行：只按环位偏差判谁更好（门槛 SOURCE_IMPROVE_MIN_PX）。"""
-    da, db = _source_dev(a), _source_dev(b)
-    if da is None or db is None:
-        return "结论：缺少环位偏差，判不了谁更好（上面两列数值自行判断）"
-    diff = db - da
+def _verdict(base_res, res, base_name: str, res_name: str) -> str:
+    """结论行：只按环位偏差判"谁拟合得更好"（门槛 SOURCE_IMPROVE_MIN_PX）。"""
+    b, v = _result_dev(base_res), _result_dev(res)
+    if b is None or v is None:
+        return (f"结论：{res_name} 或 {base_name} 没有可用环位偏差，判不了"
+                f"（看上面两列的数值自行判断）")
+    diff = v - b
     if abs(diff) < SOURCE_IMPROVE_MIN_PX:
-        return (f"结论：两者相当（环位偏差 {da:.2f} vs {db:.2f} px，"
-                f"差 {abs(diff):.2f} px 小于门槛 "
-                f"{SOURCE_IMPROVE_MIN_PX:.2f} px）")
-    better, bdev, wdev = ((label_b, db, da) if diff < 0
-                          else (label_a, da, db))
-    return (f"结论：{better} 更好（环位偏差 {bdev:.2f} vs {wdev:.2f} px，"
-            f"差 {abs(diff):.2f} px > 门槛 {SOURCE_IMPROVE_MIN_PX:.2f} px）")
+        return (f"结论：{res_name} 与 {base_name} 拟合得差不多（环位偏差 "
+                f"{v:.2f} vs {b:.2f} px，差 {abs(diff):.2f} px 小于门槛 "
+                f"{SOURCE_IMPROVE_MIN_PX:.2f}）")
+    better, worse, bd, wd = ((res_name, base_name, v, b) if diff < 0
+                             else (base_name, res_name, b, v))
+    return (f"结论：{better} 拟合得更好（环位偏差 {bd:.2f} vs {wd:.2f} px，"
+            f"差 {abs(diff):.2f} px > 门槛 {SOURCE_IMPROVE_MIN_PX:.2f}）")
 
 
 def _calib_standard_path(window: QMainWindow):
@@ -423,19 +635,17 @@ def _geom_px_keys(g: dict) -> dict:
 
 
 def _calib_draw_geometry(window: QMainWindow) -> dict:
-    """画图几何（统一 px 键）：**当前使用**的来源覆盖参数面板初值。
+    """画图几何（统一 px 键）：**当前配置**的几何。
 
-    校准完成后理论环按"当前使用"的几何重画（用户验证精修效果）；
-    没跑过校准则按参数面板当前值画预测环。
+    图上那圈青线画的就是"当前配置"预测的环——A/B 只用于对比、不动图；
+    只有采纳（谁拟合得好）才换图。没设定当前配置时退回分析配置。
     """
-    draw = _geom_px_keys(_collect_geometry(window))
     state = _calib_state(window)
-    key = state.get("current")
-    result = state.get(key) if key else None
-    if result is not None:
-        for k in ("dist_m", "poni1_px", "poni2_px", "rot1_deg", "rot2_deg"):
-            draw[k] = result[k]
-    return draw
+    geom = state.get("current_geom")
+    if geom is None:
+        return _geom_px_keys(_collect_geometry(window))
+    return _geom_px_keys(geom)
+
 
 
 # ══ 中央校准图面板 ═══════════════════════════════════════════
@@ -514,6 +724,11 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     _settle(window)
     _draw_calib_image(window, key, image, _calib_draw_geometry(window))
     _log(window, f"打开校准面板：{path.name}（点击衍射环选点）")
+    # 新面板 = 新一轮：当前配置从分析页选中的条目借起（登记成"原始"），
+    # 并异步算它的环位偏差（表里那一格先显示 —）
+    _ensure_current(window)
+    _calib_sync(window)
+    _refresh_current_metrics(window)
 
 
 def _close_calib_panel(window: QMainWindow) -> None:
@@ -640,14 +855,18 @@ def _redraw_calib(window: QMainWindow) -> None:
     """按当前状态整幅重画：理论环（最近结果几何）+ 用户点 + 自动校准
     控制点（若有）。撤销/清空/校准完成后调用。"""
     state = _calib_state(window)
-    # 控制点来自 pyFAI extract_cp（自动/二次精修都会产出）：优先当前
-    # 使用的那份，没有就退回自动定位的
+    # 控制点来自 pyFAI extract_cp（自动 / 再精修都会产出）：取"当前配置"
+    # 对应的那份，没有就退回最近一条带控制点的结果
     cps = None
-    for key in (state.get("current"), "auto"):
-        res = state.get(key) if key else None
-        if res and res.get("control_points"):
-            cps = res["control_points"]
-            break
+    cur_name = state["slots"].get("current")
+    item = _result_by_name(state, cur_name) if cur_name else None
+    if item is not None and item["result"].get("control_points"):
+        cps = item["result"]["control_points"]
+    else:
+        for it in reversed(state["results"]):
+            if it["result"].get("control_points"):
+                cps = it["result"]["control_points"]
+                break
     _draw_calib_image(window, window.calib_key,
                       _calib_image(window, window.calib_path),
                       _calib_draw_geometry(window), control_points=cps,
@@ -656,120 +875,206 @@ def _redraw_calib(window: QMainWindow) -> None:
 
 # ══ 参数坞第 2 页：校准表单 ═══════════════════════════════════
 def _build_calib_form(window: QMainWindow) -> QWidget:
-    """参数坞第 2 页：校准工作台表单（三步流程）。
+    """参数坞第 2 页：校准功能。
 
-    布局（自上而下）：说明文字 → ① 自动定位 [定位环心并精修] →
-    ② 手动选点（可选：点数标签 + [撤销一点][清空] + [用选点精修]，
-    ≥3 点且 ≥2 环才启用）→ ③ 二次精修 [在当前几何上再精修一遍]
-    （有"当前使用"才启用）→ 结果对比区（来源 A/B 任选 + A|B|Δ 三列
-    + 结论行 + 当前使用 + [以 A 为准][以 B 为准]）→ 保存区（key/label
-    输入 + 保存来源提示 + [保存为配置]）→ 底部 [返回分析模式] 出口。
-    整个页面套滚动区（参数坞窄，放不下时滚动）。
+    布局（自上而下）：
+      三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
+              配置还能借条目或手输，只是不在这个下拉里表达）+ 8 行数值
+              + 2 行 Δ（相对"对比基准"）+ 基准下拉 + 结论行 + ⚠ 说明
+      操作区  [编辑…] [导入][保存] / [删除][存为配置] + 像素尺寸确认
+      自动    定位环心并精修 / 在当前配置上再精修
+      手动    选点计数 + 撤销/清空 + 用选点精修
+      出口    返回分析模式
+    整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
     """
     page = QWidget()
     lay = QVBoxLayout(page)
     lay.setContentsMargins(4, 4, 4, 4)
     lay.setSpacing(4)
 
-    intro = QLabel("校准工作台：三步定几何（束心 / 距离 / 倾斜角）。"
-                   "① 一键自动定位并精修；② 可选，在图上点环做手动解；"
-                   "③ 可选，在当前几何上再精修一遍。谁好谁当"
-                   "「当前使用」——比的就是校准图上青线与真环的重合度"
-                   "（环位偏差）。")
+    intro = QLabel("校准功能：用标样定几何（束心 / 距离 / 倾斜角）。"
+                   "三列 = 当前配置（要用的那份）与 A / B 两个对比位；"
+                   "跑完自动/手动后，结果进列表并按环位偏差决定要不要"
+                   "替换当前配置。")
     intro.setWordWrap(True)
     lay.addWidget(intro)
 
-    # 校准初值：新批次还没有自己的几何时，先给个出发点。三通道 =
-    # 借条目（照抄某条已有几何）/ 手输（像素·波长·距离）/ 导入 .poni
-    # （"几何配置条目"区的 [加载参数]，导完自动切到该条目）。
-    init_box = QGroupBox("校准初值")
-    il = QVBoxLayout(init_box)
-    init_hint = QLabel("校准的出发点。换来源或改数值后会要求重新确认"
-                       "像素尺寸——像素填错时整幅几何都会错，而结果"
-                       "看起来很正常。")
-    init_hint.setWordWrap(True)
-    il.addWidget(init_hint)
-    combo_init = QComboBox()
-    combo_init.addItem("手动输入", "manual")
-    for name in config.CONFIGS:
-        combo_init.addItem(f"借用 {name}", name)
-    _idx = combo_init.findData(_calib_init_state(window)["source"])
-    combo_init.setCurrentIndex(_idx if _idx >= 0 else 0)
-    il.addWidget(combo_init)
+    # ── 三列表 ─────────────────────────────────────────────
+    table_box = QGroupBox("数据")
+    tb = QVBoxLayout(table_box)
+    head = QHBoxLayout()
+    head.setSpacing(4)
+    window.calib_slot_combo = {}
+    for slot in ("current", "A", "B"):
+        combo = QComboBox()
+        combo.setToolTip({
+            "current": "当前配置：选一条结果即采纳为当前配置；"
+                       "[编辑…] 可借条目或手输",
+            "A": "对比位 A：从累积结果里选；手动选过之后新结果不再覆盖它",
+            "B": "对比位 B：同上"}[slot])
+        combo.currentIndexChanged.connect(
+            lambda _i, s=slot: _on_slot_changed(window, s))
+        head.addWidget(combo, 1 if slot == "current" else 1)
+        window.calib_slot_combo[slot] = combo
+    tb.addLayout(head)
 
-    st0 = _calib_init_state(window)
-    init_rows = []
-    for text, key_, lo, hi, dec, suffix in (
-            ("像素尺寸", "pixel_um", 0.1, 2000.0, 1, " µm"),
-            ("波长", "wavelength_a", 0.01, 5.0, 4, " Å"),
-            ("距离", "dist_mm", 1.0, 100000.0, 1, " mm")):
-        row = QWidget()
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(2)
-        rl.addWidget(QLabel(text))
-        box = QDoubleSpinBox()
-        box.setRange(lo, hi)
-        box.setDecimals(dec)
-        box.setSuffix(suffix)
-        box.setValue(st0[key_])
-        box.valueChanged.connect(
-            lambda v, k=key_: _set_manual_init(window, k, v))
-        rl.addWidget(box, 1)
-        init_rows.append(row)
-        il.addWidget(row)
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(6)
+    window.calib_vals = {"current": {}, "A": {}, "B": {}, "delta": {}}
+    for c, text in enumerate(("当前配置", "A", "B"), start=1):
+        hdr = QLabel(text)
+        hdr.setAlignment(Qt.AlignCenter)
+        hdr.setStyleSheet("color: gray;")
+        grid.addWidget(hdr, 0, c)
+    row_idx = 1
+    for key_, name, _scale, _fmt, has_delta in COMPARE_ROWS:
+        grid.addWidget(QLabel(name), row_idx, 0)
+        for c, slot in enumerate(("current", "A", "B"), start=1):
+            label = QLabel("—")
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            grid.addWidget(label, row_idx, c)
+            window.calib_vals[slot][key_] = label
+        row_idx += 1
+        if has_delta:                     # Δ 行紧跟在它下面
+            grid.addWidget(QLabel(f"Δ{name.split(' (')[0]}"), row_idx, 0)
+            for c, slot in enumerate(("current", "A", "B"), start=1):
+                label = QLabel("—")
+                label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                label.setStyleSheet("color: gray;")
+                grid.addWidget(label, row_idx, c)
+                window.calib_vals["delta"].setdefault(key_, {})[slot] = label
+            row_idx += 1
+    tb.addLayout(grid)
 
-    src_lbl = QLabel()
-    src_lbl.setWordWrap(True)
-    src_lbl.setStyleSheet("color: gray;")
-    il.addWidget(src_lbl)
-    chk_ok = QCheckBox()
-    chk_ok.toggled.connect(lambda on: _set_confirmed(window, on))
-    il.addWidget(chk_ok)
-    lay.addWidget(init_box)
-    window.calib_init_combo = combo_init
-    window.calib_init_manual_rows = init_rows
-    window.calib_init_src = src_lbl
-    window.calib_init_chk = chk_ok
-    combo_init.currentIndexChanged.connect(lambda _i: _set_init_source(window))
-    _sync_calib_init(window)
+    base_row = QHBoxLayout()
+    base_row.addWidget(QLabel("对比基准"))
+    combo_base = QComboBox()
+    for slot in ("current", "A", "B"):
+        combo_base.addItem(SLOT_LABELS[slot], slot)
+    combo_base.currentIndexChanged.connect(
+        lambda _i: _refresh_table(window))
+    base_row.addWidget(combo_base, 1)
+    tb.addLayout(base_row)
 
-    # ① 自动定位：从"校准初值"给出的出发点开始
-    step1 = QGroupBox("① 自动定位")
-    s1 = QVBoxLayout(step1)
-    hint1 = QLabel("读勾选的第一个标样：自动定位环心（取点拟合，FFT "
-                   "兜底）→ pyFAI 迭代精修，初值取上面的「校准初值」。")
-    hint1.setWordWrap(True)
-    s1.addWidget(hint1)
+    verdict = QLabel("结论：—")
+    verdict.setWordWrap(True)
+    tb.addWidget(verdict)
+    hint = QLabel(COMPARE_HINT)
+    hint.setWordWrap(True)
+    hint.setStyleSheet("color: gray;")
+    tb.addWidget(hint)
+    cur_lbl = QLabel("当前配置：—")
+    cur_lbl.setWordWrap(True)
+    tb.addWidget(cur_lbl)
+    lay.addWidget(table_box)
+    window.calib_verdict = verdict
+    window.calib_current_lbl = cur_lbl
+    window.calib_base_combo = combo_base
+
+    # ── 操作区：编辑 / 配置条目进出 / 保存 / 像素确认 ────────
+    ops_box = QGroupBox("操作")
+    ops = QVBoxLayout(ops_box)
+    btn_edit = QPushButton("编辑当前配置…")
+    btn_edit.setObjectName("edit_current_btn")
+    btn_edit.setToolTip("借一条已有条目预填，或直接改像素/波长/距离/"
+                        "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
+    btn_edit.clicked.connect(lambda: _edit_current(window))
+    ops.addWidget(btn_edit)
+    row1 = QHBoxLayout()
+    row1.setSpacing(2)
+    btn_poni = QPushButton("加载参数")
+    btn_poni.setObjectName("poni_btn")    # 保持历史 objectName（测试引用）
+    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成配置"
+                        "条目并自动选中；同时作为当前配置的起点")
+    btn_poni.clicked.connect(lambda: _import_poni(window))
+    btn_save_poni = QPushButton("保存参数")
+    btn_save_poni.setObjectName("save_poni_btn")
+    btn_save_poni.setToolTip("保存 .poni：把分析页当前选中配置的几何写成"
+                             "pyFAI 交换格式文件")
+    btn_save_poni.clicked.connect(lambda: _save_poni(window))
+    btn_del = QPushButton("删除")
+    btn_del.setObjectName("del_config_btn")
+    btn_del.setToolTip("删除分析页当前选中的**用户**配置条目（内置条目不可删）")
+    btn_del.clicked.connect(lambda: _delete_config(window))
+    window.del_config_btn = btn_del
+    row2 = QHBoxLayout()
+    row2.setSpacing(2)
+    btn_save_cfg = QPushButton("保存为配置")
+    btn_save_cfg.setObjectName("save_calib_config")
+    btn_save_cfg.setToolTip("把**当前配置**存成命名配置条目（本地文件，"
+                            "不进 git），保存后分析页下拉框自动选中")
+    btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
+    window.calib_save_btn = btn_save_cfg
+    for btn in (btn_poni, btn_save_poni, btn_del, btn_save_cfg):
+        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距
+    for btn in (btn_poni, btn_save_poni, btn_del):
+        row1.addWidget(btn, 1)
+    row2.addWidget(btn_save_cfg, 1)
+    ops.addLayout(row1)
+    ops.addLayout(row2)
+    chk_pix = QCheckBox("像素尺寸已确认")
+    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
+                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
+                       "是错的。只在像素值变了时才要求重新确认。")
+    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
+                                        _calib_sync(window)))
+    ops.addWidget(chk_pix)
+    lay.addWidget(ops_box)
+    window.calib_pixel_chk = chk_pix
+
+    key_edit = QLineEdit()
+    key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
+    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
+    label_edit = QLineEdit()
+    label_edit.setPlaceholderText("批次备注（label）")
+    save_hint = QLabel("尚未有校准结果")
+    save_hint.setStyleSheet("color: gray;")
+    save_hint.setWordWrap(True)
+    for w_ in (key_edit, label_edit, save_hint):
+        ops.addWidget(w_)
+    window.calib_key_edit = key_edit
+    window.calib_label_edit = label_edit
+    window.calib_save_hint = save_hint
+
+    # ── 自动 ───────────────────────────────────────────────
+    auto_box = QGroupBox("自动")
+    al = QVBoxLayout(auto_box)
+    auto_hint = QLabel("从**当前配置**出发：定位环心（取点拟合，FFT 兜底）"
+                       "→ pyFAI 精修；或在当前几何上再精修一遍。结果进"
+                       "列表，并按环位偏差决定要不要替换当前配置。")
+    auto_hint.setWordWrap(True)
+    al.addWidget(auto_hint)
     btn_auto = QPushButton("定位环心并精修")
     btn_auto.setObjectName("start_auto_calib")
-    btn_auto.setToolTip("自动定位环心 → pyFAI 精修（约数秒）")
-    s1.addWidget(btn_auto)
-    lay.addWidget(step1)
-    window.calib_start_auto = btn_auto
     btn_auto.clicked.connect(lambda: _start_auto_calib(window, "auto"))
+    btn_refined = QPushButton("在当前配置上再精修")
+    btn_refined.setObjectName("start_refined_calib")
+    btn_refined.clicked.connect(lambda: _start_auto_calib(window, "refined"))
+    al.addWidget(btn_auto)
+    al.addWidget(btn_refined)
+    lay.addWidget(auto_box)
+    window.calib_start_auto = btn_auto
+    window.calib_start_refined = btn_refined
 
-    # ② 手动选点（可选）
-    step2 = QGroupBox("② 手动选点（可选）")
-    s2 = QVBoxLayout(step2)
-    hint2 = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
-                   "（±0.5°），环号标在图上；至少 3 个点、覆盖 2 个"
-                   "不同的环。")
-    hint2.setWordWrap(True)
-    s2.addWidget(hint2)
+    # ── 手动 ───────────────────────────────────────────────
+    manual_box = QGroupBox("手动")
+    ml = QVBoxLayout(manual_box)
+    manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
+                         "（±0.5°）；至少 3 个点、覆盖 2 个不同的环。")
+    manual_hint.setWordWrap(True)
+    ml.addWidget(manual_hint)
     points_label = QLabel("已选 0 个点 / 0 个环")
-    s2.addWidget(points_label)
+    ml.addWidget(points_label)
     row = QHBoxLayout()
     btn_undo = QPushButton("撤销一点")
     btn_clear = QPushButton("清空")
     row.addWidget(btn_undo)
     row.addWidget(btn_clear)
-    s2.addLayout(row)
+    ml.addLayout(row)
     btn_manual = QPushButton("用选点精修")
     btn_manual.setObjectName("start_manual_calib")
-    btn_manual.setToolTip("把你点的环位当控制点，反推几何")
-    s2.addWidget(btn_manual)
-    lay.addWidget(step2)
+    ml.addWidget(btn_manual)
+    lay.addWidget(manual_box)
     window.calib_points_label = points_label
     window.calib_undo_btn = btn_undo
     window.calib_clear_btn = btn_clear
@@ -778,220 +1083,124 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_clear.clicked.connect(lambda: _clear_calib_points(window))
     btn_manual.clicked.connect(lambda: _start_manual_calib(window))
 
-    # ③ 二次精修：从"当前使用"的几何出发再跑一遍自动精修
-    step3 = QGroupBox("③ 二次精修")
-    s3 = QVBoxLayout(step3)
-    hint3 = QLabel("从「当前使用」的几何（环心 + 距离）出发再跑一遍 "
-                   "pyFAI 精修：首轮初值偏时能收敛到更好的那一支；"
-                   "没变好就不会替换当前使用。")
-    hint3.setWordWrap(True)
-    s3.addWidget(hint3)
-    btn_refined = QPushButton("在当前几何上再精修一遍")
-    btn_refined.setObjectName("start_refined_calib")
-    btn_refined.setToolTip("以当前使用的环心与距离为初值再精修一轮")
-    s3.addWidget(btn_refined)
-    lay.addWidget(step3)
-    window.calib_start_refined = btn_refined
-    btn_refined.clicked.connect(lambda: _start_auto_calib(window, "refined"))
-
-    # 结果对比区：来源 A / B 任选（默认 A = 当前使用、B = 另一个来源），
-    # A|B|Δ 三列 + 结论行 + 当前使用 + [以 A 为准][以 B 为准]
-    result_box = QGroupBox("结果对比")
-    res_lay = QVBoxLayout(result_box)
-    pick = QHBoxLayout()
-    combo_a = QComboBox()
-    combo_b = QComboBox()
-    for combo in (combo_a, combo_b):
-        combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-    pick.addWidget(QLabel("A"))
-    pick.addWidget(combo_a)
-    pick.addWidget(QLabel("B"))
-    pick.addWidget(combo_b)
-    pick.addStretch(1)
-    res_lay.addLayout(pick)
-
-    grid = QGridLayout()
-    grid.setHorizontalSpacing(6)
-    for c, text in enumerate(("A", "B", "Δ"), start=1):
-        hdr = QLabel(text)
-        hdr.setAlignment(Qt.AlignCenter)
-        hdr.setStyleSheet("color: gray;")
-        grid.addWidget(hdr, 0, c)
-    window.calib_vals = {"a": {}, "b": {}, "delta": {}}
-    for r, (key_, name) in enumerate(COMPARE_ROWS, start=1):
-        grid.addWidget(QLabel(name), r, 0)
-        for c, col in enumerate(("a", "b", "delta"), start=1):
-            label = QLabel("—")
-            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            grid.addWidget(label, r, c)
-            window.calib_vals[col][key_] = label
-    res_lay.addLayout(grid)
-
-    verdict = QLabel("结论：—")
-    verdict.setWordWrap(True)
-    res_lay.addWidget(verdict)
-    hint = QLabel(COMPARE_HINT)
-    hint.setWordWrap(True)
-    hint.setStyleSheet("color: gray;")
-    res_lay.addWidget(hint)
-
-    current_lbl = QLabel("当前使用：—（还没跑过校准）")
-    current_lbl.setWordWrap(True)
-    res_lay.addWidget(current_lbl)
-    use_row = QHBoxLayout()
-    btn_use_a = QPushButton("以 A 为准")
-    btn_use_b = QPushButton("以 B 为准")
-    use_row.addWidget(btn_use_a)
-    use_row.addWidget(btn_use_b)
-    res_lay.addLayout(use_row)
-    lay.addWidget(result_box)
-    window.calib_combo_a = combo_a
-    window.calib_combo_b = combo_b
-    window.calib_verdict = verdict
-    window.calib_current_lbl = current_lbl
-    window.calib_use_a = btn_use_a
-    window.calib_use_b = btn_use_b
-    combo_a.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
-    combo_b.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
-    btn_use_a.clicked.connect(lambda: _use_current_from(window, "a"))
-    btn_use_b.clicked.connect(lambda: _use_current_from(window, "b"))
-
-    # 几何配置条目：加载 .poni / 保存 .poni / 删除。从分析页搬来——
-    # 分析页只读（只留下拉框选条目），配置的增删改查归校准页；三个
-    # 按钮作用于分析页当前选中的那一条。窄排版：三按钮各占 1/3 +
-    # 紧凑内边距（同文件坞两排按钮的考虑，撑宽会破 320 上限测试）。
-    cfg_box = QGroupBox("几何配置条目")
-    cfg_lay = QVBoxLayout(cfg_box)
-    cfg_hint = QLabel("作用于分析页「几何配置」下拉框当前选中的条目："
-                      "加载 .poni 存成用户条目 / 把选中条目写成 .poni / "
-                      "删除用户条目（内置条目不可删）。")
-    cfg_hint.setWordWrap(True)
-    cfg_lay.addWidget(cfg_hint)
-    btn_row = QWidget()
-    btn_lay = QHBoxLayout(btn_row)
-    btn_lay.setContentsMargins(0, 0, 0, 0)
-    btn_lay.setSpacing(2)
-    btn_poni = QPushButton("加载参数")
-    btn_poni.setObjectName("poni_btn")   # objectName 保持 poni_btn：测试与历史引用
-    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成"
-                        "配置条目并自动选中（避免每次重新校准）")
-    btn_poni.clicked.connect(lambda: _import_poni(window))
-    btn_save_poni = QPushButton("保存参数")
-    btn_save_poni.setObjectName("save_poni_btn")
-    btn_save_poni.setToolTip("保存 .poni：把分析页当前选中配置的几何"
-                             "（探测器距离/中心点/像素尺寸/波长/倾斜角）"
-                             "写成 pyFAI 交换格式文件")
-    btn_save_poni.clicked.connect(lambda: _save_poni(window))
-    btn_del_config = QPushButton("删除")
-    btn_del_config.setObjectName("del_config_btn")
-    btn_del_config.setToolTip("删除当前选中的用户配置条目（.poni 导入"
-                              "或 [保存为配置] 产生的条目）；内置条目"
-                              "是人工登记的注册表，不可删除（按钮置灰）")
-    btn_del_config.clicked.connect(lambda: _delete_config(window))
-    window.del_config_btn = btn_del_config
-    for btn in (btn_poni, btn_save_poni, btn_del_config):
-        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距：保住 320 窄排版
-    btn_lay.addWidget(btn_poni, 1)
-    btn_lay.addWidget(btn_save_poni, 1)
-    btn_lay.addWidget(btn_del_config, 1)
-    cfg_lay.addWidget(btn_row)
-    lay.addWidget(cfg_box)
-
-    # 保存区：校准结果直接存成命名配置条目（本地用户文件，替换旧
-    # 模板区——不再复制粘贴，保存即登记；保存后下拉框自动选中新条目）
-    save_box = QGroupBox("保存为几何配置")
-    save_lay = QVBoxLayout(save_box)
-    save_hint = QLabel("把「当前使用」的校准结果存成命名配置条目：保存后"
-                       "立即出现在分析页“几何配置”下拉框（重启后仍在，"
-                       "命令行脚本同样可用 --config 选取）。条目写入"
-                       "本地文件 config_user.json（不进 git），与人工"
-                       "登记的内置条目互不干扰。")
-    save_hint.setWordWrap(True)
-    save_lay.addWidget(save_hint)
-    key_edit = QLineEdit()
-    key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
-    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
-    save_lay.addWidget(key_edit)
-    label_edit = QLineEdit()
-    label_edit.setPlaceholderText(
-        "批次备注（label），如：lmfp 第 2 批（LaB₆ 标样标定）")
-    save_lay.addWidget(label_edit)
-    source_label = QLabel("尚未有校准结果")
-    source_label.setStyleSheet("color: gray;")
-    save_lay.addWidget(source_label)
-    btn_save = QPushButton("保存为配置")
-    btn_save.setObjectName("save_calib_config")
-    save_lay.addWidget(btn_save)
-    lay.addWidget(save_box)
-    lay.addStretch(1)
-    window.calib_key_edit = key_edit
-    window.calib_label_edit = label_edit
-    window.calib_save_hint = source_label
-    window.calib_save_btn = btn_save
-    btn_save.clicked.connect(lambda: _save_calib_config(window))
-
-    # 出口：本页唯一的返回路径（与工具栏 [校准] 开关同源——把开关
-    # 弹起 = toggled(False) → _on_mode 翻回分析页 + 关校准面板）。
-    # 钉在页面底部：用户在当前页找出口，出口就在当前页。
+    # 出口：本页唯一的返回路径（与工具栏 [校准] 开关同源）
     btn_exit = QPushButton("返回分析模式")
     btn_exit.setObjectName("exit_calib_btn")
-    btn_exit.setToolTip("回到常规参数面板（校准图面板关闭，选点/结果"
-                        "清空，关闭即遗忘）")
     btn_exit.clicked.connect(lambda: window.calib_btn.setChecked(False))
     lay.addWidget(btn_exit)
     window.calib_exit_btn = btn_exit
 
-    # 套滚动区：参数坞窄，放不下时滚动（与分析页滚动区同一套路）
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)   # 窄窗口兜底
     scroll.setWidget(page)
-    _calib_sync(window)   # 初始按钮状态（0 点 → 手动按钮置灰）
+    window.calib_scroll = scroll
+    _ensure_current(window)
+    _calib_sync(window)
     return scroll
 
 
 def _reset_calib_form(window: QMainWindow) -> None:
-    """表单复位：对比三列清空、点数标签归零、按钮复位。"""
-    for col in ("a", "b", "delta"):
+    """表单复位：表格清空、结论/标签复位（按钮状态由 _calib_sync 管）。"""
+    for col in ("current", "A", "B"):
         for label in window.calib_vals[col].values():
+            label.setText("—")
+    for per_slot in window.calib_vals["delta"].values():
+        for label in per_slot.values():
             label.setText("—")
     window.calib_verdict.setText("结论：—")
     _calib_sync(window)
 
 
 def _calib_sync(window: QMainWindow) -> None:
-    """点数标签 + 手动按钮启用逻辑 + 保存按钮/来源提示同步。
-
-    手动按钮：≥3 点且 ≥2 环才可开始；保存按钮："当前使用"的来源存在
-    才可存（无结果时置灰，来源提示写明是哪条来源、"自定义"时标出来）。
-    """
+    """把状态刷到界面：槽下拉框 / 表格 / Δ / 结论 / 按钮 / 像素确认。"""
     state = _calib_state(window)
     points = state["points"]
     n_rings = len({p[2] for p in points})
     window.calib_points_label.setText(f"已选 {len(points)} 个点 / {n_rings} 个环")
-    ok = len(points) >= MIN_POINTS and n_rings >= MIN_RINGS
-    window.calib_start_manual.setEnabled(ok)
+    window.calib_start_manual.setEnabled(
+        len(points) >= MIN_POINTS and n_rings >= MIN_RINGS)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
-    mode = state.get("current")
-    # ③ 二次精修要有个"当前使用"当出发点
-    window.calib_start_refined.setEnabled(mode is not None)
-    result = state.get(mode) if mode else None
-    if result is None:
-        window.calib_save_btn.setEnabled(False)
-        window.calib_save_hint.setText("尚未有校准结果")
+    window.calib_start_refined.setEnabled(state["current_geom"] is not None)
+    window.calib_start_auto.setEnabled(state["current_geom"] is not None)
+    window.calib_current_lbl.setText(_current_geom_text(window))
+    # 像素确认：只在像素值变了才要求重确认（规则 (b)）
+    cur_px = (state["current_geom"] or {}).get("pixel_size_m")
+    window.calib_pixel_chk.setText(
+        f"像素尺寸已确认（{(cur_px or 0) * 1e6:.1f} µm）"
+        if cur_px is not None else "像素尺寸已确认")
+    window.calib_pixel_chk.setChecked(_pixel_ok(window))
+    # 保存区
+    has_cur = state["current_geom"] is not None
+    window.calib_save_btn.setEnabled(has_cur)
+    window.calib_save_hint.setText(
+        f"将保存：「{_slot_label(state, 'current')}」的几何"
+        if has_cur else "尚未有可保存的几何")
+    _sync_slot_combos(window)
+    _refresh_table(window)
+    _sync_del_config_btn(window)
+
+
+def _sync_slot_combos(window: QMainWindow) -> None:
+    """把累积结果填进三个槽的下拉框（状态是唯一真相，重填时保留选择）。"""
+    state = _calib_state(window)
+    names = [item["name"] for item in state["results"]]
+    for slot, combo in window.calib_slot_combo.items():
+        combo.blockSignals(True)
+        combo.clear()
+        if slot == "current":
+            combo.addItem(_slot_label(state, "current"), None)
+        else:
+            combo.addItem("—（空）", None)
+        for name in names:
+            combo.addItem(name, name)
+        idx = combo.findData(state["slots"].get(slot))
+        combo.setCurrentIndex(max(0, idx))
+        combo.blockSignals(False)
+
+
+def _on_slot_changed(window: QMainWindow, slot: str) -> None:
+    """某个槽的下拉框选了一条结果（或清空）。"""
+    state = _calib_state(window)
+    name = window.calib_slot_combo[slot].currentData()
+    if name is None:
+        if slot != "current" and state["slots"][slot] is not None:
+            state["slots"][slot] = None
+            state["pinned"][slot] = False
+            _log(window, f"{slot} 槽清空（取消钉住）")
+            _calib_sync(window)
+        return
+    if slot == "current":
+        if state["slots"]["current"] != name:
+            _adopt_result(window, name, why="手动选择")
     else:
-        window.calib_save_btn.setEnabled(True)
-        mark = "（自定义）" if state.get("custom") else ""
-        window.calib_save_hint.setText(
-            f"将保存：{SOURCE_LABELS[mode]}{mark}"
-            f"（距离 {result['dist_m'] * 1000:.2f} mm，"
-            f"残差 {result['residual_deg']:.4f}°）")
-    _sync_compare_combos(window)    # 新结果进下拉框
-    _refresh_compare(window)        # 三列 + 结论 + 当前使用
-    _sync_calib_init(window)        # 初值来源下拉框跟上注册表
-    _sync_del_config_btn(window)    # [删除] 随分析页选中条目置灰
+        state["slots"][slot] = name
+        state["pinned"][slot] = True
+        _log(window, f"{slot} 槽 → {name}（钉住：新结果不再覆盖它）")
+    _calib_sync(window)
+
+
+def _refresh_table(window: QMainWindow) -> None:
+    """按三个槽的当前内容刷新数值表 + Δ 行 + 结论。"""
+    state = _calib_state(window)
+    res = {slot: _slot_result(state, slot) for slot in ("current", "A", "B")}
+    base_slot = window.calib_base_combo.currentData()
+    base_res = res.get(base_slot)
+    for key_, _name, _scale, _fmt, has_delta in COMPARE_ROWS:
+        vals = {slot: _row_values(res[slot])[key_] for slot in ("current", "A", "B")}
+        for slot in ("current", "A", "B"):
+            window.calib_vals[slot][key_].setText(_fmt_row(key_, vals[slot]))
+        if has_delta:
+            for slot in ("current", "A", "B"):
+                window.calib_vals["delta"][key_][slot].setText(
+                    "—" if slot == base_slot
+                    else _delta_text(base_res, res[slot], key_))
+    other = "A" if base_slot != "A" else "B"
+    window.calib_verdict.setText(
+        _verdict(base_res, res[other], SLOT_LABELS[base_slot],
+                 SLOT_LABELS[other]))
 
 
 # ══ 手动选点：点击判环 / 撤销 / 清空 ══════════════════════════
@@ -1185,12 +1394,11 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
 
 
 def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
-    """①[定位环心并精修] 与 ③[二次精修]：后台跑自动链路。
+    """[定位环心并精修]（target="auto"）与 [在当前配置上再精修]（"refined"）。
 
-    target="auto"     从参数面板的初值出发：自动定位环心 → 精修
-    target="refined"  二次精修：不重新定位环心，直接以"当前使用"的
-                      环心与距离为初值再精修一轮（首轮初值偏时，从更
-                      好的解出发能收敛到另一支）
+    auto     从当前配置出发：自动定位环心（取点拟合，FFT 兜底）→ 精修
+    refined  不重新定位环心，直接以**当前配置**的环心与距离为初值再精修
+             一轮（首轮初值偏时，从更好的解出发能收敛到另一支）
     """
     path = _calib_standard_path(window)
     if path is None:
@@ -1201,21 +1409,13 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         return   # 图像读取失败（_open_calib_panel 已记日志）
     if not _initial_ready(window):
         return   # 像素尺寸没确认：只提示，不建任务
-    geom = _calib_initial(window)     # 初值 = 「校准初值」区，不是分析配置
+    geom = dict(_calib_state(window).get("current_geom") or {})
     center0 = None
-    label = SOURCE_LABELS[target]
+    label = "自动定位" if target == "auto" else "在当前配置上再精修"
     if target == "refined":
-        state = _calib_state(window)
-        cur = state.get("current")
-        res = state.get(cur) if cur else None
-        if res is None:
-            _log(window, "还没有「当前使用」的几何：先跑 ① 自动定位")
-            return
-        geom = dict(geom, dist_m=res["dist_m"])
-        bc = res.get("beam_center_rc")
+        bc = geom.get("beam_center_rc")
         # beam_center_rc 是 (行, 列)；引擎的 center0_px 要 (列, 行)
-        center0 = (bc[1], bc[0]) if bc else None
-        label = f"{SOURCE_LABELS[target]}（从 {SOURCE_LABELS[cur]} 出发）"
+        center0 = ((bc[1], bc[0]) if bc and bc[0] is not None else None)
     gen = window.calib_gen
     key = "calib_auto"
     task = None
@@ -1228,7 +1428,7 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return   # 面板关过/退出过模式：迟到结果作废
-        _on_auto_done(window, result, target)
+        _on_calib_result(window, target, result)
 
     def error(msg):
         window._tasks.remove(task)
@@ -1238,7 +1438,7 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return
-        _log(window, f"{SOURCE_LABELS[target]}失败：{msg}")
+        _log(window, f"校准失败（{label}）：{msg}")
 
     task = BackgroundTask(_auto_calib_worker, str(path), geom, center0,
                           on_done=done, on_error=error)
@@ -1248,8 +1448,9 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
     task.start()
 
 
+
 def _start_manual_calib(window: QMainWindow) -> None:
-    """②[用选点精修]：用户点后台精修（环心初值 = 分析配置条目的束心）。"""
+    """[用选点精修]：用户点后台精修（初值 = 当前配置；环心 = 分析条目束心）。"""
     state = _calib_state(window)
     if len(state["points"]) < MIN_POINTS \
             or len({p[2] for p in state["points"]}) < MIN_RINGS:
@@ -1258,7 +1459,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
         return
     if not _initial_ready(window):
         return   # 像素尺寸没确认：只提示，不建任务
-    geom = _calib_initial(window)
+    geom = dict(state.get("current_geom") or {})
     beam = window.config["beam_center"]   # (行, 列) = 直射束落点 B
     center0_px = (beam[1], beam[0])       # (列, 行) 换序
     # 快照当前选点（任务运行中点列表可能被撤销/清空，不影响本次计算）
@@ -1277,7 +1478,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return
-        _on_manual_done(window, result)
+        _on_calib_result(window, "manual", result)
 
     def error(msg):
         window._tasks.remove(task)
@@ -1287,7 +1488,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return
-        _log(window, f"手动校准失败：{msg}")
+        _log(window, f"校准失败（手动）：{msg}")
 
     path = getattr(window, "calib_path", None)   # 指标要图像；没面板时为 None
     task = BackgroundTask(_manual_calib_worker, str(path) if path else None,
@@ -1295,152 +1496,40 @@ def _start_manual_calib(window: QMainWindow) -> None:
                           on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
-    _log(window, f"开始{SOURCE_LABELS['manual']}（{len(points)} 个点，"
-                 f"后台线程）")
+    _log(window, f"开始手动（{len(points)} 个点，后台线程）")
     task.start()
 
 
+
 # ══ 结果 / Δ / 保存为配置 ════════════════════════════════════
-def _on_auto_done(window: QMainWindow, result: dict, key: str = "auto") -> None:
-    """自动链路完成（主线程，① 或 ③）：登记来源 + 图按当前几何重画。"""
+def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
+    """一次校准结果落地（主线程）：进累积列表 → 判要不要换当前配置 → 填槽。
+
+    顺序有讲究：先把结果挂进列表（这样日志与槽都有名字可用），再判
+    "拟合得好不好"（_adopt_decision），采纳就换当前配置并重画青线，最后
+    按 A→B 轮换填没被钉住的槽。
+    """
     state = _calib_state(window)
-    state[key] = result
-    # 先定"当前使用"再重画/同步——画的是当前几何、保存按钮看的是当前结果
-    note = _update_current(state, key)
-    _redraw_calib(window)
-    _calib_sync(window)
-    _log(window, f"{SOURCE_LABELS[key]}完成：距离 {result['dist_m'] * 1000:.2f} mm，"
+    name = _add_result(state, kind, result)
+    label = KIND_LABELS.get(kind, kind)
+    _log(window, f"{label}完成（{name}）：距离 "
+                 f"{result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
                  f"残差 {result['residual_deg']:.4f}°"
                  f"{_metrics_note(result)}")
-    _log(window, note)
-
-
-def _on_manual_done(window: QMainWindow, result: dict) -> None:
-    """手动选点完成（主线程）：登记来源 + 图按当前几何重画。"""
-    state = _calib_state(window)
-    state["manual"] = result
-    note = _update_current(state, "manual")
-    _redraw_calib(window)
+    take, note = _adopt_decision(state, name)
+    if take:
+        _adopt_result(window, name, why="自动采纳")
+        _log(window, note)
+    else:
+        _log(window, note)
+    _log(window, _fill_slot(state, name))
     _calib_sync(window)
-    _log(window, f"{SOURCE_LABELS['manual']}完成：距离 "
-                 f"{result['dist_m'] * 1000:.2f} mm，"
-                 f"残差 {result['residual_deg']:.4f}°"
-                 f"{_metrics_note(result)}")
-    _log(window, note)
-    if state.get("manual_n", 99) < 6:
-        # 点数少时最小二乘对单点点击误差敏感（可能滑向退化解），
-        # 残差小也不代表可信——如实提示，让用户看环位偏差与图上重合度
+    if kind == "manual" and state.get("manual_n", 99) < 6:
+        # 点数少时最小二乘对单点点击误差敏感，残差小也不代表可信
         _log(window, "提示：点数较少（<6）时手动结果可能不稳，建议多点"
                      "几个环上的点再跑一次，以环位偏差判断可信度")
 
-
-# ══ 对比区刷新 / 当前使用 ════════════════════════════════════
-def _available_sources(state: dict) -> list:
-    """有结果的来源键（按 SOURCE_LABELS 的顺序）。"""
-    return [k for k in SOURCE_LABELS if state.get(k) is not None]
-
-
-def _sync_compare_combos(window: QMainWindow) -> None:
-    """把有结果的来源填进 A/B 下拉框（保留用户选择，新结果自动补位）。
-
-    默认：A = 当前使用（没有就用第一个有结果的），B = 另一个有结果的
-    来源；只有一个来源时 B 空着（列表首项 "—"，表格显示空态）。
-    """
-    state = _calib_state(window)
-    have = _available_sources(state)
-    cur = state.get("current")
-    combo_a, combo_b = window.calib_combo_a, window.calib_combo_b
-    keep_a, keep_b = combo_a.currentData(), combo_b.currentData()
-
-    def fill(combo, keep, default):
-        combo.blockSignals(True)      # 重填期间不要触发 _refresh_compare
-        combo.clear()
-        combo.addItem("—", None)
-        for k in have:
-            combo.addItem(SOURCE_LABELS[k], k)
-        # keep=None 是"没选过"，不是"选占位项"——直接查 findData(None) 会
-        # 命中首项 "—"，A 就永远停在空态（踩过）
-        idx = combo.findData(keep) if keep is not None else -1
-        if idx < 0:
-            idx = combo.findData(default)
-        combo.setCurrentIndex(max(0, idx))
-        combo.blockSignals(False)
-
-    default_a = cur if cur in have else (have[0] if have else None)
-    fill(combo_a, keep_a, default_a)
-    ka = combo_a.currentData()
-    want_b = (keep_b if keep_b is not None and keep_b != ka
-              else next((k for k in have if k != ka), None))
-    fill(combo_b, want_b, want_b)
-
-
-def _refresh_compare(window: QMainWindow) -> None:
-    """按 A/B 下拉框的选择刷新三列 + 结论行 + 当前使用行。
-
-    只有一条来源时**A（或 B）那一列照常显示它的值**，只是 Δ 无意义——
-    空态只清空缺的那一侧（只跑一条就整表空白会让人以为校准没结果）。
-    """
-    state = _calib_state(window)
-    ka, kb = window.calib_combo_a.currentData(), window.calib_combo_b.currentData()
-    a = state.get(ka) if ka else None
-    b = state.get(kb) if kb else None
-    both = a is not None and b is not None
-    rows_ab = _compare_rows(a, b) if both else None
-    rows_a = _compare_rows(a, a) if a is not None else None
-    rows_b = _compare_rows(b, b) if b is not None else None
-
-    for i, (key_, _name) in enumerate(COMPARE_ROWS):
-        window.calib_vals["a"][key_].setText(rows_a[i][1] if rows_a else "—")
-        window.calib_vals["b"][key_].setText(rows_b[i][1] if rows_b else "—")
-        window.calib_vals["delta"][key_].setText(
-            rows_ab[i][3] if rows_ab else "—")
-
-    if both and ka != kb:
-        window.calib_verdict.setText(
-            _verdict(a, b, SOURCE_LABELS[ka], SOURCE_LABELS[kb]))
-    elif both:
-        window.calib_verdict.setText(
-            f"结论：A 与 B 都是 {SOURCE_LABELS[ka]}——换一个来源才有对比")
-    elif a is None and b is None:
-        window.calib_verdict.setText(
-            "结论：还没有结果——先跑 ① 自动定位（②③ 可选）")
-    else:
-        only = SOURCE_LABELS[ka if a is not None else kb]
-        window.calib_verdict.setText(
-            f"结论：只有 {only} 一条结果——再跑一条来源才有对比")
-    _refresh_current_label(window)
-
-
-def _refresh_current_label(window: QMainWindow) -> None:
-    """"当前使用"那一行 + [以 A 为准]/[以 B 为准] 的可用状态。"""
-    state = _calib_state(window)
-    cur = state.get("current")
-    if cur is None:
-        window.calib_current_lbl.setText("当前使用：—（还没跑过校准）")
-    else:
-        dev = _source_dev(state.get(cur))
-        dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-        mark = "（自定义）" if state.get("custom") else ""
-        window.calib_current_lbl.setText(
-            f"当前使用：{SOURCE_LABELS[cur]}{mark}（{dev_txt}）")
-    window.calib_use_a.setEnabled(
-        window.calib_combo_a.currentData() is not None)
-    window.calib_use_b.setEnabled(
-        window.calib_combo_b.currentData() is not None)
-
-
-def _use_current_from(window: QMainWindow, which: str) -> None:
-    """[以 A 为准] / [以 B 为准]：把对应来源设成"当前使用"（标成自定义）。"""
-    state = _calib_state(window)
-    combo = window.calib_combo_a if which == "a" else window.calib_combo_b
-    key = combo.currentData()
-    if key is None:
-        return
-    _log(window, _set_current_custom(state, key))
-    _redraw_calib(window)       # 青线按新的"当前使用"重画
-    _calib_sync(window)
-    _refresh_compare(window)
 
 
 # ══ 几何配置条目：加载 .poni / 保存 .poni / 删除 ═══════════════
@@ -1514,17 +1603,14 @@ def _import_poni(window: QMainWindow) -> None:
         _log(window, f".poni 导入失败（{err}）")
         return
     _reload_config_combo(window, key)
-    # 导入的几何同时作为校准初值（新批次的第三通道）：切来源并重置
-    # 像素确认（初值区的像素尺寸换了，必须重新确认）
-    st = _calib_init_state(window)
-    st["source"] = key
-    st["confirmed"] = False
-    _sync_calib_init(window)
+    # 导入的几何同时成为"当前配置"的起点（新批次的导入通道），并把像素
+    # 确认清掉——像素值换了必须重新确认
+    window.calib_pixel_ok_m = None
+    _borrow_entry(window, key)
     _log(window, f"已导入 .poni → 配置条目 {key}"
                  f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
                  f"重启后仍在）")
-    _log(window, f"校准初值已切到 {key}：请在「校准初值」区确认像素尺寸"
-                 f"后再跑校准")
+    _calib_sync(window)
 
 
 def _save_poni(window: QMainWindow) -> None:
@@ -1654,21 +1740,19 @@ def _confirm_overwrite(window: QMainWindow, key: str) -> bool:
 
 
 def _save_calib_config(window: QMainWindow) -> None:
-    """[保存为配置]："当前使用"的校准结果 → 命名用户条目（本地落盘）。
+    """[存为配置]：把**当前配置**的几何 → 命名用户条目（本地落盘）。
 
     校验 key/label → 与内置条目撞名拒绝、与已存用户条目撞名弹确认
     覆盖 → config.save_user_config 落盘 → 下拉框重建并自动选中新
     条目（_apply_config 把几何填进参数坞，保存即生效）。
 
-    保存的 geometry = 校准结果（距离/PONI/倾斜角）+ 参数坞当前像素
-    /波长输入；束心 = 结果附带的 beam_center_rc（自动 = 新拟合环心，
-    手动 = 初值 B）；residual_deg 一并存入作诊断量（消费方忽略）。
+    血缘一并写入：method = 这份几何是哪个动作产出的（raw/auto/manual/
+    refined/custom）、derived_from = 这一批的起点借自哪条、created =
+    保存时间。
     """
     state = _calib_state(window)
-    mode = state.get("current")
-    result = state.get(mode) if mode else None
-    if result is None:
-        _log(window, "没有可保存的校准结果（先跑一次自动或手动校准）")
+    if state.get("current_geom") is None:
+        _log(window, "还没有可保存的几何（先选一条配置或用 [编辑…] 填）")
         return
     key = window.calib_key_edit.text().strip()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
@@ -1685,31 +1769,34 @@ def _save_calib_config(window: QMainWindow) -> None:
         return
     if key in config.USER_CONFIGS and not _confirm_overwrite(window, key):
         return
-    # 像素/波长取「校准初值」（用户确认过的那个）：新批次的分析配置可能
-    # 还是别的批次的，而初值区才是这次校准真正用的值
-    g = _calib_initial(window)
+    state = _calib_state(window)
+    g = state["current_geom"]
     pixel = g["pixel_size_m"]
-    init_st = _calib_init_state(window)
+    name = state["slots"]["current"]
+    item = _result_by_name(state, name) if name else None
     entry = {
         "label": label,
         "geometry": {
             "pixel_size_m": pixel,
             "wavelength_m": g["wavelength_m"],
-            "dist_m": result["dist_m"],
-            "poni1_m": result["poni1_px"] * pixel,
-            "poni2_m": result["poni2_px"] * pixel,
-            "rot1_deg": result["rot1_deg"],
-            "rot2_deg": result["rot2_deg"],
+            "dist_m": g["dist_m"],
+            "poni1_m": g["poni1_m"],
+            "poni2_m": g["poni2_m"],
+            "rot1_deg": g["rot1_deg"],
+            "rot2_deg": g["rot2_deg"],
         },
         "beam_center": tuple(
-            result.get("beam_center_rc", window.config["beam_center"])),
-        "residual_deg": result["residual_deg"],
-        # 血缘：初值借自哪条（手输则没有这个键）、哪个来源产出的、何时
-        "method": mode,
+            g.get("beam_center_rc") or window.config["beam_center"]),
+        # 血缘：哪个动作产出的（raw/auto/manual/refined/custom）、
+        # 这一批的起点借自哪条、何时保存
+        "method": item["kind"] if item else
+                  ("custom" if state.get("custom") else "raw"),
         "created": datetime.now().isoformat(timespec="seconds"),
     }
-    if init_st["source"] in config.CONFIGS:
-        entry["derived_from"] = init_st["source"]
+    if item is not None and item["result"].get("residual_deg") is not None:
+        entry["residual_deg"] = item["result"]["residual_deg"]
+    if state.get("base_key") in config.CONFIGS:
+        entry["derived_from"] = state["base_key"]
     try:
         is_new = config.save_user_config(key, entry)
     except ValueError as err:
@@ -1725,18 +1812,54 @@ def _save_calib_config(window: QMainWindow) -> None:
 
 # ══ 模式进出（app._on_mode 调用）══════════════════════════════
 def _enter_calib(window: QMainWindow) -> None:
-    """进入校准模式（[校准] 按下）：勾选的第一个文件开校准面板。
+    """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
 
-    没勾文件只记日志提示（不崩）——用户勾好文件后点 [开始自动校准]
-    也能开面板。
+    没勾文件只记日志提示（不崩）——用户勾好文件后点 [定位环心并精修]
+    也能开面板。宽度只在够得着时拉：给绘图区留 CALIB_PANEL_RESERVE_PX
+    （点环选点是在图上做的，坞太宽就没法点了）。
     """
     path = _calib_standard_path(window)
     if path is None:
         _log(window, "请先在文件列表勾选标样文件")
         return
     _open_calib_panel(window, path)
+    _widen_dock_for_calib(window)
 
 
 def _exit_calib(window: QMainWindow) -> None:
-    """退出校准模式：关校准面板（状态清零，关闭即遗忘）。"""
+    """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
     _close_calib_panel(window)
+    _restore_dock_width(window)
+
+
+def _widen_dock_for_calib(window: QMainWindow) -> None:
+    """校准模式下把参数坞拉宽到"放下校准页所有内容"（不超过窗口上限）。"""
+    dock = getattr(window, "param_dock", None)
+    page = getattr(window, "calib_scroll", None)
+    if dock is None or page is None:
+        return
+    if getattr(window, "_dock_w_before", None) is None:
+        window._dock_w_before = dock.width()      # 记住分析模式的宽度
+    need = page.widget().sizeHint().width() + 24  # 滚动区边框/条余量
+    limit = max(360, window.width() - CALIB_PANEL_RESERVE_PX)
+    target = int(min(need, limit))
+    if dock.isFloating():
+        dock.resize(target, dock.height())
+    else:
+        window.resizeDocks([dock], [target], Qt.Horizontal)
+    if need > limit:
+        _log(window, f"校准页需要 {need} px，但为保住绘图区（点环用）只给到 "
+                     f"{target} px：窄窗口下校准页里可以横向滚动")
+
+
+def _restore_dock_width(window: QMainWindow) -> None:
+    """出校准模式：参数坞宽度还原成进之前那一条。"""
+    was = getattr(window, "_dock_w_before", None)
+    dock = getattr(window, "param_dock", None)
+    if was is None or dock is None:
+        return
+    if dock.isFloating():
+        dock.resize(was, dock.height())
+    else:
+        window.resizeDocks([dock], [was], Qt.Horizontal)
+    window._dock_w_before = None
