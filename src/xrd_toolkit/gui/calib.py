@@ -11,6 +11,12 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
     环，点自动吸附最近理论环（snap_lab6_ring，容差 0.5°），
     [开始手动校准] 交给 refine_lab6_from_points 反推几何。
 
+校准完成后**引擎指标**（services/ring_metrics：环位偏差中位 px、完整
+环数、a 离散 ppm）附在结果 dict 上并写进日志后缀。它量的是"几何有没
+有把理论环放到图像的真环上"，与 pyFAI 的收敛残差互补——后者只说明
+迭代自洽（两种解分支都能报 0.004°），不说明环对不对。指标算不出来时
+只记 metrics_error、日志如实说明，不影响校准结果本身。
+
 界面分工：
   - 参数坞第 2 页 = _build_calib_form（模式单选 + 自动/手动按钮区 +
     结果三列区 自动|手动|Δ偏差 + 保存为配置区）。两种模式共用同一
@@ -58,6 +64,7 @@ from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import (
     calibrate_lab6, refine_lab6_from_points, snap_lab6_ring,
     theoretical_ring_paths)
+from xrd_toolkit.services.ring_metrics import ring_metrics
 
 SNAP_TOL_DEG = 0.5      # 判环容差（2θ 度；与 snap_lab6_ring 默认一致）
 MIN_POINTS = 3          # 手动校准最低点数
@@ -101,18 +108,22 @@ def _calib_image(window: QMainWindow, path: Path):
     return image
 
 
+def _geom_px_keys(g: dict) -> dict:
+    """_collect_geometry 的输出 → 画图/指标共用的 px 键几何（PONI 米→px）。"""
+    return dict(
+        pixel_size_m=g["pixel_size_m"], wavelength_m=g["wavelength_m"],
+        dist_m=g["dist_m"], poni1_px=g["poni1_m"] / g["pixel_size_m"],
+        poni2_px=g["poni2_m"] / g["pixel_size_m"],
+        rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"])
+
+
 def _calib_draw_geometry(window: QMainWindow) -> dict:
     """画图几何（统一 px 键）：最近一次校准结果覆盖参数面板初值。
 
     自动/手动校准完成后理论环按新几何重画（用户验证精修效果）；
     没跑过校准则按参数面板当前值画预测环。
     """
-    g = _collect_geometry(window)
-    draw = dict(
-        pixel_size_m=g["pixel_size_m"], wavelength_m=g["wavelength_m"],
-        dist_m=g["dist_m"], poni1_px=g["poni1_m"] / g["pixel_size_m"],
-        poni2_px=g["poni2_m"] / g["pixel_size_m"],
-        rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"])
+    draw = _geom_px_keys(_collect_geometry(window))
     state = _calib_state(window)
     mode = state.get("last")
     result = state.get(mode) if mode else None
@@ -583,12 +594,86 @@ def _clear_calib_points(window: QMainWindow) -> None:
     _calib_sync(window)
 
 
+# ══ 引擎指标：环位偏差 / 完整度 / a 离散（结果日志后缀）══════════
+def _attach_metrics(result: dict, image, geom: dict,
+                    initial: dict = None) -> None:
+    """给校准结果就地附引擎指标，**绝不抛出**（失败记 metrics_error）。
+
+    geom / initial 都是 _collect_geometry 形状的字典（initial = 预精修
+    的初值几何，米制 PONI）；result 是引擎结果（px 键，**不含**像素
+    尺寸与波长——它们不参与拟合）。指标要的像素尺寸/波长一律取自
+    geom，距离/PONI/倾斜角取自被评估的那一份。
+
+    写三个键：
+      metrics          结果几何下的指标（ring_metrics 的输出）
+      metrics_initial  初值几何下的指标；没给初值时 None——两者并排才
+                       看得出"精修到底把环往图像的真环上挪了多少像素"
+      metrics_error    失败原因（成功时不写这个键）
+
+    设计：指标是**显示器**，不是校准本身。算不出来（几何键缺失、几何
+    离谱、图像太小、引擎内部异常）时校准结果照常有效，日志如实说明——
+    静默失败会让用户以为"指标说没问题"。
+    """
+    def _one(src: dict) -> dict:
+        # 米制面板几何先转 px 键（转换也在守卫内：残缺字典不许穿透）
+        g = _geom_px_keys(src) if "poni1_m" in src else src
+        return ring_metrics(
+            image, pixel_size_m=geom["pixel_size_m"],
+            wavelength_m=geom["wavelength_m"], dist_m=g["dist_m"],
+            poni1_px=g["poni1_px"], poni2_px=g["poni2_px"],
+            rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"])
+
+    result["metrics"] = None
+    result["metrics_initial"] = None
+    for key, src in (("metrics", result), ("metrics_initial", initial)):
+        if src is None:
+            continue
+        try:
+            result[key] = _one(src)      # 引擎结果本来不带指标，只管覆盖
+        except Exception as exc:                      # noqa: BLE001
+            result[key] = None
+            result["metrics_error"] = f"{type(exc).__name__}: {exc}"
+
+
+def _metrics_note(result: dict) -> str:
+    """结果日志的中文指标后缀（没指标时尽量说明原因，不静默）。
+
+    措辞约定：几何离谱时宁可说"无可用环信号 + 贴窗边比例"——**不用
+    _warn_rings_off_image 那句"全部落在图像外"**，那句有守卫测试在数
+    出现次数，混用会让计数含义变糊。
+    """
+    if result.get("metrics_error"):
+        return f"｜指标不可用（{result['metrics_error']}）"
+    m = result.get("metrics")
+    if m is None:
+        return ""
+    n = len(m["rings"])
+    if not np.isfinite(m["dev_px"]):
+        # clip_frac 也可能无值（连搜索窗都放不进图像）——不能给用户看 nan%
+        clip = m["clip_frac"]
+        clip_txt = (f"峰值贴搜索窗边界 {clip:.0%}" if np.isfinite(clip)
+                    else "搜索窗在图像内放不下")
+        return (f"｜无可用环信号（{clip_txt}、完整环 {m['n_complete']}/{n}）")
+    a = m["a"]
+    a_txt = (f"a 离散 {a['spread_ppm']:.0f} ppm"
+             if np.isfinite(a["spread_ppm"]) else "a 离散 —")
+    init = result.get("metrics_initial")
+    init_txt = (f"（初值 {init['dev_px']:.2f}）"
+                if init is not None and np.isfinite(init["dev_px"]) else "")
+    return (f"｜环位偏差中位 {m['dev_px']:.2f} px{init_txt}、"
+            f"完整环 {m['n_complete']}/{n}、{a_txt}")
+
+
 # ══ 后台任务：自动 / 手动（_spawn 同款守卫）═══════════════════
 def _auto_calib_worker(path_str: str, geom: dict) -> dict:
     """后台线程纯计算：读标样 → 自动定环心（FFT 兜底）→ pyFAI 精修。
 
     结果附 beam_center_rc：(行, 列) 像素——这次新拟合的环心就是直射
     束落点 B（比沿用配置条目的旧 B 更准），[保存为配置] 用它入条目。
+
+    图像已经在手，顺手附引擎指标（metrics / metrics_initial）——环位
+    偏差量的是"精修后几何把理论环放到图像真环上了没有"，是用户在校
+    准图上看得见的那件事。
     """
     image = load_diffraction_image(path_str)
     center = fit_center_from_rings(image)
@@ -600,20 +685,36 @@ def _auto_calib_worker(path_str: str, geom: dict) -> dict:
         image, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
         center0_px=(cx, cy))
+    _attach_metrics(result, image, geom, initial=geom)
     result["beam_center_rc"] = (cy, cx)
     return result
 
 
-def _manual_calib_worker(points, rings, geom: dict, center0_px: tuple) -> dict:
-    """后台线程纯计算：用户点 → pyFAI refine2 单轮精修。
+def _manual_calib_worker(path_str, points, rings, geom: dict,
+                         center0_px: tuple) -> dict:
+    """后台线程纯计算：用户点 → pyFAI refine2 单轮精修 → 附引擎指标。
 
     结果附 beam_center_rc：手动精修不动束心（初值 = 配置条目 B），
-    保存时沿用初值 B（与旧模板机制一致）。"""
+    保存时沿用初值 B（与旧模板机制一致）。
+
+    path_str = 标样文件路径（window.calib_path）：手动链路本身只要点
+    坐标，指标却需要图像本身，所以这里多读一次图（后台线程，读失败
+    只让指标缺失，不影响校准结果）。
+    """
     result = refine_lab6_from_points(
         points, rings, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
         center0_px=center0_px)
     result["beam_center_rc"] = (center0_px[1], center0_px[0])
+    if path_str is not None:
+        try:
+            image = load_diffraction_image(path_str)
+        except Exception as exc:                      # noqa: BLE001
+            result["metrics"] = None
+            result["metrics_initial"] = None
+            result["metrics_error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            _attach_metrics(result, image, geom, initial=geom)
     return result
 
 
@@ -698,8 +799,10 @@ def _start_manual_calib(window: QMainWindow) -> None:
             return
         _log(window, f"手动校准失败：{msg}")
 
-    task = BackgroundTask(_manual_calib_worker, points, rings, geom,
-                          center0_px, on_done=done, on_error=error)
+    path = getattr(window, "calib_path", None)   # 指标要图像；没面板时为 None
+    task = BackgroundTask(_manual_calib_worker, str(path) if path else None,
+                          points, rings, geom, center0_px,
+                          on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
     _log(window, f"开始手动校准（{len(points)} 个点，后台线程）")
@@ -719,7 +822,8 @@ def _on_auto_done(window: QMainWindow, result: dict) -> None:
     _calib_sync(window)
     _log(window, f"自动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
-                 f"残差 {result['residual_deg']:.4f}°")
+                 f"残差 {result['residual_deg']:.4f}°"
+                 f"{_metrics_note(result)}")
 
 
 def _on_manual_done(window: QMainWindow, result: dict) -> None:
@@ -732,7 +836,8 @@ def _on_manual_done(window: QMainWindow, result: dict) -> None:
     _redraw_calib(window)
     _calib_sync(window)
     _log(window, f"手动校准完成：距离 {result['dist_m'] * 1000:.2f} mm，"
-                 f"残差 {result['residual_deg']:.4f}°")
+                 f"残差 {result['residual_deg']:.4f}°"
+                 f"{_metrics_note(result)}")
     if state.get("manual_n", 99) < 6:
         # 点数少时最小二乘对单点点击误差敏感（可能滑向退化解），
         # 残差小也不代表可信——如实提示，Δ 列让用户自己判断

@@ -5379,11 +5379,185 @@ class TestSaveCalibConfig(unittest.TestCase):
             res = gui_calib._auto_calib_worker("data/fake_a.tif", geom)
         self.assertEqual(res["beam_center_rc"], (1021.0, 1023.0))
         # 手动 worker：束心 = 初值 (列, 行) → (行, 列)
+        # （首参 None = 没有标样路径 → 跳过引擎指标，本测试只管束心）
         with mock.patch.object(gui_calib, "refine_lab6_from_points",
                                return_value=dict(self.FAKE_MANUAL)):
             res = gui_calib._manual_calib_worker(
-                [(1, 2), (3, 4), (5, 6)], [0, 1, 2], geom, (1022.3, 1022.0))
+                None, [(1, 2), (3, 4), (5, 6)], [0, 1, 2], geom,
+                (1022.3, 1022.0))
         self.assertEqual(res["beam_center_rc"], (1022.0, 1022.3))
+
+
+class TestCalibMetrics(unittest.TestCase):
+    """引擎指标接线：附在结果 dict 上 + 写进日志后缀；失败不静默、不拖垮校准。
+
+    指标本身（引擎语义、阈值、检出下限）在 test_ring_metrics.py 里用真
+    几何合成图标定；这里只验 GUI 侧的接线与措辞。
+    """
+
+    FAKE_AUTO = dict(TestCalibration.FAKE_AUTO, dist_m=1.5958)
+    FAKE_MANUAL = dict(TestCalibration.FAKE_MANUAL)
+    FAKE_CENTER = TestCalibration.FAKE_CENTER
+    GEO = {"pixel_size_m": 200e-6, "wavelength_m": 0.1223e-10,
+           "dist_m": 1.6000, "poni1_m": 1045.2 * 200e-6,
+           "poni2_m": 1022.0 * 200e-6, "rot1_deg": -0.005, "rot2_deg": -0.163}
+    METRICS = {"dev_px": 0.52, "dev_signed_px": 0.1, "dev_rms_px": 0.6,
+               "clip_frac": 0.0, "n_complete": 16, "n_rings_used": 16,
+               "rings": [{} for _ in range(16)],
+               "a": {"mean_angstrom": 4.1568, "spread_ppm": 812.0}}
+    INITIAL = dict(METRICS, dev_px=3.14)
+
+    def _logs(self, w):
+        return w.log_text.toPlainText()
+
+    # ── worker 侧：指标的附着位置 ──────────────────────────────
+    def test_auto_worker_attaches_metrics_for_result_and_initial(self):
+        """自动 worker：结果几何与初值几何各附一份（初值 = 面板预精修值）。"""
+        seen = []
+
+        def fake_rm(image, **kw):
+            seen.append(kw["dist_m"])
+            return dict(self.METRICS)
+
+        with mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=np.ones((64, 64)) * 10), \
+             mock.patch.object(gui_calib, "fit_center_from_rings",
+                               return_value=self.FAKE_CENTER), \
+             mock.patch.object(gui_calib, "calibrate_lab6",
+                               return_value=dict(self.FAKE_AUTO)), \
+             mock.patch.object(gui_calib, "ring_metrics",
+                               side_effect=fake_rm):
+            res = gui_calib._auto_calib_worker("data/fake_a.tif", self.GEO)
+        self.assertEqual(res["metrics"]["dev_px"], 0.52)
+        self.assertEqual(res["metrics_initial"]["dev_px"], 0.52)
+        self.assertNotIn("metrics_error", res)
+        # 两次调用的距离：先结果几何、后初值几何（GEOM 初值 1.6000 ≠ 结果 1.5958）
+        self.assertEqual(seen, [self.FAKE_AUTO["dist_m"], self.GEO["dist_m"]])
+
+    def test_manual_worker_metrics_need_a_path(self):
+        """手动 worker：给了标样路径才读图算指标；没路径就跳过（不写键）。"""
+        with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               return_value=dict(self.FAKE_MANUAL)), \
+             mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=np.ones((64, 64)) * 10), \
+             mock.patch.object(gui_calib, "ring_metrics",
+                               return_value=dict(self.METRICS)):
+            res = gui_calib._manual_calib_worker(
+                "data/fake_a.tif", [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
+                self.GEO, (1022.3, 1022.0))
+        self.assertIsNotNone(res["metrics"])
+        with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               return_value=dict(self.FAKE_MANUAL)):
+            res_none = gui_calib._manual_calib_worker(
+                None, [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
+                self.GEO, (1022.3, 1022.0))
+        self.assertNotIn("metrics", res_none)
+
+    # ── 失败路径：不许抛出，也不许静默 ─────────────────────────
+    def test_attach_metrics_records_failure_without_raising(self):
+        """几何键残缺（半截字典）→ 记 metrics_error，绝不抛出。"""
+        res = dict(self.FAKE_MANUAL)
+        gui_calib._attach_metrics(res, np.ones((8, 8)), {"dist_m": 1.0})
+        self.assertIsNone(res["metrics"])
+        self.assertIsNone(res["metrics_initial"])
+        self.assertIn("KeyError", res["metrics_error"])
+
+    def test_worker_survives_engine_exception(self):
+        """引擎抛异常 → 只丢指标；校准结果与束心完好（指标是显示器）。"""
+        with mock.patch.object(gui_calib, "load_diffraction_image",
+                               return_value=np.ones((64, 64)) * 10), \
+             mock.patch.object(gui_calib, "fit_center_from_rings",
+                               return_value=self.FAKE_CENTER), \
+             mock.patch.object(gui_calib, "calibrate_lab6",
+                               return_value=dict(self.FAKE_AUTO)), \
+             mock.patch.object(gui_calib, "ring_metrics",
+                               side_effect=RuntimeError("boom")):
+            res = gui_calib._auto_calib_worker("data/fake_a.tif", self.GEO)
+        self.assertIsNone(res["metrics"])
+        self.assertEqual(res["metrics_error"], "RuntimeError: boom")
+        self.assertEqual(res["dist_m"], self.FAKE_AUTO["dist_m"])
+        self.assertEqual(res["beam_center_rc"],
+                         (self.FAKE_CENTER["cy"], self.FAKE_CENTER["cx"]))
+
+    def test_manual_worker_image_failure_only_loses_metrics(self):
+        """手动侧读图失败（文件被挪走）→ 只丢指标，精修结果照常返回。"""
+        with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               return_value=dict(self.FAKE_MANUAL)), \
+             mock.patch.object(gui_calib, "load_diffraction_image",
+                               side_effect=OSError("文件不见了")):
+            res = gui_calib._manual_calib_worker(
+                "data/gone.tif", [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
+                self.GEO, (1022.3, 1022.0))
+        self.assertIsNone(res["metrics"])
+        self.assertIn("OSError", res["metrics_error"])
+        self.assertEqual(res["dist_m"], self.FAKE_MANUAL["dist_m"])
+
+    # ── 日志后缀：三种状态的措辞 ───────────────────────────────
+    def test_metrics_note_formats_all_three_states(self):
+        note = gui_calib._metrics_note(
+            {"metrics": dict(self.METRICS), "metrics_initial": self.INITIAL})
+        self.assertIn("环位偏差中位 0.52 px（初值 3.14）", note)
+        self.assertIn("完整环 16/16", note)
+        self.assertIn("a 离散 812 ppm", note)
+        # 无可用环信号：给证据（贴窗边比例）而不是数字
+        nan = {"metrics": dict(self.METRICS, dev_px=float("nan"),
+                               clip_frac=0.87, n_complete=0)}
+        note_nan = gui_calib._metrics_note(nan)
+        self.assertIn("无可用环信号", note_nan)
+        self.assertIn("87%", note_nan)
+        # clip_frac 本身也无值（搜索窗都放不进图像）时不许给用户看 nan%
+        note_noclip = gui_calib._metrics_note(
+            {"metrics": dict(self.METRICS, dev_px=float("nan"),
+                             clip_frac=float("nan"), n_complete=0)})
+        self.assertIn("搜索窗在图像内放不下", note_noclip)
+        self.assertNotIn("nan", note_noclip)
+        # 指标不可用：如实报错，不静默
+        note_err = gui_calib._metrics_note(
+            {"metrics": None, "metrics_error": "RuntimeError: boom"})
+        self.assertIn("指标不可用", note_err)
+        self.assertIn("boom", note_err)
+        # 完全没指标（老结果/手动无路径）：后缀为空，不改动原日志
+        self.assertEqual(gui_calib._metrics_note({}), "")
+
+    def test_metrics_note_avoids_the_guard_phrase(self):
+        """文案分离："全部落在图像外"是 _warn_rings_off_image 的守卫措辞，
+        有测试在数它的出现次数——指标后缀不许复用同一句话。"""
+        for state in ({"metrics": dict(self.METRICS)},
+                      {"metrics": dict(self.METRICS, dev_px=float("nan"),
+                                       clip_frac=1.0)},
+                      {"metrics": None, "metrics_error": "X"}):
+            self.assertNotIn("全部落在图像外",
+                             gui_calib._metrics_note(state))
+
+    def test_auto_done_log_carries_metrics_suffix(self):
+        """端到端（mock 引擎与指标）：完成日志带指标后缀。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=dict(self.FAKE_AUTO)), \
+                 mock.patch.object(gui_calib, "ring_metrics",
+                                   side_effect=lambda image, **kw:
+                                   dict(self.METRICS if kw["dist_m"]
+                                        == self.FAKE_AUTO["dist_m"]
+                                        else self.INITIAL)):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+            logs = self._logs(w)
+            self.assertIn("自动校准完成", logs)
+            self.assertIn("环位偏差中位 0.52 px（初值 3.14）", logs)
+            self.assertIn("a 离散 812 ppm", logs)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
 
 class TestBatchProgress(unittest.TestCase):
