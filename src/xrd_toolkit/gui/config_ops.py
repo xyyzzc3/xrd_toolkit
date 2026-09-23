@@ -289,5 +289,3 @@ def _save_calib_config(window: QMainWindow) -> None:
                      f"命令行脚本可用 --config {key} 取用")
     else:
         _log(window, f"已覆盖配置条目 {key} 并自动选中")
-
-

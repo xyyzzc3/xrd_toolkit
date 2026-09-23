@@ -76,5 +76,3 @@ def _refresh_table(window: QMainWindow) -> None:
     window.calib_verdict.setText(
         _verdict(base_res, res[other], SLOT_LABELS[base_slot],
                  SLOT_LABELS[other]))
-
-

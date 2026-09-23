@@ -264,7 +264,7 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
             dock.curve_colors = dict(picks)
         elif hasattr(dock, "curve_colors"):
             del dock.curve_colors
-        from xrd_toolkit.gui.plot_views import _redraw_compare
+        from xrd_toolkit.gui.plot_compare import _redraw_compare
         _redraw_compare(window, dock.panel_key)
     _content(dock).draw()
     _log(window, f"已应用 Customize 设置：{dock.windowTitle()}")

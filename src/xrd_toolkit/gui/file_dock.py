@@ -23,7 +23,6 @@ FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 SUPPORTED_SUFFIXES = tuple(sorted(SUPPORTED_EXTS))
 
 
-
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
 def _dropped_items(event) -> list:
     """从拖放事件提取可处理的本地路径：支持类型的文件 + 目录。
@@ -40,7 +39,6 @@ def _dropped_items(event) -> list:
             if p.is_dir() or p.suffix.lower() in SUPPORTED_SUFFIXES:
                 items.append(p)
     return items
-
 
 
 # ══ 左侧：文件列 ═══════════════════════════════════════════

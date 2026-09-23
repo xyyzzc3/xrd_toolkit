@@ -1,9 +1,20 @@
 """面板状态共享层：面板登记访问、参数快照、焦点回放、自动显示区间。
 
-模块图（2026-09-18 从 app.py 拆分，调用方向永远从上往下）：
-    app.py（窗口组装）→ plot_views.py（视图注册表与绘图）
-      → panels.py（面板容器生命周期）→ customize.py（Customize 对话框）
-      → panel_state.py（本模块：最底层共享层，不 import 任何兄弟模块）
+模块图（调用方向永远从上往下；2026-09-18 与 09-23 分两轮拆模块，
+2026-09-24 再拆出多文件视图 plot_compare 与面板壳 plot_panels）：
+    app.py（窗口组装）
+      ├── plot_compare.py（多文件视图：对比 / 热图 / 锚点拾取）
+      │     └── plot_views.py（单文件视图：runner + 出图 + 任务回调）
+      │           └── plot_panels.py（面板壳：画布 / 手势 / 工具栏）
+      ├── file_dock.py（文件列表坞，共用 plot_export 存图）
+      └── calib.py（校准工作台）→ calib_model / calib_panel /
+            calib_table / config_ops
+    共同下层：plot_export.py（存图对话框）→ panels.py（面板容器生命
+      周期）→ customize.py（Customize 对话框）→ panel_state.py（本
+      模块：最底层共享层，不 import 任何兄弟模块；tasks.py 同样零
+      兄弟依赖，只管后台线程）
+    反向调用（plot_views / plot_panels / customize → plot_compare，
+    calib_* → calib）一律函数内延迟导入——全包没有模块级环。
 
 内容：
   - _log / _content：日志与"面板容器 → 面板内容"的统一入口；
@@ -738,3 +749,11 @@ def _content(dock) -> QWidget:
     if isinstance(dock, QMdiSubWindow):
         return dock.widget()
     return dock.content
+
+
+# 背景扣除的辅助线（原始曲线/基线/锚点标记）统一带这个 gid 前缀。
+# 它们不是"曲线"，凡按线号/线列表做事的逻辑都要排除，否则会错位：
+# _snapshot_canvas 的快照、_restore_line_styles 的按序回填、
+# _hover_motion 的最近线选择、_draw_waterfall 的扇区名回贴。
+# 统一走 _data_lines(ax)，别直接迭代 ax.lines。
+_AUX_GID_PREFIX = "bg:"

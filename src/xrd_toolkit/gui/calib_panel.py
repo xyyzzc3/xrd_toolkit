@@ -73,8 +73,6 @@ def _calib_image(window: QMainWindow, path: Path):
     return image
 
 
-
-
 def _calib_draw_geometry(window: QMainWindow) -> dict:
     """画图几何（统一 px 键）：**当前配置**的几何。
 
@@ -361,5 +359,3 @@ def _clear_calib_points(window: QMainWindow) -> None:
     _log(window, "已清空选点")
     _redraw_calib(window)
     _calib_sync(window)
-
-

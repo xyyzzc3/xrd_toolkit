@@ -31,6 +31,10 @@
     24px 小错位级联（6 档循环）、按当前总缩放开；
   - 关闭面板 = 关闭即遗忘：重开全新默认，关窗询问只算开着的图，
     在飞任务/旧代对比结果迟到即作废；
+  - 背景扣除（TestBackgroundSubtraction）：三种模式 + 实时预览 + 辅助
+    线隔离；锚点点选逐条调处理函数，另有一条从 canvas.callbacks 发真
+    MouseEvent 的接线护栏——漏导入名字这类拆分伤只有真点画布才现形，
+    直接调处理函数的测试全绿也照样漏它；
   - 校准工作台（TestCalibration / TestSaveCalibConfig）：[校准] 进
     模式 = 参数坞换页 + 中央校准图面板开出（勾选的第一个文件；没勾
     文件只提示）；自动校准后台跑（mock 引擎）→ 自动列 + 保存区提示；
@@ -48,6 +52,7 @@
 
 运行：python -m unittest discover -s tests -v
 """
+import ast
 import os
 import re
 import sys
@@ -65,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from types import SimpleNamespace
 
 import numpy as np
+from matplotlib.backend_bases import MouseEvent
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
@@ -78,6 +84,10 @@ from xrd_toolkit import config as config_mod
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
+from xrd_toolkit.gui import plot_views as gui_plot_views
+from xrd_toolkit.gui import panel_state as gui_panel_state
+from xrd_toolkit.gui import plot_compare as gui_plot_compare
+from xrd_toolkit.gui import plot_panels as gui_plot_panels
 from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import config_ops as gui_config_ops
 from xrd_toolkit.gui import calib_panel as gui_calib_panel
@@ -153,7 +163,7 @@ def _dock(w, view, path_str):
 
 def _axes(w, view, path_str):
     """取某 1D 面板自己的坐标轴（容器 = 子窗口或弹出窗口，经 _content 取内容）。"""
-    return gui_app._content(_dock(w, view, path_str)).axes_1d
+    return gui_panel_state._content(_dock(w, view, path_str)).axes_1d
 
 
 def _resize_panel(w, dock, wpx, hpx):
@@ -183,6 +193,59 @@ def _drop_event(w, paths, kind="drop"):
     else:
         w.dragEnterEvent(ev)
     return ev
+
+
+class TestPatchTargetsResolve(unittest.TestCase):
+    """静态护栏：每个 mock.patch 目标的名字必须真的在被打的模块里。
+
+    拆模块后最常踩的坑（本仓踩过两次）：patch 目标跟着"函数的新家"改，
+    或者别名混了（gui_panels 指 panels.py，不是 plot_panels.py）。打一
+    个不存在的名字 = AttributeError，但只有当那条测试跑到时才炸；要是
+    它同时让真弹窗打开，整套会卡死在 exec() 上（实测卡过一次，20 分钟
+    后才发现）。
+
+    另一类（patch 打在"定义处"而调用者在别的模块）静态查不出来，规矩
+    写在上面的导入注释里：**patch 目标 = 调用点所在的模块**。
+    """
+
+    def test_patch_targets_exist(self):
+        import types
+        aliases = {}          # 别名 → 模块对象（本文件 import 进来的）
+        for name, obj in vars(sys.modules[__name__]).items():
+            if isinstance(obj, types.ModuleType):
+                aliases[name] = obj
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        checked = 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("object", "patch")
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "patch"
+                    and len(node.args) >= 1):
+                continue
+            tgt = node.args[0]
+            if isinstance(tgt, ast.Name):        # patch.object(MOD, "name")
+                if len(node.args) < 2 \
+                        or not isinstance(node.args[1], ast.Constant):
+                    continue
+                mod, attr = aliases.get(tgt.id), node.args[1].value
+            elif isinstance(tgt, ast.Attribute):   # patch.object(MOD.Class, "m")
+                if not isinstance(tgt.value, ast.Name):
+                    continue
+                mod, attr = aliases.get(tgt.value.id), tgt.attr
+            elif isinstance(tgt, ast.Constant) and isinstance(tgt.value, str):
+                continue          # mock.patch("a.b.c") 形式本文件没用
+            else:
+                continue
+            if mod is None:
+                continue          # 不是模块（如 patch.object(window, ...)）
+            checked += 1
+            self.assertTrue(
+                hasattr(mod, attr),
+                f"{mod.__name__} 没有 {attr}（test 行 {node.lineno}）"
+                f"——拆模块后 patch 目标要指向调用点所在的模块")
+        self.assertGreater(checked, 100, "patch 目标没扫到，检查本测试的解析")
 
 
 class TestSelectionOnly(unittest.TestCase):
@@ -313,7 +376,7 @@ class TestViewButtonRuns(unittest.TestCase):
         """
         self.assertEqual(set(gui_views._VIEW_RUNNERS),
                          {"2D", "剖面", "1D", "瀑布"})
-        self.assertEqual(set(gui_views._VIEW_BUILDERS),
+        self.assertEqual(set(gui_plot_panels._VIEW_BUILDERS),
                          {"2D", "剖面", "1D", "瀑布", "热图"})
 
 
@@ -329,12 +392,12 @@ class TestNewViews(unittest.TestCase):
                                    return_value=fake_image):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "2D")
-                drawn = _wait_until(lambda: len(gui_app._content(
+                drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0)
                 self.assertTrue(drawn, "点 2D 后应画出图像")
             dock = _dock(w, "2D", "data/fake_b.tif")
             self.assertEqual(dock.windowTitle(), "2D_fake_b.tif")
-            ax = gui_app._content(dock).axes_2d
+            ax = gui_panel_state._content(dock).axes_2d
             self.assertEqual(len(ax.images), 1)
             # 束心十字画在当前配置的 beam_center 上（(行, 列) → x=列, y=行）
             cy, cx = w.config["beam_center"]
@@ -363,7 +426,7 @@ class TestNewViews(unittest.TestCase):
                                    side_effect=fake_profile):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "剖面")
-                drawn = _wait_until(lambda: len(gui_app._content(
+                drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "剖面", "data/fake_b.tif")).axes_profile.lines) > 0)
                 self.assertTrue(drawn, "点 剖面 后应画出曲线")
             dock = _dock(w, "剖面", "data/fake_b.tif")
@@ -414,11 +477,11 @@ class TestNewViews(unittest.TestCase):
                                    side_effect=fake_sectors):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "瀑布")
-                drawn = _wait_until(lambda: len(gui_app._content(
+                drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0)
                 self.assertTrue(drawn, "点 瀑布 后应画出堆叠曲线")
             dock = _dock(w, "瀑布", "data/fake_b.tif")
-            ax = gui_app._content(dock).axes_waterfall
+            ax = gui_panel_state._content(dock).axes_waterfall
             self.assertEqual(len(ax.lines), 36, "36 条扇区曲线")
             # 每行基线标 χ（第一条 -175°），曲线名 = 扇区名（悬停读数）
             self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°")
@@ -437,9 +500,9 @@ class TestNewViews(unittest.TestCase):
                                    return_value=fake_image):
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "2D")
-                self.assertTrue(_wait_until(lambda: len(gui_app._content(
+                self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0))
-            ax = gui_app._content(_dock(w, "2D", "data/fake_b.tif")).axes_2d
+            ax = gui_panel_state._content(_dock(w, "2D", "data/fake_b.tif")).axes_2d
             self.assertGreater(ax.images[0].norm.vmin, 1.0, "自动 = 分位值")
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
@@ -466,7 +529,7 @@ class TestNewViews(unittest.TestCase):
                     return_value=(tth, i2d, chi)) as fake_sectors:
                 w.add_files(["data/fake_b.tif"])
                 _open_view(w, "瀑布")
-                self.assertTrue(_wait_until(lambda: len(gui_app._content(
+                self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0))
                 w.findChild(QPushButton, "apply_image_btn").click()
                 QApplication.processEvents()
@@ -516,7 +579,7 @@ class TestApplyAndFocus(unittest.TestCase):
             _open_view(w, "2D")
             self.assertIsNone(w.focus_panel)
             # 模拟点击面板内容 → 事件过滤器切焦点（焦点=具体面板）
-            QTest.mouseClick(gui_app._content(_dock(w, "2D", "data/fake_b.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "2D", "data/fake_b.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, "2D|data/fake_b.tif")
             self.assertIn("2D_fake_b.tif", w.focus_label.text())
@@ -674,7 +737,7 @@ class TestSaveFigures(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            fig = gui_app._content(dock).figure
+            fig = gui_panel_state._content(dock).figure
             with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
                  mock.patch.object(gui_export, "_ask_save_options",
@@ -741,7 +804,7 @@ class TestSaveFigures(unittest.TestCase):
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    side_effect=[("/tmp/a", ""),
                                                 ("", "")]) as dlg, \
-                 mock.patch.object(gui_app._content(d1).figure, "savefig"):
+                 mock.patch.object(gui_panel_state._content(d1).figure, "savefig"):
                 self.assertFalse(gui_export._save_figures(w))
             self.assertEqual(dlg.call_count, 2)
             log = w.log_text.toPlainText()
@@ -762,7 +825,7 @@ class TestSaveFigures(unittest.TestCase):
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/no/such/dir/out.png", "")), \
-                 mock.patch.object(gui_app._content(dock).figure, "savefig",
+                 mock.patch.object(gui_panel_state._content(dock).figure, "savefig",
                                    side_effect=OSError("磁盘写不进")):
                 self.assertFalse(gui_export._save_figures(w))
             log = w.log_text.toPlainText()
@@ -778,9 +841,9 @@ class TestSaveOptions(unittest.TestCase):
         """默认 300 dpi + PNG（论文/报告印刷的常用起步值）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views.QDialog, "exec",
+            with mock.patch.object(gui_plot_export.QDialog, "exec",
                                    return_value=QDialog.Accepted):
-                self.assertEqual(gui_views._ask_save_options(w),
+                self.assertEqual(gui_plot_export._ask_save_options(w),
                                  {"dpi": 300, "fmt": "png"})
         finally:
             w.close()
@@ -795,8 +858,8 @@ class TestSaveOptions(unittest.TestCase):
                 return QDialog.Accepted
             # new= 放普通函数：函数是描述符，实例访问自动绑定 dlg；
             # return_value 的 MagicMock 不绑定（Shiboken 方法也不吃 autospec）
-            with mock.patch.object(gui_views.QDialog, "exec", new=fake_exec):
-                self.assertEqual(gui_views._ask_save_options(w),
+            with mock.patch.object(gui_plot_export.QDialog, "exec", new=fake_exec):
+                self.assertEqual(gui_plot_export._ask_save_options(w),
                                  {"dpi": 600, "fmt": "tif"})
         finally:
             w.close()
@@ -804,9 +867,9 @@ class TestSaveOptions(unittest.TestCase):
     def test_dialog_cancel_returns_none(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views.QDialog, "exec",
+            with mock.patch.object(gui_plot_export.QDialog, "exec",
                                    return_value=QDialog.Rejected):
-                self.assertIsNone(gui_views._ask_save_options(w))
+                self.assertIsNone(gui_plot_export._ask_save_options(w))
         finally:
             w.close()
 
@@ -831,7 +894,7 @@ class TestSaveOptions(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            fig = gui_app._content(dock).figure
+            fig = gui_panel_state._content(dock).figure
             with mock.patch.object(gui_export, "_choose_panels",
                                    return_value=[dock]), \
                  mock.patch.object(gui_export, "_ask_save_options",
@@ -846,14 +909,19 @@ class TestSaveOptions(unittest.TestCase):
             w.close()
 
     def test_panel_save_cancel_options_keeps_unsaved(self):
-        """单面板工具栏 [Save]：选项弹窗取消 → 不弹文件名框、记账不动。"""
+        """单面板工具栏 [Save]：选项弹窗取消 → 不弹文件名框、记账不动。
+
+        patch 目标 = 调用点所在模块 plot_panels（_save_panel 在那里做
+        全局名查找）：打 plot_export 里的同名函数拦不住这条路径，真弹窗
+        会让 offscreen 套件卡死在 exec() 上（实测）。
+        """
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            with mock.patch.object(gui_views, "_ask_save_options",
+            with mock.patch.object(gui_plot_panels, "_ask_save_options",
                                    return_value=None), \
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
-                gui_app._content(dock).toolbar.save_figure()
+                gui_panel_state._content(dock).toolbar.save_figure()
                 self.assertFalse(dlg.called)
                 self.assertFalse(dock.figure_saved)
         finally:
@@ -864,13 +932,13 @@ class TestSaveOptions(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            fig = gui_app._content(dock).figure
-            with mock.patch.object(gui_views, "_ask_save_options",
+            fig = gui_panel_state._content(dock).figure
+            with mock.patch.object(gui_plot_panels, "_ask_save_options",
                                    return_value={"dpi": 600, "fmt": "tif"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/panel_tif", "TIF 图片 (*.tif)")) as dlg, \
                  mock.patch.object(fig, "savefig") as savefig:
-                gui_app._content(dock).toolbar.save_figure()
+                gui_panel_state._content(dock).toolbar.save_figure()
                 self.assertIn("TIF", dlg.call_args[0][3])
                 savefig.assert_called_once_with("/tmp/panel_tif.tif", dpi=600)
                 self.assertTrue(dock.figure_saved)
@@ -926,7 +994,7 @@ class TestCurveColors(unittest.TestCase):
             w.compare_btn.click()
             keys = [k for k in w.plot_docks if k.startswith("对比|")]
             self.assertEqual(len(keys), 1)
-            ax = gui_app._content(w.plot_docks[keys[0]]).axes_1d
+            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
@@ -940,12 +1008,12 @@ class TestCurveColors(unittest.TestCase):
                              [self._SLOTS[0], self._SLOTS[1]])
             # 逐条自定义：第一条换红 → 重画时自定义优先
             dock.curve_colors = {"fake_a.tif": "#ff0000"}
-            gui_views._redraw_compare(w, key)
+            gui_plot_compare._redraw_compare(w, key)
             self.assertEqual(ax.lines[0].get_color(), "#ff0000")
             self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
             # 换"默认"配色 → 颜色按新参数重画（旧色不被套回）
             dock.params_snapshot["曲线配色"] = "默认"
-            gui_views._redraw_compare(w, key)
+            gui_plot_compare._redraw_compare(w, key)
             self.assertEqual([line.get_color() for line in ax.lines],
                              ["#ff0000", "C1"])
         finally:
@@ -970,8 +1038,8 @@ class TestCurveColors(unittest.TestCase):
         try:
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
-            content = gui_app._content(dock)
-            dlg = gui_app._build_customize_dialog(w, dock, content.axes_1d,
+            content = gui_panel_state._content(dock)
+            dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
             swatches = [dlg.findChild(QPushButton, f"swatch_{i}")
                         for i in range(2)]
@@ -988,17 +1056,17 @@ class TestCurveColors(unittest.TestCase):
             with mock.patch.object(gui_customize.QColorDialog, "getColor",
                                    return_value=QColor("#ff0000")):
                 swatches[0].click()
-            gui_app._apply_customize(w, dock, content.axes_1d,
+            gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
             self.assertEqual(dock.curve_colors, {"fake_a.tif": "#ff0000"})
             self.assertEqual(ax.lines[0].get_color(), "#ff0000")
             self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
             # 再开对话框：色块预填自定义色；清空后应用 → 回色板色
-            dlg2 = gui_app._build_customize_dialog(w, dock, content.axes_1d,
+            dlg2 = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                    content.figure)
             self.assertEqual(dlg2._color_picks, {"fake_a.tif": "#ff0000"})
             dlg2.findChild(QPushButton, "clear_colors_btn").click()
-            gui_app._apply_customize(w, dock, content.axes_1d,
+            gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg2)
             self.assertFalse(hasattr(dock, "curve_colors"))
             self.assertEqual(ax.lines[0].get_color(), self._SLOTS[0])
@@ -1016,7 +1084,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             w.compare_btn.click()
             keys = [k for k in w.plot_docks if k.startswith("对比|")]
             self.assertEqual(len(keys), 1)
-            ax = gui_app._content(w.plot_docks[keys[0]]).axes_1d
+            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
@@ -1039,7 +1107,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock = w.plot_docks[key]
             y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
             dock.params_snapshot["对比堆叠"] = True
-            gui_views._redraw_compare(w, key)
+            gui_plot_compare._redraw_compare(w, key)
             y_stack = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
             peak0 = np.nanmax(y_flat[0])   # fake_a 最强峰 = 3
             np.testing.assert_allclose(y_stack[0], y_flat[0])   # 第一条不动
@@ -1048,7 +1116,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
                              ["fake_a.tif", "fake_b.tif"])
             self.assertIsNone(ax.get_legend(), "堆叠下 y 刻度即样品名，无图例")
             dock.params_snapshot["对比堆叠"] = False
-            gui_views._redraw_compare(w, key)
+            gui_plot_compare._redraw_compare(w, key)
             np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
             self.assertIsNotNone(ax.get_legend())
         finally:
@@ -1065,7 +1133,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock.params_snapshot["纵轴下限"] = 2.0
             dock.params_snapshot["纵轴上限"] = 3.0
             dock.params_snapshot["对比堆叠"] = True
-            gui_views._redraw_compare(w, key)
+            gui_plot_compare._redraw_compare(w, key)
             self.assertEqual(ax.get_yscale(), "linear")
             lo, hi = ax.get_ylim()   # 手填 2~3 不生效：行基线决定范围
             self.assertTrue(lo <= 0.0 and hi > 3.0,
@@ -1092,15 +1160,15 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             # 给面板挂 heat_files（行→文件），行 1 = fake_b.tif
             dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
                                ("data/fake_b.tif", "fake_b.tif")]
-            gui_views._heat_row_press(w, key, self._synthetic_event(ax, 1))
-            gui_views._heat_row_release(w, key, self._synthetic_event(ax, 1))
+            gui_plot_compare._heat_row_press(w, key, self._synthetic_event(ax, 1))
+            gui_plot_compare._heat_row_release(w, key, self._synthetic_event(ax, 1))
             self.assertEqual(dock.compare_hidden, {"fake_b.tif"})
             self.assertEqual([l.get_label() for l in ax.lines],
                              ["fake_a.tif"])
             self.assertIn("对比面板隐藏该曲线", w.log_text.toPlainText())
             # 再点一次 → 恢复，颜色序号不变（fake_b 仍是第 2 槽）
-            gui_views._heat_row_press(w, key, self._synthetic_event(ax, 1))
-            gui_views._heat_row_release(w, key, self._synthetic_event(ax, 1))
+            gui_plot_compare._heat_row_press(w, key, self._synthetic_event(ax, 1))
+            gui_plot_compare._heat_row_release(w, key, self._synthetic_event(ax, 1))
             self.assertEqual(dock.compare_hidden, set())
             self.assertEqual(len(ax.lines), 2)
             self.assertEqual(ax.lines[1].get_color(), "#eb6834")
@@ -1115,9 +1183,9 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock = w.plot_docks[key]
             dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
                                ("data/fake_b.tif", "fake_b.tif")]
-            gui_views._heat_row_press(w, key,
+            gui_plot_compare._heat_row_press(w, key,
                                       self._synthetic_event(ax, 1, x=50, y=50))
-            gui_views._heat_row_release(w, key,
+            gui_plot_compare._heat_row_release(w, key,
                                         self._synthetic_event(ax, 1,
                                                               x=200, y=200))
             self.assertFalse(hasattr(dock, "compare_hidden"))
@@ -1137,10 +1205,10 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
             dock1 = _dock(w, "1D", "data/fake_b.tif")
             dock1.heat_files = [("data/fake_b.tif", "fake_b.tif")]
-            ax1 = gui_app._content(dock1).axes_1d
-            gui_views._heat_row_press(w, "1D|data/fake_b.tif",
+            ax1 = gui_panel_state._content(dock1).axes_1d
+            gui_plot_compare._heat_row_press(w, "1D|data/fake_b.tif",
                                       self._synthetic_event(ax1, 0))
-            gui_views._heat_row_release(w, "1D|data/fake_b.tif",
+            gui_plot_compare._heat_row_release(w, "1D|data/fake_b.tif",
                                         self._synthetic_event(ax1, 0))
             self.assertIn("没有含该文件的对比面板", w.log_text.toPlainText())
         finally:
@@ -1208,7 +1276,11 @@ class TestClosePrompt(unittest.TestCase):
                                    return_value=False):
                 self.assertFalse(w.close(), "保存被取消 → 留在程序里")
         finally:
-            w.close()
+            # 第一次 close 被 ignore、窗口还开着：收尾这次必须罩住确认框，
+            # 否则 offscreen 下真弹窗 → 挂死（同其他关窗测试）
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
     def test_close_saved_figures_skips_prompt(self):
         w = create_window()
@@ -1447,7 +1519,7 @@ class TestDuplicateFiles(unittest.TestCase):
         """窗口没显示（测试环境）→ 不弹模态框，返回预填的默认名。"""
         w = create_window()
         try:
-            self.assertEqual(gui_app._ask_rename(w, "xxx (1).tif"),
+            self.assertEqual(gui_file_dock._ask_rename(w, "xxx (1).tif"),
                              "xxx (1).tif")
         finally:
             w.close()
@@ -1456,7 +1528,7 @@ class TestDuplicateFiles(unittest.TestCase):
         """窗口没显示（测试环境）→ 不弹模态框，默认覆盖（防挂死）。"""
         w = create_window()
         try:
-            self.assertEqual(gui_app._ask_duplicate(w, "fake_a.tif"),
+            self.assertEqual(gui_file_dock._ask_duplicate(w, "fake_a.tif"),
                              "overwrite")
         finally:
             w.close()
@@ -1478,7 +1550,7 @@ class TestDuplicateFiles(unittest.TestCase):
                 key2 = "1D|data/fake_a.tif|fake_a (1).tif"
                 drawn2 = _wait_until(
                     lambda: key2 in w.plot_docks
-                    and len(gui_app._content(w.plot_docks[key2]).axes_1d.lines) > 0)
+                    and len(gui_panel_state._content(w.plot_docks[key2]).axes_1d.lines) > 0)
                 self.assertTrue(drawn1, "原条目应出图")
                 self.assertTrue(drawn2, "改名条目应有自己的面板和曲线")
             self.assertEqual(len(w.plot_docks), 2)
@@ -1501,7 +1573,7 @@ class TestCollectGeometry(unittest.TestCase):
         w = create_window()
         try:
             cfg = w.config["geometry"]
-            geom = gui_app._collect_geometry(w)
+            geom = gui_panel_state._collect_geometry(w)
             self.assertAlmostEqual(geom["dist_m"], cfg["dist_m"])
             self.assertAlmostEqual(geom["pixel_size_m"],
                                    cfg["pixel_size_m"])
@@ -1514,13 +1586,13 @@ class TestCollectGeometry(unittest.TestCase):
             self.assertTrue(w.params["波长 (Å)"].isReadOnly())
             w.params["初始距离 (mm)"].setValue(1700.0)
             self.assertAlmostEqual(
-                gui_app._collect_geometry(w)["dist_m"], cfg["dist_m"])
+                gui_panel_state._collect_geometry(w)["dist_m"], cfg["dist_m"])
             # 2θ 上下限 = 积分设置，仍随面板走（改了就进 geom）
             self.assertAlmostEqual(geom["tth_min_deg"], 1.0)
             self.assertAlmostEqual(geom["tth_max_deg"], 8.0)
             w.params["2θ 下限 (°)"].setValue(2.5)
             w.params["2θ 上限 (°)"].setValue(7.5)
-            geom2 = gui_app._collect_geometry(w)
+            geom2 = gui_panel_state._collect_geometry(w)
             self.assertAlmostEqual(geom2["tth_min_deg"], 2.5)
             self.assertAlmostEqual(geom2["tth_max_deg"], 7.5)
         finally:
@@ -1580,9 +1652,9 @@ class TestAutoContrast(unittest.TestCase):
                                return_value=fake_image):
             w.add_files(["data/fake_a.tif"])
             _open_view(w, "2D")
-            self.assertTrue(_wait_until(lambda: len(gui_app._content(
+            self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                 _dock(w, "2D", "data/fake_a.tif")).axes_2d.images) > 0))
-        QTest.mouseClick(gui_app._content(_dock(w, "2D", "data/fake_a.tif")),
+        QTest.mouseClick(gui_panel_state._content(_dock(w, "2D", "data/fake_a.tif")),
                          Qt.LeftButton)
         return w.focus_panel
 
@@ -1743,7 +1815,7 @@ class TestParamSnapshot(unittest.TestCase):
             self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 8.0)
             # 点回 A → 参数显示 A 的值（能看）
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, key_a)
             self.assertEqual(w.params["初始距离 (mm)"].value(), 1700.0)
@@ -1775,7 +1847,7 @@ class TestParamSnapshot(unittest.TestCase):
             # 切到 B 再切回 A → 显示新值 1800
             self._plot_fake(w, "data/fake_b.tif",
                             {"初始距离 (mm)": 1900.0})
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
         finally:
@@ -1788,7 +1860,7 @@ class TestParamSnapshot(unittest.TestCase):
             key = self._plot_fake(w, "data/fake_a.tif",
                                   {"初始距离 (mm)": 1700.0})
             w.params["初始距离 (mm)"].setValue(1750.0)   # 未应用的编辑
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, key)
             self.assertEqual(w.params["初始距离 (mm)"].value(), 1750.0)
@@ -1812,12 +1884,12 @@ class TestParamSnapshot(unittest.TestCase):
             w.params["对比度上限"].setValue(456.0)
             w.findChild(QPushButton, "apply_image_btn").click()
             # 切回 A：A 的快照里自动是勾着的 → 自动开、输入框置灰
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertTrue(w.params["自动对比度"].isChecked())
             self.assertFalse(w.params["对比度下限"].isEnabled())
             # 再切回 B：手动模式 + 123/456 原样回放
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_b.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif")),
                              Qt.LeftButton)
             self.assertFalse(w.params["自动对比度"].isChecked())
             self.assertEqual(w.params["对比度下限"].value(), 123.0)
@@ -2241,7 +2313,7 @@ class TestImageApply(unittest.TestCase):
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(
                     lambda: "读取失败" in w.log_text.toPlainText()))
-            QTest.mouseClick(gui_app._content(_dock(w, "2D", "data/fake_b.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "2D", "data/fake_b.tif")),
                              Qt.LeftButton)
             w.findChild(QPushButton, "apply_image_btn").click()
             self.assertIn("还没有计算结果（读取完成后再试）",
@@ -2264,11 +2336,11 @@ class TestImageApply(unittest.TestCase):
                     > 0))
                 w.add_files(["data/fake_b.tif"])   # fake_a 仍勾着
                 w.compare_btn.click()
-                cax = gui_app._content([d for k, d in w.plot_docks.items()
+                cax = gui_panel_state._content([d for k, d in w.plot_docks.items()
                                         if k.startswith("对比|")][0]).axes_1d
                 self.assertTrue(_wait_until(lambda: len(cax.lines) >= 2))
             # 焦点此时在对比面板；切到 1D 面板改参数 → 应用 → 只动 1D
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             w.params["对数纵轴"].setChecked(True)
             w.findChild(QPushButton, "apply_image_btn").click()
@@ -2297,7 +2369,7 @@ class TestImageApply(unittest.TestCase):
                     lambda: all(len(_axes(w, "1D", f"data/{n}.tif").lines) > 0
                                 for n in ("fake_a", "fake_b"))))
             # 焦点是最后算完的那张；切到 fake_a 改成对数并应用
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             w.params["对数纵轴"].setChecked(True)
             w.findChild(QPushButton, "apply_image_btn").click()
@@ -2306,11 +2378,11 @@ class TestImageApply(unittest.TestCase):
             self.assertEqual(
                 _axes(w, "1D", "data/fake_b.tif").get_yscale(), "linear")
             # 点 fake_b → 参数坞回放它自己的设置（对数关）
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_b.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif")),
                              Qt.LeftButton)
             self.assertFalse(w.params["对数纵轴"].isChecked())
             # 点回 fake_a → 显示它自己的设置（对数开）
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertTrue(w.params["对数纵轴"].isChecked())
         finally:
@@ -2353,7 +2425,7 @@ class TestImageApply(unittest.TestCase):
             self.assertTrue(w.params["纵轴自动"].isChecked())
             self.assertFalse(w.params["纵轴下限"].isEnabled())
             # 点回 A → 回放它自己的：自动关、输入框可改、值 = 手填值
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertFalse(w.params["纵轴自动"].isChecked())
             self.assertTrue(w.params["纵轴下限"].isEnabled())
@@ -2389,7 +2461,7 @@ class TestImageApply(unittest.TestCase):
                 cdock = [d for k, d in w.plot_docks.items()
                          if k.startswith("对比|")][0]
                 self.assertTrue(_wait_until(
-                    lambda: len(gui_app._content(cdock).axes_1d.lines) >= 2))
+                    lambda: len(gui_panel_state._content(cdock).axes_1d.lines) >= 2))
             snap = cdock.params_snapshot
             self.assertFalse(snap["对数纵轴"])
             self.assertTrue(snap["纵轴自动"])
@@ -2397,7 +2469,7 @@ class TestImageApply(unittest.TestCase):
             self.assertEqual(snap["纵轴上限"], 100000.0)
             # 对比完成后成为焦点：置灰框显示它自己算出的自动区间
             # （输入框精度 decimals=1，与图的精确值允许 0.1 级误差）
-            cax = gui_app._content(cdock).axes_1d
+            cax = gui_panel_state._content(cdock).axes_1d
             self.assertAlmostEqual(w.params["纵轴下限"].value(),
                                    cax.get_ylim()[0], places=1)
             self.assertAlmostEqual(w.params["纵轴上限"].value(),
@@ -2515,7 +2587,7 @@ class TestImageApply(unittest.TestCase):
             ax_a = _axes(w, "1D", "data/fake_a.tif")
             self.assertAlmostEqual(w.params["纵轴下限"].value(),
                                    ax_a.get_ylim()[0], places=1)
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_b.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif")),
                              Qt.LeftButton)
             self.assertAlmostEqual(w.params["纵轴下限"].value(),
                                    ax_b.get_ylim()[0], places=1)
@@ -2543,7 +2615,7 @@ class TestCompare(unittest.TestCase):
         """取唯一的对比面板坐标轴（面板键以 "对比|" 开头）。"""
         keys = [k for k in w.plot_docks if k.startswith("对比|")]
         self.assertEqual(len(keys), 1)
-        return gui_app._content(w.plot_docks[keys[0]]).axes_1d
+        return gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
 
     def _plot_compare(self, w):
         """勾 fake_a + fake_b 点 [对比] 并等两条曲线到齐 → 返回坐标轴。"""
@@ -2959,7 +3031,7 @@ class TestZoomToolbar(unittest.TestCase):
                 _open_view(w, "1D")
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
-            widget = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            widget = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
             self.assertIsInstance(widget.toolbar, NavigationToolbar2QT)
             names = [t[0] for t in widget.toolbar.toolitems if t[0]]
             self.assertEqual(names, ["Home", "Zoom", "Customize", "Save"],
@@ -2973,9 +3045,9 @@ class TestZoomToolbar(unittest.TestCase):
         """未注册视图（分发骨架的防御路径）：占位标签面板，无工具栏。"""
         w = create_window()
         try:
-            gui_views._open_plot_panel(w, "不存在", "不存在|data/fake_b.tif",
+            gui_plot_panels._open_plot_panel(w, "不存在", "不存在|data/fake_b.tif",
                                        "不存在_fake_b.tif")
-            widget = gui_app._content(_dock(w, "不存在", "data/fake_b.tif"))
+            widget = gui_panel_state._content(_dock(w, "不存在", "data/fake_b.tif"))
             self.assertIsInstance(widget, QLabel, "占位面板仍是标签")
             self.assertFalse(hasattr(widget, "toolbar"),
                              "占位面板不应有缩放工具栏")
@@ -3001,7 +3073,7 @@ class TestHoverDot(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.6))
             marker = dock.hover_marker
             self.assertIsNotNone(marker, "悬停后应出现取点标记")
             self.assertTrue(marker.get_visible())
@@ -3022,8 +3094,8 @@ class TestHoverDot(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
-            gui_app._hover_leave(w, key)
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.6))
+            gui_plot_panels._hover_leave(w, key)
             self.assertFalse(dock.hover_marker.get_visible(),
                              "离开后取点标记应藏起来")
             self.assertEqual(w.coord_label.text(), "",
@@ -3038,12 +3110,12 @@ class TestHoverDot(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            gui_app._hover_motion(w, key, _hover_event(ax, 0.6))
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.6))
             old = dock.hover_marker
             tth, it = np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
-            gui_app._draw_1d(w, dock, tth, it)
+            gui_plot_views._draw_1d(w, dock, tth, it)
             self.assertIsNot(old.axes, ax, "重画后旧标记应与旧轴断开")
-            gui_app._hover_motion(w, key, _hover_event(ax, 1.0))
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 1.0))
             self.assertIs(dock.hover_marker.axes, ax,
                           "再次悬停应在当前轴上重建标记")
             self.assertEqual(list(dock.hover_marker.get_xdata()), [1.0])
@@ -3061,9 +3133,9 @@ class TestHoverDot(unittest.TestCase):
                            if k.startswith("对比|"))
                 dock = w.plot_docks[key]
                 _wait_until(
-                    lambda: len(gui_app._content(dock).axes_1d.lines) >= 2)
-            ax = gui_app._content(dock).axes_1d
-            gui_app._hover_motion(w, key, _hover_event(ax, 0.5))
+                    lambda: len(gui_panel_state._content(dock).axes_1d.lines) >= 2)
+            ax = gui_panel_state._content(dock).axes_1d
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.5))
             text = w.coord_label.text()
             self.assertIn("fake_a.tif", text,
                           "对比图坐标前缀 = 曲线（文件）名")
@@ -3266,7 +3338,7 @@ class TestFreeResize(unittest.TestCase):
             self._open_two(w)
             d1 = _dock(w, "1D", "data/fake_a.tif")
             _resize_panel(w, d1, 400, 450)   # 模拟用户拖成 400×450
-            canvas = gui_app._content(d1).canvas
+            canvas = gui_panel_state._content(d1).canvas
             self.assertEqual((d1.width(), d1.height()), (400, 450),
                              "自由缩放：拖成什么样就停在什么样")
             self.assertTrue(d1._dragged, "拖过 = 记比例")
@@ -3323,7 +3395,7 @@ class TestResizeGrips(unittest.TestCase):
             w.show()
             w.resize(1400, 900)
             self._open_one(w)
-            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
             # 方向光标 = 应用级覆盖光标（macOS 上部件级 setCursor 会被
             # 带过期坐标的合成事件打回原形，见 _PanelGripFilter docstring）
             # 右边缘中部（避开右下角把手）→ 水平双箭头
@@ -3361,7 +3433,7 @@ class TestResizeGrips(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             dock = _dock(w, "1D", "data/fake_b.tif")
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             grip = content._resize_grip
             w0, h0 = dock.width(), dock.height()
             # 真实用户行为：按住 ▙ 把手拖（不是直接投递给内容）
@@ -3393,7 +3465,7 @@ class TestResizeGrips(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             dock = _dock(w, "1D", "data/fake_b.tif")
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             h0 = dock.height()
             # 顶边抓取带真实落点 = 工具栏条（内容上边 5px）
             QTest.mousePress(content.toolbar, Qt.LeftButton, Qt.NoModifier,
@@ -3417,7 +3489,7 @@ class TestResizeGrips(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w, view="2D")
             dock = _dock(w, "2D", "data/fake_b.tif")
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             grip = content._resize_grip
             w0, h0 = dock.width(), dock.height()
             QTest.mousePress(grip, Qt.LeftButton, Qt.NoModifier, QPoint(8, 8))
@@ -3448,8 +3520,8 @@ class TestCustomizeDialog(unittest.TestCase):
 
     def _build(self, w, path_str="data/fake_b.tif"):
         dock = _dock(w, "1D", path_str)
-        content = gui_app._content(dock)
-        return dock, gui_app._build_customize_dialog(
+        content = gui_panel_state._content(dock)
+        return dock, gui_customize._build_customize_dialog(
             w, dock, content.axes_1d, content.figure)
 
     def test_dialog_prefills_current_axis_state(self):
@@ -3459,7 +3531,7 @@ class TestCustomizeDialog(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             dock, dlg = self._build(w)
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             f = dlg._fields
             self.assertEqual(f["title"].text(), content.axes_1d.get_title())
             self.assertEqual(f["xlabel"].text(), content.axes_1d.get_xlabel())
@@ -3499,8 +3571,8 @@ class TestCustomizeDialog(unittest.TestCase):
             f["bottom"].setValue(0.15)
             f["right"].setValue(0.85)
             f["top"].setValue(0.8)
-            content = gui_app._content(dock)
-            gui_app._apply_customize(w, dock, content.axes_1d,
+            content = gui_panel_state._content(dock)
+            gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
             ax = content.axes_1d
             self.assertEqual(ax.get_title(), "我的衍射图")
@@ -3530,11 +3602,11 @@ class TestCustomizeDialog(unittest.TestCase):
             f["ylabel"].setText("计数")
             f["scale"].setCurrentIndex(f["scale"].findData("log"))
             f["left"].setValue(0.2)
-            content = gui_app._content(dock)
-            gui_app._apply_customize(w, dock, content.axes_1d,
+            content = gui_panel_state._content(dock)
+            gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
             # 程序重画（等价于图像参数 [应用] 走的 _draw_1d 路径）
-            gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+            gui_plot_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
             ax = content.axes_1d
             self.assertEqual(ax.get_title(), "我的衍射图", "标题：用户为准")
             self.assertEqual(ax.get_xlabel(), "角度", "X 标签：用户为准")
@@ -3555,7 +3627,7 @@ class TestCustomizeDialog(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             key = "1D|data/fake_b.tif"
-            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
             before = (content.axes_1d.get_title(),
                       content.axes_1d.get_xlabel(),
                       content.axes_1d.get_ylabel(),
@@ -3563,7 +3635,7 @@ class TestCustomizeDialog(unittest.TestCase):
             # 取消路：exec 拒绝 → 图保持原样
             with mock.patch.object(QDialog, "exec",
                                    lambda self: QDialog.Rejected):
-                gui_app._open_customize_dialog(w, key)
+                gui_customize._open_customize_dialog(w, key)
             self.assertEqual(
                 (content.axes_1d.get_title(), content.axes_1d.get_xlabel(),
                  content.axes_1d.get_ylabel(), content.axes_1d.get_yscale()),
@@ -3575,7 +3647,7 @@ class TestCustomizeDialog(unittest.TestCase):
                     self._fields["scale"].findData("log"))
                 return QDialog.Accepted
             with mock.patch.object(QDialog, "exec", _accept):
-                gui_app._open_customize_dialog(w, key)
+                gui_customize._open_customize_dialog(w, key)
             self.assertEqual(content.axes_1d.get_title(), "流程标题",
                              "应用生效")
             self.assertEqual(content.axes_1d.get_yscale(), "log")
@@ -3590,8 +3662,11 @@ class TestCustomizeDialog(unittest.TestCase):
             w.show()
             w.resize(1400, 900)
             self._open_one(w)
-            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
-            with mock.patch.object(gui_views, "_open_customize_dialog") as m:
+            content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
+            # patch 目标 = 调用点所在模块 plot_panels（_SlimToolbar 在
+            # 那里查全局名）；gui_panels 是 panels.py，不是这个模块
+            with mock.patch.object(gui_plot_panels,
+                                   "_open_customize_dialog") as m:
                 content.toolbar._actions["edit_parameters"].trigger()
             m.assert_called_once_with(w, "1D|data/fake_b.tif")
         finally:
@@ -3622,7 +3697,7 @@ class TestWindowClickFocus(unittest.TestCase):
             self._open_two(w)
             w.focus_panel = None
             # 点画布（子部件，mpl 会 accept 鼠标按下）→ 也选中
-            canvas = gui_app._content(
+            canvas = gui_panel_state._content(
                 _dock(w, "1D", "data/fake_a.tif")).canvas
             QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier,
                              QPoint(100, 100))
@@ -3644,7 +3719,7 @@ class TestWindowClickFocus(unittest.TestCase):
             self.assertEqual(w.focus_panel, "1D|data/fake_b.tif")
             # 占位面板也一样：点内容即选中
             w.focus_panel = None
-            QTest.mouseClick(gui_app._content(_dock(w, "1D", "data/fake_a.tif")),
+            QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, "1D|data/fake_a.tif")
         finally:
@@ -3660,12 +3735,12 @@ class TestWindowClickFocus(unittest.TestCase):
             self._open_two(w)
             key = "1D|data/fake_a.tif"
             dock = _dock(w, "1D", "data/fake_a.tif")
-            gui_app._content(dock).popout_btn.click()
+            gui_panel_state._content(dock).popout_btn.click()
             QApplication.processEvents()
             floated = w.plot_docks[key]
-            self.assertNotIsInstance(floated, gui_app._PlotSubWindow)
+            self.assertNotIsInstance(floated, gui_panels._PlotSubWindow)
             w.focus_panel = None
-            QTest.mouseClick(gui_app._content(floated).canvas,
+            QTest.mouseClick(gui_panel_state._content(floated).canvas,
                              Qt.LeftButton, Qt.NoModifier, QPoint(100, 100))
             self.assertEqual(w.focus_panel, key)
         finally:
@@ -3689,7 +3764,7 @@ class TestCanvasTrue53(unittest.TestCase):
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
             QApplication.processEvents()
-            canvas = gui_app._content(_dock(w, "1D", "data/fake_b.tif")).canvas
+            canvas = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif")).canvas
             self.assertGreater(canvas.width(), 450)
             self.assertLess(canvas.width(), 550)
             self.assertGreater(canvas.height(), 270)
@@ -3749,14 +3824,14 @@ class TestCustomRatioMemory(unittest.TestCase):
             for mode in ("横排", "竖排"):
                 w.arrange_buttons[mode].click()
                 QApplication.processEvents()
-                c = gui_app._content(d2).canvas
+                c = gui_panel_state._content(d2).canvas
                 now = c.height() / c.width()
                 expected = pref[1] / pref[0]
                 self.assertAlmostEqual(now, expected, delta=0.06,
                                        msg=f"{mode}后拖过的图比例变了")
                 # 没拖过的图保持默认 5:3
                 d1 = _dock(w, "1D", "data/fake_a.tif")
-                c1 = gui_app._content(d1).canvas
+                c1 = gui_panel_state._content(d1).canvas
                 self.assertAlmostEqual(
                     c1.height() / c1.width(), 3 / 5,
                     delta=0.06, msg=f"{mode}后默认图比例变了")
@@ -3777,7 +3852,7 @@ class TestCustomRatioMemory(unittest.TestCase):
             _resize_panel(w, d1, 400, 450)
             self.assertEqual(d2.geometry(), geo2, "拖一张图牵动了邻居")
             self.assertTrue(d1._dragged)
-            c1 = gui_app._content(d1).canvas
+            c1 = gui_panel_state._content(d1).canvas
             self.assertEqual(d1._canvas_pref, (c1.width(), c1.height()),
                              "拖过的图应记住拖成时的画布比例")
         finally:
@@ -3892,10 +3967,10 @@ class TestGestures(unittest.TestCase):
 
     def _magnifier(self, w, display, on):
         """点放大镜开关（触发 QAction = 用户点按钮），断言模式到位。"""
-        content = gui_app._content(_dock(w, "1D", display))
+        content = gui_panel_state._content(_dock(w, "1D", display))
         content.toolbar._actions["zoom"].trigger()
         QApplication.processEvents()
-        self.assertEqual(gui_app._magnifier_on(_dock(w, "1D", display)), on,
+        self.assertEqual(gui_plot_panels._magnifier_on(_dock(w, "1D", display)), on,
                          f"放大镜应已{'点亮' if on else '熄灭'}")
 
     def test_magnifier_toggle_switches_mode(self):
@@ -3904,7 +3979,7 @@ class TestGestures(unittest.TestCase):
         w = create_window()
         try:
             self._open_1d(w)
-            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
+            content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
             action = content.toolbar._actions["zoom"]
             self.assertTrue(action.isCheckable(), "放大镜按钮应可亮灭")
             self.assertFalse(action.isChecked())
@@ -3926,18 +4001,18 @@ class TestGestures(unittest.TestCase):
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
             ax.set_xlim(1.0, 8.0)
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             self.assertEqual(ax.get_xlim(), (1.0, 8.0),
                              "放大镜熄灭时滚轮不应改范围")
             self._magnifier(w, "data/fake_b.tif", True)
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             xlo, xhi = ax.get_xlim()
             self.assertAlmostEqual(xlo, 4.0 - 3.0 / 1.1, places=3,
                                    msg="点亮后滚轮应缩放")
             self.assertAlmostEqual(xhi, 4.0 + 4.0 / 1.1, places=3)
             self._magnifier(w, "data/fake_b.tif", False)
             ax.set_xlim(1.0, 8.0)
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             self.assertEqual(ax.get_xlim(), (1.0, 8.0),
                              "再熄灭后滚轮应再次失效")
         finally:
@@ -3951,12 +4026,12 @@ class TestGestures(unittest.TestCase):
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
             self._magnifier(w, "data/fake_b.tif", True)
-            gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
+            gui_plot_panels._pan_press(w, key, _press_event(ax, x=100, y=120))
             self.assertIsNotNone(getattr(dock, "_pan_start", None),
                                  "放大镜点亮时左键拖也应是平移")
             dock._pan_start = None
             self._magnifier(w, "data/fake_b.tif", False)
-            gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
+            gui_plot_panels._pan_press(w, key, _press_event(ax, x=100, y=120))
             self.assertIsNotNone(getattr(dock, "_pan_start", None),
                                  "放大镜熄灭时左键拖同样是平移")
         finally:
@@ -3971,7 +4046,7 @@ class TestGestures(unittest.TestCase):
             ax = _axes(w, "1D", "data/fake_b.tif")
             ax.set_xlim(1.0, 8.0)
             self._magnifier(w, "data/fake_b.tif", True)
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             xlo, xhi = ax.get_xlim()
             # 系数 1.1（每格 10%）：两侧各收拢 1/1.1
             self.assertAlmostEqual(xlo, 4.0 - 3.0 / 1.1, places=3)
@@ -3981,7 +4056,7 @@ class TestGestures(unittest.TestCase):
             frac = (4.0 - xlo) / (xhi - xlo)
             self.assertAlmostEqual(frac, 3 / 7, places=3,
                                    msg="光标点的相对位置缩放后应不变")
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "down", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "down", 4.0, 2.0))
             xlo2, xhi2 = ax.get_xlim()
             self.assertAlmostEqual(xlo2, 1.0, places=3)
             self.assertAlmostEqual(xhi2, 8.0, places=3)
@@ -4002,7 +4077,7 @@ class TestGestures(unittest.TestCase):
             self._magnifier(w, "data/fake_b.tif", True)
             prev_lo = 0.5
             for _ in range(6):
-                gui_app._wheel_zoom(
+                gui_plot_panels._wheel_zoom(
                     w, key, _scroll_event(ax, "down", 4.0, 1.0))
                 ylo, yhi = ax.get_ylim()
                 self.assertGreater(ylo, 0.0,
@@ -4021,10 +4096,10 @@ class TestGestures(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             self._magnifier(w, "data/fake_b.tif", True)
             x0 = ax.get_xlim()
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             self.assertNotEqual(ax.get_xlim(), x0, "滚轮缩放应先改范围")
             content.toolbar._actions["home"].trigger()
             QApplication.processEvents()
@@ -4042,16 +4117,16 @@ class TestGestures(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            content = gui_app._content(dock)
+            content = gui_panel_state._content(dock)
             self._magnifier(w, "data/fake_b.tif", True)
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             # 程序重画（等价：参数面板改视图范围后点 [应用]）
             dock.params_snapshot["视图 2θ 下限 (°)"] = 3.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 6.0
-            gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+            gui_plot_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
             QApplication.processEvents()
             self.assertEqual(ax.get_xlim(), (3.0, 6.0))
-            gui_app._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
+            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             self.assertNotEqual(ax.get_xlim(), (3.0, 6.0),
                                 "第二次滚轮缩放应先改范围")
             content.toolbar._actions["home"].trigger()
@@ -4075,9 +4150,9 @@ class TestGestures(unittest.TestCase):
             # (100,120) 像素按下 → 拖到 (150,100)：matplotlib 事件的
             # y 从画布底边起算（鼠标在屏幕上向下 = y 变小）。图跟着
             # 鼠标走：向右下拖 → 数据范围整体向左上移动
-            gui_app._pan_press(w, key, _press_event(ax, x=100, y=120))
-            gui_app._pan_motion(w, key, _press_event(ax, x=150, y=100))
-            gui_app._pan_release(w, key, _press_event(ax, x=150, y=100))
+            gui_plot_panels._pan_press(w, key, _press_event(ax, x=100, y=120))
+            gui_plot_panels._pan_motion(w, key, _press_event(ax, x=150, y=100))
+            gui_plot_panels._pan_release(w, key, _press_event(ax, x=150, y=100))
             xlo, xhi = ax.get_xlim()
             self.assertLess(xlo, 1.0, "向右拖图 → 数据范围应左移")
             self.assertLess(xhi, 8.0)
@@ -4106,7 +4181,7 @@ class TestCustomizeProtection(unittest.TestCase):
 
     def _redraw(self, w, dock):
         """等价于点 [应用] 的程序重画路径。"""
-        gui_app._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
+        gui_plot_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
         QApplication.processEvents()
 
     def test_custom_title_survives_redraw(self):
@@ -4209,9 +4284,9 @@ class TestTileScrollReset(unittest.TestCase):
 
     def _open_six(self, w):
         for i in range(3):
-            gui_app._open_plot_panel(w, "1D", f"1D|fake{i}.tif", f"1D_{i}")
+            gui_plot_panels._open_plot_panel(w, "1D", f"1D|fake{i}.tif", f"1D_{i}")
         for i in range(3):
-            gui_app._open_plot_panel(w, "2D", f"2D|fake{i}.tif", f"2D_{i}")
+            gui_plot_panels._open_plot_panel(w, "2D", f"2D|fake{i}.tif", f"2D_{i}")
         for _ in range(10):
             QApplication.processEvents()
 
@@ -4268,7 +4343,7 @@ class TestCascadeCap(unittest.TestCase):
         try:
             subs = []
             for i in range(7):
-                subs.append(gui_app._open_plot_panel(
+                subs.append(gui_plot_panels._open_plot_panel(
                     w, "1D", f"1D|fake{i}.tif", f"fake{i}"))
             for _ in range(10):
                 QApplication.processEvents()
@@ -4290,8 +4365,8 @@ class TestAreaZoom(unittest.TestCase):
     总缩放落位；缩放不记成"用户拖过"。"""
 
     def _open_two(self, w):
-        a = gui_app._open_plot_panel(w, "1D", "1D|a.tif", "a")
-        b = gui_app._open_plot_panel(w, "2D", "2D|b.tif", "b")
+        a = gui_plot_panels._open_plot_panel(w, "1D", "1D|a.tif", "a")
+        b = gui_plot_panels._open_plot_panel(w, "2D", "2D|b.tif", "b")
         for _ in range(10):
             QApplication.processEvents()
         return a, b
@@ -4318,7 +4393,7 @@ class TestAreaZoom(unittest.TestCase):
             # 消失，事后量视口会和动手时差 18px）
             cx = w.mdi.viewport().width() / 2
             cy = w.mdi.viewport().height() / 2
-            gui_app._apply_area_zoom(w, 1.1)
+            gui_panels._apply_area_zoom(w, 1.1)
             for _ in range(10):
                 QApplication.processEvents()
             for d, (x, y, wd, ht) in geo.items():
@@ -4360,14 +4435,14 @@ class TestAreaZoom(unittest.TestCase):
         w = create_window()
         try:
             a, _ = self._open_two(w)
-            ax = gui_app._content(a).axes_1d
+            ax = gui_panel_state._content(a).axes_1d
             ax.set_xlim(1.0, 8.0)
             accepted = []
             gui = SimpleNamespace(
                 modifiers=lambda: Qt.ControlModifier,
                 angleDelta=lambda: QPoint(0, 120),
                 accept=lambda: accepted.append(True))
-            gui_app._wheel_zoom(
+            gui_plot_panels._wheel_zoom(
                 w, "1D|a.tif",
                 SimpleNamespace(inaxes=ax, guiEvent=gui,
                                 xdata=4.0, ydata=2.0))
@@ -4385,10 +4460,10 @@ class TestAreaZoom(unittest.TestCase):
         w = create_window()
         try:
             self._open_two(w)
-            gui_app._apply_area_zoom(w, 0.01)
+            gui_panels._apply_area_zoom(w, 0.01)
             self.assertAlmostEqual(w._area_zoom, 0.5, places=6)
             self.assertEqual(w.zoom_label.text(), "50%")
-            gui_app._apply_area_zoom(w, 99.0)
+            gui_panels._apply_area_zoom(w, 99.0)
             self.assertAlmostEqual(w._area_zoom, 2.0, places=6)
             self.assertEqual(w.zoom_label.text(), "200%")
         finally:
@@ -4415,18 +4490,18 @@ class TestAreaZoom(unittest.TestCase):
             w.show()   # 显示后布局才会激活（隐藏窗口的 resize 不挤画布）
             w.resize(1400, 900)
             a, _ = self._open_two(w)
-            gui_app._apply_area_zoom(w, 0.8)
+            gui_panels._apply_area_zoom(w, 0.8)
             for _ in range(10):
                 QApplication.processEvents()
-            p = gui_app._open_plot_panel(w, "1D", "1D|c.tif", "c")
+            p = gui_plot_panels._open_plot_panel(w, "1D", "1D|c.tif", "c")
             for _ in range(10):
                 QApplication.processEvents()
             # 契约 = 新图和周围已缩放的图一样大；画布被标题栏/工具栏
             # 壳吃掉固定高度，不会正好是 500×0.8，所以与邻居对比
             self.assertEqual((p.width(), p.height()), (a.width(), a.height()),
                              msg="新图子窗口应和周围已缩放的图一样大")
-            canvas = gui_app._content(p).canvas
-            canvas_a = gui_app._content(a).canvas
+            canvas = gui_panel_state._content(p).canvas
+            canvas_a = gui_panel_state._content(a).canvas
             self.assertEqual((canvas.width(), canvas.height()),
                              (canvas_a.width(), canvas_a.height()),
                              msg="新图画布应和周围图一致")
@@ -4441,21 +4516,21 @@ class TestAreaZoom(unittest.TestCase):
             w.show()   # 见 test_new_panel_opens_at_current_zoom
             w.resize(1400, 900)
             a, _ = self._open_two(w)
-            ref = gui_app._open_plot_panel(w, "1D", "1D|ref.tif", "ref")
+            ref = gui_plot_panels._open_plot_panel(w, "1D", "1D|ref.tif", "ref")
             for _ in range(10):
                 QApplication.processEvents()
-            gui_app._toggle_pop_out(w, "1D|a.tif")
+            gui_panels._toggle_pop_out(w, "1D|a.tif")
             for _ in range(10):
                 QApplication.processEvents()
-            gui_app._apply_area_zoom(w, 0.8)
+            gui_panels._apply_area_zoom(w, 0.8)
             for _ in range(10):
                 QApplication.processEvents()
-            gui_app._toggle_pop_out(w, "1D|a.tif")
+            gui_panels._toggle_pop_out(w, "1D|a.tif")
             for _ in range(10):
                 QApplication.processEvents()
             sub = _dock(w, "1D", "a.tif")
-            canvas2 = gui_app._content(sub).canvas
-            canvas_ref = gui_app._content(ref).canvas
+            canvas2 = gui_panel_state._content(sub).canvas
+            canvas_ref = gui_panel_state._content(ref).canvas
             # 收回 = 按当前总缩放落位：弹出时 100%、收回时 80%，
             # 应和没弹出过的 1D 邻居 ref 一致（弹出时的画布已带
             # 100% 缩放，直接乘 80% 会双重缩，见 _pop_zoom）
@@ -4474,13 +4549,13 @@ class TestAreaZoom(unittest.TestCase):
         w = create_window()
         try:
             a, b = self._open_two(w)
-            gui_app._toggle_pop_out(w, "1D|a.tif")
+            gui_panels._toggle_pop_out(w, "1D|a.tif")
             for _ in range(10):
                 QApplication.processEvents()
             floated = w.plot_docks["1D|a.tif"]
             fw, fh = floated.width(), floated.height()
             bw = b.width()
-            gui_app._apply_area_zoom(w, 0.5)
+            gui_panels._apply_area_zoom(w, 0.5)
             for _ in range(10):
                 QApplication.processEvents()
             self.assertEqual((floated.width(), floated.height()), (fw, fh),
@@ -4495,7 +4570,7 @@ class TestAreaZoom(unittest.TestCase):
         w = create_window()
         try:
             self._open_two(w)
-            gui_app._apply_area_zoom(w, 1.1)
+            gui_panels._apply_area_zoom(w, 1.1)
             w.arrange_buttons["横排"].click()
             for _ in range(10):
                 QApplication.processEvents()
@@ -4543,20 +4618,20 @@ class TestPopOut(unittest.TestCase):
             w.resize(1400, 900)
             self._open_1d(w)
             key = "1D|data/fake_b.tif"
-            content = gui_app._content(_dock(w, "1D", "data/fake_b.tif"))
-            gui_app._toggle_pop_out(w, key)
+            content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
+            gui_panels._toggle_pop_out(w, key)
             QApplication.processEvents()
             floated = w.plot_docks[key]
-            self.assertIsInstance(floated, gui_app._FloatedWindow)
-            self.assertIs(gui_app._content(floated), content,
+            self.assertIsInstance(floated, gui_panels._FloatedWindow)
+            self.assertIs(gui_panel_state._content(floated), content,
                           "弹出后内容应是同一个对象")
             self.assertEqual(content.popout_btn.text(), "收回")
             self.assertEqual(len(content.axes_1d.lines), 1, "曲线应保留")
-            gui_app._toggle_pop_out(w, key)
+            gui_panels._toggle_pop_out(w, key)
             QApplication.processEvents()
             back = w.plot_docks[key]
             self.assertIsInstance(back, gui_app.QMdiSubWindow)
-            self.assertIs(gui_app._content(back), content)
+            self.assertIs(gui_panel_state._content(back), content)
             self.assertEqual(content.popout_btn.text(), "弹出")
             self.assertEqual(len(content.axes_1d.lines), 1)
         finally:
@@ -4571,10 +4646,10 @@ class TestPopOut(unittest.TestCase):
             w.resize(1400, 900)
             self._open_1d(w)
             key = "1D|data/fake_b.tif"
-            gui_app._toggle_pop_out(w, key)
+            gui_panels._toggle_pop_out(w, key)
             QApplication.processEvents()
             floated = w.plot_docks[key]
-            ax = gui_app._content(floated).axes_1d
+            ax = gui_panel_state._content(floated).axes_1d
             ax.set_xlim(2.0, 3.0)
             QApplication.processEvents()
             self.assertAlmostEqual(
@@ -4592,7 +4667,7 @@ class TestPopOut(unittest.TestCase):
             w.resize(1400, 900)
             self._open_1d(w)
             key = "1D|data/fake_b.tif"
-            gui_app._toggle_pop_out(w, key)
+            gui_panels._toggle_pop_out(w, key)
             QApplication.processEvents()
             w.plot_docks[key].close()
             QApplication.processEvents()
@@ -4616,7 +4691,7 @@ class TestPopOut(unittest.TestCase):
                     and len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
             QApplication.processEvents()
             key_b = "1D|data/fake_b.tif"
-            gui_app._toggle_pop_out(w, key_b)
+            gui_panels._toggle_pop_out(w, key_b)
             QApplication.processEvents()
             floated = w.plot_docks[key_b]
             geo_before = floated.geometry()
@@ -4651,11 +4726,11 @@ class TestPanelClose(unittest.TestCase):
             self._open_two(w)
             focus = w.focus_panel
             other = next(k for k in w.plot_docks if k != focus)
-            gui_app._close_panel(w, focus)
+            gui_panels._close_panel(w, focus)
             QApplication.processEvents()
             self.assertNotIn(focus, w.plot_docks)
             self.assertEqual(w.focus_panel, other, "焦点应移交给剩余面板")
-            gui_app._close_panel(w, other)
+            gui_panels._close_panel(w, other)
             QApplication.processEvents()
             self.assertFalse(w.plot_docks)
             self.assertIsNone(w.focus_panel)
@@ -4673,7 +4748,7 @@ class TestPanelClose(unittest.TestCase):
             key_a = "1D|data/fake_a.tif"
             _resize_panel(w, _dock(w, "1D", "data/fake_a.tif"), 700, 400)
             _axes(w, "1D", "data/fake_a.tif").set_ylim(1.0, 2.0)
-            gui_app._close_panel(w, key_a)
+            gui_panels._close_panel(w, key_a)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")   # 文件仍在列表里，重新出图
@@ -4684,7 +4759,7 @@ class TestPanelClose(unittest.TestCase):
             self.assertFalse(new._dragged, "重开不应继承拖过状态")
             self.assertEqual(new._canvas_pref, (500, 300),
                              "重开应回到默认画布比例")
-            canvas = gui_app._content(new).canvas
+            canvas = gui_panel_state._content(new).canvas
             self.assertGreater(canvas.width(), 450)
             self.assertLess(canvas.width(), 550)
             ylo, yhi = _axes(w, "1D", "data/fake_a.tif").get_ylim()
@@ -4710,7 +4785,7 @@ class TestPanelClose(unittest.TestCase):
                 _open_view(w, "1D")   # 后台开算（0.3s）
                 key = "1D|data/fake_b.tif"
                 self.assertTrue(_wait_until(lambda: key in w.plot_docks))
-                gui_app._close_panel(w, key)
+                gui_panels._close_panel(w, key)
             for _ in range(50):   # 等迟到结果送达（不崩 = 通过）
                 QApplication.processEvents()
                 time.sleep(0.01)
@@ -4734,11 +4809,11 @@ class TestPanelClose(unittest.TestCase):
                 w.compare_btn.click()
                 keys = [k for k in w.plot_docks if k.startswith("对比|")]
                 self.assertTrue(_wait_until(lambda: keys))
-                gui_app._close_panel(w, keys[0])   # 旧代任务还在飞
+                gui_panels._close_panel(w, keys[0])   # 旧代任务还在飞
                 w.compare_btn.click()              # 重开新面板（新代）
                 keys = [k for k in w.plot_docks if k.startswith("对比|")]
                 self.assertTrue(_wait_until(lambda: keys))
-                ax = gui_app._content(w.plot_docks[keys[0]]).axes_1d
+                ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
                 self.assertTrue(_wait_until(lambda: len(ax.lines) == 2))
             QApplication.processEvents()
             self.assertEqual(len(ax.lines), 2, "旧代结果不应混进新图")
@@ -4755,13 +4830,13 @@ class TestToolbarSave(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            fig = gui_app._content(dock).figure
-            with mock.patch.object(gui_views, "_ask_save_options",
+            fig = gui_panel_state._content(dock).figure
+            with mock.patch.object(gui_plot_panels, "_ask_save_options",
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/panel_out", "PNG 图片 (*.png)")) as dlg, \
                  mock.patch.object(fig, "savefig") as savefig:
-                gui_app._content(dock).toolbar.save_figure()
+                gui_panel_state._content(dock).toolbar.save_figure()
                 self.assertTrue(dlg.called)
                 savefig.assert_called_once_with("/tmp/panel_out.png", dpi=300)
                 self.assertTrue(dock.figure_saved)
@@ -4784,7 +4859,7 @@ class TestSavePromptExcludesClosed(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
                     and len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
-            gui_app._close_panel(w, "1D|data/fake_b.tif")
+            gui_panels._close_panel(w, "1D|data/fake_b.tif")
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard") as confirm:
                 self.assertTrue(w.close())
@@ -4862,7 +4937,7 @@ class TestCalibration(unittest.TestCase):
             # Circle patch，见 theoretical_ring_paths）
             rings = [ln for ln in w.calib_ax.lines
                      if str(ln.get_color()).lower()
-                     == gui_calib.RING_COLOR.lower()]
+                     == gui_calib_model.RING_COLOR.lower()]
             self.assertGreaterEqual(len(rings), 16)
             # 退出：面板关、参数坞还原
             w.calib_btn.click()
@@ -5812,14 +5887,14 @@ class TestCalibModel(unittest.TestCase):
         self.assertEqual(gui_calib_model._delta_text(a, a, "dist"), "—")
 
     def test_delta_rows_are_whitelisted(self):
-        rows = [k for k, _n, _s, _f, has_d in gui_calib.COMPARE_ROWS]
+        rows = [k for k, _n, _s, _f, has_d in gui_calib_model.COMPARE_ROWS]
         self.assertEqual(rows, ["dist", "center_r", "center_c", "dev",
                                 "poni1", "poni2", "rot1", "rot2"])
-        has_delta = [k for k, _n, _s, _f, d in gui_calib.COMPARE_ROWS if d]
+        has_delta = [k for k, _n, _s, _f, d in gui_calib_model.COMPARE_ROWS if d]
         self.assertEqual(has_delta, ["dist", "dev"])   # 只给这两行 Δ
         self.assertFalse(any("残差" in n for _k, n, *_ in
-                             gui_calib.COMPARE_ROWS))
-        self.assertIn("退化方向", gui_calib.COMPARE_HINT)
+                             gui_calib_model.COMPARE_ROWS))
+        self.assertIn("退化方向", gui_calib_model.COMPARE_HINT)
 
     def test_verdict_by_ring_deviation(self):
         base, other = self._res(dev=0.52), self._res(dev=0.28)
@@ -6127,7 +6202,7 @@ class TestCalibFlow(unittest.TestCase):
             self.assertGreaterEqual(w.param_dock.width(),
                                     page.sizeHint().width())
             self.assertLessEqual(w.param_dock.width(),
-                                 w.width() - gui_calib.CALIB_PANEL_RESERVE_PX + 2)
+                                 w.width() - gui_calib_model.CALIB_PANEL_RESERVE_PX + 2)
             w.calib_btn.click()          # 退出
             QApplication.processEvents()
             self.assertAlmostEqual(w.param_dock.width(), before, delta=2)
@@ -6822,7 +6897,7 @@ class TestHeatmap(unittest.TestCase):
     def test_assemble_heatmap_same_grid_no_interp(self):
         r = [("a", np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])),
              ("b", np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0]))]
-        tth, matrix, stems, interp = gui_views._assemble_heatmap(r)
+        tth, matrix, stems, interp = gui_plot_compare._assemble_heatmap(r)
         self.assertFalse(interp)
         self.assertEqual(stems, ["a", "b"])
         np.testing.assert_array_equal(matrix, [[1, 2, 3], [4, 5, 6]])
@@ -6831,13 +6906,13 @@ class TestHeatmap(unittest.TestCase):
         """网格不一致（点数/区间不同）→ 重插值到第一个文件的网格。"""
         r = [("a", np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])),
              ("b", np.array([1.0, 3.0]), np.array([10.0, 30.0]))]
-        tth, matrix, stems, interp = gui_views._assemble_heatmap(r)
+        tth, matrix, stems, interp = gui_plot_compare._assemble_heatmap(r)
         self.assertTrue(interp)
         np.testing.assert_allclose(matrix[1], [10.0, 20.0, 30.0])
 
     def test_assemble_heatmap_empty_returns_none(self):
-        self.assertIsNone(gui_views._assemble_heatmap([]))
-        self.assertIsNone(gui_views._assemble_heatmap(
+        self.assertIsNone(gui_plot_compare._assemble_heatmap([]))
+        self.assertIsNone(gui_plot_compare._assemble_heatmap(
             [("a", np.array([]), np.array([]))]))
 
     def test_heat_shown_modes(self):
@@ -6870,7 +6945,7 @@ class TestHeatmap(unittest.TestCase):
             self.assertIn("热图完成：2 个样品 × 3 点", log)
             # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
             dock = self._heat_dock(w)
-            ax = gui_app._content(dock).axes_heat
+            ax = gui_panel_state._content(dock).axes_heat
             self.assertEqual(len(ax.images), 1)
             self.assertIsNotNone(dock._heat_colorbar)
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
@@ -6974,7 +7049,7 @@ class TestHeatmap(unittest.TestCase):
                 self.assertTrue(self._wait_heat(w))
                 calls = c.call_count
             dock = self._heat_dock(w)
-            ax = gui_app._content(dock).axes_heat
+            ax = gui_panel_state._content(dock).axes_heat
             self.assertEqual(ax.images[0].get_cmap().name, "magma")
             w.params["热图色图"].setCurrentIndex(
                 w.params["热图色图"].findData("viridis"))
@@ -6996,7 +7071,7 @@ class TestHeatmap(unittest.TestCase):
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             dock = self._heat_dock(w)
-            ax = gui_app._content(dock).axes_heat
+            ax = gui_panel_state._content(dock).axes_heat
             widths = []
             for _ in range(3):
                 w.findChild(QPushButton, "apply_image_btn").click()
@@ -7038,7 +7113,7 @@ class Test2DColorbar(unittest.TestCase):
                     lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
                                     "last_image", None) is not None))
             dock = _dock(w, "2D", "data/fake_a.tif")
-            fig = gui_app._content(dock).figure
+            fig = gui_panel_state._content(dock).figure
             self.assertEqual(len(fig.axes), 2)   # 图像轴 + 颜色条轴
             # 图像 [应用] 重画 → 颜色条仍恰好一条
             w.findChild(QPushButton, "apply_image_btn").click()
@@ -7060,7 +7135,7 @@ class Test2DColorbar(unittest.TestCase):
                     lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
                                     "last_image", None) is not None))
             dock = _dock(w, "2D", "data/fake_a.tif")
-            ax = gui_app._content(dock).axes_2d
+            ax = gui_panel_state._content(dock).axes_2d
             widths = []
             for _ in range(3):
                 w.findChild(QPushButton, "apply_image_btn").click()
@@ -7113,8 +7188,8 @@ def _bg_click(ax, xdata, y=None, drag=(0, 0)):
 
 def _bg_lines(ax):
     """该轴上的数据曲线（排除背景扣除辅助线）与辅助线。"""
-    aux = [ln for ln in ax.lines if gui_views._is_aux_line(ln)]
-    data = [ln for ln in ax.lines if not gui_views._is_aux_line(ln)]
+    aux = [ln for ln in ax.lines if gui_plot_panels._is_aux_line(ln)]
+    data = [ln for ln in ax.lines if not gui_plot_panels._is_aux_line(ln)]
     return data, aux
 
 
@@ -7153,8 +7228,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
         原始尺度上，两者不是一个位置。
         """
         press, release = _bg_click(ax, x, y=y)
-        gui_views._anchor_press(w, self.KEY, press)
-        gui_views._anchor_release(w, self.KEY, release)
+        gui_plot_compare._anchor_press(w, self.KEY, press)
+        gui_plot_compare._anchor_release(w, self.KEY, release)
 
     def test_off_by_default_draws_single_line(self):
         """默认关闭 = 零行为变化：1D 仍只画一条曲线，没有辅助线。
@@ -7259,6 +7334,36 @@ class TestBackgroundSubtraction(unittest.TestCase):
         finally:
             w.close()
 
+    def test_anchor_click_through_canvas_wiring(self):
+        """画布上真连的两根线要能解析到锚点处理（拆模块的回归护栏）。
+
+        上面几条锚点测试直接调 _anchor_press/_anchor_release，绕过了
+        _build_1d_widget 里 mpl_connect 的那两行 lambda。拆模块时 lambda
+        引用的名字搬去了 plot_compare、面板壳这边忘了导入：直接调处理的
+        测试全绿，用户真点画布却什么也不发生（回调里的 NameError 被
+        matplotlib 打印到 stderr，不弹窗——探针实证）。这条从
+        canvas.callbacks 发真 MouseEvent，走用户真实路径；两根线只要
+        有一根断在 NameError 上，锚点就加不出来，本测试失败。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            self._set_mode(w, "anchor")
+            w.bg_pick_btn.setChecked(True)
+            ax = _axes(w, "1D", self.PATH)
+            canvas = gui_panel_state._content(dock).canvas
+            # 真 MouseEvent 的 (x, y) = 显示像素；用 _bg_click 算好位置，
+            # 按下/松手同一点 = 点击（不位移就不算平移）
+            press, _ = _bg_click(ax, 1.0)
+            for name in ("button_press_event", "button_release_event"):
+                canvas.callbacks.process(
+                    name, MouseEvent(name, canvas, press.x, press.y,
+                                     button=1))
+            self.assertEqual(len(self._anchors_of(w, dock)), 1)
+            self.assertIn("加锚点", w.log_text.toPlainText())
+        finally:
+            w.close()
+
     def test_anchor_drag_is_not_a_click(self):
         """按下后拖走（>5 px）→ 平移手势，不加锚点。"""
         w = create_window()
@@ -7268,8 +7373,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.bg_pick_btn.setChecked(True)
             ax = _axes(w, "1D", self.PATH)
             press, release = _bg_click(ax, 1.0, drag=(150, 150))
-            gui_views._anchor_press(w, self.KEY, press)
-            gui_views._anchor_release(w, self.KEY, release)
+            gui_plot_compare._anchor_press(w, self.KEY, press)
+            gui_plot_compare._anchor_release(w, self.KEY, release)
             self.assertEqual(self._anchors_of(w, dock), [])
         finally:
             w.close()
@@ -7421,12 +7526,12 @@ class TestBackgroundSubtraction(unittest.TestCase):
             self._open_1d(w)
             self._set_mode(w, "auto")
             ax = _axes(w, "1D", self.PATH)
-            _, _, _, _, old_lines = gui_views._snapshot_canvas(ax)
+            _, _, _, _, old_lines = gui_plot_panels._snapshot_canvas(ax)
             self.assertEqual(len(old_lines), 1, "快照只该收数据曲线")
             # 悬停选线只认数据曲线；取点标记自己也是辅助线（不参与选线）
-            gui_views._hover_motion(w, self.KEY, _hover_event(ax, 1.0))
+            gui_plot_panels._hover_motion(w, self.KEY, _hover_event(ax, 1.0))
             marker = w.plot_docks[self.KEY].hover_marker
-            self.assertTrue(gui_views._is_aux_line(marker))
+            self.assertTrue(gui_plot_panels._is_aux_line(marker))
             self.assertTrue(marker.get_visible())
         finally:
             w.close()
@@ -7458,14 +7563,14 @@ class TestBackgroundSubtraction(unittest.TestCase):
                                side_effect=_fake_bg_compute):
             try:
                 w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
-                gui_app._plot_compare(w)
+                gui_plot_compare._plot_compare(w)
                 keys = [k for k in w.plot_docks if k.startswith("对比|")]
                 self.assertTrue(_wait_until(lambda: len(keys) == 1))
                 key = keys[0]
                 dock = w.plot_docks[key]
                 self.assertTrue(_wait_until(
                     lambda: len(getattr(dock, "compare_data", {})) == 2))
-                ax = gui_app._content(dock).axes_1d
+                ax = gui_panel_state._content(dock).axes_1d
                 before = np.asarray(_bg_lines(ax)[0][0].get_ydata(),
                                     dtype=float).copy()
                 self._set_mode(w, "auto")
@@ -7502,7 +7607,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 # **扇区均值**（共同基线）。逐扇区各扣各的会调用 4 次、
                 # 每次喂一条扇区曲线——扇区之间的真实强度差就被抹平了
                 with mock.patch.object(gui_views, "_bg_curve",
-                                       wraps=gui_views._bg_curve) as spy:
+                                       wraps=gui_panel_state._bg_curve) as spy:
                     gui_views._draw_waterfall(w, dock, *dock.last_waterfall)
                 self.assertEqual(spy.call_count, 1, "应只估一条共同基线")
                 fed = spy.call_args[0][4]
@@ -7510,7 +7615,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                     np.asarray(fed, dtype=float),
                     np.nanmean(np.asarray(i2d, dtype=float), axis=1),
                     err_msg="喂给基线估计的应是扇区均值")
-                wax = gui_app._content(dock).axes_waterfall
+                wax = gui_panel_state._content(dock).axes_waterfall
                 self.assertEqual(len(_bg_lines(wax)[0]), 4, "四条扇区曲线")
         finally:
             w.close()
@@ -7528,7 +7633,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.bg_blank = {"path": "b.tif", "tth": tth,
                           "intensity": blank, "geom": ""}
             self._set_mode(w, "blank")
-            data = gui_views._heat_data(w, dock)
+            data = gui_plot_compare._heat_data(w, dock)
             self.assertIsNotNone(data)
             np.testing.assert_allclose(
                 data[1][0], _fake_bg_compute("", {}, 0)[1] - blank)
@@ -7624,8 +7729,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 # 在 B 面板上按下并拖走（>5 px = 平移手势，不是点击）
                 axb = _axes(w, "1D", "data/fg_b.tif")
                 press, release = _bg_click(axb, 1.0, drag=(150, 150))
-                gui_views._anchor_press(w, kb, press)
-                gui_views._anchor_release(w, kb, release)
+                gui_plot_compare._anchor_press(w, kb, press)
+                gui_plot_compare._anchor_release(w, kb, release)
                 self.assertTrue(w.bg_pick_btn.isChecked(),
                                 "拖拽平移不该取消拾取状态")
             finally:
@@ -7673,9 +7778,9 @@ class TestBackgroundSubtraction(unittest.TestCase):
             dock = self._open_1d(w)
             tth = np.linspace(0.5, 8.5, 200)
             blank = 0.5 * (100.0 + 900.0 * np.exp(-tth / 2.0))
-            geom = gui_app._collect_geometry(w)
+            geom = gui_panel_state._collect_geometry(w)
             w.bg_blank = {"path": "b.tif", "tth": tth, "intensity": blank,
-                          "geom_sig": gui_app._bg_geom_sig(geom)}
+                          "geom_sig": gui_panel_state._bg_geom_sig(geom)}
             self._set_mode(w, "blank")
             self.assertNotIn("空扫图与当前几何不一致", w.log_text.toPlainText())
             # 改一个几何量 → 再扣就该提示。几何只认配置条目（分析页

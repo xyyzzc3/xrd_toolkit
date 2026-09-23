@@ -361,5 +361,3 @@ def _run_export(window: QMainWindow) -> None:
         _log(window, f"导出完成：{ok} 个文件")
     if fields["csv"]:
         _write_csv_summary(window, results, outdir)
-
-

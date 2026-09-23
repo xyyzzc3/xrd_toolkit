@@ -79,19 +79,28 @@
 面板为 PNG，校准存几何配置（模板复制）/ 图像存积分结果（与 CLI
 同格式）待 2D/剖面/瀑布接线时实现；不做会话记忆。
 
-模块结构（2026-09-18 从 3622 行单文件拆分，调用方向永远从上往下，
-循环导入无路可走）：
-  app.py         窗口组装：文件坞/参数坞/日志坞/工具栏/保存关窗
-  plot_views.py  视图注册表 + 出图调度 + 1D/对比绘图 + 悬停 + 手势
-  calib.py       校准工作台：校准表单 + 校准图面板 + 自动/手动后台任务
-  panels.py      面板容器生命周期：子窗口/弹出/抓手/平铺/总缩放
-  customize.py   Customize 自绘轴属性对话框
-  panel_state.py 共享层：日志/内容入口/参数快照/焦点回放/几何收集
-  tasks.py       后台任务运行器（耗时计算挪出界面线程）
-扩展点：新视图（2D/剖面/瀑布）接线 = 往 plot_views 的
-_VIEW_BUILDERS/_VIEW_RUNNERS 两张表加条目；app.py 对拆分前的全部
-函数保留兼容再导出（测试经 gui_app 继续访问，mock.patch 目标请指
-到实现所在的新模块）。
+模块结构（2026-09-18 从 3622 行单文件起分三轮拆出：09-23 拆校准 /
+文件坞 / 配置条目 / 存图，09-24 拆多文件视图与面板壳；调用方向永远
+从上往下，反向调用一律函数内延迟导入，全包没有模块级环）：
+  app.py          窗口组装：文件坞 / 参数坞 / 日志坞 / 工具栏 / 保存关窗
+  plot_compare.py 多文件视图：对比面板（多条 1D 叠图）+ 热图 + 锚点拾取
+  plot_views.py   单文件视图：runner 分发 + 四个视图的出图 + 任务回调
+  plot_panels.py  面板壳：画布容器 / 半截工具栏 / 手势 / 轴同步 / 悬停
+  plot_export.py  导出：1D 数据（txt/chi + CSV 总表）+ 图片（PNG/TIF）
+  file_dock.py    左侧文件坞：文件列表 + 打开 / 拖放 + 显示名去重
+  calib.py        校准工作台：自动校准 + 手动选点校准
+  calib_model.py  校准页纯逻辑（零 Qt）：状态模型 + 采纳判据 + 取值
+  calib_panel.py  中央校准图面板：图像 + 理论环（青线）+ 选点交互
+  calib_table.py  校准页三列表：当前配置 / A / B + Δ 行 + 基准
+  config_ops.py   几何配置条目的进出口：加载 / 保存 .poni、删条目
+  panels.py       面板容器生命周期：子窗口 / 弹出 / 抓手 / 平铺 / 总缩放
+  customize.py    Customize 自绘轴属性对话框
+  panel_state.py  共享层：日志 / 内容入口 / 参数快照 / 焦点回放 / 几何收集
+  tasks.py        后台任务运行器（耗时计算挪出界面线程）
+扩展点：新视图（2D/剖面/瀑布）接线 = 往 plot_panels 的
+_VIEW_BUILDERS 与 plot_views 的 _VIEW_RUNNERS 两张表加条目；app.py
+对拆分前的全部函数保留兼容再导出（测试经 gui_app 继续访问，
+mock.patch 目标请指到实现所在的新模块）。
 
 启动：python -m xrd_toolkit.gui
 """

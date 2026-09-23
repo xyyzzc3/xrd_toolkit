@@ -93,12 +93,16 @@ from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _reload_config_combo, _set_focus)
+from xrd_toolkit.gui.panel_state import _bg_curve
+from xrd_toolkit.gui.plot_compare import _plot_compare, _plot_heatmap
+from xrd_toolkit.gui.plot_export import _ask_save_options
+from xrd_toolkit.gui.plot_panels import (
+    _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
+    _pan_motion, _pan_press, _pan_release, _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _ask_save_options, _bg_curve,
-    _compute_integration, _draw_1d, _hover_leave, _hover_motion,
-    _magnifier_on, _open_plot_panel, _pan_motion, _pan_press,
-    _pan_release, _plot_compare, _plot_heatmap, _plot_view, _refresh_bg,
-    _spawn_task, _wheel_zoom)
+    _apply_image_params, _apply_params, _compute_integration, _draw_1d,
+    _plot_view, _refresh_bg, _spawn_task)
+
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
 
@@ -210,7 +214,6 @@ class _ElideLabel(QLabel):
             return
         super().setText(self.fontMetrics().elidedText(
             self._full, self._mode, self.width()))
-
 
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
@@ -1221,17 +1224,6 @@ def _confirm_close(window: QMainWindow, n_unsaved: int) -> str:
         QMessageBox.Save)
     return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(
         ans, "cancel")
-
-# ══ 批量管线：.poni 保存/加载 + 1D 数据导出 / CSV 总表 ═════════
-
-
-
-
-
-
-
-
-
 
 
 # ══ 主窗口组装 ════════════════════════════════════════════

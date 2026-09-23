@@ -91,9 +91,6 @@ from xrd_toolkit.services.integrator import (
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
 
-# ══ 小工具：状态 / 文件 / 图像 ══════════════════════════════════
-
-
 # ── 结果列表与三个槽 ────────────────────────────────────────
 
 
@@ -346,8 +343,6 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
     window._latest_task[key] = task
     window._tasks.append(task)
     task.start()
-
-
 
 
 # ══ 中央校准图面板 ═══════════════════════════════════════════
