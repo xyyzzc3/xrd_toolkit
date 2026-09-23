@@ -345,19 +345,23 @@ def _set_focus(window: QMainWindow, key: str, title: str) -> None:
 
 
 def _collect_geometry(window: QMainWindow) -> dict:
-    """从参数面板收集积分几何。
+    """收集当前**几何配置条目**的积分几何（面板上的几何字段是只读显示）。
 
-    PONI/倾斜角取当前配置条目的标定值（面板暂不暴露），像素/波长/
-    距离取面板输入框——对应 integrate_pattern 里 --pixel/--wavelength/
-    --dist 覆盖配置值的语义。2θ 上下限是积分设置（参与计算，不是
-    显示窗口），一并收进 geom：_compute_integration 原样 **geom 传给
+    分析页只读后这里没有"面板覆盖配置"的隐藏通路了：像素/波长/距离/
+    PONI/倾斜角一律取 window.config["geometry"]（下拉框选中哪条就是
+    哪条）；要改几何去校准页。2θ 上下限是积分设置（参与计算，不是
+    显示窗口），仍从面板取：_compute_integration 原样 **geom 传给
     integrate_1d，改了范围点 [应用] 即按新区间重积分。
+
+    （几何字段的控件仍留在 window.params 里：_apply_config 往它们填
+    显示值、快照回放与测试也按这些键找控件——改的是"谁说了算"，
+    不是控件本身。）
     """
     geom = window.config["geometry"]
     return dict(
-        pixel_size_m=window.params["像素尺寸 (µm)"].value() * 1e-6,
-        wavelength_m=window.params["波长 (Å)"].value() * 1e-10,
-        dist_m=window.params["初始距离 (mm)"].value() * 1e-3,
+        pixel_size_m=geom["pixel_size_m"],
+        wavelength_m=geom["wavelength_m"],
+        dist_m=geom["dist_m"],
         poni1_m=geom["poni1_m"],
         poni2_m=geom["poni2_m"],
         rot1_deg=geom["rot1_deg"],

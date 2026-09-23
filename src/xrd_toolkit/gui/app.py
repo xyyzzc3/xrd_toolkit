@@ -69,8 +69,8 @@ from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 from xrd_toolkit.gui.calib import (
     _build_calib_form, _CalibSubWindow, _close_calib_panel,
     _draw_calib_image, _enter_calib, _exit_calib,
-    _on_calib_click, _open_calib_panel,
-    _start_auto_calib, _start_manual_calib, _undo_calib_point,
+    _on_calib_click, _open_calib_panel, _start_auto_calib,
+    _start_manual_calib, _sync_del_config_btn, _undo_calib_point,
     _clear_calib_points)
 from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
@@ -822,48 +822,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.config_combo.currentIndexChanged.connect(
         lambda i: (_apply_config(window, i),
                    _sync_del_config_btn(window)))
-    # 下拉框 + [加载参数][保存参数][删除]（作业规格按钮名）：.poni 是
-    # pyFAI 生态的通用几何交换格式——加载 = 读文件 → 存成用户配置
-    # 条目并自动选中；保存 = 当前选中配置写成 .poni 文件；删除 =
-    # 移除用户条目（内置条目置灰）。按钮放下拉框下面一行（各占
-    # 1/3 宽）：表单最窄行宽由下拉框决定，按钮并排在下拉框右侧会
-    # 把整个参数坞的最小宽度撑宽（同文件坞两排按钮的考虑）
-    combo_row = QWidget()
-    combo_lay = QVBoxLayout(combo_row)
-    combo_lay.setContentsMargins(0, 0, 0, 0)
-    combo_lay.setSpacing(2)
-    combo_lay.addWidget(window.config_combo)
-    btn_poni_row = QWidget()
-    btn_poni_lay = QHBoxLayout(btn_poni_row)
-    btn_poni_lay.setContentsMargins(0, 0, 0, 0)
-    # 三按钮一行：每个按钮收紧内边距（默认 ~12px 左右各半会把这行
-    # 的最小宽度撑过 320 上限——同文件坞两排按钮的窄排版考虑）
-    btn_poni_lay.setSpacing(2)
-    btn_poni = QPushButton("加载参数")
-    btn_poni.setObjectName("poni_btn")   # objectName 保持 poni_btn：测试与历史引用
-    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成"
-                        "配置条目并自动选中（避免每次重新校准）")
-    btn_poni.clicked.connect(lambda: _import_poni(window))
-    btn_save_poni = QPushButton("保存参数")
-    btn_save_poni.setObjectName("save_poni_btn")
-    btn_save_poni.setToolTip("保存 .poni：把当前选中配置的几何"
-                             "（探测器距离/中心点/像素尺寸/波长/倾斜角）"
-                             "写成 pyFAI 交换格式文件")
-    btn_save_poni.clicked.connect(lambda: _save_poni(window))
-    btn_del_config = QPushButton("删除")
-    btn_del_config.setObjectName("del_config_btn")
-    btn_del_config.setToolTip("删除当前选中的用户配置条目（.poni 导入"
-                              "或 [保存为配置] 产生的条目）；内置条目"
-                              "是人工登记的注册表，不可删除（按钮置灰）")
-    btn_del_config.clicked.connect(lambda: _delete_config(window))
-    window.del_config_btn = btn_del_config
-    for btn in (btn_poni, btn_save_poni, btn_del_config):
-        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距：保住 320 窄排版
-    btn_poni_lay.addWidget(btn_poni, 1)
-    btn_poni_lay.addWidget(btn_save_poni, 1)
-    btn_poni_lay.addWidget(btn_del_config, 1)
-    combo_lay.addWidget(btn_poni_row)
-    form.addRow("几何配置", combo_row)
+    # 分析页只读：这里只留下拉框选条目；几何值下面以只读摘要显示。
+    # [加载参数][保存参数][删除] 三个按钮在校准页（配置的增删改查归
+    # 校准页，分析页不提供修改入口——见 calib._build_calib_form）。
+    form.addRow("几何配置", window.config_combo)
 
     window.params = {}
     def add_caption(form, text):
@@ -876,7 +838,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         return cap
 
     def add_float(form, name, lo, hi, value, decimals=2,
-                  label=None, suffix="", tooltip=""):
+                  label=None, suffix="", tooltip="", readonly=False):
         box = QDoubleSpinBox()
         box.setRange(lo, hi)
         box.setValue(value)
@@ -885,6 +847,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
             box.setSuffix(suffix)   # 单位跟在数字后（标签不再带括号单位）
         if tooltip:
             box.setToolTip(tooltip)
+        if readonly:
+            # 只读摘要：几何值由所选配置条目决定（_apply_config 填），
+            # 用户改不了——要改去校准页。setReadOnly 只挡用户输入，
+            # 程序 setValue 照常工作，快照回放不受影响。
+            box.setReadOnly(True)
+            box.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            box.setStyleSheet("color: gray;")
         window.params[name] = box
         form.addRow(label if label is not None else name, box)
         return box
@@ -924,16 +893,21 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         form.addRow(label, field)
         return lo_box, hi_box
 
-    add_caption(form, "标定几何")
+    add_caption(form, "标定几何（只读：由几何配置决定）")
     add_float(form, "像素尺寸 (µm)", 0.0, 10000.0, 200.0, decimals=1,
-              label="像素尺寸", suffix=" µm",
-              tooltip="探测器单个像素的边长；随几何配置自动填入，也可手改")
+              label="像素尺寸", suffix=" µm", readonly=True,
+              tooltip="探测器单个像素的边长；来自所选几何配置条目"
+                      "（分析页只读，改几何请去校准页）")
     add_float(form, "波长 (Å)", 0.0, 10.0, 0.1223, decimals=4,
-              label="波长", suffix=" Å",
-              tooltip="X 射线波长；随几何配置自动填入，也可手改")
+              label="波长", suffix=" Å", readonly=True,
+              tooltip="X 射线波长；来自所选几何配置条目（分析页只读）")
+    # 参数键仍是 "初始距离 (mm)"（_collect_geometry / 快照回放按它取控件，
+    # 改名会牵动一大片），但显示名随语义改成"分析用距离"：它是**分析用**
+    # 的几何（来自所选配置条目），校准的初值另在校准页设。
     add_float(form, "初始距离 (mm)", 0.0, 10000.0, 1600.0, decimals=1,
-              label="初始距离", suffix=" mm",
-              tooltip="样品到探测器的距离；随几何配置自动填入，也可手改")
+              label="分析用距离", suffix=" mm", readonly=True,
+              tooltip="分析用的样品-探测器距离；来自所选几何配置条目。"
+                      "校准的初值在校准页单独设（③ 二次精修取当前使用）")
 
     add_caption(form, "积分设置")
     add_range(form, "2θ 下限 (°)", "2θ 上限 (°)", 0.0, 90.0, 1.0, 8.0,
@@ -1674,182 +1648,6 @@ def _confirm_close(window: QMainWindow, n_unsaved: int) -> str:
         ans, "cancel")
 
 # ══ 批量管线：.poni 保存/加载 + 1D 数据导出 / CSV 总表 ═════════
-def _import_poni(window: QMainWindow) -> None:
-    """[加载参数]：读 .poni 交换格式几何文件 → 存成用户配置条目。
-
-    .poni 是 pyFAI 生态通用的几何交换格式（别的工具/命令行标定的
-    结果常以这种文件交付）。导入 = 解析出几何 → 照 GUI 配置条目的
-    形状存进本地 config_user.json（与 [保存为配置] 同源，重启仍
-    在）→ 下拉框重建并自动选中（_apply_config 立即生效）。pyFAI
-    只在点击时导入：CLI 用户与纯测试环境不为此多背启动依赖。
-    """
-    path_str, _ = QFileDialog.getOpenFileName(
-        window, "选择 .poni 几何文件", "data",
-        "pyFAI 几何 (*.poni);;所有文件 (*)")
-    if not path_str:
-        return
-    p = Path(path_str)
-    try:
-        import pyFAI
-        ai = pyFAI.load(str(p))
-    except Exception as err:
-        _log(window, f".poni 读取失败 {p.name}（{err}）")
-        return
-    # 必备几何字段缺一不可（探测器库不认识旧型号时 pixel 可能缺失）
-    missing = [field for field, val in (
-        ("dist", ai.dist), ("poni1", ai.poni1), ("poni2", ai.poni2),
-        ("rot1", ai.rot1), ("rot2", ai.rot2),
-        ("wavelength", ai.wavelength),
-        ("pixel", getattr(ai, "pixel1", None) or getattr(ai, "pixel2", None)),
-    ) if val is None]
-    if missing:
-        _log(window, f".poni 缺少几何字段：{', '.join(missing)}，无法导入")
-        return
-    pixel = float(ai.pixel1)   # 配置只有单一像素尺寸：非方像素取 pixel1
-    if float(ai.pixel2) != pixel:
-        _log(window, "注意：.poni 像素非方形（pixel1≠pixel2），配置只"
-                     "存单一像素尺寸，已取 pixel1")
-    # 束心 = getFit2D 的直射束落点（含倾斜修正）：正是配置条目的 B
-    # 语义（B ≠ PONI，探测器有倾斜时两者差可达 23 px，见 config.py
-    # 注释）——不能直接用 poni/pixel 投影。约定核实过：pyFAI 里
-    # centerX = 列、centerY = 行，与内置 lmfp1_lab6 条目的实测值吻合。
-    fit2d = ai.getFit2D()
-    entry = {
-        "label": p.stem,
-        "geometry": {
-            "pixel_size_m": pixel,
-            "wavelength_m": float(ai.wavelength),
-            "dist_m": float(ai.dist),
-            "poni1_m": float(ai.poni1),
-            "poni2_m": float(ai.poni2),
-            "rot1_deg": float(np.degrees(ai.rot1)),
-            "rot2_deg": float(np.degrees(ai.rot2)),
-        },
-        "beam_center": (float(fit2d.centerY), float(fit2d.centerX)),
-    }
-    # key = 文件名清洗（只留字母数字下划线）；数字开头补前缀，
-    # 撞名依次补 _poni1/_poni2…（CONFIGS 含内置，循环避开全部重名）
-    key = re.sub(r"[^A-Za-z0-9_]", "_", p.stem)
-    if not key or key[0].isdigit():
-        key = "poni_" + key
-    base, n = key, 1
-    while key in CONFIGS:
-        key = f"{base}_poni{n}"
-        n += 1
-    try:
-        is_new = config.save_user_config(key, entry)
-    except ValueError as err:
-        _log(window, f".poni 导入失败（{err}）")
-        return
-    _reload_config_combo(window, key)
-    _log(window, f"已导入 .poni → 配置条目 {key}"
-                 f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
-                 f"重启后仍在）")
-
-
-def _save_poni(window: QMainWindow) -> None:
-    """[保存参数]：把当前选中的几何配置写成标准 .poni 文件。
-
-    保存内容 = 探测器距离 / 中心点 / 像素尺寸 / 波长 / 倾斜角。
-    中心点在 .poni 标准里就是 poni1/poni2 米制坐标（像素束心含
-    显示语义、不含倾斜修正，不属于几何量——加载回来时由
-    getFit2D 重算，往返探测已验证自洽）。作业规格里的"掩膜文件
-    路径"是可选项：引擎尚未支持掩膜，且 pyFAI .poni 格式本身没
-    有掩膜字段，故不写。保存成功记日志（列出保存内容，供核对）。
-    默认文件名 = {配置名}.poni、默认目录 outputs/，同 [加载参数]
-    共用一套读写口径（pyFAI 只在点击时导入，CLI/测试不为启动背
-    依赖）。
-    """
-    cfg = window.config   # 当前选中条目（label / geometry / beam_center）
-    geom = cfg["geometry"]
-    default = str(Path("outputs") / f"{window.config_name}.poni")
-    path_str, _ = QFileDialog.getSaveFileName(
-        window, "保存几何参数（.poni）", default,
-        "pyFAI 几何 (*.poni);;所有文件 (*)")
-    if not path_str:
-        return   # 用户取消
-    if not path_str.lower().endswith(".poni"):
-        path_str += ".poni"
-    try:
-        from pyFAI.geometry import Geometry
-        g = Geometry(
-            dist=float(geom["dist_m"]),
-            poni1=float(geom["poni1_m"]),
-            poni2=float(geom["poni2_m"]),
-            rot1=float(np.radians(geom["rot1_deg"])),
-            rot2=float(np.radians(geom["rot2_deg"])),
-            pixel1=float(geom["pixel_size_m"]),
-            pixel2=float(geom["pixel_size_m"]),
-            wavelength=float(geom["wavelength_m"]))
-        Path(path_str).parent.mkdir(parents=True, exist_ok=True)
-        g.save(path_str)
-    except Exception as err:
-        _log(window, f".poni 保存失败（{err}）")
-        return
-    _log(window, f"已保存几何参数 → {path_str}"
-                 f"（距离 {geom['dist_m'] * 1e3:.2f} mm，"
-                 f"中心 poni1={geom['poni1_m']:.6g} m, "
-                 f"poni2={geom['poni2_m']:.6g} m，"
-                 f"像素 {geom['pixel_size_m'] * 1e6:.1f} µm，"
-                 f"波长 {geom['wavelength_m'] * 1e10:.4f} Å，"
-                 f"倾斜 rot1={geom['rot1_deg']:.4f}°, "
-                 f"rot2={geom['rot2_deg']:.4f}°）")
-
-
-def _sync_del_config_btn(window: QMainWindow) -> None:
-    """[删除] 按钮置灰同步：选中内置条目时不可删（人工登记注册表）。
-
-    下拉框当前索引变化时由连接调用；_reload_config_combo 重建下拉
-    框后索引不变不触发信号，调用方（_delete_config / 建坞收尾）再
-    显式补一次。
-    """
-    btn = getattr(window, "del_config_btn", None)
-    if btn is None:
-        return   # 建坞早于按钮创建时的信号（若有）安全忽略
-    idx = window.config_combo.currentIndex()
-    btn.setEnabled(idx >= 0 and
-                   window.config_combo.itemData(idx) not in
-                   config.BUILTIN_CONFIGS)
-
-
-def _delete_config(window: QMainWindow) -> None:
-    """[删除]：把当前选中的用户配置条目从注册表与磁盘移除。
-
-    只删用户条目（.poni 导入 / [保存为配置] 产生）——内置条目是
-    config.py 人工登记的注册表，按钮置灰 + 处理函数双保险拒绝。
-    删除前弹确认框；删后下拉框重建并切回默认条目（删除的对象是
-    "当前选中"条目，删完当前选中已不存在）。
-    """
-    combo = window.config_combo
-    key = combo.itemData(combo.currentIndex())
-    if key in config.BUILTIN_CONFIGS:
-        _log(window, f"内置条目 {key} 不可删除（人工登记的注册表）")
-        return
-    entry = config.USER_CONFIGS.get(key)
-    if entry is None:
-        _log(window, f"用户条目 {key} 不存在，无需删除")
-        return
-    answer = QMessageBox.question(
-        window, "删除配置",
-        f"删除用户配置条目 {key}（{entry['label']}）？\n"
-        "删除后不可恢复（内置条目不受影响）。",
-        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-    if answer != QMessageBox.Yes:
-        return
-    try:
-        removed = config.remove_user_config(key)
-    except ValueError as err:
-        _log(window, f"删除失败（{err}）")
-        return
-    if not removed:
-        _log(window, f"用户条目 {key} 不存在，无需删除")
-        return
-    _reload_config_combo(window, config.DEFAULT_CONFIG)
-    _sync_del_config_btn(window)
-    _log(window, f"已删除配置条目 {key}（{entry['label']}），"
-                 f"已切回默认条目 {config.DEFAULT_CONFIG}")
-
-
 def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                         quiet: bool = False) -> list:
     """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity), ...]。

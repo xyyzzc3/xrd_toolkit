@@ -70,9 +70,9 @@ from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
-    QSplitter, QSpinBox, QVBoxLayout)
+    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QSplitter, QSpinBox, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
@@ -1486,21 +1486,30 @@ class TestDuplicateFiles(unittest.TestCase):
 class TestCollectGeometry(unittest.TestCase):
     """参数面板 → 积分几何：输入覆盖配置值，PONI/倾斜取配置条目。"""
 
-    def test_overrides_and_config_fallback(self):
+    def test_geometry_comes_from_the_selected_config(self):
+        """几何一律取配置条目：面板字段是只读显示，改它不改几何。
+
+        （换条目才是改几何的入口——分析页只读后没有"面板覆盖配置"
+        这条隐藏通路了。）
+        """
         w = create_window()
         try:
             cfg = w.config["geometry"]
-            w.params["初始距离 (mm)"].setValue(1700.0)
             geom = gui_app._collect_geometry(w)
-            self.assertAlmostEqual(geom["dist_m"], 1.7, places=9)
+            self.assertAlmostEqual(geom["dist_m"], cfg["dist_m"])
             self.assertAlmostEqual(geom["pixel_size_m"],
                                    cfg["pixel_size_m"])
+            self.assertAlmostEqual(geom["wavelength_m"], cfg["wavelength_m"])
             self.assertEqual(geom["poni1_m"], cfg["poni1_m"])
             self.assertEqual(geom["rot1_deg"], cfg["rot1_deg"])
-            w.params["波长 (Å)"].setValue(0.15)
+            # 只读：控件收不到用户输入，且程序改它也不该影响几何
+            self.assertTrue(w.params["初始距离 (mm)"].isReadOnly())
+            self.assertTrue(w.params["像素尺寸 (µm)"].isReadOnly())
+            self.assertTrue(w.params["波长 (Å)"].isReadOnly())
+            w.params["初始距离 (mm)"].setValue(1700.0)
             self.assertAlmostEqual(
-                gui_app._collect_geometry(w)["wavelength_m"], 0.15e-10)
-            # 2θ 上下限 = 积分设置，随面板走（改了就进 geom）
+                gui_app._collect_geometry(w)["dist_m"], cfg["dist_m"])
+            # 2θ 上下限 = 积分设置，仍随面板走（改了就进 geom）
             self.assertAlmostEqual(geom["tth_min_deg"], 1.0)
             self.assertAlmostEqual(geom["tth_max_deg"], 8.0)
             w.params["2θ 下限 (°)"].setValue(2.5)
@@ -2114,7 +2123,8 @@ class TestParamFormPolish(unittest.TestCase):
         w = create_window()
         try:
             captions = {lb.text() for lb in w.param_dock.findChildren(QLabel)}
-            self.assertIn("标定几何", captions)
+            # 几何段标题带"只读"提示（分析页改不了几何，去校准页改）
+            self.assertIn("标定几何（只读：由几何配置决定）", captions)
             self.assertIn("积分设置", captions)
             self.assertIn("2D/剖面视图", captions)
             # 归一化四选一下拉框（键仍是"对比归一化"，快照回放认 data
@@ -4830,6 +4840,7 @@ class TestCalibration(unittest.TestCase):
         w.calib_btn.click()
         self.assertEqual(w.param_stack.currentIndex(), 1)
         self.assertIsNotNone(w.calib_dock)
+        w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
 
     def test_enter_mode_opens_panel_and_exit_restores(self):
         w = create_window()
@@ -4907,12 +4918,15 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(fake.call_args.kwargs["center0_px"],
                              (self.FAKE_CENTER["cx"], self.FAKE_CENTER["cy"]))
             self.assertAlmostEqual(fake.call_args.kwargs["dist0_m"], 1.5958)
-            # 自动列 + 状态行日志
-            vals = w.calib_vals["auto"]
+            # 对比区 A 列 = 当前使用（自动定位）+ 状态行日志
+            vals = w.calib_vals["a"]
             self.assertEqual(vals["dist"].text(), "1595.80")
-            self.assertEqual(vals["poni"].text(), "(1045.20, 1022.00)")
-            self.assertEqual(vals["resid"].text(), "0.0040")
-            self.assertIn("自动校准完成", self._logs(w))
+            self.assertEqual(vals["poni1"].text(), "1045.20")
+            self.assertEqual(vals["poni2"].text(), "1022.00")
+            self.assertEqual(vals["dev"].text(), "—")   # fake 结果没带指标
+            # 白名单：自洽残差不入对比表
+            self.assertNotIn("resid", vals)
+            self.assertIn("自动定位完成", self._logs(w))
             # 图按新几何重画：控制点绿点（一条 2 点散点线）画上
             self.assertTrue(any(len(line.get_xdata()) == 2
                                 for line in w.calib_ax.lines))
@@ -5036,8 +5050,8 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(fake.call_args.kwargs["center0_px"],
                              (1022.3, 1022.0))
             # 手动列 + 点数少的可信度提示
-            self.assertEqual(w.calib_vals["manual"]["dist"].text(), "1596.20")
-            self.assertIn("手动校准完成", self._logs(w))
+            self.assertEqual(w.calib_vals["a"]["dist"].text(), "1596.20")
+            self.assertIn("手动选点完成", self._logs(w))
             self.assertIn("点数较少", self._logs(w))
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -5068,9 +5082,14 @@ class TestCalibration(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: w.calib_state["auto"] is not None, 8000))
                 d = w.calib_vals["delta"]
-                self.assertEqual(d["dist"].text(), "+0.40")
-                self.assertEqual(d["poni"].text(), "1.56")
-                self.assertEqual(d["resid"].text(), "+0.0080")
+                # A 保持用户先前看到的来源（手动），新来源自动补到 B →
+                # Δ = B − A = 自动 − 手动（所以是 −0.40 而不是 +0.40）
+                self.assertEqual(w.calib_combo_a.currentData(), "manual")
+                self.assertEqual(w.calib_combo_b.currentData(), "auto")
+                self.assertEqual(d["dist"].text(), "-0.40")
+                # 一行一个标量：PONI 分成两行，各自的 Δ 是分量差
+                self.assertEqual(d["poni1"].text(), "+1.20")
+                self.assertEqual(d["poni2"].text(), "+1.00")
                 # 保存来源 = "当前使用"的来源（两个 fake 结果都没带指标 →
                 # 比不出来 → 采用刚完成的自动；见 _update_current 规则）
                 self.assertIn("将保存：自动定位",
@@ -5108,9 +5127,40 @@ class TestCalibration(unittest.TestCase):
                 # 等任务收尾投递后：状态与结果区仍为空（作废不炸）
                 self.assertTrue(_wait_until(lambda: not w._tasks, 5000))
                 self.assertIsNone(w.calib_state["auto"])
-                self.assertEqual(w.calib_vals["auto"]["dist"].text(), "—")
+                self.assertEqual(w.calib_vals["a"]["dist"].text(), "—")
         finally:
             release.set()
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_page_fits_the_dock_width(self):
+        """校准页不许有控件越界：参数坞窄、滚动区水平条关闭，超宽就够不着。
+
+        （判据是**实际几何**：把坞压到最小宽后逐控件量右边缘；用
+        sizeHint 会误判——滚动区本来就会把页面压到视口宽。）
+        """
+        w = create_window()
+        try:
+            w.show()
+            w.resize(420, 700)
+            QApplication.processEvents()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            w.param_dock.setMinimumWidth(w.param_dock.minimumWidth())
+            QApplication.processEvents()
+            page = w.param_stack.widget(1).widget()
+            over = []
+            for child in page.findChildren(QWidget):
+                if not child.isVisible() or child.width() == 0:
+                    continue
+                right = child.mapTo(page, QPoint(0, 0)).x() + child.width()
+                if right > page.width() + 1:
+                    over.append((type(child).__name__,
+                                 right - page.width()))
+            self.assertEqual(over, [], f"越界控件（类型, 超出 px）：{over}")
+        finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
                 w.close()
@@ -5146,11 +5196,11 @@ class TestCalibration(unittest.TestCase):
                 w.calib_start_auto.click()   # 连点重跑：新任务说了算
                 self.assertTrue(_wait_until(
                     lambda: w.calib_state["auto"] is not None, 8000))
-                self.assertEqual(w.calib_vals["auto"]["dist"].text(),
+                self.assertEqual(w.calib_vals["a"]["dist"].text(),
                                  "1600.00")
                 release.set()   # 旧任务这时才完成 → 迟到作废
                 self.assertTrue(_wait_until(lambda: not w._tasks, 5000))
-                self.assertEqual(w.calib_vals["auto"]["dist"].text(),
+                self.assertEqual(w.calib_vals["a"]["dist"].text(),
                                  "1600.00", "旧结果不得覆盖新结果")
                 self.assertIs(w.calib_state["auto"], fast)
         finally:
@@ -5231,6 +5281,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                                return_value=dict(self.FAKE_AUTO)):
             w.add_files(["data/fake_a.tif"])
             w.calib_btn.click()
+            w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
             w.calib_start_auto.click()
             self.assertTrue(_wait_until(
                 lambda: w.calib_state["auto"] is not None, 8000))
@@ -5540,19 +5591,20 @@ class TestCalibMetrics(unittest.TestCase):
                  mock.patch.object(gui_calib, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
                  mock.patch.object(gui_calib, "calibrate_lab6",
-                                   return_value=dict(self.FAKE_AUTO)), \
+                                   return_value=dict(self.FAKE_AUTO,
+                                                     dist_m=1.5970)), \
                  mock.patch.object(gui_calib, "ring_metrics",
                                    side_effect=lambda image, **kw:
-                                   dict(self.METRICS if kw["dist_m"]
-                                        == self.FAKE_AUTO["dist_m"]
+                                   dict(self.METRICS if kw["dist_m"] == 1.5970
                                         else self.INITIAL)):
                 w.add_files(["data/fake_a.tif"])
                 w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
                     lambda: w.calib_state["auto"] is not None, 8000))
             logs = self._logs(w)
-            self.assertIn("自动校准完成", logs)
+            self.assertIn("自动定位完成", logs)
             self.assertIn("环位偏差中位 0.52 px（初值 3.14）", logs)
             self.assertIn("a 离散 812 ppm", logs)
         finally:
@@ -5669,6 +5721,350 @@ class TestCalibSources(unittest.TestCase):
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
                 w.close()
+
+
+class TestCalibThreeStep(unittest.TestCase):
+    """三步流程：③ 的启用条件 / ③ 从"当前使用"出发 / [以 A 为准] 标自定义。"""
+
+    FAKE_AUTO = dict(TestCalibration.FAKE_AUTO)
+    FAKE_MANUAL = dict(TestCalibration.FAKE_MANUAL)
+    FAKE_CENTER = TestCalibration.FAKE_CENTER
+
+    def _logs(self, w):
+        return w.log_text.toPlainText()
+
+    def test_step3_needs_a_current_source(self):
+        """③ 二次精修要有"当前使用"的几何：按钮置灰 + 直接调用也被守卫拦。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
+                self.assertFalse(w.calib_start_refined.isEnabled())
+                # 置灰按钮点不动，所以直接调入口验证守卫（不建任务）
+                gui_calib._start_auto_calib(w, "refined")
+            self.assertIn("先跑 ① 自动定位", self._logs(w))
+            self.assertFalse(w._tasks)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_step3_refines_from_the_current_geometry(self):
+        """③ 的初值 = "当前使用"那一份（环心 + 距离），不是参数面板的。"""
+        w = create_window()
+        try:
+            w.show()
+            calls = []
+
+            def fake_calib(image, **kw):
+                calls.append(kw)
+                # 第一次（手动）用手动结果，第二次（③）返回另一支解
+                return dict(self.FAKE_MANUAL) if len(calls) == 1 \
+                    else dict(self.FAKE_AUTO, dist_m=1.5970)
+
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "refine_lab6_from_points",
+                                   return_value=dict(self.FAKE_MANUAL)), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   side_effect=fake_calib):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
+                # 先跑 ②（手动）→ 当前使用 = 手动（距离 1596.20）
+                for ring, ang in ((2, 0), (4, 90), (6, 180)):
+                    cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
+                    theo = lab6_theoretical_2theta(cfg["wavelength_m"])
+                    r = cfg["dist_m"] * np.tan(np.radians(theo[ring])) \
+                        / cfg["pixel_size_m"]
+                    a = np.radians(ang)
+                    gui_calib._on_calib_click(
+                        w, w.calib_key,
+                        SimpleNamespace(
+                            xdata=cfg["poni2_m"] / cfg["pixel_size_m"]
+                            + r * np.cos(a),
+                            ydata=cfg["poni1_m"] / cfg["pixel_size_m"]
+                            + r * np.sin(a), inaxes=w.calib_ax))
+                w.calib_start_manual.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["manual"] is not None, 8000))
+                self.assertEqual(w.calib_state["current"], "manual")
+                self.assertTrue(w.calib_start_refined.isEnabled())
+                # ③：从手动的几何出发
+                w.calib_start_refined.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["refined"] is not None, 8000))
+            # 初值 = 手动的距离与环心（不是面板的 1595.80/内部初值）
+            self.assertAlmostEqual(calls[-1]["dist0_m"], 1.5962)
+            self.assertEqual(calls[-1]["center0_px"], (1022.3, 1022.0))
+            self.assertIn("二次精修完成", self._logs(w))
+            # 三次来源都在对比区可选
+            self.assertEqual([w.calib_combo_a.itemData(i)
+                              for i in range(w.calib_combo_a.count())],
+                             [None, "manual", "refined"])
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_use_a_as_current_marks_custom(self):
+        """[以 A 为准] → 当前使用改成 A + 标成自定义（此后不自动替换）。"""
+        w = create_window()
+        try:
+            w.show()
+            metrics = {"dev_px": 0.9, "clip_frac": 0.0, "n_complete": 16,
+                       "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=dict(self.FAKE_AUTO)), \
+                 mock.patch.object(gui_calib, "ring_metrics",
+                                   return_value=dict(metrics)):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)   # 校准前置：确认像素尺寸
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+            self.assertFalse(w.calib_state["custom"])
+            self.assertTrue(w.calib_use_a.isEnabled())
+            self.assertFalse(w.calib_use_b.isEnabled())   # B 还没有来源
+            w.calib_use_a.click()
+            self.assertEqual(w.calib_state["current"], "auto")
+            self.assertTrue(w.calib_state["custom"])
+            self.assertIn("自定义", w.calib_current_lbl.text())
+            self.assertIn("0.90 px", w.calib_current_lbl.text())
+            self.assertIn("自定义——之后的新结果不再自动替换",
+                          self._logs(w))
+            # 再跑一条：更好的结果也不抢位（冻结）
+            w.calib_start_auto.click()
+            self.assertTrue(_wait_until(lambda: not w._tasks, 8000))
+            self.assertEqual(w.calib_state["current"], "auto")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+
+class TestCalibInitial(unittest.TestCase):
+    """校准初值三通道 + 像素尺寸强制确认 + 保存时的血缘字段。"""
+
+    FAKE_AUTO = dict(TestCalibration.FAKE_AUTO)
+    FAKE_CENTER = TestCalibration.FAKE_CENTER
+
+    def _logs(self, w):
+        return w.log_text.toPlainText()
+
+    def test_calibration_is_blocked_until_pixels_are_confirmed(self):
+        """没勾确认框 → 校准只提示、不建任务（像素填错会整体错且看不出来）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                self.assertFalse(w.calib_init_chk.isChecked())
+                w.calib_start_auto.click()
+                self.assertFalse(w._tasks)
+                self.assertIn("请先确认「校准初值」里的像素尺寸", self._logs(w))
+                # 勾上 → 能跑
+                w.calib_init_chk.setChecked(True)
+            self.assertIn("像素尺寸已确认：200.0 µm", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_switching_source_resets_the_confirmation(self):
+        """换来源/改数值 → 确认作废（像素尺寸可能变了，必须重新确认）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)
+                self.assertTrue(w.calib_init["confirmed"])
+                # 切到"手动输入"
+                w.calib_init_combo.setCurrentIndex(
+                    w.calib_init_combo.findData("manual"))
+                self.assertFalse(w.calib_init["confirmed"])
+                self.assertFalse(w.calib_init_chk.isChecked())
+                # 手输通道的三行出现了
+                self.assertTrue(all(r.isVisible()
+                                    for r in w.calib_init_manual_rows))
+                self.assertIn("手动输入", w.calib_init_src.text())
+                # 改数值同样作废
+                w.calib_init_chk.setChecked(True)
+                box = w.calib_init_manual_rows[0].findChildren(QDoubleSpinBox)[0]
+                box.setValue(box.value() + 10.0)
+                self.assertFalse(w.calib_init["confirmed"])
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_initial_geometry_borrow_vs_manual(self):
+        """借条目 → 该条目几何；手输 → 三个输入框的值。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                g = gui_calib._calib_initial(w)
+                cfg = gui_app.CONFIGS[gui_calib._calib_init_state(w)["source"]]
+                self.assertAlmostEqual(g["dist_m"],
+                                       cfg["geometry"]["dist_m"])
+                self.assertAlmostEqual(g["pixel_size_m"],
+                                       cfg["geometry"]["pixel_size_m"])
+                self.assertIn("借用条目", gui_calib._init_source_text(w))
+                # 手输通道
+                st = gui_calib._calib_init_state(w)
+                st["source"] = "manual"
+                st["pixel_um"], st["wavelength_a"], st["dist_mm"] = (
+                    150.0, 0.9, 1234.5)
+                g2 = gui_calib._calib_initial(w)
+                self.assertAlmostEqual(g2["pixel_size_m"], 150e-6)
+                self.assertAlmostEqual(g2["wavelength_m"], 0.9e-10)
+                self.assertAlmostEqual(g2["dist_m"], 1.2345)
+                self.assertEqual(gui_calib._init_source_text(w), "手动输入")
+                # 面板 2θ 范围照旧带上（初值不参与积分，但同形状）
+                self.assertAlmostEqual(g2["tth_max_deg"], 8.0)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_saved_entry_carries_provenance(self):
+        """[保存为配置] 落盘的血缘：method / created / derived_from。"""
+        w = create_window()
+        saved = {}
+        try:
+            w.show()
+            with mock.patch.object(gui_calib, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=self.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=dict(self.FAKE_AUTO)), \
+                 mock.patch.object(gui_calib.config, "save_user_config",
+                                   side_effect=lambda k, e: saved.update(
+                                       {k: e}) or True), \
+                 mock.patch.object(gui_app, "_reload_config_combo"):
+                w.add_files(["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_init_chk.setChecked(True)
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: w.calib_state["auto"] is not None, 8000))
+                w.calib_key_edit.setText("lmfp9_lab6")
+                w.calib_label_edit.setText("第 9 批")
+                w.calib_save_btn.click()
+            entry = saved["lmfp9_lab6"]
+            self.assertEqual(entry["method"], "auto")
+            self.assertEqual(entry["derived_from"],
+                             gui_calib._calib_init_state(w)["source"])
+            self.assertRegex(entry["created"], r"^\d{4}-\d\d-\d\dT\d\d:")
+            # 像素/波长取「校准初值」（用户确认过的那份）
+            init = gui_calib._calib_initial(w)
+            self.assertAlmostEqual(entry["geometry"]["pixel_size_m"],
+                                   init["pixel_size_m"])
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+
+class TestCalibCompare(unittest.TestCase):
+    """对比区（纯函数）：A|B|Δ 三列 + 结论行 + 量白名单。"""
+
+    @staticmethod
+    def _res(dist=1.5958, poni=(1045.2, 1022.0), rot=(-0.005, -0.163),
+             center=(1021.5, 1022.0), dev=0.30):
+        return {"dist_m": dist, "poni1_px": poni[0], "poni2_px": poni[1],
+                "rot1_deg": rot[0], "rot2_deg": rot[1],
+                "beam_center_rc": center, "residual_deg": 0.004,
+                "metrics": None if dev is None else {
+                    "dev_px": dev, "clip_frac": 0.0, "n_complete": 16,
+                    "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}}
+
+    def test_rows_cover_the_whitelist_only(self):
+        rows = gui_calib._compare_rows(self._res(), self._res())
+        self.assertEqual([r[0] for r in rows],
+                         [k for k, _ in gui_calib.COMPARE_ROWS])
+        names = [n for _, n in gui_calib.COMPARE_ROWS]
+        self.assertIn("距离 (mm)", names)
+        self.assertIn("环心行 (px)", names)
+        self.assertIn("环心列 (px)", names)
+        self.assertIn("环位偏差 (px)", names)
+        self.assertTrue(any("PONI" in n and "⚠" in n for n in names))
+        self.assertTrue(any("rot" in n and "⚠" in n for n in names))
+        # 自洽残差明确不入表：它只说明迭代自洽，量不到准不准
+        self.assertFalse(any("残差" in n for n in names))
+        self.assertIn("退化方向", gui_calib.COMPARE_HINT)
+        # 一行一个标量：参数坞只有 ~276 px 可用宽，元组串会把页面撑破
+        for _key, va, vb, delta in rows:
+            self.assertLess(len(va), 12, va)
+            self.assertLess(len(delta), 12, delta)
+
+    def test_delta_is_b_minus_a(self):
+        a = self._res(dist=1.5958, dev=0.52)
+        b = self._res(dist=1.5962, dev=0.28)
+        rows = {r[0]: r[1:] for r in gui_calib._compare_rows(a, b)}
+        self.assertEqual(rows["dist"], ("1595.80", "1596.20", "+0.40"))
+        self.assertEqual(rows["dev"], ("0.52", "0.28", "-0.24"))
+
+    def test_center_rows_and_missing_pieces(self):
+        a = self._res(center=(1021.0, 1022.0), dev=None)
+        b = self._res(center=(1024.0, 1022.0))
+        rows = {r[0]: r for r in gui_calib._compare_rows(a, b)}
+        self.assertEqual(rows["center_r"][1:], ("1021.00", "1024.00", "+3.00"))
+        self.assertEqual(rows["center_c"][3], "+0.00")
+        self.assertEqual(rows["dev"][1], "—")           # A 没有指标
+        self.assertEqual(rows["dev"][3], "—")
+        # 束心缺失（异常结果）也不许抛
+        broken = dict(self._res(), beam_center_rc=None)
+        rows2 = {r[0]: r for r in gui_calib._compare_rows(broken, b)}
+        self.assertEqual(rows2["center_r"][1], "—")
+        self.assertEqual(rows2["center_r"][3], "—")
+        # 指标里是 NaN（无可用环信号）也算"没值"
+        nan_dev = dict(self._res(), metrics={"dev_px": float("nan")})
+        self.assertEqual(
+            {r[0]: r for r in gui_calib._compare_rows(nan_dev, b)}["dev"][1],
+            "—")
+
+    def test_verdict_picks_the_better_by_deviation(self):
+        a, b = self._res(dev=0.52), self._res(dev=0.28)
+        v = gui_calib._verdict(a, b, "自动定位", "手动选点")
+        self.assertIn("手动选点 更好", v)
+        self.assertIn("0.28 vs 0.52 px", v)
+        # 反过来（A 才是更好的那个）→ 结论指向 A
+        a2, b2 = self._res(dev=0.28), self._res(dev=0.52)
+        self.assertIn("自动定位 更好",
+                      gui_calib._verdict(a2, b2, "自动定位", "手动选点"))
+
+    def test_verdict_calls_a_tie_within_the_margin(self):
+        v = gui_calib._verdict(self._res(dev=0.30), self._res(dev=0.28))
+        self.assertIn("两者相当", v)
+        self.assertIn("小于门槛", v)
+
+    def test_verdict_without_metrics_says_so(self):
+        v = gui_calib._verdict(self._res(dev=None), self._res(dev=0.28))
+        self.assertIn("判不了", v)
+        self.assertIn("判不了", gui_calib._verdict(self._res(dev=None),
+                                                 self._res(dev=None)))
 
 
 class TestBatchProgress(unittest.TestCase):
@@ -6225,7 +6621,7 @@ class TestDeleteConfig(unittest.TestCase):
             self.assertFalse(w.del_config_btn.isEnabled())
             # 置灰是体验层，处理函数是安全层：直调也被拒
             with mock.patch.object(gui_app.QMessageBox, "question") as ask:
-                gui_app._delete_config(w)
+                gui_calib._delete_config(w)   # 处理函数归校准页
             ask.assert_not_called()
             self.assertIn("内置条目", w.log_text.toPlainText())
         finally:
@@ -7182,9 +7578,11 @@ class TestBackgroundSubtraction(unittest.TestCase):
                           "geom_sig": gui_app._bg_geom_sig(geom)}
             self._set_mode(w, "blank")
             self.assertNotIn("空扫图与当前几何不一致", w.log_text.toPlainText())
-            # 改一个几何量 → 再扣就该提示
-            w.params["初始距离 (mm)"].setValue(
-                w.params["初始距离 (mm)"].value() + 50.0)
+            # 改一个几何量 → 再扣就该提示。几何只认配置条目（分析页
+            # 的字段是只读显示），所以改配置、不是改面板控件。
+            w.config = dict(w.config, geometry=dict(
+                w.config["geometry"],
+                dist_m=w.config["geometry"]["dist_m"] + 0.05))
             self._set_mode(w, "auto")
             self._set_mode(w, "blank")
             text = w.log_text.toPlainText()
