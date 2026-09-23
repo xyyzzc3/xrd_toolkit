@@ -13,6 +13,8 @@ conda activate XRD_Toolkit_Environment
 pip install -e .
 ```
 
+> 环境自检：`python scripts/check_env.py` 一条命令回答"现在能不能跑"（解释器、依赖、安装指向、GUI 导入、测试与数据）。**搬动或重命名过项目文件夹之后**要重跑上面的 `pip install -e .`——可编辑安装记的是绝对路径，搬家会让 `import xrd_toolkit` 失败，但源码一个字都没坏。
+
 ## 使用
 
 典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性检查）。所有输出都在 `outputs/{数据文件名}/` 下。

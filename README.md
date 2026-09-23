@@ -127,6 +127,8 @@ pip install -e .
 
 > Note: sample data are not included in this repository — point `--file` at your own diffraction data.
 
+> Environment self-check: `python scripts/check_env.py` answers "can this repo run right now?" in one command (interpreter, dependencies, editable-install target, GUI import, tests & data). **After moving or renaming the project folder**, re-run `pip install -e .` — the editable install stores an absolute path, so a move breaks `import xrd_toolkit` even though no source file changed.
+
 ## Scripts
 
 Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). All outputs are written under `outputs/{dataset_name}/`.
@@ -139,6 +141,7 @@ Each script accepts either `--file` to pick one dataset, or — without `--file`
 | `scripts/calibrate_integrate.py` | LaB₆ geometric calibration (pyFAI) + azimuthal integration (2D → 1D) |
 | `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern (two-column txt) |
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
+| `scripts/check_env.py` | Environment self-check — interpreter, dependencies, editable-install target, GUI import, tests & data (not an analysis script; run it first when something "just won't run") |
 
 ## Usage details
 
