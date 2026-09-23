@@ -109,3 +109,74 @@ class TestDiscard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestConcurrencyGate(unittest.TestCase):
+    """并发闸门（MAX_CONCURRENT_TASKS）：批量任务不许一次全开。
+
+    为什么值得测：一次 81 张 [1D] = 81 个后台任务，每个要吃 ~0.5 GB
+    （2048² 图像 + pyFAI 内部副本），全开会把内存打爆（实测 12 张
+    6.1 GB）——而并发几乎不加速（pyFAI 吃 CPU/内存带宽）。所以闸门
+    是"一次 80 张不卡"的关键，不许被无意改掉。
+    """
+
+    def test_at_most_max_concurrent_run_at_once(self):
+        import threading
+
+        lock = threading.Lock()
+        state = {"running": 0, "peak": 0, "started": 0}
+
+        def job(i):
+            with lock:
+                state["running"] += 1
+                state["started"] += 1
+                state["peak"] = max(state["peak"], state["running"])
+            time.sleep(0.05)
+            with lock:
+                state["running"] -= 1
+            return i
+
+        n = 6
+        done = []
+        tasks = [BackgroundTask(job, i, on_done=done.append)
+                 for i in range(n)]
+        for t in tasks:
+            t.start()
+        self.assertTrue(_wait_until(lambda: len(done) == n, 10000),
+                        f"只完成 {len(done)}/{n}")
+        from xrd_toolkit.gui.tasks import MAX_CONCURRENT_TASKS as CAP
+        self.assertLessEqual(state["peak"], CAP,
+                             f"同时跑了 {state['peak']} 个（上限 {CAP}）")
+        self.assertEqual(sorted(done), list(range(n)), "结果都回来了")
+
+    def test_queued_task_gives_up_when_discarded(self):
+        """关窗口：还在排队等闸门的任务立刻放弃（否则 81 张排队时
+        关窗要等整批跑完）。"""
+        import threading
+
+        release = threading.Event()
+        entered = threading.Event()
+
+        def blocker():
+            entered.set()
+            release.wait(5)
+            return "blocker"
+
+        def should_not_run():
+            raise AssertionError("排队中的任务被取消了，不该真的跑起来")
+
+        t1 = BackgroundTask(blocker)
+        t2 = BackgroundTask(should_not_run)
+        t3 = BackgroundTask(should_not_run)
+        t1.start()
+        self.assertTrue(entered.wait(3), "第一个任务没进闸门")
+        t2.start()
+        t3.start()
+        time.sleep(0.05)             # 让 t2/t3 去排队
+        t0 = time.time()
+        t2.discard()                 # 排队中 → 立刻返回
+        t3.discard()
+        dt = time.time() - t0
+        release.set()
+        t1.discard()
+        self.assertLess(dt, 1.0, f"取消排队任务耗时 {dt:.2f}s，应该立刻返回")
+

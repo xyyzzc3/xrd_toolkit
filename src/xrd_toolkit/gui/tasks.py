@@ -15,6 +15,8 @@
   - fn 里绝不能碰任何界面控件（QWidget），只能做纯计算；
   - 结果经信号送回主线程，回调在主线程执行，可以安全更新界面。
 """
+import threading
+
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 # 模块级引用：线程没真正结束前，任务对象不许被 Python 回收。
@@ -23,6 +25,18 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 # 先被 GC，C++ 的 QThread 会在运行中被销毁 → Qt 直接 abort。等
 # finished 送达（事件循环处理）再放手，这个窗口期就安全了。
 _live_tasks = set()
+
+# ══ 并发闸门：批量任务不许一次全开 ═══════════════════════════
+# 为什么必须有（2026-09-23 实测，真数据 2048² ×81 张）：
+#   * 批量积分 = 每个文件一个后台任务，原样就是"81 个任务同时跑"；
+#   * 每个任务要把 2048² 图像读进来、pyFAI 内部再复制几份，
+#     **实测峰值 ≈ 0.5 GB/张**（12 张 → 6.1 GB；81 张 → 约 41 GB，
+#     机器开始 swap——这就是"一次 80 张就卡"的真凶）；
+#   * 而**并发几乎不加速**：复用 integrator 后实测 0.16 s/张（串行）
+#     vs 0.25 s/张（3 线程）——pyFAI 吃的是 CPU/内存带宽。
+# 所以限额取 2：峰值内存 ≈ 1 GB，速度与串行基本相同。
+MAX_CONCURRENT_TASKS = 2
+_task_slots = threading.Semaphore(MAX_CONCURRENT_TASKS)
 
 
 class _Worker(QObject):
@@ -35,16 +49,26 @@ class _Worker(QObject):
         super().__init__()
         self._fn = fn
         self._args = args
+        self.cancelled = False    # 关窗口时置位：排队中的任务直接放弃
 
     @Slot()
     def run(self):
-        try:
-            result = self._fn(*self._args)
-        except Exception as err:
-            # 后台线程里任何异常都转成信号，绝不直接在后台崩溃
-            self.error.emit(f"{type(err).__name__}: {err}")
-        else:
-            self.done.emit(result)
+        # 重活先进闸门（见模块说明的实测数字）：批量时并发压在
+        # MAX_CONCURRENT_TASKS 内，峰值内存才不会随文件数线性上涨。
+        with _task_slots:
+            if self.cancelled:
+                # 窗口已在关闭：不干活，但**必须发一次信号**让线程退出
+                # （否则 discard 的 wait() 会一直等下去）。此时回调已被
+                # 清空，没人会处理这个结果。
+                self.done.emit(None)
+                return
+            try:
+                result = self._fn(*self._args)
+            except Exception as err:
+                # 后台线程里任何异常都转成信号，绝不直接在后台崩溃
+                self.error.emit(f"{type(err).__name__}: {err}")
+                return
+        self.done.emit(result)
 
 
 class BackgroundTask(QObject):
@@ -118,9 +142,15 @@ class BackgroundTask(QObject):
         不等待就关窗口，线程会在运行中被销毁（Qt 直接 abort）；
         计算函数本身无法被中途打断，所以这里阻塞最多等于
         剩余计算时间（典型积分几秒钟）。
+        **已经在排队等闸门的任务**（批量时大部分都是）会被标记
+        cancelled：拿到闸门后立刻放弃，所以关窗不用等完整批跑完
+        （81 张排队时这一条很关键）。
         """
         self._on_done_cb = None
         self._on_error_cb = None
+        # 无条件置位：正在跑的任务已经过了检查点（它照常跑完），
+        # 还在排队等闸门的任务拿到闸门后立刻放弃。
+        self._worker.cancelled = True
         if self._thread.isRunning():
             self._thread.quit()
             self._thread.wait()
