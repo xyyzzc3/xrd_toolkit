@@ -100,8 +100,8 @@ from xrd_toolkit.gui.plot_panels import (
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
     _pan_motion, _pan_press, _pan_release, _sync_bar_active, _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _compute_integration, _draw_1d,
-    _plot_view, _refresh_bg, _spawn_task)
+    _apply_image_params, _apply_params, _bg_batch_apply, _compute_integration,
+    _draw_1d, _plot_view, _refresh_bg, _spawn_task)
 
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -912,6 +912,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.bg_redraw_btn = btn_bg_redraw
     btn_bg_redraw.clicked.connect(lambda: _refresh_bg(window))
     btns_bg.addWidget(btn_bg_redraw)
+    # [批量扣背景]：把编辑对象的锚点（只传 2θ 位置）用到所有勾选文件，
+    # 各扣各的并存成产物——对比/热图下次直接读它（跨会话秒开）。
+    # 绝对强度不能跨文件套，见 plot_views._bg_batch_apply 的说明
+    btn_bg_batch = QPushButton("批量扣背景（勾选文件）")
+    btn_bg_batch.setObjectName("bg_batch_btn")
+    btn_bg_batch.setToolTip("把当前图上的锚点用到所有勾选文件："
+                            "锚点只传 2θ 位置，强度到每张图自己的曲线上"
+                            "重新取；扣完存成产物，对比 / 热图直接复用")
+    btn_bg_batch.clicked.connect(lambda: _bg_batch_apply(window))
+    window.bg_batch_btn = btn_bg_batch
+    btns_bg.addWidget(btn_bg_batch)
 
     # ── 热图显示（小节）：批量热图的显示参数 ──
     # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比

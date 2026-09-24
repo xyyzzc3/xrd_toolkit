@@ -44,13 +44,15 @@ from PySide6.QtWidgets import QMainWindow
 from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _bg_curve,
-    _collect_geometry, _content, _curve_color, _data_snapshot,
-    _display_snapshot, _log, _panel_param, _set_focus)
+    _bg_params, _bg_settings, _collect_geometry, _content, _curve_color,
+    _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services import stage_cache
+from xrd_toolkit.services.background import (compute_baseline,
+                                              subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
 
@@ -588,6 +590,124 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
 def _bg_path_of(dock):
     """面板对应的文件路径（锚点按路径存；路径是唯一的，显示名可能重名）。"""
     return getattr(dock, "panel_file", None)
+
+
+def _curve_source(window, path, kw: dict):
+    """取某个文件**现有**的 1D 曲线：面板缓存优先，其次 1D 产物。
+
+    没有则返回 (None, None)——批量扣背景要拿原始曲线去重取锚点强度，
+    拿不到的文件会被跳过并记进摘要（不静默）。
+    """
+    panel = window.plot_docks.get("1D|" + str(path))
+    if panel is not None and getattr(panel, "last_tth", None) is not None:
+        return panel.last_tth, panel.last_intensity
+    got = stage_cache.load_1d(path, **kw)
+    return got if got is not None else (None, None)
+
+
+def _curve_for(window, path):
+    """对比 / 热图取曲线：**产物优先**（扣背景产物 → 1D 产物），否则 None。
+
+    返回 (tth, intensity, 来源说明)。产物齐了就不用再积分——跨会话秒开
+    （用户 2026-09-24 第 5 条：对比直接用上一步扣完背景的产物）。
+    来源说明进日志：用哪一份**看得见**，不是悄悄发生的。
+    """
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    kw = dict(config=window.config_name, npt=npt,
+              tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    dock = window.plot_docks.get(window.focus_panel)
+    if dock is not None:
+        # 设置模板 = 当前编辑对象那份（模式/窗口/拟合/截断），锚点按**该
+        # 文件自己的**取（_bg_settings 内部按 path 查 window.bg_anchors）
+        settings = _bg_settings(window, dock, path)
+        if settings["mode"] != "off":
+            got = stage_cache.load_bg(path, **kw, settings=settings)
+            if got is not None:
+                return got[0], got[1], "扣背景产物"
+    got = stage_cache.load_1d(path, **kw)
+    if got is not None:
+        return got[0], got[1], "1D 产物"
+    return None
+
+
+def _bg_batch_apply(window: QMainWindow) -> None:
+    """[批量扣背景]：给勾选文件各生成一份扣后曲线产物。
+
+    锚点**只传 2θ 位置**，强度到每个文件自己的曲线上重新取：一批数据的
+    背景**形状**（空气散射 / 光路 / 探测器）是共同的，绝对强度不是——
+    直接套 A 的强度会把 B 的基线抬错几倍（与用户 2026-09-24 讨论定稿）。
+    空扫模式本来就整批共用一条空扫曲线，直接照各自的设置扣。
+
+    扣完存进分阶段产物（kind=bg）：对比 / 热图下次直接读它，跨会话秒开。
+    每个目标面板的参数快照也写成同一套设置——这样"面板上看到的曲线"与
+    "对比里用的曲线"是同一条（否则两处数字对不上，最容易让人怀疑自己）。
+    """
+    dock = window.plot_docks.get(window.focus_panel)
+    focus_path = _bg_path_of(dock) if dock is not None else None
+    if dock is None or focus_path is None:
+        _log(window, "先点一张 1D 图（编辑对象），再点 [批量扣背景]")
+        return
+    settings = _bg_settings(window, dock, focus_path)
+    if settings["mode"] == "off":
+        _log(window, "先把背景扣除模式切到「自动基线」或「手动锚点」"
+                     "（空扫相减也行），再点 [批量扣背景]")
+        return
+    xs = [x for x, _ in settings["anchors"]]
+    if settings["mode"] == "anchor" and not xs:
+        _log(window, "先在图上点几个锚点（背景扣除模式 = 手动锚点），"
+                     "再点 [批量扣背景]")
+        return
+    targets = [Path(window.file_list.item(i).data(Qt.UserRole))
+               for i in range(window.file_list.count())
+               if window.file_list.item(i).checkState() == Qt.Checked]
+    if not targets:
+        _log(window, "没有选中的文件")
+        return
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    kw = dict(config=window.config_name, npt=npt,
+              tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    blank = getattr(window, "bg_blank", None)
+    blank_curve = ((blank["tth"], blank["intensity"])
+                   if settings["mode"] == "blank" and blank is not None
+                   else None)
+    done = skipped = 0
+    for i, path in enumerate(targets):
+        tth, intensity = _curve_source(window, path, kw)
+        if tth is None:
+            skipped += 1
+            continue
+        per_file = [(x, float(np.interp(x, tth, intensity))) for x in xs]
+        params = {**_bg_params(window, dock, focus_path),
+                  "anchors": per_file}
+        base = compute_baseline(tth, intensity, params,
+                                blank_curve=blank_curve)
+        if base is None:
+            skipped += 1
+            continue
+        sub = subtract_background(intensity, base,
+                                  clip_negative=settings["clip"])
+        stage_cache.store_bg(path, tth, sub, **kw,
+                            settings={**settings, "anchors": per_file})
+        if getattr(window, "bg_anchors", None) is None:
+            window.bg_anchors = {}
+        window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
+        panel = window.plot_docks.get("1D|" + str(path))
+        snap = getattr(panel, "params_snapshot", None)
+        if isinstance(snap, dict):                # 开着的面板：设置也写成同一套
+            snap["背景扣除模式"] = "anchor"
+            snap["背景窗口 (°)"] = settings["window_deg"]
+            snap["锚点拟合方式"] = settings["anchor_method"]
+            snap["负值截断为 0"] = settings["clip"]
+        done += 1
+        if (i + 1) % 20 == 0:
+            _log(window, f"批量扣背景：{i + 1}/{len(targets)}…")
+    tail = (f"，跳过 {skipped} 个（还没有 1D 结果，先点 [1D] 出图）"
+            if skipped else "")
+    _log(window, f"批量扣背景完成：{done}/{len(targets)} 个文件（"
+                 + (f"锚点 {len(xs)} 个，" if xs else "")
+                 + f"窗口 {settings['window_deg']:g}°）{tail}")
 
 
 def _refresh_bg(window: QMainWindow) -> None:

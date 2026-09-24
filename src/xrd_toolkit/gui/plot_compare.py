@@ -20,7 +20,7 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _batch_step, _bg_path_of, _refresh_bg, _spawn)
+    _batch_step, _bg_path_of, _curve_for, _refresh_bg, _spawn)
 
 
 def _compare_title(displays) -> str:
@@ -142,7 +142,16 @@ def _finish_compare(window: QMainWindow, key: str) -> None:
     _redraw_compare(window, key)
     _set_focus(window, key, dock.panel_display)
     if dock.compare_data:
-        _log(window, f"对比完成：{len(dock.compare_data)} 条曲线")
+        srcs = getattr(dock, "compare_sources", {}) or {}
+        tally = {}
+        for src in srcs.values():
+            tally[src] = tally.get(src, 0) + 1
+        n_new = len(dock.compare_data) - sum(tally.values())
+        if n_new:
+            tally["新算"] = n_new
+        detail = "、".join(f"{k} {v} 条" for k, v in sorted(tally.items()))
+        _log(window, f"对比完成：{len(dock.compare_data)} 条曲线"
+                     + (f"（{detail}）" if detail else ""))
     else:
         _log(window, "对比失败：所有文件的积分都失败了，面板留空")
 
@@ -198,8 +207,19 @@ def _run_compare(window: QMainWindow, key: str) -> None:
         if panel.compare_pending == 0:
             _finish_compare(window, key)
 
+    # 取数：**产物优先**——扣背景产物 / 1D 产物命中就直接用（跨会话秒开，
+    # 见 plot_views._curve_for），没有的才起后台任务真算。用了哪一份记进
+    # compare_sources，收尾时写进日志（"看得见"，不是悄悄发生的）
+    dock.compare_sources = {}
     for path, display in dock.compare_files:
-        # 默认参数绑定防闭包晚绑定（循环变量到回调执行时已走到末尾）
+        got = _curve_for(window, path)
+        if got is not None:
+            dock.compare_sources[display] = got[2]
+            finish_one(path, display, (got[0], got[1]))
+            continue
+
+        # 没有产物：照旧后台积分（默认参数绑定防闭包晚绑定——循环变量到
+        # 回调执行时已走到末尾）
         def spawn_one(path=path, display=display):
             def done(window_, key_, task, result):
                 finish_one(path, display, result)
@@ -212,7 +232,11 @@ def _run_compare(window: QMainWindow, key: str) -> None:
                    on_done=done, on_error=error)
 
         spawn_one()
-    _log(window, f"开始对比 {len(dock.compare_files)} 个文件（后台线程）")
+    n_cached = len(dock.compare_sources)
+    if dock.compare_pending <= 0:
+        return          # 全部命中产物：finish_one 已经把图收尾了
+    _log(window, f"开始对比 {len(dock.compare_files)} 个文件"
+                 f"（{n_cached} 个走产物，{dock.compare_pending} 个后台线程）")
 
 
 def _plot_compare(window: QMainWindow) -> None:
@@ -602,19 +626,26 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
     missing = []
 
     def cache_of(path, display):
-        """该文件已有 1D 面板的积分缓存吗？（键同 _checked_1d_results）"""
-        for k in (f"1D|{path}", f"1D|{path}|{display}"):
-            d = window.plot_docks.get(k)
-            if d is not None and getattr(d, "last_tth", None) is not None:
-                return d.last_tth, d.last_intensity
-        return None
+        """该文件的曲线：先看 1D 面板缓存，再看产物（扣背景 / 1D）。
+
+        产物那一步是跨会话的那一步（services/stage_cache）：参数没变
+        → 键不变 → 直接读，不用重积分。force（数据参数变了）时跳过
+        面板缓存（它按旧参数算的 ✗），但**产物仍然可查**——产物的键里
+        含参数，命中就说明这份正好是新参数算的，用它是正确的、也是快的。
+        """
+        if not force:
+            for k in (f"1D|{path}", f"1D|{path}|{display}"):
+                d = window.plot_docks.get(k)
+                if d is not None and getattr(d, "last_tth", None) is not None:
+                    return d.last_tth, d.last_intensity
+        got = _curve_for(window, path)
+        return (got[0], got[1]) if got is not None else None
 
     for i, (path, display) in enumerate(dock.heat_files):
-        if not force:
-            cached = cache_of(str(path), display)
-            if cached is not None:
-                results[i] = (Path(path).stem, cached[0], cached[1])
-                continue
+        cached = cache_of(str(path), display)
+        if cached is not None:
+            results[i] = (Path(path).stem, cached[0], cached[1])
+            continue
         missing.append((i, path, display))
     dock.heat_results = results
     dock.heat_pending = len(missing)

@@ -502,6 +502,36 @@ def _bg_params(window: QMainWindow, dock, path) -> dict:
     }
 
 
+def _bg_settings(window: QMainWindow, dock, path) -> dict:
+    """该面板当前的背景设置（bg 产物键用的规范化字典）。
+
+    与 _bg_params 的区别：这里是给**缓存键**用的口径，所以把"能影响
+    扣后曲线"的东西全列出来——模式 / 窗口 / 拟合方式 / 锚点（2θ 与强度
+    都算：批量应用时每个文件的强度是各自曲线上的重新取样值，所以同一套
+    锚点在不同文件上的键本来就不同，这是对的）/ 负值截断 / 空扫图指纹。
+
+    改任意一项 → 键变 → 当场重画（实时预览照旧）；设置没变 → 跨会话读
+    产物。这条接缝就是"既实时可调、又能落盘复用"的关键。
+    """
+    from xrd_toolkit.services import stage_cache
+    params = _bg_params(window, dock, path)
+    blank = getattr(window, "bg_blank", None)
+    blank_sig = None
+    if params["mode"] == "blank" and blank is not None:
+        try:                       # 空扫只记指纹：曲线本身不入键
+            blank_sig = list(stage_cache.fingerprint(blank["path"]))
+        except Exception:                                # noqa: BLE001
+            blank_sig = None
+    return {
+        "mode": params["mode"],
+        "window_deg": float(params["window_deg"]),
+        "anchor_method": params["anchor_method"],
+        "clip": bool(_panel_param(window, dock, "负值截断为 0", False)),
+        "anchors": [(float(x), float(y)) for x, y in params["anchors"]],
+        "blank": blank_sig,
+    }
+
+
 def _bg_curve(window: QMainWindow, dock, path, tth, intensity):
     """按面板显示参数扣背景，返回 (tth, 扣后强度, 基线或 None)。
 

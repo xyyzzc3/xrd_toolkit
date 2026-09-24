@@ -3573,6 +3573,131 @@ class TestHomeView(unittest.TestCase):
             w.close()
 
 
+def _scaled_compute(path_str, geom, npt):
+    """假积分：两个文件的曲线**尺度不同**（模拟不同曝光/衰减）。
+
+    批量扣背景的核心语义就靠它验：锚点跨文件只传 2θ，强度必须到每张
+    自己的曲线上重取——直接套 A 的强度会把 B 的基线抬错几倍。
+    """
+    # 按**结尾**判断（batch_a 里也有个 b，别用 in）
+    scale = 3.0 if path_str.endswith("_b.tif") else 1.0
+    tth = np.array([0.5, 1.0, 2.0, 4.0, 8.5])
+    return tth, np.array([1.0, 2.0, 3.0, 2.0, 1.0]) * scale
+
+
+class TestBackgroundBatch(unittest.TestCase):
+    """[批量扣背景]：锚点只传 2θ、强度各取各的；扣后落盘；对比优先读它。
+
+    用户 2026-09-24 提的流程："1d 完了存一次，做扣背景时可直接使用，
+    然后扣完一张，可以用这些锚点给其他的图批量扣，然后再存一份，后面
+    对比就可以直接用批量扣完的"。
+
+    注意设置顺序：**先切编辑对象（点图 = 回放快照）再设背景模式**——
+    反过来会被回放重置回"关闭"（界面就是这么设计的，测试踩过）。
+    """
+
+    def _two_files(self):
+        """两个真临时文件（缓存指纹要 stat；假路径会被当 miss）。"""
+        out = []
+        for name in ("batch_a.tif", "batch_b.tif"):
+            f = Path(tempfile.mkdtemp(prefix="xrd_bgbatch_")) / name
+            f.write_bytes(b"0" * 4096)
+            out.append(str(f))
+        return out
+
+    def _open_both(self, w, files):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_scaled_compute):
+            w.add_files(files)
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(lambda: all(
+                len(_axes(w, "1D", f).lines) > 0 for f in files)))
+
+    def _focus_a_with_anchors(self, w, files):
+        """把 A 设成编辑对象、切到手动锚点、放两个锚点（在背景位置上）。"""
+        gui_panel_state._set_focus(w, "1D|" + files[0],
+                                   Path(files[0]).name)
+        dock_a = _dock(w, "1D", files[0])
+        cb = w.params["背景扣除模式"]
+        cb.setCurrentIndex(cb.findData("anchor"))
+        w.params["背景窗口 (°)"].setValue(1.0)
+        dock_a.params_snapshot = dict(
+            dock_a.params_snapshot or {},
+            **{"背景扣除模式": "anchor", "背景窗口 (°)": 1.0})
+        key_a = str(gui_views._bg_path_of(dock_a))
+        # 两个锚点落在曲线 [0.5,1,2,4,8.5] → [1,2,3,2,1] 的 2θ=1 与 4 上
+        w.bg_anchors[key_a] = [(1.0, 2.0), (4.0, 2.0)]
+        return dock_a, key_a
+
+    def test_batch_transfers_positions_not_intensities(self):
+        """A 的锚点用到 B 上：2θ 照搬，强度取 B 自己曲线上的值。"""
+        from xrd_toolkit.services import stage_cache
+        w = create_window()
+        files = self._two_files()
+        try:
+            self._open_both(w, files)
+            dock_a, key_a = self._focus_a_with_anchors(w, files)
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            self.assertIn("批量扣背景完成", w.log_text.toPlainText())
+            key_b = str(gui_views._bg_path_of(_dock(w, "1D", files[1])))
+            self.assertIn(key_b, w.bg_anchors, "B 也该拿到一套锚点")
+            got_a, got_b = w.bg_anchors[key_a], w.bg_anchors[key_b]
+            self.assertEqual([x for x, _ in got_a], [x for x, _ in got_b],
+                             "2θ 位置照搬")
+            self.assertAlmostEqual(got_b[0][1], got_a[0][1] * 3, delta=1e-6,
+                                   msg="B 的强度取 B 曲线上的值（尺度 ×3）")
+            # 两份 bg 产物都在（键要**一模一样**才命中：几何范围也得带）
+            geom = gui_panel_state._collect_geometry(w)
+            for f in files:
+                dock = _dock(w, "1D", f)
+                st = gui_panel_state._bg_settings(
+                    w, dock, str(gui_views._bg_path_of(dock)))
+                self.assertIsNotNone(stage_cache.load_bg(
+                    f, config=w.config_name,
+                    npt=int(w.params["输出点数"].value()),
+                    tth_min=geom.get("tth_min_deg"),
+                    tth_max=geom.get("tth_max_deg"), settings=st), f)
+        finally:
+            w.close()
+
+    def test_compare_prefers_the_bg_product(self):
+        """扣完再开对比：日志写明用的是扣背景产物（跨会话那条路）。"""
+        w = create_window()
+        files = self._two_files()
+        try:
+            self._open_both(w, files)
+            self._focus_a_with_anchors(w, files)
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            before = len(w.log_text.toPlainText())
+            w.compare_btn.click()
+            self.assertTrue(_wait_until(lambda: "对比完成" in
+                                        w.log_text.toPlainText()), "对比该完成")
+            log = w.log_text.toPlainText()
+            self.assertIn("扣背景产物", log,
+                          "对比该优先用扣背景产物（不是重新积分）")
+            self.assertNotIn("开始积分", log[before:],
+                             "对比不该再起积分任务")
+        finally:
+            w.close()
+
+    def test_batch_with_mode_off_hints(self):
+        """模式还是"关闭"时点批量：只提示，不产出（不静默）。"""
+        w = create_window()
+        files = self._two_files()
+        try:
+            self._open_both(w, files)
+            gui_panel_state._set_focus(w, "1D|" + files[0],
+                                       Path(files[0]).name)
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            self.assertIn("先把背景扣除模式切到", w.log_text.toPlainText())
+            self.assertNotIn("批量扣背景完成", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+
 class TestStageCacheFlow(unittest.TestCase):
     """分阶段产物缓存接进界面后的行为（services/stage_cache）。
 

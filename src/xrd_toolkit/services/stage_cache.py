@@ -9,9 +9,14 @@
 产物按阶段分（与界面上的入口一一对应）：
     ① 校准 → 几何条目（已有：config_user.json；本模块不管）
     ② 1D   → 曲线 (2θ, 强度) 落盘 ← **唯一耗时的步骤，收益最大**
-    ③ 扣背景 → **默认不落盘**：它是实时可调的（改窗口/锚点立刻重画），
-      冻成产物反而慢；导出时走导出链路现算
-    ④ 对比 / 热图 → 读 ② 的产物（内存里已经这么做，跨会话靠本模块）
+    ③ 扣背景 → 落盘，但**由 [批量扣背景] 显式生成**（不是每次改参数都
+      写盘）：批量那一步把一张图的锚点用到整批（**只传 2θ 位置，强度到
+      每张自己的曲线上重取**——绝对强度跨文件会错几倍），各存一份
+    ④ 对比 / 热图 → 优先读 ③（有就用），其次 ②
+  
+  实时预览与落盘不冲突：产物键里含**背景设置哈希**（模式/窗口/拟合/
+  锚点/截断/空扫指纹）——改任何一项 → 键变 → 当场重画（毫秒级）；设置
+  没变 → 跨会话直接读产物。
 
 缓存键 = 文件指纹（名字 + 大小 + 修改时间 + 头部哈希，见 fingerprint）
 + 几何条目名 + 2θ 范围 + 点数 +
@@ -85,13 +90,12 @@ def cache_key(path, *, config: str, npt: int, tth_min=None,
     return hashlib.blake2b(blob.encode("utf-8"), digest_size=10).hexdigest()
 
 
-def load_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
-    """读 1D 产物；没有 / 坏了 / 版本不符都返回 None（当作没缓存）。
+def _read_curve(target: Path):
+    """读一条曲线产物（1D 与 bg 共用）。没有 / 坏了都返回 None。
 
     坏产物（半截文件、形状不对）**删掉**再返回 None：留着它每次都会
-    在读的这一步失败，而重建的代价只是一次积分。
+    在读的这一步失败，而重建的代价只是重算一次。
     """
-    target = _cache_dir("1d") / f"{cache_key(path, config=config, npt=npt, tth_min=tth_min, tth_max=tth_max)}.npz"
     if not target.exists():
         return None
     try:
@@ -106,26 +110,113 @@ def load_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
         return None
 
 
-def store_1d(path, tth, intensity, *, config: str, npt: int,
-             tth_min=None, tth_max=None) -> Path:
-    """写 1D 产物（原子：先写 tmp 再 rename）。返回产物路径。"""
+def _write_curve(target: Path, tth, intensity, meta: dict) -> Path:
+    """写一条曲线产物（原子：先写 tmp 再 rename），1D 与 bg 共用。"""
     tth = np.asarray(tth, dtype=float)
     intensity = np.asarray(intensity, dtype=float)
     if tth.shape != intensity.shape or tth.size == 0:
         raise ValueError("曲线与强度形状不一致，不写缓存")
-    target_dir = _cache_dir("1d")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    key = cache_key(path, config=config, npt=npt, tth_min=tth_min,
-                    tth_max=tth_max)
-    target = target_dir / f"{key}.npz"
+    target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".tmp.npz")
-    meta = {"source": str(Path(path).name), "config": config, "npt": int(npt),
-            "engine": INTEGRATION_VERSION, "created": time.time(),
-            "n_points": int(tth.size)}
+    meta = dict(meta, n_points=int(tth.size))
     np.savez(tmp, tth=tth, intensity=intensity,
              meta=json.dumps(meta, ensure_ascii=False))
     tmp.replace(target)          # 原子：读者要么见旧的、要么见新的
     return target
+
+
+def _safe_key(path, *, config, npt, tth_min=None, tth_max=None):
+    """算键；文件不在/读不了时返回 None（查找要算 miss，不能抛）。
+
+    消费方（界面取数）会拿假路径或已删除的条目来查缓存，那是**正常情况**
+    （没有缓存而已，去算就是），不该当异常——2026-09-24 对比测试因此红过。
+    """
+    try:
+        return cache_key(path, config=config, npt=npt, tth_min=tth_min,
+                         tth_max=tth_max)
+    except OSError:
+        return None
+
+
+def load_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
+    """读 1D 产物；没有 / 坏了 / 文件不在都返回 None（当作没缓存）。"""
+    key = _safe_key(path, config=config, npt=npt, tth_min=tth_min,
+                    tth_max=tth_max)
+    if key is None:
+        return None
+    return _read_curve(_cache_dir("1d") / f"{key}.npz")
+
+
+def store_1d(path, tth, intensity, *, config: str, npt: int,
+             tth_min=None, tth_max=None) -> Path:
+    """写 1D 产物（原子）。返回产物路径。"""
+    target = _cache_dir("1d") / (
+        f"{cache_key(path, config=config, npt=npt, tth_min=tth_min, tth_max=tth_max)}.npz")
+    return _write_curve(target, tth, intensity,
+                        {"source": str(Path(path).name), "config": config,
+                         "npt": int(npt), "engine": INTEGRATION_VERSION,
+                         "kind": "1d", "created": time.time()})
+
+
+def bg_settings_hash(settings: dict) -> str:
+    """背景设置 → 短哈希（bg 产物键的一半）。
+
+    设置包括：模式 / 窗口宽度 / 锚点拟合方式 / 锚点列表（2θ 与强度都
+    取，四舍五入到 1e-6）/ 负值截断 / 空扫图指纹。**任何一项变了就是
+    另一份产物**——这正是"扣背景既实时可调、又能跨会话复用"的接缝：
+    改参数 → 键变 → 当场重画（毫秒级），设置没变 → 读产物。
+    """
+    canon = {
+        "mode": settings.get("mode"),
+        "window_deg": round(float(settings.get("window_deg") or 0.0), 6),
+        "anchor_method": settings.get("anchor_method"),
+        "clip": bool(settings.get("clip")),
+        "anchors": [[round(float(x), 6), round(float(y), 6)]
+                    for x, y in (settings.get("anchors") or [])],
+        "blank": settings.get("blank"),
+    }
+    blob = json.dumps(canon, sort_keys=True, ensure_ascii=False)
+    return hashlib.blake2b(blob.encode("utf-8"), digest_size=8).hexdigest()
+
+
+def _bg_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
+                settings: dict) -> Path:
+    """bg 产物路径：1D 产物的键 + 背景设置哈希。
+
+    先有 1D 才有扣背景（扣的是那条曲线），所以键里嵌 1D 的键——1D
+    产物换代（换几何/换点数/升版本）时 bg 自然跟着作废。
+    """
+    base = cache_key(path, config=config, npt=npt, tth_min=tth_min,
+                     tth_max=tth_max)
+    key = hashlib.blake2b(
+        (base + bg_settings_hash(settings)).encode("utf-8"),
+        digest_size=10).hexdigest()
+    return _cache_dir("bg") / f"{key}.npz"
+
+
+def load_bg(path, *, config: str, npt: int, tth_min=None, tth_max=None,
+            settings: dict):
+    """读扣背景产物；没有 / 坏了 / 文件不在都返回 None（同 load_1d）。"""
+    key = _safe_key(path, config=config, npt=npt, tth_min=tth_min,
+                    tth_max=tth_max)
+    if key is None:
+        return None
+    return _read_curve(_bg_product(path, config=config, npt=npt,
+                                   tth_min=tth_min, tth_max=tth_max,
+                                   settings=settings))
+
+
+def store_bg(path, tth, intensity, *, config: str, npt: int, tth_min=None,
+             tth_max=None, settings: dict) -> Path:
+    """写扣背景产物（原子）。"""
+    return _write_curve(
+        _bg_product(path, config=config, npt=npt, tth_min=tth_min,
+                    tth_max=tth_max, settings=settings),
+        tth, intensity,
+        meta={"source": str(Path(path).name), "config": config,
+              "npt": int(npt), "engine": INTEGRATION_VERSION,
+              "kind": "bg", "created": time.time(),
+              "settings": settings})
 
 
 def describe() -> dict:

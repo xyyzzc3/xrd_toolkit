@@ -36,7 +36,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(ROOT / "src"))
 
+import numpy as np                                       # noqa: E402
 from matplotlib.backend_bases import MouseEvent          # noqa: E402
+from PySide6.QtCore import Qt                            # noqa: E402
 from PySide6.QtWidgets import QApplication               # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state     # noqa: E402
@@ -209,6 +211,82 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
            "热图带颜色条")
 
 
+def check_batch_background(window, lab6: str, lmfp: str) -> None:
+    """D. 批量扣背景产物（用户 2026-09-24 的流程）。
+
+    1D 产物 → 在一张图上放锚点 → [批量扣背景] → 各存一份 → 对比直接读。
+    锚点**只传 2θ**：这里用一个锚点强度明显不同的检查来印证（同一个 2θ
+    在两个文件上的 y 必须不同，除非两条曲线恰好一样）。
+    """
+    from xrd_toolkit.services import stage_cache
+    print("\nD. 批量扣背景（真数据）")
+    key1d = "1D|" + lab6
+    dock = window.plot_docks.get(key1d)
+    if dock is None:
+        report(False, "批量扣背景：没有 1D 面板（前面的检查没过）")
+        return
+    # 确保两个文件都勾着（对比/批量都按勾选走）
+    for i in range(window.file_list.count()):
+        window.file_list.item(i).setCheckState(Qt.Checked)
+    # 编辑对象 = lab6 那张；手动锚点模式 + 拾取开关
+    gui_state._set_focus(window, key1d, Path(lab6).name)
+    combo = window.params["背景扣除模式"]
+    combo.setCurrentIndex(combo.findData("anchor"))
+    window.params["背景窗口 (°)"].setValue(1.0)
+    dock.params_snapshot = dict(
+        dock.params_snapshot or {},
+        **{"背景扣除模式": "anchor", "背景窗口 (°)": 1.0})
+    # 放两个锚点：取曲线 10%/60% 处的真实点（背景位置，非峰）
+    tth = np.asarray(dock.last_tth, dtype=float)
+    inten = np.asarray(dock.last_intensity, dtype=float)
+    xs = [float(tth[int(len(tth) * f)]) for f in (0.1, 0.6)]
+    key_a = str(gui_views._bg_path_of(dock))
+    window.bg_anchors[key_a] = [(x, float(np.interp(x, tth, inten)))
+                                for x in xs]
+    window.bg_batch_btn.click()
+    QApplication.processEvents()
+    log = window.log_text.toPlainText()
+    report("批量扣背景完成" in log, "批量扣背景：跑完",
+           [ln for ln in log.splitlines() if ln.startswith("批量扣背景完成")][:1])
+    # lmfp 未必开过 1D 面板（本探针前面只给它开了对比/热图）→ 从文件
+    # 列表拿它的路径字符串（面板键与锚点键都用这一份）
+    other = [k for k in window.bg_anchors if k != key_a]
+    report(len(other) == 1, "另一个文件也拿到了锚点", other[:1])
+    if not other:
+        return
+    path_b = other[0]
+    got_a = window.bg_anchors.get(key_a) or []
+    got_b = window.bg_anchors.get(path_b) or []
+    report(len(got_a) == len(got_b) == 2, "两个文件各拿到一套锚点",
+           f"A={len(got_a)} B={len(got_b)}")
+    if got_a and got_b:
+        report([x for x, _ in got_a] == [x for x, _ in got_b],
+               "锚点 2θ 照搬（位置跨文件）")
+        report(abs(got_a[0][1] - got_b[0][1]) > 1e-9,
+               "强度各取各的（两个文件曲线不同 → y 不同）",
+               f"A={got_a[0][1]:.1f} B={got_b[0][1]:.1f}")
+    # 产物在不在 + 对比是不是读它
+    geom = gui_state._collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    n_bg = 0
+    for path in (key_a, path_b):
+        # 用同一个面板取"控件那部分"参数（模式/窗口/截断都在坞里，窗级），
+        # 锚点按 path 取——这正是 _bg_settings 的口径
+        st = gui_state._bg_settings(window, dock, path)
+        if stage_cache.load_bg(path, config=window.config_name, npt=npt,
+                               tth_min=geom.get("tth_min_deg"),
+                               tth_max=geom.get("tth_max_deg"),
+                               settings=st) is not None:
+            n_bg += 1
+    report(n_bg == 2, "两份扣背景产物都落盘了", f"{n_bg}/2")
+    before = len(window.log_text.toPlainText())
+    window.compare_btn.click()
+    wait_until(lambda: "对比完成" in window.log_text.toPlainText())
+    tail = window.log_text.toPlainText()[before:]
+    report("扣背景产物" in tail, "对比直接读扣背景产物",
+           [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="GUI 真数据探针（跑完给出退出码）")
@@ -240,6 +318,7 @@ def main() -> int:
         lab6_key, lmfp_key = str(lab6), str(lmfp)
         check_single_views(window, lab6_key)
         check_multi_views(window, lab6_key, lmfp_key)
+        check_batch_background(window, lab6_key, lmfp_key)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:
