@@ -154,7 +154,7 @@ Each script accepts either `--file` to pick one dataset, or — without `--file`
 | `scripts/check_env.py` | Environment self-check — interpreter, dependencies, editable-install target, GUI import, tests & data (not an analysis script; run it first when something "just won't run") |
 | `scripts/check_gui.py` | GUI link check — drives the real window offscreen with real sample data and real canvas events (hover, anchor picking, wheel zoom, compare, heatmap) to prove the UI wiring still reaches the engine (not an analysis script; run it after moving code between GUI modules) |
 | `scripts/run_tests.py` | the full unit suite behind a watchdog — a stalled run prints every thread's Python stack and exits instead of hanging (see the Tests section) |
-| `scripts/stress_panels.py` | panel-stress probe — reproduces the known offscreen deadlock on demand (not a check; it is meant to hang, see its docstring) |
+| `scripts/stress_panels.py` | panel-stress probe — opens batches of panels (with background integration) round after round and closes the windows; a regression check for the two offscreen deadlocks fixed on 2026-09-24 (a hang means one came back) |
 
 ## Usage details
 
@@ -223,7 +223,7 @@ conda activate XRD_Toolkit_Environment
 python -m unittest discover -s tests -v
 ```
 
-> The offscreen GUI suite has one known flake: once enough panels have been built in a single process, the run can deadlock — a PySide6 lock-order inversion where the main thread holds the GIL and waits on a Qt mutex that a worker thread holds while it waits for the GIL. `python scripts/run_tests.py` runs the same suite behind a watchdog: if it stalls, it dumps every thread's Python stack and exits non-zero instead of hanging silently. `python scripts/stress_panels.py` reproduces the deadlock on demand (its docstring carries the full write-up).
+> The offscreen GUI suite used to deadlock once enough panels had been built in one process (two mechanisms: matplotlib's toolbar recursing inside its constructor, and a PySide6 lock-order inversion between the GIL and Qt's connection mutex during per-task thread teardown). Both are fixed — the panel toolbar is ours now and background tasks run on long-lived worker threads — and `python scripts/stress_panels.py` is the regression probe that used to hang on them. `python scripts/run_tests.py` runs the suite behind a watchdog anyway: if it ever stalls, it dumps every thread's Python stack and exits non-zero instead of hanging silently.
 
 They cover the arc-coverage failure criterion for centered / edge / corner / outside-image beam placements, the geometric failure-point values, and the off-center integration fallback (regression guard for a pyFAI binning bug). The background-subtraction tests characterise each baseline estimator against synthetic curves with known backgrounds (SNIP preserves a constant background exactly but underestimates a linear ramp; the rolling-window estimate must be told a window 3–10× the peak width), and the GUI tests pin down live preview, per-file anchors and the raw/baseline overlay lines.
 

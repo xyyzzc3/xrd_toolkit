@@ -5,26 +5,30 @@
 （信号），铃声经 Qt 排队送回服务员手里。要是服务员自己炒菜，
 客人就只能干等（界面卡死）——这就是积分/校准必须放后台的原因。
 
-用法：
+与旧版（**每个任务起一条 QThread**）的区别（2026-09-24，为治一处实测
+死锁）：现在是**固定几条长驻工作线程**，任务排队交给它们跑。
+为什么必须换：任务收尾要销毁那条 QThread，而销毁一个 Python 派生的
+Qt 对象要在**工作线程**里回调进 Python（shiboken 要 GIL）；主线程此刻
+可能正握着 GIL 等一把 Qt 内部锁（`QObject::connect`，例如建面板时的
+`QMdiArea::addSubWindow`）→ 锁序反转，两边都不让，进程永远停住。
+复现脚本 `scripts/stress_panels.py`（把对象销毁关掉，复现率从 6/6
+掉到 1/6，指向的就是这条路）。长驻线程不再反复创建/销毁，这条路径
+整个不存在了。
+
+用法（**没变**）：
     task = BackgroundTask(fn, *args, on_done=回调, on_error=回调)
     task.start()          # fn(*args) 在后台线程执行
     # 完成时：on_done(返回值) 或 on_error(报错文字) 在主线程被调用；
     # 同时 task.done / task.error 信号发射（测试用 QSignalSpy 监听）
 
-线程安全要点：
+线程安全要点（**没变**）：
   - fn 里绝不能碰任何界面控件（QWidget），只能做纯计算；
   - 结果经信号送回主线程，回调在主线程执行，可以安全更新界面。
 """
+import atexit
 import threading
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
-
-# 模块级引用：线程没真正结束前，任务对象不许被 Python 回收。
-# 调用方在回调里会把 task 从自己的列表移除（window._tasks），但
-# 此刻线程事件循环往往还没退出（quit 是排队送达的）；包装对象若
-# 先被 GC，C++ 的 QThread 会在运行中被销毁 → Qt 直接 abort。等
-# finished 送达（事件循环处理）再放手，这个窗口期就安全了。
-_live_tasks = set()
+from PySide6.QtCore import (QMetaObject, QObject, QThread, Qt, Signal, Slot)
 
 # ══ 并发闸门：批量任务不许一次全开 ═══════════════════════════
 # 为什么必须有（2026-09-23 实测，真数据 2048² ×81 张）：
@@ -34,9 +38,55 @@ _live_tasks = set()
 #     机器开始 swap——这就是"一次 80 张就卡"的真凶）；
 #   * 而**并发几乎不加速**：复用 integrator 后实测 0.16 s/张（串行）
 #     vs 0.25 s/张（3 线程）——pyFAI 吃的是 CPU/内存带宽。
-# 所以限额取 2：峰值内存 ≈ 1 GB，速度与串行基本相同。
+# 闸门现在由**线程条数**直接实现（见下面的长驻线程池）：最多这么多条
+# 线程同时在跑，峰值内存 ≈ 1 GB，速度与串行基本相同。
 MAX_CONCURRENT_TASKS = 2
-_task_slots = threading.Semaphore(MAX_CONCURRENT_TASKS)
+
+# 任务对象在跑完（或被确认放弃）之前不许被 Python 回收：排队中的任务
+# 只有 worker 被引用着，而调用方（比如关窗时）会把自己的引用放掉。
+_live_tasks = set()
+
+_pool = []                     # 长驻工作线程（懒创建，进程内复用）
+_pool_lock = threading.Lock()
+_pool_rr = 0                   # 轮转派活的下标
+
+
+def _pool_threads():
+    """懒创建长驻工作线程：最多 MAX_CONCURRENT_TASKS 条，之后一直复用。
+
+    线程只跑自己的事件循环，任务（_Worker.run）以排队调用的形式投进去
+    ——先到先跑，天然就是"最多 N 个同时干活"的闸门。
+    """
+    with _pool_lock:
+        while len(_pool) < MAX_CONCURRENT_TASKS:
+            t = QThread()
+            t.setObjectName(f"xrd-worker-{len(_pool) + 1}")
+            t.start()
+            _pool.append(t)
+        return list(_pool)
+
+
+def _dispatch():
+    """挑一条工作线程（轮转：两条轮流吃，负载大致均匀）。"""
+    global _pool_rr
+    threads = _pool_threads()
+    with _pool_lock:
+        t = threads[_pool_rr % len(threads)]
+        _pool_rr += 1
+    return t
+
+
+def _shutdown_pool():
+    """解释器退出：收起长驻线程（有任务在跑就等它跑完，最多 3 秒）。"""
+    for t in _pool:
+        try:
+            t.quit()
+            t.wait(3000)
+        except RuntimeError:
+            pass    # 线程对象已被销毁：没什么可收的
+
+
+atexit.register(_shutdown_pool)
 
 
 class _Worker(QObject):
@@ -49,39 +99,47 @@ class _Worker(QObject):
         super().__init__()
         self._fn = fn
         self._args = args
-        self.cancelled = False    # 关窗口时置位：排队中的任务直接放弃
+        self.cancelled = False    # 关窗口时置位：还没开跑的直接放弃
+        self.running = False      # 正在跑（discard 靠它决定要不要等）
+        self.finished = threading.Event()   # 跑完/放弃后置位
 
     @Slot()
     def run(self):
-        # 重活先进闸门（见模块说明的实测数字）：批量时并发压在
-        # MAX_CONCURRENT_TASKS 内，峰值内存才不会随文件数线性上涨。
-        with _task_slots:
-            if self.cancelled:
-                # 窗口已在关闭：不干活，但**必须发一次信号**让线程退出
-                # （否则 discard 的 wait() 会一直等下去）。此时回调已被
-                # 清空，没人会处理这个结果。
-                self.done.emit(None)
-                return
+        if self.cancelled:
+            # 窗口已在关闭：不干活，但**必须发一次信号**让排队投递收尾
+            # （回调已被清空，没人会处理这个结果）
+            self.finished.set()
+            self.done.emit(None)
+            return
+        self.running = True
+        try:
             try:
-                result = self._fn(*self._args)
-            except Exception as err:
+                result, err = self._fn(*self._args), None
+            except Exception as exc:
                 # 后台线程里任何异常都转成信号，绝不直接在后台崩溃
-                self.error.emit(f"{type(err).__name__}: {err}")
-                return
-        self.done.emit(result)
+                result = None
+                err = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.running = False
+            self.finished.set()
+        if err is not None:
+            self.error.emit(err)
+        else:
+            self.done.emit(result)
 
 
 class BackgroundTask(QObject):
-    """一个后台任务：QThread + _Worker 的组合，替调用方管好清理。
+    """一个后台任务：交给长驻工作线程跑，替调用方管好清理。
 
-    清理连接（Qt 文档标准做法）：
-      worker.done/error → thread.quit     函数跑完就让线程事件循环退出
-      worker.done/error → worker.deleteLater  工作对象随线程销毁
-      thread.finished → thread.deleteLater 线程对象自己销毁
-      thread.finished → self._release     线程真结束后才允许任务被回收
-    调用方照常把 task 挂在自己的列表里（如 window._tasks，回调里
-    移除）——挂住是为了防回收，_live_tasks 负责补上回调移除后到
-    线程真正退出前的窗口期。
+    生命周期（都发生在**主线程**，见模块说明的死锁原因）：
+      __init__        建 worker（归主线程）
+      start()         worker moveToThread 到某条长驻线程，排队调用 run
+      run 结束        done/error 信号排队回主线程 → 本对象发同名信号、
+                      调回调、把任务从 _live_tasks 放掉（此后可被回收）
+      discard()       关窗口：丢弃回调 + 标记取消；正在跑的等它跑完
+
+    worker 的销毁发生在主线程（随本对象被回收时），所以"工作线程里销毁
+    Python 派生的 Qt 对象"这条死锁路径不会出现。
     """
 
     done = Signal(object)     # 转发 _Worker.done（测试监听用）
@@ -89,29 +147,24 @@ class BackgroundTask(QObject):
 
     def __init__(self, fn, *args, on_done=None, on_error=None):
         super().__init__()
-        _live_tasks.add(self)   # 线程结束前保持存活（见模块说明）
-        self._thread = QThread()
+        _live_tasks.add(self)   # 收尾前保持存活（见 _live_tasks 处的说明）
         self._worker = _Worker(fn, *args)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
         self._worker.done.connect(self._on_worker_done)
         self._worker.error.connect(self._on_worker_error)
-        # 清理连接（顺序见类文档）
-        self._worker.done.connect(self._thread.quit)
-        self._worker.error.connect(self._thread.quit)
-        self._worker.done.connect(self._worker.deleteLater)
-        self._worker.error.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
-        self._thread.finished.connect(self._release)
         self._on_done_cb = on_done
         self._on_error_cb = on_error
-
-    def _release(self):
-        """线程事件循环已退出 → 允许任务对象被回收。"""
-        _live_tasks.discard(self)
+        self._started = False
+        self._done = False
 
     def start(self):
-        self._thread.start()
+        """派活：worker 搬进一条长驻线程，排队调用 run（先到先跑）。"""
+        self._worker.moveToThread(_dispatch())
+        self._started = True
+        QMetaObject.invokeMethod(self._worker, "run", Qt.QueuedConnection)
+
+    def is_done(self) -> bool:
+        """任务是否已经收尾（跑完 / 报错 / 被取消放弃）——测试与关窗用。"""
+        return self._done
 
     # worker 在后台线程发射信号 → 这两个槽属于主线程的 BackgroundTask，
     # Qt 自动排队投递，所以槽内可以安全触碰界面
@@ -132,25 +185,25 @@ class BackgroundTask(QObject):
             cb(msg)
 
     def _finish(self):
-        self._thread.quit()
         self._on_done_cb = None
         self._on_error_cb = None
+        self._done = True
+        _live_tasks.discard(self)   # 线程已收尾：允许本对象被回收
 
     def discard(self):
-        """窗口关闭时调用：丢弃回调并等后台函数返回。
+        """窗口关闭时调用：丢弃回调，必要时等后台函数返回。
 
-        不等待就关窗口，线程会在运行中被销毁（Qt 直接 abort）；
-        计算函数本身无法被中途打断，所以这里阻塞最多等于
-        剩余计算时间（典型积分几秒钟）。
-        **已经在排队等闸门的任务**（批量时大部分都是）会被标记
-        cancelled：拿到闸门后立刻放弃，所以关窗不用等完整批跑完
-        （81 张排队时这一条很关键）。
+        - **正在跑**的任务：等它跑完——计算函数无法被中途打断，所以最多
+          等"一个任务"的时间（批量时就是当前并行的那两条）；
+        - **还没开跑**（排队中）的：**立刻返回**——它轮到自己时会看见
+          cancelled 直接放弃。旧版这里是 quit()+wait() 干等（实测排队
+          任务要等 4.8 s），现在不等了，关窗更快。
+        两种情况回调都被丢弃：不会有人再触碰已经关掉的窗口。
         """
         self._on_done_cb = None
         self._on_error_cb = None
         # 无条件置位：正在跑的任务已经过了检查点（它照常跑完），
-        # 还在排队等闸门的任务拿到闸门后立刻放弃。
+        # 还在排队的任务被调用时立刻放弃。
         self._worker.cancelled = True
-        if self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait()
+        if self._started and self._worker.running:
+            self._worker.finished.wait()

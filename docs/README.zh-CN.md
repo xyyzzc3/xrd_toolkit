@@ -157,7 +157,7 @@ python -m xrd_toolkit.gui
 │   ├── check_env.py            # 环境自检（"现在能不能跑"，搬家后先跑它）
 │   ├── check_gui.py            # 界面链路探针（真数据 + 真画布事件，拆模块后跑）
 │   ├── run_tests.py            # 带看门狗的全量测试（卡住会打印所有线程的栈再退出）
-│   └── stress_panels.py        # 面板压力探针（按需复现已知的 offscreen 死锁）
+│   └── stress_panels.py        # 面板压力探针（回归检查：offscreen 那两处死锁修好了没）
 ├── src/xrd_toolkit/
 │   ├── config.py               # 几何配置注册表（每批实验一个条目，--config 选择）
 │   ├── cli.py                  # 命令行共用交互选文件菜单（四个脚本共用）
@@ -183,7 +183,7 @@ conda activate XRD_Toolkit_Environment
 python -m unittest discover -s tests -v
 ```
 
-> offscreen 的 GUI 套件有一处已知偶发卡死：一个进程里面板建够多之后会死锁——PySide6 侧的一次锁序反转（主线程握着 GIL 等一把 Qt 内部锁，而工作线程正持着那把锁、等 GIL）。`python scripts/run_tests.py` 跑同一套测试但带看门狗：卡住时打印所有线程的 Python 栈并以非 0 退出，不会静默挂到天荒地老；`python scripts/stress_panels.py` 是按需复现它的压力脚本（完整排查记录写在它的 docstring 里）。
+> offscreen 的 GUI 套件曾经在一个进程里面板建够多之后会死锁（两个机制：matplotlib 工具栏在自己的构造函数里递归；以及 PySide6 侧的一次锁序反转——主线程握 GIL 等一把 Qt 内部锁，而工作线程持着那把锁、在销毁每任务线程时要 GIL）。**两个都已修**：面板工具栏改成自绘、后台任务改用长驻工作线程；`python scripts/stress_panels.py` 就是当初挂死的那个压力探针，现在是回归检查。`python scripts/run_tests.py` 仍然给套件带看门狗：万一再卡住，它会打印所有线程的 Python 栈并以非 0 退出，不会静默挂到天荒地老。
 
 覆盖弧覆盖率失效判据（居中 / 边缘 / 角落 / 束心在图像外四种摆法）、几何失效点数值，以及偏置摆法下的自研积分兜底（pyFAI 分箱缺陷的回归护栏）。
 

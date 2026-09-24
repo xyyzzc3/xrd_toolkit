@@ -1,37 +1,34 @@
 #!/usr/bin/env python3
-"""面板压力探针：一个进程里"开 N 块面板 → 关窗"重复 R 轮，看会不会挂死。
+"""面板压力探针：一个进程里"开 N 块面板（带后台积分）→ 关窗"重复 R 轮。
 
-**这是已知问题的复现脚本**（不是回归检查——它按设计会挂）：
-offscreen 环境下，同一进程里建到一定数量的面板（实测 20 块一窗、第 5 轮
-左右 ≈ 累计 80 块）之后，再建下一块面板会**偶发**在 matplotlib 的
-`NavigationToolbar2QT.__init__` 里无限递归（栈深 5000+ 帧、100% CPU、
-永不返回；`sample` / faulthandler 都能抓到）。cocoa（真窗口）下没复现，
-真程序开 81 块面板也正常。
+**回归检查**：offscreen 下这里曾经挂死过（2026-09-24 修掉两个机制），
+现在正常应当打印 DONE、退出码 0；**它挂住 = 那处问题回来了**。
 
-排查记录（2026-09-24）：
-  * **不是本项目改动引入的**：用 `git worktree` 拉改动前的 `423ac99`
-    跑同一个探针，同样挂（3/3）；把开面板循环里的 `_settle` 换成空操作
-    也照样挂（NOSETTLE=1）。
-  * 与环境负载无关：挂的几轮里内存充裕（vm_stat 空闲 12 GB、无 swap）。
-  * 触发概率：同样参数 10 次里挂 3–10 次（同一进程内累计新建的面板越
-    多越容易挂）；单轮 ≤16 块没挂过。
-  * 栈里的落点固定：`_open_plot_panel → _build_canvas_panel →
-    _SlimToolbar.__init__ → NavigationToolbar2QT.__init__`（mpl 在建
-    工具栏 action 的那段）。面板工具栏其实是隐藏的、只当 action 仓库用
-    （见 plot_panels._SlimToolbar 的说明）——真要根治，方向是"别用 mpl
-    的工具栏，自己拿 4 个 QAction"，但要动 `content.toolbar._actions` /
-    `_nav_stack` 这些既有契约，得先跟用户确认。
+当时挂死的两个机制（都查到底、都修了）：
+  ① **mpl 工具栏构造递归**：`_open_plot_panel → _build_canvas_panel →
+     _SlimToolbar.__init__ → NavigationToolbar2QT.__init__` 里无限递归
+     （栈 5000+ 帧、100% CPU）。→ 面板工具栏改成自绘的
+     `_SlimToolbar`（自己拿四个 QAction，图标仍用 mpl 的 PNG）。
+  ② **GIL / Qt 锁序反转**：主线程握 GIL 调 Qt（`QObject::connect`，例如
+     `QMdiArea::addSubWindow` 建面板）等一把 Qt 内部锁，而工作线程持着
+     那把锁、正销毁 Python 派生的 Qt 对象（shiboken 要 GIL）→ 两边都不
+     让。旧版每个任务一条 QThread，线程收尾就要销毁一批对象。→ 后台
+     任务运行器改成**长驻工作线程**（见 gui/tasks.py）。
+排查时的关键实验（留档）：把 `tasks.py` 的对象销毁关掉，复现率从
+6/6 掉到 1/6；单独把 worker 搬回主线程无效；关不关窗无关；
+`git worktree` 拉改动前的 `423ac99` 跑同样挂（3/3）——**不是某次改动
+引入的**，与内存/负载也无关（挂时内存空闲 12 GB、无 swap）。
 
 用法：
     python scripts/stress_panels.py            # 20 块面板 × 10 轮
     python scripts/stress_panels.py 12 5       # 12 块面板 × 5 轮
 
 环境变量：
-    HANG_S=40      faulthandler 超时秒数（挂死时打印栈并以非 0 退出）
-    NOSETTLE=1     把开面板循环里的 _settle 换成空操作（对照实验用）
+    HANG_S=40      faulthandler 超时秒数（卡住时打印栈并以非 0 退出）
+    NOCLOSE=1      不关窗（复现机制 ② 的变体：旧版这样 6/6 挂）
+    NOSETTLE=1     把开面板循环里的 _settle 换成空操作（排查用的对照）
 
-挂死时 faulthandler 会打印主线程栈；每轮打一行，"挂在哪一轮"一眼可见。
-正常结束时最后一行是 DONE（退出码 0）。
+每轮打一行，"卡在哪一轮"一眼可见；最后一行 DONE = 通过。
 """
 import faulthandler
 import os
@@ -80,6 +77,7 @@ def pump(predicate, timeout_s=10.0):
     return False
 
 
+keep = []        # NOCLOSE=1 时把窗口留活口（不触发窗口销毁那条路）
 t0 = time.time()
 for r in range(ROUNDS):
     w = create_window()
@@ -92,6 +90,9 @@ for r in range(ROUNDS):
             for k in keys))
     print(f"[{time.time() - t0:6.1f}s] round {r + 1}/{ROUNDS}: "
           f"面板 {len(w.plot_docks)} 算完={ok}", flush=True)
-    w.close()
-    QApplication.processEvents()
+    if os.environ.get("NOCLOSE") == "1":
+        keep.append(w)
+    else:
+        w.close()
+        QApplication.processEvents()
 print("DONE")
