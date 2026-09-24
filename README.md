@@ -138,6 +138,8 @@ pip install -e .
 > Environment self-check: `python scripts/check_env.py` answers "can this repo run right now?" in one command (interpreter, dependencies, editable-install target, GUI import, tests & data). **After moving or renaming the project folder**, re-run `pip install -e .` — the editable install stores an absolute path, so a move breaks `import xrd_toolkit` even though no source file changed.
 
 > GUI link check: `python scripts/check_gui.py` walks the interface with real sample data (real integration + real mouse events: hover, anchor picking, wheel zoom, compare, heatmap). An all-green unit suite can still hide a dead click path — this one verifies at the canvas-callback layer, so it is worth a run after moving code between GUI modules.
+>
+> Real-window peek: `python scripts/show_gui.py` opens the actual window on real sample data, walks three fixed steps (open 1D panels, hover readout, the batch-cap message), saves a screenshot of each under `outputs/gui_shots/`, and leaves the window up so you can click around. `--headless --exit` is the no-window, run-and-quit variant for when you only want the screenshots.
 
 ## Scripts
 
@@ -153,6 +155,7 @@ Each script accepts either `--file` to pick one dataset, or — without `--file`
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
 | `scripts/check_env.py` | Environment self-check — interpreter, dependencies, editable-install target, GUI import, tests & data (not an analysis script; run it first when something "just won't run") |
 | `scripts/check_gui.py` | GUI link check — drives the real window offscreen with real sample data and real canvas events (hover, anchor picking, wheel zoom, compare, heatmap) to prove the UI wiring still reaches the engine (not an analysis script; run it after moving code between GUI modules) |
+| `scripts/show_gui.py` | real-window peek — opens the window on real sample data, drives three fixed steps (1D panels, hover readout, batch-cap message), saves a screenshot of each to `outputs/gui_shots/`, and leaves the window up for you (`--headless --exit` for the automated variant) |
 | `scripts/run_tests.py` | the full unit suite behind a watchdog — a stalled run prints every thread's Python stack and exits instead of hanging (see the Tests section) |
 | `scripts/stress_panels.py` | panel-stress probe — opens batches of panels (with background integration) round after round and closes the windows; a regression check for the two offscreen deadlocks fixed on 2026-09-24 (a hang means one came back) |
 

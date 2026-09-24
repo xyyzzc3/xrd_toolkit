@@ -108,8 +108,10 @@ def main() -> int:
                   for f in tests)
     if tests:
         report("OK", f"测试文件 {len(tests)} 个，用例 {n_cases} 条")
-        print("       跑全量测试：QT_QPA_PLATFORM=offscreen "
-              f"{Path(sys.executable).name} -m unittest discover -s tests")
+        # 推荐带看门狗那条（卡住会打印所有线程的栈再退出，不再静默挂死）
+        print("       跑全量测试：python scripts/run_tests.py"
+              "（或 QT_QPA_PLATFORM=offscreen "
+              f"{Path(sys.executable).name} -m unittest discover -s tests）")
     data = sorted((ROOT / "data").glob("*.tif*"))
     if data:
         report("OK", f"数据文件 {len(data)} 个",

@@ -16,6 +16,8 @@ pip install -e .
 > 环境自检：`python scripts/check_env.py` 一条命令回答"现在能不能跑"（解释器、依赖、安装指向、GUI 导入、测试与数据）。**搬动或重命名过项目文件夹之后**要重跑上面的 `pip install -e .`——可编辑安装记的是绝对路径，搬家会让 `import xrd_toolkit` 失败，但源码一个字都没坏。
 
 > 界面链路探针：`python scripts/check_gui.py` 用真数据把界面走一遍（真积分 + 真鼠标事件：悬停/锚点点选/滚轮缩放/对比/热图）。单元测试全绿也可能藏着"点了没反应"的接线断点——它在画布回调那一层验，搬动过 GUI 模块之后值得跑一次。
+>
+> 真窗口看一眼：`python scripts/show_gui.py` 开**真窗口**（真数据）走三步固定动作——开 1D 面板、悬停取点、批量上限提示——每步存一张图到 `outputs/gui_shots/`，然后把窗口留在屏幕上给你自己点。只想拿图就加 `--headless --exit`（不开窗口、跑完即退）。
 
 ## 使用
 
@@ -156,6 +158,7 @@ python -m xrd_toolkit.gui
 │   ├── sector_waterfall.py     # 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计
 │   ├── check_env.py            # 环境自检（"现在能不能跑"，搬家后先跑它）
 │   ├── check_gui.py            # 界面链路探针（真数据 + 真画布事件，拆模块后跑）
+│   ├── show_gui.py             # 真窗口看一眼（真数据走三步 + 抓图 + 窗口留给你点）
 │   ├── run_tests.py            # 带看门狗的全量测试（卡住会打印所有线程的栈再退出）
 │   └── stress_panels.py        # 面板压力探针（回归检查：offscreen 那两处死锁修好了没）
 ├── src/xrd_toolkit/
