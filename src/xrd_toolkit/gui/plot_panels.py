@@ -5,8 +5,9 @@
 依赖方向：plot_views / plot_compare 都用本模块，本模块不反向依赖它们。
 
 壳的形状（2026-09-24，用户要求"边框、小工具栏做小一点"）：面板 =
-一行 26 px 自绘标题栏（标题 + [Home][Zoom][Customize][Save] +
-[弹出][关闭]，_build_slim_bar）+ 画布；容器是 frameless 子窗口
+一行 26 px 自绘标题栏（[Home][Zoom][Customize][Save] + [弹出][关闭]，
+_build_slim_bar；不显示名字——名字在参数坞"编辑对象"与图上标题里
+已经有两处，悬停提示才给）+ 画布；容器是 frameless 子窗口
 （panels._apply_panel_chrome），原先"原生标题栏 36 + 工具栏 47 =
 83 px"的壳瘦到 26 px——同样高度的面板里画布多拿 57 px。matplotlib
 的工具栏对象仍然存在（_SlimToolbar）但 hide()，只当 action 仓库：
@@ -17,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import (FigureCanvasQTAgg,
                                               NavigationToolbar2QT)
+from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
@@ -35,11 +37,24 @@ from xrd_toolkit.gui.plot_export import _ask_save_options
 
 PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板默认画布尺寸（画布真 5:3，
                                       # 面板总高 = 画布 + 标题栏一行 26 px）
+BOX_MIN_PX = 6     # 框选放大：拖出来的框小于这个尺寸（像素）= 误碰，当点击
 PANEL_BAR_H = 26   # 自绘标题栏高度：标题 + 四个按钮 + [弹出][关闭] 一行。
 # 面板在绘图区里时容器是 frameless（panels._PlotSubWindow），这行就是
 # 唯一的壳——原先"原生标题栏 36 + 工具栏 47 = 83 px"，现在 26 px，
 # 同样的面板高度里画布多拿 57 px。工具栏对象保留（测试与 _magnifier_on
 # 都从它取 action），只是藏起来不出高度，见 _build_slim_bar。
+
+# 标题栏配色（2026-09-24 用户反馈"没有背景、子窗口太丑"）：
+# 面板去掉了原生标题栏后，顶端那条默认苍白底（Qt 窗口色 239）夹在
+# 工作区（159 灰）与画布（255 白）之间，只差 16 级、没有分界线，看着
+# 像条空槽。给一个真正的底色 + 一条与画布的分隔线 + 按钮悬停反馈。
+PANEL_BAR_BG = "#dde1e6"        # 比画布暗、比工作区亮的一档灰
+PANEL_BAR_ACTIVE = "#c6d0da"    # 当前编辑对象的标题栏深一档（活动/非活动）
+PANEL_BAR_LINE = "#b4bac1"      # 标题栏与画布之间的分隔线
+PANEL_BAR_TEXT = "#2b2f33"      # 标题文字（11px 小字要够深才读得清）
+PANEL_BAR_HOVER = "#c8ced6"     # 按钮悬停底
+PANEL_BAR_PRESS = "#b0b7c0"     # 按钮按下底
+PANEL_BAR_CLOSE_HOVER = "#d64545"   # 关闭按钮悬停（危险动作给危险色）
 
 
 def _is_aux_line(line) -> bool:
@@ -166,10 +181,11 @@ def _refresh_home(dock):
 class _SlimToolbar(NavigationToolbar2QT):
     """只留 [Home][Zoom][Customize][Save] 的精简工具栏（过滤父类工具清单）。
 
-    放大/平移改成鼠标手势（拖 = 平移，放大镜点不点亮都是），放大镜
-    按钮当开关（与用户讨论定稿）：点亮 = 滚轮（触摸板两指滚动）以
-    光标为中心缩放（每格 10%）；熄灭 = 滚轮还给绘图区滚动。框选
-    放大已删除（画框后再缩小会出 bug，且与滚轮缩放重复）。抓手/
+    放大/平移改成鼠标手势，放大镜按钮当开关（与用户讨论定稿）：
+    点亮 = 滚轮（触摸板两指滚动）以光标为中心缩放（每格 10%）
+    + 左键拖 = **框选放大**（自己画的框、只改坐标范围，见
+    _pan_press 里 2026-09-18 那个 bug 的说明）；熄灭 = 滚轮还给绘图区
+    滚动、左键拖 = 平移。抓手/
     前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
     一个入口；Customize = 自绘轴属性对话框（标题/轴标签/纵轴刻度/
     图边距，见 _open_customize_dialog；mpl 自带子图配置器被替换
@@ -177,8 +193,9 @@ class _SlimToolbar(NavigationToolbar2QT):
     无用、字段还挤）；Save = 本面板另存为图片。父类 __init__ 按
     toolitems 表逐个建按钮，覆盖成只含这四个的表即可；放大镜
     QAction mpl 自带 checkable，点击自动亮灭翻转——把 mpl 的
-    triggered→zoom() 断开，按钮就只当纯开关（mode 永远停在
-    NONE，不再进框选模式），toggled 信号接日志提示。
+    triggered→zoom() 断开：按钮只当纯开关，**永不进 mpl 的 zoom
+    mode**（框选放大的选框是我们自己画的 Rectangle，见 _draw_box），
+    toggled 信号接日志提示。
 
     Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
     关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
@@ -257,8 +274,12 @@ def _save_panel(window: QMainWindow, key: str) -> None:
 
 
 def _magnifier_on(dock) -> bool:
-    """该面板的放大镜开关是否点亮（只管滚轮：点亮 = 滚轮缩放，
-    熄灭 = 滚轮滚动；左键拖在任何时候都是平移）。"""
+    """该面板的放大镜开关是否点亮。
+
+    点亮 = 滚轮以光标为中心缩放 + 左键拖 = 框选放大；熄灭 = 滚轮
+    滚动绘图区、左键拖 = 平移。一个开关管住"这张图上的缩放"，
+    不看图时不会误缩（与用户讨论定稿）。
+    """
     toolbar = getattr(_content(dock), "toolbar", None)
     if toolbar is None:
         return False
@@ -266,28 +287,71 @@ def _magnifier_on(dock) -> bool:
     return bool(action is not None and action.isChecked())
 
 
+def _draw_box(dock, ax, x0: float, y0: float, x1: float, y1: float) -> None:
+    """框选放大的选框：画成"坐标轴分数坐标"的矩形（跟着轴缩放，不受
+    数据范围影响），松开时由 _pan_release 删掉。
+    """
+    inv = ax.transAxes.inverted()
+    (u0, v0), (u1, v1) = inv.transform([(x0, y0), (x1, y1)])
+    left, bottom = min(u0, u1), min(v0, v1)
+    box = getattr(dock, "_box_patch", None)
+    if box is None or box.axes is not ax:
+        if box is not None:
+            box.remove()
+        box = Rectangle((left, bottom), abs(u1 - u0), abs(v1 - v0),
+                        transform=ax.transAxes, facecolor="none",
+                        edgecolor="#2a78d6", linewidth=1.0, linestyle="--",
+                        zorder=20)
+        ax.add_patch(box)
+        dock._box_patch = box
+    else:
+        box.set_bounds(left, bottom, abs(u1 - u0), abs(v1 - v0))
+    ax.figure.canvas.draw_idle()
+
+
 def _pan_press(window: QMainWindow, key: str, event) -> None:
-    """按住左键在图上按下：记起点像素与当时的显示范围，准备平移。"""
+    """左键按下：放大镜点亮 = 起框选放大的框；熄灭 = 记平移起点。
+
+    框选放大是自己实现的（画框 + 松开时只改 set_xlim/set_ylim），
+    **不碰 matplotlib 的 zoom mode**。2026-09-18 用户报过旧版的 bug：
+    "画完框再缩小，会把画框内的数据变小"——那是 mpl 的 zoom 模式
+    与我们的平移手势抢同一串鼠标事件、又各自记账造成的。现在这条
+    路径只动坐标范围、永远不碰曲线数据，并且和滚轮缩放共用同一套
+    范围写回（改动实时同步进参数快照）。
+    """
     dock = window.plot_docks.get(key)
     if dock is None or event.inaxes is None or event.button != 1:
         return
-    # 左键拖 = 平移（放大镜点不点亮都是——框选放大已删除，与用户
-    # 讨论定稿：框选会带来画框后再缩小出 bug，且与滚轮缩放重复）
+    if _magnifier_on(dock):
+        dock._box_start = (event.x, event.y)
+        dock._box_axes = event.inaxes
+        _draw_box(dock, event.inaxes, event.x, event.y, event.x, event.y)
+        return
     dock._pan_start = (event.x, event.y)
     dock._pan_limits = (event.inaxes.get_xlim(), event.inaxes.get_ylim())
 
 
 def _pan_motion(window: QMainWindow, key: str, event) -> None:
-    """按住左键拖动 = 整图平移（图跟着鼠标走，像拖地图）。
+    """左键拖动：放大镜点亮 = 拉伸框选矩形；熄灭 = 整图平移。
 
-    起点之后每次移动都从"按下时的显示范围"重算（绝对位移，不
-    累计误差）。像素差换算：把起始范围的两个角换算成像素坐标，
+    平移：起点之后每次移动都从"按下时的显示范围"重算（绝对位移，
+    不累计误差）。像素差换算：把起始范围的两个角换算成像素坐标，
     平移后再反算回数据坐标——对数轴也精确（数据坐标直接相减在
     对数轴上会变形）。范围变化走 xlim_changed/ylim_changed →
     自动同步写回参数快照。
     """
     dock = window.plot_docks.get(key)
-    if dock is None or event.inaxes is None or event.button != 1:
+    if dock is None or event.button != 1:
+        return
+    box_start = getattr(dock, "_box_start", None)
+    if box_start is not None:
+        # 框选：鼠标拖出画框外也照画（按住不放时出轴是常态），
+        # 用按下时那个坐标轴
+        ax = getattr(dock, "_box_axes", None)
+        if ax is not None:
+            _draw_box(dock, ax, box_start[0], box_start[1], event.x, event.y)
+        return
+    if event.inaxes is None:
         return
     start = getattr(dock, "_pan_start", None)
     limits = getattr(dock, "_pan_limits", None)
@@ -308,11 +372,49 @@ def _pan_motion(window: QMainWindow, key: str, event) -> None:
 
 
 def _pan_release(window: QMainWindow, key: str, event) -> None:
-    """松开鼠标：结束平移（清掉起点与起始范围）。"""
+    """松开左键：放大镜点亮且框够大 = 放大到框内；否则结束平移。
+
+    只改坐标范围（set_xlim / set_ylim），**一个数据点都不碰**——这是
+    2026-09-18 那个 bug（画完框再缩小、框内数据变小）的根治办法：
+    框选只表达"我要看这一块"，看的仍是原来那条曲线。框太小
+    （< BOX_MIN_PX）= 其实是一次点击，什么都不做（避免误缩到极限）。
+    """
     dock = window.plot_docks.get(key)
-    if dock is not None:
-        dock._pan_start = None
-        dock._pan_limits = None
+    if dock is None:
+        return
+    box_start = getattr(dock, "_box_start", None)
+    if box_start is not None:
+        ax = getattr(dock, "_box_axes", None)
+        patch = getattr(dock, "_box_patch", None)
+        dock._box_start = None
+        dock._box_axes = None
+        dock._box_patch = None
+        if patch is not None:
+            patch.remove()      # 选框是临时的：松开就撤，不留痕迹
+        if ax is None:
+            return
+        if (abs(event.x - box_start[0]) >= BOX_MIN_PX
+                and abs(event.y - box_start[1]) >= BOX_MIN_PX):
+            inv = ax.transData.inverted()
+            (cx0, cy0), (cx1, cy1) = inv.transform(
+                [box_start, (event.x, event.y)])
+            xlo, xhi = min(cx0, cx1), max(cx0, cx1)
+            ylo, yhi = min(cy0, cy1), max(cy0, cy1)
+            if ax.get_yscale() == "log" and ylo <= 0:
+                # 对数轴下限必须 > 0：不然 matplotlib 会把整条
+                # set_ylim 忽略掉（x 放大了、y 没动，看着像只做了一半）
+                ylo = yhi / 1e6 if yhi > 0 else None
+            ax.set_xlim(xlo, xhi)
+            if ylo is not None:
+                ax.set_ylim(ylo, yhi)
+            # 同滚轮缩放：给 Home 记账（账本空着 Home 会无事可做）
+            toolbar = getattr(ax.figure.canvas, "toolbar", None)
+            if toolbar is not None and toolbar._nav_stack() is None:
+                toolbar.push_current()
+        ax.figure.canvas.draw_idle()   # 撤掉的选框要重画一次
+        return
+    dock._pan_start = None
+    dock._pan_limits = None
 
 
 def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
@@ -487,13 +589,50 @@ def _build_slim_bar(window: QMainWindow, key: str, content) -> QWidget:
     bar = QWidget()
     bar.setObjectName("panel_bar")
     bar.setFixedHeight(PANEL_BAR_H)
+    # 纯 QWidget 要显式开这个才让样式表画背景（Qt 的老规矩）
+    bar.setAttribute(Qt.WA_StyledBackground, True)
+    bar.setStyleSheet(f"""
+        QWidget#panel_bar {{
+            background: {PANEL_BAR_BG};
+            border-bottom: 1px solid {PANEL_BAR_LINE};
+        }}
+        QWidget#panel_bar[active="true"] {{
+            background: {PANEL_BAR_ACTIVE};
+        }}
+        QWidget#panel_bar QLabel {{
+            color: {PANEL_BAR_TEXT}; font-size: 11px;
+        }}
+        QWidget#panel_bar QToolButton {{
+            border: none; border-radius: 3px; padding: 1px 3px;
+        }}
+        QWidget#panel_bar QToolButton:hover {{ background: {PANEL_BAR_HOVER}; }}
+        QWidget#panel_bar QToolButton:pressed {{
+            background: {PANEL_BAR_PRESS};
+        }}
+        QWidget#panel_bar QToolButton:checked {{
+            background: {PANEL_BAR_PRESS};
+            border: 1px solid {PANEL_BAR_LINE};
+        }}
+        QWidget#panel_bar QToolButton#panel_bar_close:hover {{
+            background: {PANEL_BAR_CLOSE_HOVER}; color: white;
+        }}
+        QWidget#panel_bar QPushButton {{
+            border: none; border-radius: 3px; padding: 1px 5px;
+            background: transparent; color: {PANEL_BAR_TEXT};
+            font-size: 11px;
+        }}
+        QWidget#panel_bar QPushButton:hover {{ background: {PANEL_BAR_HOVER}; }}
+        QWidget#panel_bar QPushButton:pressed {{
+            background: {PANEL_BAR_PRESS};
+        }}
+    """)
     row = QHBoxLayout(bar)
     row.setContentsMargins(6, 0, 2, 0)
     row.setSpacing(1)
-    label = QLabel("")            # 文本由 dock 的 WindowTitleChange 同步
-    label.setObjectName("panel_bar_title")
-    label.setStyleSheet("font-size: 11px;")
-    row.addWidget(label)
+    # 2026-09-24 用户：名字在屏幕上出现了三处（参数坞的"编辑对象"、
+    # 这一行、图上标题）→ 这一行不再显示名字，只留按钮；是哪块面板
+    # 看图上的标题，鼠标悬停在这行的空白处也能看到（tooltip 在
+    # 容器的 windowTitleChanged 里同步，见 _sync_bar_tooltip）
     row.addStretch(1)
     toolbar = getattr(content, "toolbar", None)
     if toolbar is not None:
@@ -512,6 +651,7 @@ def _build_slim_bar(window: QMainWindow, key: str, content) -> QWidget:
     popout.clicked.connect(lambda: _toggle_pop_out(window, key))
     row.addWidget(popout)
     close = QToolButton()
+    close.setObjectName("panel_bar_close")
     close.setText("✕")
     close.setToolTip("关闭面板（关闭即遗忘）")
     close.setAutoRaise(True)
@@ -520,10 +660,29 @@ def _build_slim_bar(window: QMainWindow, key: str, content) -> QWidget:
     row.addWidget(close)
     bar.installEventFilter(_PanelBarFilter(window, key, bar))
     content.slim_bar = bar
-    content.title_label = label
     content.popout_btn = popout      # 名字不变：测试与 _toggle_pop_out 按它取
     content.bar_close_btn = close
     return bar
+
+
+def _sync_bar_active(window: QMainWindow, prev: str, cur: str) -> None:
+    """当前编辑对象那块面板的标题栏深一档（原生窗口的活动/非活动惯例）。
+
+    由焦点切换驱动：panel_state._set_focus 调 window._on_focus_changed
+    钩子（回调挂在 window 上，避免最底层反向 import 本模块），app 在
+    建窗收尾时接上。面板开了又关、焦点自动移交都走同一条路。
+    """
+    for key, active in ((prev, False), (cur, True)):
+        if not key:
+            continue
+        dock = window.plot_docks.get(key)
+        bar = getattr(_content(dock), "slim_bar", None) if dock else None
+        if bar is None:
+            continue
+        bar.setProperty("active", "true" if active else "false")
+        # 动态属性变了要重新求值样式表（Qt 不自动重画）
+        bar.style().unpolish(bar)
+        bar.style().polish(bar)
 
 
 def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,

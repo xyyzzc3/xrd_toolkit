@@ -98,7 +98,7 @@ from xrd_toolkit.gui.plot_compare import _plot_compare, _plot_heatmap
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
-    _pan_motion, _pan_press, _pan_release, _wheel_zoom)
+    _pan_motion, _pan_press, _pan_release, _sync_bar_active, _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _compute_integration, _draw_1d,
     _plot_view, _refresh_bg, _spawn_task)
@@ -1276,6 +1276,10 @@ def create_window() -> QMainWindow:
     # 背景扣除专用行的显隐同步入口（panel_state 回放面板快照后回调，
     # 同样避免反向 import）
     window._bg_rows_sync = _sync_bg_rows
+    # 焦点切换入口：当前编辑对象那块面板的标题栏深一档（plot_panels
+    # 的 _sync_bar_active；panel_state 只负责回调，不反向 import）
+    window._on_focus_changed = (
+        lambda prev, cur: _sync_bar_active(window, prev, cur))
 
     _build_center(window)
     # 点任何面板窗口内任何位置都选中该面板（应用级过滤器，原因见

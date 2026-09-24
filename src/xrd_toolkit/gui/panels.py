@@ -77,13 +77,13 @@ class _PlotSubWindow(QMdiSubWindow):
         self.panel_key = key
         # 原生壳的 flags（占位面板要还原成这个，见 _apply_panel_chrome）
         self._native_flags = self.windowFlags()
-        # 标题变了（改名/显示名变化）自绘栏要跟着变。用
+        # 标题变了（改名/显示名变化）自绘栏的悬停提示要跟着变。用
         # windowTitleChanged 信号而不是 WindowTitleChange 事件：
         # 后者只发给**顶层窗口**（QWidget::setWindowTitle 里
         # topextra 为空就不发），MDI 子窗口是子部件，收不到（踩过：
         # 标题栏文案一直是空字符串）
         self.windowTitleChanged.connect(
-            lambda title: _sync_bar_title(self, title))
+            lambda title: _sync_bar_tooltip(self, title))
         # 点窗口任何地方都选中该面板：由 _PanelClickTracker（应用级
         # 过滤器，见 create_window）统一处理——QWidget 的父过滤器
         # 收不到子部件事件，容器级过滤器盖不住内容区
@@ -159,7 +159,7 @@ class _FloatedWindow(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose)
         # 弹出状态下的改名也要同步自绘栏（同 _PlotSubWindow）
         self.windowTitleChanged.connect(
-            lambda title: _sync_bar_title(self, title))
+            lambda title: _sync_bar_tooltip(self, title))
         # 点窗口任何地方都选中该面板：同 _PlotSubWindow，
         # 由 _PanelClickTracker 统一处理
 
@@ -168,17 +168,19 @@ class _FloatedWindow(QWidget):
         super().closeEvent(event)
 
 
-def _sync_bar_title(dock, title: str) -> None:
-    """自绘标题栏的文案跟着容器标题走（开局、改名、换显示名都算）。
+def _sync_bar_tooltip(dock, title: str) -> None:
+    """自绘标题栏的悬停提示跟着容器标题走（开局、改名、换显示名都算）。
 
-    容器可能是子窗口或弹出窗口，两边都连到本函数；内容没建好
-    （占位面板）时静默跳过。
+    2026-09-24 用户："名字在三处太多" → 标题栏不再显示名字（只留
+    按钮），改成悬停提示：鼠标放在这行的空白处就知道是哪块面板，
+    屏幕上则靠图上的标题辨认。容器可能是子窗口或弹出窗口，两边都
+    连到本函数；内容没建好（占位面板）时静默跳过。
     """
     content = _content(dock) if isinstance(dock, QMdiSubWindow) \
         else getattr(dock, "content", None)
-    label = getattr(content, "title_label", None)
-    if label is not None and label.text() != title:
-        label.setText(title)
+    bar = getattr(content, "slim_bar", None)
+    if bar is not None and bar.toolTip() != title:
+        bar.setToolTip(title)
 
 
 def _apply_panel_chrome(dock, content) -> None:
@@ -778,7 +780,7 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
         dock._settling = True
         cw, ch = content.width(), content.height()
         floated = _FloatedWindow(window, key)
-        floated.content = content      # 先挂内容：标题同步（_sync_bar_title）
+        floated.content = content      # 先挂内容：标题同步（_sync_bar_tooltip）
         floated.setWindowTitle(dock.windowTitle())   # 才找得到自绘栏
 
         box = QVBoxLayout(floated)

@@ -29,7 +29,8 @@
     QMdiArea 滚动条兜底；摆图前滚动自动归零（滚动状态下的 move
     会混入滚动偏移、图越排越漂）；点面板窗口任何位置 = 选中该
     面板；滚轮 = 只滚动绘图区；放大镜开关点亮时滚轮以光标为中心
-    缩放每格 10% + 左键拖框放大，熄灭时左键 = 平移；总缩放 =
+    缩放每格 10% + 左键拖框放大（自行绘框、只改坐标范围，见
+    TestBoxZoom），熄灭时左键 = 平移；总缩放 =
     Ctrl+滚轮 / 底部 − 100% + 按钮，绘图区全体同比缩放
     （50%–200%），弹出去的不参与、平铺不碰它；新图左上角
     24px 小错位级联（6 档循环）、按当前总缩放开；
@@ -3066,17 +3067,18 @@ class TestSlimPanelChrome(unittest.TestCase):
         finally:
             w.close()
 
-    def test_bar_title_follows_rename(self):
-        """改名（对比面板复用时要改显示名）自绘栏文案跟着走。"""
+    def test_bar_tooltip_follows_rename(self):
+        """标题栏不显示名字（名字在参数坞"编辑对象"与图上标题里），
+        但悬停提示要跟着容器标题走——改名也要同步。"""
         w = create_window()
         try:
             dock = self._open_1d(w)
             content = gui_panel_state._content(dock)
-            self.assertEqual(content.title_label.text(), dock.windowTitle())
+            self.assertEqual(content.slim_bar.toolTip(), dock.windowTitle())
             dock.setWindowTitle("新名字")
             QApplication.processEvents()
-            self.assertEqual(content.title_label.text(), "新名字",
-                             "标题栏文案要跟容器标题同步")
+            self.assertEqual(content.slim_bar.toolTip(), "新名字",
+                             "悬停提示要跟容器标题同步")
         finally:
             w.close()
 
@@ -3187,6 +3189,143 @@ class TestSlimPanelChrome(unittest.TestCase):
             self.assertFalse(dock.windowFlags() & Qt.FramelessWindowHint,
                             "没有自绘栏的占位面板得留着原生标题栏"
                             "（否则拖不动也关不掉）")
+        finally:
+            w.close()
+
+
+class TestBoxZoom(unittest.TestCase):
+    """放大镜点亮时左键拖 = 框选放大（2026-09-24 用户要求加回来：
+    "再加回去放大镜框选放大，注意上次那个bug，不要再出现了"）。
+
+    上次的 bug（用户 2026-09-18 原话）："画完框在缩小会把画框内的
+    数据变小"——旧版用的是 matplotlib 的 zoom mode，它与我们自己的
+    平移手势抢同一串鼠标事件、又各自记账。现在框选是自己实现的：
+    自己画选框 + 松开时只改 set_xlim/set_ylim，**一个数据点都不碰**。
+    test_box_zoom_then_wheel_out_keeps_data 就是那个 bug 的回归护栏。
+    """
+
+    PATH = "data/fake_b.tif"
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([self.PATH])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
+        return _dock(w, "1D", self.PATH)
+
+    def _drag_box(self, dock, data0, data1):
+        """按真事件的形状拖一个框：press 带 button，move 带 buttons
+        （mpl 的 _mouse_handler 会把拖动中的 move 事件补上 button）。"""
+        content = gui_panel_state._content(dock)
+        ax, canvas = content.axes_1d, content.canvas
+        p0 = ax.transData.transform(data0)
+        p1 = ax.transData.transform(data1)
+        canvas.callbacks.process("button_press_event", MouseEvent(
+            "button_press_event", canvas, p0[0], p0[1], button=1))
+        canvas.callbacks.process("motion_notify_event", MouseEvent(
+            "motion_notify_event", canvas, p1[0], p1[1],
+            buttons=frozenset({1})))
+        canvas.callbacks.process("button_release_event", MouseEvent(
+            "button_release_event", canvas, p1[0], p1[1], button=1))
+
+    def test_box_zoom_narrows_both_axes_to_the_box(self):
+        """框住哪块就放大到哪块：x/y 范围收拢到框内。
+
+        框必须落在**当前可见范围之内**：起点在轴外时按下事件
+        inaxes=None，被手势正确忽略（那是保护，不是缺陷）。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            content.toolbar._actions["zoom"].trigger()   # 点亮放大镜
+            self._drag_box(dock, (1.2, 1.3), (3.0, 2.5))
+            xlo, xhi = ax.get_xlim()
+            ylo, yhi = ax.get_ylim()
+            self.assertAlmostEqual(xlo, 1.2, delta=0.05, msg=f"x 下限 {xlo}")
+            self.assertAlmostEqual(xhi, 3.0, delta=0.05, msg=f"x 上限 {xhi}")
+            self.assertAlmostEqual(ylo, 1.3, delta=0.05, msg=f"y 下限 {ylo}")
+            self.assertAlmostEqual(yhi, 2.5, delta=0.05, msg=f"y 上限 {yhi}")
+        finally:
+            w.close()
+
+    def test_box_zoom_then_wheel_out_keeps_data(self):
+        """**旧 bug 的回归护栏**：画框放大 → 再滚轮缩小，曲线数据一个
+        点都不许变（旧版是"框内数据变小"，那是数据被动了）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax, canvas = content.axes_1d, content.canvas
+            # 只比数据曲线：悬停圆点（单点假线）不算——鼠标一动它就
+            # 会建出来，比"线数"会被它带偏
+            def data_lines():
+                return [ln for ln in ax.lines if len(ln.get_xdata()) > 1]
+            before = [(ln.get_xdata().copy(), ln.get_ydata().copy())
+                      for ln in data_lines()]
+            content.toolbar._actions["zoom"].trigger()   # 点亮
+            self._drag_box(dock, (1.2, 1.3), (3.0, 2.5))
+            # 再缩小（放大镜仍点亮：滚轮向下 = 缩小）
+            canvas.callbacks.process("scroll_event", MouseEvent(
+                "scroll_event", canvas, 250, 150, step=-1, button="down"))
+            after = [(ln.get_xdata(), ln.get_ydata()) for ln in data_lines()]
+            self.assertEqual(len(before), len(after))
+            for i, ((x0, y0), (x1, y1)) in enumerate(zip(before, after)):
+                self.assertTrue(np.array_equal(x0, x1),
+                                f"第 {i} 条曲线的 x 数据被改了")
+                self.assertTrue(np.array_equal(y0, y1),
+                                f"第 {i} 条曲线的 y 数据被改了")
+            # 而且视图确实张开了（证明缩小这一步真的执行了）
+            self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 0.8)
+        finally:
+            w.close()
+
+    def test_box_zoom_removes_the_rect_after_release(self):
+        """选框是临时的：松开后轴上不留矩形（否则重画会叠罗汉）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            content.toolbar._actions["zoom"].trigger()
+            self._drag_box(dock, (1.2, 1.3), (3.0, 2.5))
+            self.assertEqual(len(ax.patches), 0, "松开后不应留下选框")
+            self.assertIsNone(getattr(dock, "_box_patch", None))
+        finally:
+            w.close()
+
+    def test_tiny_drag_is_a_click_not_a_zoom(self):
+        """框太小（< 6 px）= 手抖，当点击：视图不动。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            content.toolbar._actions["zoom"].trigger()
+            x0 = ax.get_xlim()
+            self._drag_box(dock, (1.0, 1.5), (1.001, 1.501))
+            self.assertEqual(tuple(ax.get_xlim()), tuple(x0),
+                             "小抖动不该改变视图")
+        finally:
+            w.close()
+
+    def test_magnifier_off_drag_still_pans(self):
+        """放大镜熄灭时左键拖仍是平移（框选只在点亮时生效）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            self.assertFalse(gui_plot_panels._magnifier_on(dock))
+            x0 = ax.get_xlim()
+            self._drag_box(dock, (1.0, 1.5), (2.0, 2.0))
+            x1 = ax.get_xlim()
+            self.assertNotEqual(tuple(x0), tuple(x1), "熄灭时拖动应平移")
+            # 平移不该留下选框
+            self.assertEqual(len(ax.patches), 0)
         finally:
             w.close()
 
@@ -4193,22 +4332,31 @@ class TestGestures(unittest.TestCase):
         finally:
             w.close()
 
-    def test_pan_always_records_start(self):
-        """左键拖 = 平移（框选放大已删除）：放大镜点不点亮都记平移起点。"""
+    def test_press_pans_when_magnifier_off_and_boxes_when_on(self):
+        """左键按下：熄灭 = 记平移起点；点亮 = 起框选放大的框（2026-09-24
+        用户要求把框选放大加回来，见 TestBoxZoom）。"""
         w = create_window()
         try:
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            self._magnifier(w, "data/fake_b.tif", True)
+            # 开局放大镜是熄灭的（_magnifier 是"点一下再断言"的语义，
+            # 这里先直接断言默认态）
+            self.assertFalse(gui_plot_panels._magnifier_on(dock))
             gui_plot_panels._pan_press(w, key, _press_event(ax, x=100, y=120))
             self.assertIsNotNone(getattr(dock, "_pan_start", None),
-                                 "放大镜点亮时左键拖也应是平移")
-            dock._pan_start = None
-            self._magnifier(w, "data/fake_b.tif", False)
+                                 "放大镜熄灭时左键拖 = 平移")
+            gui_plot_panels._pan_release(
+                w, key, _press_event(ax, x=100, y=120))
+            self.assertIsNone(getattr(dock, "_pan_start", None))
+            self._magnifier(w, "data/fake_b.tif", True)   # 点亮
             gui_plot_panels._pan_press(w, key, _press_event(ax, x=100, y=120))
-            self.assertIsNotNone(getattr(dock, "_pan_start", None),
-                                 "放大镜熄灭时左键拖同样是平移")
+            self.assertIsNotNone(getattr(dock, "_box_start", None),
+                                 "放大镜点亮时左键拖 = 框选放大")
+            self.assertIsNone(getattr(dock, "_pan_start", None),
+                              "框选时不该同时记平移起点（两套手势不能抢）")
+            gui_plot_panels._pan_release(
+                w, key, _press_event(ax, x=100, y=120))
         finally:
             w.close()
 
@@ -6434,10 +6582,17 @@ class TestBatchProgress(unittest.TestCase):
                         is not None
                         for p in ("data/fake_a.tif", "data/fake_b.tif"))))
             log = w.log_text.toPlainText()
-            self.assertIn("积分完成：fake_b.tif（3 点，2θ 0.500~8.500°）"
-                          "（1/2）", log)
-            self.assertIn("积分完成：fake_a.tif（3 点，2θ 0.500~8.500°）"
-                          "（2/2）", log)
+            # 不写死"谁先完成"：BackgroundTask 每任务一个线程，完成回调
+            # 到主线程的先后由调度决定（教训 12 的定时炸弹——本测试曾
+            # 因机器负载翻转而红）。断言的是"两条都计数、且合计是 1/2
+            # 与 2/2"，顺序交给调度。
+            done = re.findall(r"积分完成：(fake_[ab]\.tif)（3 点，"
+                              r"2θ 0\.500~8\.500°）（(\d)/2）", log)
+            self.assertEqual({name for name, _ in done},
+                             {"fake_a.tif", "fake_b.tif"},
+                             f"两个文件都该报完成：{done}")
+            self.assertEqual({k for _, k in done}, {"1", "2"},
+                             f"进度计数应是 1/2 与 2/2：{done}")
             self.assertFalse(hasattr(w, "_batch"),
                              "批走完应清账（之后零散任务不再计数）")
         finally:

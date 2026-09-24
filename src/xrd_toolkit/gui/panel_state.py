@@ -347,12 +347,18 @@ def _set_focus(window: QMainWindow, key: str, title: str) -> None:
     """
     if window.focus_panel == key:
         return
+    prev = window.focus_panel
     window.focus_panel = key
     window.focus_label.setText(f"编辑对象：{title}")
     dock = window.plot_docks.get(key)
     snap = getattr(dock, "params_snapshot", None)
     if snap is not None:
         _load_params_snapshot(window, snap)
+    # 焦点变了通知外面（面板壳用它把"活动"标题栏挪到新面板；回调挂在
+    # window 上，本模块是最底层、不 import 兄弟模块——同 _bg_rows_sync）
+    hook = getattr(window, "_on_focus_changed", None)
+    if hook is not None:
+        hook(prev, key)
 
 
 def _collect_geometry(window: QMainWindow) -> dict:
