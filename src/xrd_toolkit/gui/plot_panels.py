@@ -15,12 +15,17 @@ _build_slim_bar；不显示名字——名字在参数坞"编辑对象"与图上
 """
 from pathlib import Path
 
+import time
+from contextlib import contextmanager
+
 import numpy as np
-from matplotlib.backends.backend_qtagg import (FigureCanvasQTAgg,
-                                              NavigationToolbar2QT)
+from matplotlib import get_data_path
+from matplotlib.backend_tools import Cursors
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
                                QMdiSubWindow, QPushButton, QToolButton,
                                QVBoxLayout, QWidget)
@@ -238,26 +243,22 @@ def _panel_axes(dock):
 
 
 def _refresh_home(dock, ax=None):
-    """程序自己重画后：清空 mpl 的视图账本 + 维护这张面板的"家"视图。
+    """程序自己重画后：维护这张面板的"家"视图（`dock.view_home`）。
 
-    mpl 只在用户手势（框选/平移）里记账，程序重画不自动刷新——不刷的
-    话它的 Home 会跳回重画前的老视图。
-
-    面板自己那条 [Home] 不跟 mpl 的历史栈（程序重画会清空它，按下去
-    常常"没反应"），用的是 `dock.view_home`，规则一句话：
+    面板自己那条 [Home] 不跟任何历史栈（程序重画会把栈清掉，按下去常常
+    "没反应"），用的是 `dock.view_home`，规则一句话：
     **手势改的视图不算"家"**。
       - 手势（滚轮/框选/平移）把范围写进了参数快照（那是"两处入口一套
         真相"的既定设计），所以不能拿参数当"家"——三个手势处理器都置
         `dock._view_from_gesture`，本次重画就不更新"家"；
       - 其余的重画（首画、重算、[应用] 改显示参数、换文件/几何）都更新
         "家"：那才是"这张图本来的样子"。
-    于是 Home 永远回得到最初（用户 2026-09-24："回到最初的样子，而不是
-    上次画的位置"）。
+    于是 Home 永远回得到最初（用户 2026-09-24：回到最初的样子，而不是
+    上次画的位置）。
+
+    旧版这里还顺手刷一下 mpl 工具栏的按钮状态、清它的历史栈——面板工具栏
+    换成自绘的 _SlimToolbar（自己拿四个 QAction）之后，那套机件不在场了。
     """
-    canvas = getattr(_content(dock), "canvas", None)
-    toolbar = getattr(canvas, "toolbar", None)
-    if toolbar is not None:
-        toolbar.update()
     from_gesture = getattr(dock, "_view_from_gesture", False)
     dock._view_from_gesture = False
     if ax is not None and not from_gesture:
@@ -265,57 +266,115 @@ def _refresh_home(dock, ax=None):
                           ax.get_yscale())
 
 
-class _SlimToolbar(NavigationToolbar2QT):
-    """只留 [Home][Zoom][Customize][Save] 的精简工具栏（过滤父类工具清单）。
+class _SlimToolbar(QWidget):
+    """面板的 [Home][Zoom][Customize][Save]：**自己拿四个 QAction**，
+    本体隐藏（按钮都在自绘标题栏里，见 _build_slim_bar）。
 
     放大/平移改成鼠标手势，放大镜按钮当开关（与用户讨论定稿）：
     点亮 = 滚轮（触摸板两指滚动）以光标为中心缩放（每格 10%）
     + 左键拖 = **框选放大**（自己画的框、只改坐标范围，见
     _pan_press 里 2026-09-18 那个 bug 的说明）；熄灭 = 滚轮还给绘图区
-    滚动、左键拖 = 平移。抓手/
-    前进/后退/子图按钮退休；双击不回全图——回首页只有 Home
-    一个入口；Customize = 自绘轴属性对话框（标题/轴标签/纵轴刻度/
-    图边距，见 _open_customize_dialog；mpl 自带子图配置器被替换
-    ——那是英文技术术语，且 hspace/wspace/Export values 对单图
-    无用、字段还挤）；Save = 本面板另存为图片。父类 __init__ 按
-    toolitems 表逐个建按钮，覆盖成只含这四个的表即可；放大镜
-    QAction mpl 自带 checkable，点击自动亮灭翻转——把 mpl 的
-    triggered→zoom() 断开：按钮只当纯开关，**永不进 mpl 的 zoom
-    mode**（框选放大的选框是我们自己画的 Rectangle，见 _draw_box），
-    toggled 信号接日志提示。
+    滚动、左键拖 = 平移。抓手/前进/后退/子图按钮退休；双击不回全图
+    ——回首页只有 Home 一个入口；Customize = 自绘轴属性对话框（标题/
+    轴标签/纵轴刻度/图边距，见 _open_customize_dialog；mpl 自带子图
+    配置器被替换——那是英文技术术语，且 hspace/wspace/Export values
+    对单图无用、字段还挤）；Save = 本面板另存为图片。
 
-    Save 重写 save_figure 走 _save_panel：存完置 figure_saved，
-    关窗询问"未保存"时不会再问已经存过盘的面板（旧版工具栏 Save
-    绕过记账，存过还问）。
+    **为什么不再继承 matplotlib 的 NavigationToolbar2QT**（2026-09-24
+    换掉）：那是个 QToolBar，构造时按工具清单逐个 addAction——offscreen
+    下建够多面板（实测累计约 80 块）之后，下一次构造会偶发在 Qt 的
+    action 事件里无限递归、永不返回（栈 5000+ 帧、100% CPU；复现脚本
+    scripts/stress_panels.py 里写着排查记录）。本项目**只借它的四个
+    action**（工具栏一直是隐藏的，按钮在自绘标题栏上），所以自己建：
+    图标仍用 mpl 自带的 PNG，外观与换掉之前逐字一致，那条病路径整个
+    不在场了。
+
+    以前靠父类拿到的东西各就各位：
+      - **mpl 的 ZOOM/PAN 模式机件不再存在**——放大镜只是开关，框选
+        放大是我们自己画的 Rectangle（见 _draw_box），所以"永不进 mpl
+        zoom mode"这句话都不必说了：那块机器整个不在场（测试原来断言
+        `toolbar.mode.name == "NONE"`，现在断言"没有 mode 这个机件"）；
+      - 历史栈（父类 `_nav_stack`/`push_current`）退休：Home 按
+        `dock.view_home` 走（见 _refresh_home），不读栈——手势里那两处
+        "给 mpl 的 Home 记账"随之删掉；
+      - `update()` 也不再需要（没有要刷新的原生按钮）。
+
+    Save 走 save_figure → _save_panel：存完置 figure_saved，关窗询问
+    "未保存"时不会再问已经存过盘的面板（旧版工具栏 Save 绕过记账，
+    存过还问）。
+
+    对外契约（手势 / 测试 / scripts/check_gui.py 都按
+    `content.toolbar` 取）：`_actions` 这四个键、`isHidden()`、
+    `save_figure()`——**不能把这个类删成局部变量**。
     """
 
-    toolitems = [t for t in NavigationToolbar2QT.toolitems
-                 if t[0] in ("Home", "Zoom", "Customize", "Save")]
+    # (键, 文本, 悬停提示, 图标名)；图标取 mpl 自带的 PNG（mpl-data/
+    # images），外观与换掉之前一致——栏上按钮 setDefaultAction 后显示的
+    # 就是这些图。键名沿用 mpl 工具清单里的回调名（edit_parameters /
+    # save_figure），既有调用点与测试不用改。
+    ACTION_SPECS = (
+        ("home", "Home", "回到这张图最初的样子", "home"),
+        ("zoom", "放大镜",
+         "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大", "zoom_to_rect"),
+        ("edit_parameters", "Customize", "编辑轴与曲线属性",
+         "qt4_editor_options"),
+        ("save_figure", "Save", "把这张图另存为图片", "filesave"),
+    )
 
     def __init__(self, canvas, parent=None, window=None, key=None):
-        super().__init__(canvas, parent)
+        super().__init__(parent)
+        self.canvas = canvas
         self._window = window
         self._panel_key = key
-        # 放大镜按钮只当纯开关：断开 mpl 的 zoom()（会切框选模式），
-        # 点击只剩亮灭翻转；toggled 信号写日志
-        self._actions["zoom"].triggered.disconnect()
+        icon_dir = Path(get_data_path()) / "images"
+        self._actions = {}
+        for name, text, tip, icon in self.ACTION_SPECS:
+            action = QAction(QIcon(str(icon_dir / f"{icon}.png")), text, self)
+            action.setToolTip(tip)
+            self._actions[name] = action
+        # 放大镜只当纯开关：点击只翻亮灭 + 写日志（旧版还要断开 mpl 的
+        # triggered→zoom()；现在那边没有可断的东西）
+        self._actions["zoom"].setCheckable(True)
         self._actions["zoom"].toggled.connect(self._log_zoom_toggle)
-        # Customize 断开 mpl 自带的图选项编辑器（edit_parameters =
-        # toolitem 的回调名，也是 _actions 的键），换成自绘轴属性对话框
-        self._actions["edit_parameters"].triggered.disconnect()
+        # [Home] = 回到这张面板的"家"视图（dock.view_home）。旧版这里要
+        # 断开 mpl 的历史栈：程序重画（[应用]/重算/实时预览）会清空那个
+        # 栈，之后按 Home 常常"没反应"、或只回到"上次画的位置"。现在是
+        # **按面板自己的"家"**回（用户 2026-09-24 要求"回到最初的样子，
+        # 而不是上次画的位置"）
+        self._actions["home"].triggered.connect(self._reset_view)
         self._actions["edit_parameters"].triggered.connect(
             self._open_customize)
-        # [Home] 也断开 mpl 的历史栈：程序重画（[应用]/重算/实时预览）
-        # 会清空那个栈，之后按 Home 常常"没反应"、或只回到"上次画的
-        # 位置"。换成**按面板参数重画**（与 [应用] 同一条路）= 参数是
-        # 什么样，Home 就是什么样（用户 2026-09-24 要求"回到最初的
-        # 样子，而不是上次画的位置"）
-        self._actions["home"].triggered.disconnect()
-        self._actions["home"].triggered.connect(self._reset_view)
+        self._actions["save_figure"].triggered.connect(self.save_figure)
+        # 旧父类在它的 __init__ 里把这一笔挂在画布上（调用点按
+        # canvas.toolbar / _content(dock).toolbar 取），自己挂
+        canvas.toolbar = self
 
     def _open_customize(self):
         if self._window is not None and self._panel_key is not None:
             _open_customize_dialog(self._window, self._panel_key)
+
+    @contextmanager
+    def _wait_cursor_for_draw_cm(self):
+        """整帧重绘期间给个等待光标——**mpl 自己会来要这个上下文**，不是
+        我们调的：`FigureCanvasAgg.draw()` 里写着"画布上有工具栏就问它要
+        等待光标"（旧父类提供的，搬过来行为不变；不提供的话每次 draw 都
+        会 AttributeError）。
+
+        一秒内连着画就不来回切（照抄 mpl 的节流）：拖动/缩放期每帧都画，
+        不节流会闪成噪声。macOS 上部件级光标会被应用级覆盖光标压住
+        （项目的光标都走 QApplication 覆盖光标，见 panels.py 的说明），
+        所以它只在没有覆盖光标时露一下。
+        """
+        self._draw_time, last_draw = (
+            time.time(), getattr(self, "_draw_time", -np.inf))
+        if self._draw_time - last_draw > 1:
+            try:
+                self.canvas.set_cursor(Cursors.WAIT)
+                yield
+            finally:
+                self.canvas.set_cursor(Cursors.POINTER)
+        else:
+            yield
 
     def _reset_view(self):
         """[Home]：回到这张面板的"家"视图（`dock.view_home`）。
@@ -358,10 +417,9 @@ class _SlimToolbar(NavigationToolbar2QT):
                  f"左键拖 = 平移")
 
     def save_figure(self, *args):
+        # 形参收下 QAction.triggered 的 checked 布尔
         if self._window is not None and self._panel_key is not None:
             _save_panel(self._window, self._panel_key)
-        else:
-            super().save_figure(*args)
 
 
 def _save_panel(window: QMainWindow, key: str) -> None:
@@ -544,10 +602,6 @@ def _pan_release(window: QMainWindow, key: str, event) -> None:
             if ylo is not None:
                 ax.set_ylim(ylo, yhi)
             dock._view_from_gesture = True   # 框选不算"家"（见 _refresh_home）
-            # 同滚轮缩放：给 Home 记账（账本空着 Home 会无事可做）
-            toolbar = getattr(ax.figure.canvas, "toolbar", None)
-            if toolbar is not None and toolbar._nav_stack() is None:
-                toolbar.push_current()
         dock._blit = None
         ax.figure.canvas.draw_idle()   # 松手：整帧重画（撤选框 + 刻度更新）
         return
@@ -584,11 +638,6 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
         return
     if not _magnifier_on(dock):
         return   # 放大镜熄灭：滚轮只滚动绘图区，不缩图
-    # 懒记账（照抄 mpl 框选/平移手势的做法）：滚轮直接改坐标轴范围、
-    # 绕过 mpl 的记账，账本一直空着它自己的 Home 就无事可做
-    toolbar = getattr(ax.figure.canvas, "toolbar", None)
-    if toolbar is not None and toolbar._nav_stack() is None:
-        toolbar.push_current()
     # 每格 10%（1.25 = 25% 太猛：触摸板两指一滑是连续好多小格事件，
     # 连乘几下图就飞了；与用户讨论定为 10%）
     factor = 1.0 / 1.1 if event.button == "up" else 1.1

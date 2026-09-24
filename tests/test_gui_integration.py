@@ -82,7 +82,6 @@ from types import SimpleNamespace
 
 import numpy as np
 from matplotlib.backend_bases import MouseEvent
-from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
@@ -3926,7 +3925,11 @@ class TestBoxZoom(unittest.TestCase):
 class TestZoomToolbar(unittest.TestCase):
     """D：每个 1D 面板带自己的精简工具栏 [Home][Zoom][Customize][Save]；
     放大镜 = 开关（点亮滚轮缩放/拖框放大，熄灭滚轮滚动/拖平移），
-    抓手/前进后退/子图按钮退休；占位面板没有。"""
+    抓手/前进后退/子图按钮退休；占位面板没有。
+
+    2026-09-24 起工具栏是自绘的 `_SlimToolbar`（自己拿四个 QAction，
+    不再继承 mpl 的 NavigationToolbar2QT——它构造时会在 offscreen 下
+    偶发无限递归，见 scripts/stress_panels.py）。"""
 
     def test_toolbar_present_on_1d(self):
         w = create_window()
@@ -3938,12 +3941,16 @@ class TestZoomToolbar(unittest.TestCase):
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
             widget = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
-            self.assertIsInstance(widget.toolbar, NavigationToolbar2QT)
-            names = [t[0] for t in widget.toolbar.toolitems if t[0]]
-            self.assertEqual(names, ["Home", "Zoom", "Customize", "Save"],
-                             "工具栏应精简为 Home/Zoom/Customize/Save")
-            for gone in ("Pan", "Back", "Forward", "Subplots"):
-                self.assertNotIn(gone, names, f"{gone} 按钮应已砍掉")
+            self.assertIsInstance(widget.toolbar,
+                                  gui_plot_panels._SlimToolbar)
+            self.assertEqual(
+                list(widget.toolbar._actions),
+                ["home", "zoom", "edit_parameters", "save_figure"],
+                "工具栏应精简为 Home/Zoom/Customize/Save 四个 action")
+            # 砍掉的按钮不该有 action（抓手/前进/后退/子图）
+            for gone in ("pan", "back", "forward", "configure_subplots"):
+                self.assertNotIn(gone, widget.toolbar._actions,
+                                 f"{gone} 按钮应已砍掉")
         finally:
             w.close()
 
@@ -4881,8 +4888,12 @@ class TestGestures(unittest.TestCase):
                          f"放大镜应已{'点亮' if on else '熄灭'}")
 
     def test_magnifier_toggle_switches_mode(self):
-        """放大镜 = 纯开关：点亮点灭只翻转按钮，mpl 模式永远停在 NONE
-        （框选放大已删除，不再切 ZOOM 模式）。"""
+        """放大镜 = 纯开关：点亮点灭只翻转按钮。
+
+        （旧断言是"mpl 的模式永远停在 NONE"——2026-09-24 面板工具栏换成
+        自绘的 _SlimToolbar 之后，mpl 那套模式机件整个不在场，所以改成
+        断言"没有 mode 这个机件"：将来谁再把 mpl 工具栏塞回来，这条会红。）
+        """
         w = create_window()
         try:
             self._open_1d(w)
@@ -4892,11 +4903,10 @@ class TestGestures(unittest.TestCase):
             self.assertFalse(action.isChecked())
             self._magnifier(w, "data/fake_b.tif", True)
             self.assertTrue(action.isChecked(), "点亮后按钮应亮起")
-            self.assertEqual(content.toolbar.mode.name, "NONE",
-                             "点亮放大镜不应切进 mpl 框选模式")
+            self.assertFalse(hasattr(content.toolbar, "mode"),
+                             "不该再有 mpl 的缩放模式机件")
             self._magnifier(w, "data/fake_b.tif", False)
             self.assertFalse(action.isChecked(), "熄灭后按钮应熄灭")
-            self.assertEqual(content.toolbar.mode.name, "NONE")
         finally:
             w.close()
 

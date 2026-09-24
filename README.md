@@ -153,6 +153,8 @@ Each script accepts either `--file` to pick one dataset, or — without `--file`
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plots + azimuthal uniformity statistics |
 | `scripts/check_env.py` | Environment self-check — interpreter, dependencies, editable-install target, GUI import, tests & data (not an analysis script; run it first when something "just won't run") |
 | `scripts/check_gui.py` | GUI link check — drives the real window offscreen with real sample data and real canvas events (hover, anchor picking, wheel zoom, compare, heatmap) to prove the UI wiring still reaches the engine (not an analysis script; run it after moving code between GUI modules) |
+| `scripts/run_tests.py` | the full unit suite behind a watchdog — a stalled run prints every thread's Python stack and exits instead of hanging (see the Tests section) |
+| `scripts/stress_panels.py` | panel-stress probe — reproduces the known offscreen deadlock on demand (not a check; it is meant to hang, see its docstring) |
 
 ## Usage details
 
@@ -220,6 +222,8 @@ Synthetic-image unit tests (no sample data needed; plain `unittest`, no pytest):
 conda activate XRD_Toolkit_Environment
 python -m unittest discover -s tests -v
 ```
+
+> The offscreen GUI suite has one known flake: once enough panels have been built in a single process, the run can deadlock — a PySide6 lock-order inversion where the main thread holds the GIL and waits on a Qt mutex that a worker thread holds while it waits for the GIL. `python scripts/run_tests.py` runs the same suite behind a watchdog: if it stalls, it dumps every thread's Python stack and exits non-zero instead of hanging silently. `python scripts/stress_panels.py` reproduces the deadlock on demand (its docstring carries the full write-up).
 
 They cover the arc-coverage failure criterion for centered / edge / corner / outside-image beam placements, the geometric failure-point values, and the off-center integration fallback (regression guard for a pyFAI binning bug). The background-subtraction tests characterise each baseline estimator against synthetic curves with known backgrounds (SNIP preserves a constant background exactly but underestimates a linear ramp; the rolling-window estimate must be told a window 3–10× the peak width), and the GUI tests pin down live preview, per-file anchors and the raw/baseline overlay lines.
 
