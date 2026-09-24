@@ -21,6 +21,10 @@
     搬出独立 OS 窗口；
   - 自装抓手：内容四边 5px 抓取带 + 四角 16px 抓取区 + 右下角
     把手（▙），悬停换方向光标、按住拖 = 拉伸容器；
+  - 面板壳 = 一行 26 px 自绘标题栏（标题 + [Home][Zoom][Customize]
+    [Save] + [弹出][关闭]）+ 画布，子窗口 frameless（TestSlimPanelChrome：
+    壳 83 → 26 px、栏上按钮与工具栏共用 action、拖动/双击最大化/✕
+    关闭、弹出保留原生边框而收回恢复 frameless、占位面板留原生标题栏）；
   - 横排/竖排 = 按类型分层摆位置（开图先后排序）不缩放，溢出靠
     QMdiArea 滚动条兜底；摆图前滚动自动归零（滚动状态下的 move
     会混入滚动偏移、图越排越漂）；点面板窗口任何位置 = 选中该
@@ -78,7 +82,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QSplitter, QSpinBox, QVBoxLayout, QWidget)
+    QPushButton, QScrollArea, QSplitter, QSpinBox, QToolButton,
+    QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
@@ -3017,6 +3022,175 @@ class TestPlotFixedSize(unittest.TestCase):
             w.close()
 
 
+class TestSlimPanelChrome(unittest.TestCase):
+    """面板壳瘦身（2026-09-24）：原生标题栏（36 px）+ 工具栏（47 px）
+    两行合成一行 26 px 自绘标题栏（标题 + [Home][Zoom][Customize][Save]
+    + [弹出][关闭]），子窗口 frameless —— 壳 83 → 26 px，同样的面板
+    高度里画布多拿 57 px。
+
+    原生标题栏被拿掉的三件事在这里各有测试兜着：拖动、双击最大化、
+    × 关闭（自绘栏按钮走同一个 _close_panel）。占位面板没有自绘栏 →
+    必须保留原生标题栏，否则既拖不动也关不掉。
+    """
+
+    PATH = "data/fake_b.tif"
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([self.PATH])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
+        return _dock(w, "1D", self.PATH)
+
+    def test_shell_shrinks_and_canvas_unchanged(self):
+        """壳 ≤ 32 px（改前 83）、画布仍是 500×300、子窗口 frameless。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            QApplication.processEvents()
+            content = gui_panel_state._content(dock)
+            self.assertTrue(dock.windowFlags() & Qt.FramelessWindowHint,
+                            "子窗口应无原生标题栏")
+            self.assertFalse(content.slim_bar.isHidden(), "自绘标题栏应可见")
+            self.assertTrue(content.toolbar.isHidden(), "工具栏不该再占高度")
+            self.assertEqual(
+                (content.canvas.width(), content.canvas.height()), (500, 300),
+                "画布尺寸不能因为瘦身而变")
+            shell = dock.height() - content.canvas.height()
+            self.assertLessEqual(shell, 32,
+                                 f"壳应瘦到 26 px 上下，实测 {shell} px")
+            self.assertGreaterEqual(shell, 20,
+                                    f"壳过小，布局可能塌了：{shell} px")
+        finally:
+            w.close()
+
+    def test_bar_title_follows_rename(self):
+        """改名（对比面板复用时要改显示名）自绘栏文案跟着走。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            self.assertEqual(content.title_label.text(), dock.windowTitle())
+            dock.setWindowTitle("新名字")
+            QApplication.processEvents()
+            self.assertEqual(content.title_label.text(), "新名字",
+                             "标题栏文案要跟容器标题同步")
+        finally:
+            w.close()
+
+    def test_bar_buttons_share_toolbar_actions(self):
+        """自绘栏按钮直接绑工具栏的 QAction：放大镜状态两边同步。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            zoom = content.toolbar._actions["zoom"]
+            btns = content.slim_bar.findChildren(QToolButton)
+            match = [b for b in btns if b.defaultAction() is zoom]
+            self.assertTrue(match, "栏上应有绑 zoom action 的按钮")
+            match[0].click()
+            self.assertTrue(gui_plot_panels._magnifier_on(dock),
+                            "点栏上的放大镜 = 点亮（与工具栏共用同一 action）")
+            match[0].click()
+            self.assertFalse(gui_plot_panels._magnifier_on(dock))
+        finally:
+            w.close()
+
+    def test_bar_drag_moves_panel(self):
+        """按住标题栏拖 = 移动面板（原生标题栏的拖动自己实现）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            p0 = dock.pos()
+            QTest.mousePress(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
+                             QPoint(60, 12))
+            QTest.mouseMove(content.slim_bar, QPoint(120, 52))
+            QTest.mouseRelease(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
+                               QPoint(120, 52))
+            QApplication.processEvents()
+            self.assertEqual(
+                (dock.pos().x() - p0.x(), dock.pos().y() - p0.y()), (60, 40),
+                "拖动位移应与鼠标位移一致")
+        finally:
+            w.hide()   # 显示过的窗口关窗会弹模态框（见 TestPlotFixedSize）
+            w.close()
+
+    def test_bar_double_click_toggles_maximize(self):
+        """双击标题栏 = 占满绘图区 / 还原（原生双击的替代）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            QTest.mouseDClick(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
+                              QPoint(60, 12))
+            QApplication.processEvents()
+            self.assertTrue(dock.isMaximized(), "双击应最大化")
+            QTest.mouseDClick(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
+                              QPoint(60, 12))
+            QApplication.processEvents()
+            self.assertFalse(dock.isMaximized(), "再双击应还原")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_bar_close_button_closes_panel(self):
+        """✕ = 关闭面板，与原生 × 走同一个入口（关闭即遗忘）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            content.bar_close_btn.click()
+            QApplication.processEvents()
+            self.assertNotIn("1D|" + self.PATH, w.plot_docks)
+            self.assertIn("已关闭面板", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_pop_out_keeps_native_frame_and_retract_restores(self):
+        """弹出 = 系统窗口（保留原生边框管窗口管理），收回 = 再 frameless。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            content.popout_btn.click()
+            QApplication.processEvents()
+            floated = w.plot_docks["1D|" + self.PATH]
+            self.assertIsInstance(floated, gui_panels._FloatedWindow)
+            self.assertFalse(floated.windowFlags() & Qt.FramelessWindowHint,
+                             "独立窗口要留着系统标题栏")
+            fc = gui_panel_state._content(floated)
+            self.assertFalse(fc.slim_bar.isHidden(),
+                             "弹出窗口里栏继续提供按钮")
+            self.assertEqual(fc.popout_btn.text(), "收回")
+            fc.popout_btn.click()
+            QApplication.processEvents()
+            back = w.plot_docks["1D|" + self.PATH]
+            self.assertIsInstance(back, gui_app.QMdiSubWindow)
+            self.assertTrue(back.windowFlags() & Qt.FramelessWindowHint,
+                            "收回后应恢复 frameless")
+        finally:
+            w.close()
+
+    def test_placeholder_keeps_native_title_bar(self):
+        """占位面板（未注册视图）没有自绘栏 → 保留原生标题栏。"""
+        w = create_window()
+        try:
+            gui_plot_panels._open_plot_panel(w, "未注册视图", "X|占位", "占位")
+            dock = w.plot_docks["X|占位"]
+            self.assertFalse(dock.windowFlags() & Qt.FramelessWindowHint,
+                            "没有自绘栏的占位面板得留着原生标题栏"
+                            "（否则拖不动也关不掉）")
+        finally:
+            w.close()
+
+
 class TestZoomToolbar(unittest.TestCase):
     """D：每个 1D 面板带自己的精简工具栏 [Home][Zoom][Customize][Save]；
     放大镜 = 开关（点亮滚轮缩放/拖框放大，熄灭滚轮滚动/拖平移），
@@ -3467,12 +3641,13 @@ class TestResizeGrips(unittest.TestCase):
             dock = _dock(w, "1D", "data/fake_b.tif")
             content = gui_panel_state._content(dock)
             h0 = dock.height()
-            # 顶边抓取带真实落点 = 工具栏条（内容上边 5px）
-            QTest.mousePress(content.toolbar, Qt.LeftButton, Qt.NoModifier,
+            # 顶边抓取带真实落点 = 自绘标题栏那一行（内容上边 5px；
+            # 2026-09-24 面板壳瘦身：工具栏藏了，最上面是自绘栏）
+            QTest.mousePress(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
                              QPoint(content.width() // 2, 2))
-            QTest.mouseMove(content.toolbar,
+            QTest.mouseMove(content.slim_bar,
                             QPoint(content.width() // 2, 2 - 40))
-            QTest.mouseRelease(content.toolbar, Qt.LeftButton, Qt.NoModifier,
+            QTest.mouseRelease(content.slim_bar, Qt.LeftButton, Qt.NoModifier,
                                QPoint(content.width() // 2, 2 - 40))
             QApplication.processEvents()
             self.assertEqual(dock.height(), h0 + 40, "顶边往上拖 = 容器变高")

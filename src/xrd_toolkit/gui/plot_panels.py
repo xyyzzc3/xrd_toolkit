@@ -1,8 +1,16 @@
-"""面板壳：画布容器、半截工具栏、手势、轴同步、悬停、开面板。
+"""面板壳：画布容器、自绘标题栏、手势、轴同步、悬停、开面板。
 
 从 plot_views.py 拆出来（纯搬迁）：这一层只关心"一个画布长什么样、
 怎么拖怎么缩放、鼠标放在上面显示什么"，不知道数据从哪来。
 依赖方向：plot_views / plot_compare 都用本模块，本模块不反向依赖它们。
+
+壳的形状（2026-09-24，用户要求"边框、小工具栏做小一点"）：面板 =
+一行 26 px 自绘标题栏（标题 + [Home][Zoom][Customize][Save] +
+[弹出][关闭]，_build_slim_bar）+ 画布；容器是 frameless 子窗口
+（panels._apply_panel_chrome），原先"原生标题栏 36 + 工具栏 47 =
+83 px"的壳瘦到 26 px——同样高度的面板里画布多拿 57 px。matplotlib
+的工具栏对象仍然存在（_SlimToolbar）但 hide()，只当 action 仓库：
+测试与 _magnifier_on 都按 content.toolbar 取 action。
 """
 from pathlib import Path
 
@@ -10,21 +18,28 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import (FigureCanvasQTAgg,
                                               NavigationToolbar2QT)
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow,
-                               QMdiSubWindow, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
+                               QMdiSubWindow, QPushButton, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panel_state import _AUX_GID_PREFIX, _content, _log
-from xrd_toolkit.gui.panels import (_apply_area_zoom, _install_resize_grip,
-                                    _PanelResizeFilter, _panel_extra,
-                                    _PlotSubWindow, _settle, _toggle_pop_out)
+from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
+                                    _close_panel, _install_resize_grip,
+                                    _PanelBarFilter, _PanelResizeFilter,
+                                    _panel_extra, _PlotSubWindow, _settle,
+                                    _toggle_pop_out)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 
 
 PLOT_OPEN_W, PLOT_OPEN_H = 500, 300   # 新面板默认画布尺寸（画布真 5:3，
-                                      # 面板总高 = 画布 + 工具栏 + 标题栏）
+                                      # 面板总高 = 画布 + 标题栏一行 26 px）
+PANEL_BAR_H = 26   # 自绘标题栏高度：标题 + 四个按钮 + [弹出][关闭] 一行。
+# 面板在绘图区里时容器是 frameless（panels._PlotSubWindow），这行就是
+# 唯一的壳——原先"原生标题栏 36 + 工具栏 47 = 83 px"，现在 26 px，
+# 同样的面板高度里画布多拿 57 px。工具栏对象保留（测试与 _magnifier_on
+# 都从它取 action），只是藏起来不出高度，见 _build_slim_bar。
 
 
 def _is_aux_line(line) -> bool:
@@ -452,6 +467,65 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
     return widget
 
 
+def _build_slim_bar(window: QMainWindow, key: str, content) -> QWidget:
+    """面板的单行标题栏：标题 + [Home][Zoom][Customize][Save] + [弹出][关闭]。
+
+    取代"原生标题栏 + 一整个工具栏"两行（实测 36 + 47 = 83 px）。
+    面板在绘图区里时容器是 frameless 子窗口（panels._PlotSubWindow），
+    这行是唯一的壳；弹出去成独立窗口时系统标题栏回来负责移动/最大
+    化，这行继续提供四个按钮和 [收回]（弹出后仍是唯一有按钮的地方
+    ——工具栏是藏着的）。
+
+    按钮直接绑工具栏自己的 QAction（setDefaultAction）：放大镜的
+    点亮状态、[Customize] 换过的回调、[Save] 走的 _save_panel 全部
+    共用一份，不重复实现。工具栏对象本体留在内容里但 hide()——测试
+    和 _magnifier_on 都按 content.toolbar 取 action，不能删。
+
+    拖动/双击最大化由 panels._PanelBarFilter 挂在**本行**上，所以
+    按在按钮上不会误拖（见该过滤器说明）。
+    """
+    bar = QWidget()
+    bar.setObjectName("panel_bar")
+    bar.setFixedHeight(PANEL_BAR_H)
+    row = QHBoxLayout(bar)
+    row.setContentsMargins(6, 0, 2, 0)
+    row.setSpacing(1)
+    label = QLabel("")            # 文本由 dock 的 WindowTitleChange 同步
+    label.setObjectName("panel_bar_title")
+    label.setStyleSheet("font-size: 11px;")
+    row.addWidget(label)
+    row.addStretch(1)
+    toolbar = getattr(content, "toolbar", None)
+    if toolbar is not None:
+        for name in ("home", "zoom", "edit_parameters", "save_figure"):
+            action = toolbar._actions.get(name)
+            if action is None:
+                continue
+            btn = QToolButton()
+            btn.setDefaultAction(action)
+            btn.setAutoRaise(True)
+            btn.setIconSize(QSize(16, 16))   # 工具栏图标 32 px 太大
+            btn.setFocusPolicy(Qt.NoFocus)
+            row.addWidget(btn)
+    popout = QPushButton("弹出")     # 文本随弹出/收回切换（见 _toggle_pop_out）
+    popout.setFocusPolicy(Qt.NoFocus)
+    popout.clicked.connect(lambda: _toggle_pop_out(window, key))
+    row.addWidget(popout)
+    close = QToolButton()
+    close.setText("✕")
+    close.setToolTip("关闭面板（关闭即遗忘）")
+    close.setAutoRaise(True)
+    close.setFocusPolicy(Qt.NoFocus)
+    close.clicked.connect(lambda: _close_panel(window, key))
+    row.addWidget(close)
+    bar.installEventFilter(_PanelBarFilter(window, key, bar))
+    content.slim_bar = bar
+    content.title_label = label
+    content.popout_btn = popout      # 名字不变：测试与 _toggle_pop_out 按它取
+    content.bar_close_btn = close
+    return bar
+
+
 def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
                         hover: bool, sync: str) -> QWidget:
     """面板内容骨架（1D/2D/剖面/瀑布共用）：画布 + 精简工具栏 +
@@ -476,28 +550,25 @@ def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
     ax = fig.add_subplot(111)
     setattr(canvas, ax_attr, ax)
     toolbar = _SlimToolbar(canvas, canvas, window, key)
-    # 容器 = 工具栏 + 画布竖排。把画布原有属性挂到容器上（坐标轴
-    # / figure / draw），其余代码仍按 _content(dock) 直取，不必改
-    # 调用点
+    # 容器 = 自绘标题栏 + 画布竖排（工具栏藏起来不出高度，见
+    # _build_slim_bar）。把画布原有属性挂到容器上（坐标轴 / figure
+    # / draw），其余代码仍按 _content(dock) 直取，不必改调用点
     widget = QWidget()
     box = QVBoxLayout(widget)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(0)
-    box.addWidget(toolbar)
-    box.addWidget(canvas)
     setattr(widget, ax_attr, ax)
     widget.figure = fig
     widget.canvas = canvas
     widget.toolbar = toolbar
     widget.draw = canvas.draw   # _content(dock).draw() 仍直接落到画布
     widget.panel_key = key   # 弹出/收回按钮经它找面板
-    # 弹出按钮：工具栏末尾（按钮跟着内容走，弹出后在新窗口里
-    # 照样能点；addWidget 不动 toolitems 表，测试不受影响）
-    popout = QPushButton("弹出")
-    popout.setFocusPolicy(Qt.NoFocus)
-    toolbar.addWidget(popout)
-    widget.popout_btn = popout
-    popout.clicked.connect(lambda: _toggle_pop_out(window, key))
+    # 自绘标题栏要在 widget 的属性就位之后建：它按 content.toolbar
+    # 取 action，并往 content 上挂 slim_bar / title_label / popout_btn
+    box.addWidget(_build_slim_bar(window, key, widget))
+    toolbar.hide()   # 按钮都进了标题栏，这行只当 action 仓库（不出高度）
+    box.addWidget(toolbar)
+    box.addWidget(canvas)
     # 画布尺寸变化 = 用户拖了面板边框（或程序平铺/开局）→ 记
     # 比例记忆。过滤器装在画布上而不是容器上：弹出/收回换容器
     # 不用重挂（逻辑见 _on_canvas_resized）
@@ -587,6 +658,9 @@ def _open_plot_panel(window: QMainWindow, name: str, key: str,
     content = _build_view_widget(window, name, key, title)
     sub.setWidget(content)
     sub.setWindowTitle(title)
+    # 壳：画布面板换成自绘标题栏（frameless，省 57 px），占位面板
+    # 保留原生标题栏（见 _apply_panel_chrome）
+    _apply_panel_chrome(sub, content)
     # 比例记忆的初始状态：没拖过 = 默认画布 (500, 300)。_settling
     # 期间（开局/弹出/收回/平铺的程序性尺寸变化）画布 Resize
     # 事件不记成"用户拖过"

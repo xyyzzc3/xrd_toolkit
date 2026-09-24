@@ -58,12 +58,32 @@ class _PlotSubWindow(QMdiSubWindow):
     Qt 默认行为是"关闭 = 隐藏"（还留在 subWindowList 里），与
     "关闭即遗忘"的规则不符 → 重写 closeEvent 走统一关闭入口
     _close_panel（从登记表移除 + 焦点移交 + 销毁容器）。
+
+    无原生标题栏（frameless）：壳改成内容自己的一行自绘标题栏
+    （plot_panels._build_slim_bar，实测省 57 px/面板）。原生标题栏
+    被拿掉的三件事在这里补回来：拖动 = _PanelBarFilter 挂在自绘
+    栏上、双击最大化 = 同一个过滤器、× 关闭 = 自绘栏的关闭按钮
+    （调用与原生 × 同一个 _close_panel）。弹出的独立窗口不套这个
+    壳——它要系统的窗口管理（见 _FloatedWindow）。
+
+    frameless 由 _apply_panel_chrome 按内容决定（不是构造函数里
+    一刀切）：占位面板（未注册视图）没有自绘栏，得留着原生标题栏，
+    否则既拖不动也关不掉。
     """
 
     def __init__(self, window: QMainWindow, key: str):
         super().__init__()
         self._window = window
         self.panel_key = key
+        # 原生壳的 flags（占位面板要还原成这个，见 _apply_panel_chrome）
+        self._native_flags = self.windowFlags()
+        # 标题变了（改名/显示名变化）自绘栏要跟着变。用
+        # windowTitleChanged 信号而不是 WindowTitleChange 事件：
+        # 后者只发给**顶层窗口**（QWidget::setWindowTitle 里
+        # topextra 为空就不发），MDI 子窗口是子部件，收不到（踩过：
+        # 标题栏文案一直是空字符串）
+        self.windowTitleChanged.connect(
+            lambda title: _sync_bar_title(self, title))
         # 点窗口任何地方都选中该面板：由 _PanelClickTracker（应用级
         # 过滤器，见 create_window）统一处理——QWidget 的父过滤器
         # 收不到子部件事件，容器级过滤器盖不住内容区
@@ -71,6 +91,56 @@ class _PlotSubWindow(QMdiSubWindow):
     def closeEvent(self, event):
         _close_panel(self._window, self.panel_key)
         super().closeEvent(event)
+
+
+class _PanelBarFilter(QObject):
+    """自绘标题栏上的"窗口管理器"：按住拖 = 移动面板、双击 = 最大化。
+
+    原生标题栏被拿掉后，这两件事本来由系统做。事件过滤器装在自绘
+    栏本体上（不装按钮）：按在按钮上的事件不会到过滤器，点按钮
+    照旧触发动作——只有标题文字/空白处才是"窗口把儿"。
+
+    容器现查（window.plot_docks[key]），不捕获对象：弹出/收回会换
+    容器（子窗口 ↔ 独立窗口），捕获旧对象就拖不动了。拖动按"全局
+    坐标位移差"算，滚动条/缩放都不影响。
+    """
+
+    def __init__(self, window: QMainWindow, key: str, bar):
+        super().__init__(bar)      # 父 = 自绘栏：防 Python GC 静默失效
+        self._window = window
+        self._key = key
+        self._drag = None          # (按下时的全局坐标, 容器当时的位置)
+
+    def eventFilter(self, obj, event):
+        etype = event.type()
+        if etype == QEvent.MouseButtonDblClick:
+            self._drag = None   # 双击前那一下 press 记的拖动作废
+            dock = self._window.plot_docks.get(self._key)
+            if isinstance(dock, QMdiSubWindow):
+                # 双击 = 占满绘图区 / 还原（子窗口才有这个语义；弹出
+                # 窗口归系统管）
+                if dock.isMaximized():
+                    dock.showNormal()
+                else:
+                    dock.showMaximized()
+            return True
+        if etype == QEvent.MouseButtonPress:
+            dock = self._window.plot_docks.get(self._key)
+            if dock is not None and event.button() == Qt.LeftButton:
+                self._drag = (event.globalPosition().toPoint(), dock.pos())
+            return False
+        if etype == QEvent.MouseMove and self._drag is not None:
+            dock = self._window.plot_docks.get(self._key)
+            if dock is None:
+                self._drag = None
+                return False
+            start, origin = self._drag
+            delta = event.globalPosition().toPoint() - start
+            dock.move(origin + delta)
+            return True
+        if etype == QEvent.MouseButtonRelease:
+            self._drag = None
+        return super().eventFilter(obj, event)
 
 
 class _FloatedWindow(QWidget):
@@ -87,12 +157,46 @@ class _FloatedWindow(QWidget):
         self.panel_key = key
         self.content = None   # 面板内容（_content(dock) 从这里取）
         self.setAttribute(Qt.WA_DeleteOnClose)
+        # 弹出状态下的改名也要同步自绘栏（同 _PlotSubWindow）
+        self.windowTitleChanged.connect(
+            lambda title: _sync_bar_title(self, title))
         # 点窗口任何地方都选中该面板：同 _PlotSubWindow，
         # 由 _PanelClickTracker 统一处理
 
     def closeEvent(self, event):
         _close_panel(self._window, self.panel_key)
         super().closeEvent(event)
+
+
+def _sync_bar_title(dock, title: str) -> None:
+    """自绘标题栏的文案跟着容器标题走（开局、改名、换显示名都算）。
+
+    容器可能是子窗口或弹出窗口，两边都连到本函数；内容没建好
+    （占位面板）时静默跳过。
+    """
+    content = _content(dock) if isinstance(dock, QMdiSubWindow) \
+        else getattr(dock, "content", None)
+    label = getattr(content, "title_label", None)
+    if label is not None and label.text() != title:
+        label.setText(title)
+
+
+def _apply_panel_chrome(dock, content) -> None:
+    """按内容决定容器的壳：有自绘标题栏 → frameless 子窗口。
+
+    画布面板的内容自带一行自绘标题栏（plot_panels._build_slim_bar，
+    标题 + 四个按钮 + [弹出][关闭]）→ 原生标题栏就不要了，省下
+    36 px；占位面板（未注册视图）没有那一行 → 保留原生标题栏（否则
+    没法拖动、也没关闭入口）。弹出窗口不在这里管：它要系统的窗口
+    管理（见 _FloatedWindow 说明）。
+
+    注意 setWindowFlags 会把窗口藏起来，调用方随后必须 show()。
+    """
+    if not isinstance(dock, QMdiSubWindow):
+        return
+    flags = Qt.FramelessWindowHint if hasattr(content, "slim_bar") \
+        else getattr(dock, "_native_flags", Qt.Window)
+    dock.setWindowFlags(flags)
 
 
 def _close_panel(window: QMainWindow, key: str) -> None:
@@ -386,9 +490,9 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     钉住。过滤器必须装到事件落点控件上：QWidget 的父过滤器收不
     到子部件事件（探针实证：子部件 accept 后不向上传播，而
     matplotlib 画布会 accept 鼠标按下）——所以 1D 面板装画布、
-    占位面板装内容本体、把手自己再装一份；顶边抓取带落在工具栏
-    条上（含坐标标签），也各挂一份（按钮是它的子部件，按到按钮
-    仍各司其职，不会误拉伸）。mouseTracking 打开：悬停换光标需
+    占位面板装内容本体、把手自己再装一份；顶边抓取带落在自绘
+    标题栏（面板最上面那一行）上，也挂一份（按钮是它的子部件，
+    按到按钮仍各司其职，不会误拉伸）。mouseTracking 打开：悬停换光标需
     要鼠标移动事件（按住拖动期间的移动事件有隐式鼠标抓取，把手
     不开也照常拖）。光标机制：过滤器挂应用级覆盖光标
     （QApplication.setOverrideCursor，macOS 上部件级 setCursor 会
@@ -411,17 +515,15 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     if canvas is not None:
         canvas.setMouseTracking(True)
         targets.append(canvas)
-    toolbar = getattr(content, "toolbar", None)
-    if toolbar is not None:
-        # 内容上边 8px 抓取带落在工具栏条上：也挂一份（按钮是它的
-        # 子部件，按到按钮仍各司其职，不会误拉伸）
-        toolbar.setMouseTracking(True)
-        targets.append(toolbar)
-        loc = getattr(toolbar, "locLabel", None)
-        if loc is not None:
-            # 坐标标签占住工具栏右侧大半：不挂它顶边拖拽会在这里断
-            loc.setMouseTracking(True)
-            targets.append(loc)
+    bar = getattr(content, "slim_bar", None)
+    if bar is not None:
+        # 内容上边 8px 抓取带落在自绘标题栏那一行上：也挂一份（按钮
+        # 是它的子部件，按到按钮仍各司其职，不会误拉伸）。这一行还
+        # 挂着"拖动移动"过滤器（plot_panels._build_slim_bar）——后
+        # 装的过滤器先收到事件，这里的挂载发生在建栏之后，所以边缘
+        # 带先被抓手吃掉，其余区域才轮到"拖 = 移动面板"
+        bar.setMouseTracking(True)
+        targets.append(bar)
     for target in targets:
         target.installEventFilter(filt)
     content._resize_grip = grip
@@ -486,7 +588,7 @@ def _on_canvas_resized(window: QMainWindow, key: str) -> None:
 
 
 def _panel_extra(dock) -> tuple:
-    """面板"壳"尺寸 = 容器尺寸 − 画布尺寸（标题栏 + 工具栏 + 边框）。
+    """面板"壳"尺寸 = 容器尺寸 − 画布尺寸（自绘标题栏一行 + 边框）。
 
     布局稳定后直接量；刚创建/未布局时量出来是垃圾值（探针实测
     子窗口刚 setWidget 后宽 0..60、高 10..300 都有）→ 改用
@@ -494,6 +596,9 @@ def _panel_extra(dock) -> tuple:
     同旧 _dock_extra 的验证结论）。返回 (宽, 高)；占位面板没有
     画布 → (0, 0)。弹出窗口的壳是 OS 标题栏（不进 widget 几何），
     量出来 = (0, 0)——正常，弹出状态本就不需要壳。
+
+    2026-09-24 面板壳瘦身：这里现在是 26 px 的自绘标题栏（原先
+    原生标题栏 36 + 工具栏 47 = 83 px），同样的画布能多拿 57 px。
     """
     content = _content(dock)
     canvas = getattr(content, "canvas", None)
@@ -673,8 +778,9 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
         dock._settling = True
         cw, ch = content.width(), content.height()
         floated = _FloatedWindow(window, key)
-        floated.setWindowTitle(dock.windowTitle())
-        floated.content = content
+        floated.content = content      # 先挂内容：标题同步（_sync_bar_title）
+        floated.setWindowTitle(dock.windowTitle())   # 才找得到自绘栏
+
         box = QVBoxLayout(floated)
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(content)   # 先改挂内容，再删旧子窗口
@@ -707,6 +813,7 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
         window.mdi.addSubWindow(sub)
         sub.setWidget(content)   # 先改挂内容，再删旧壳（同弹出）
         sub.setWindowTitle(floated.windowTitle())
+        _apply_panel_chrome(sub, content)   # 收回：壳换回自绘标题栏
         _copy_panel_attrs(floated, sub)
         window.plot_docks[key] = sub
         floated.deleteLater()   # 不用 close()：close 会触发 _close_panel 抹掉登记
