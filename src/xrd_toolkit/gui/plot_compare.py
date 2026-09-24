@@ -5,6 +5,7 @@
 依赖方向：本模块 → plot_views（背景叠加/重画）与 plot_panels（面板壳），
 反向调用一律函数内延迟导入。
 """
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,8 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _batch_step, _bg_path_of, _curve_for, _refresh_bg, _spawn)
+    _batch_step, _bg_path_of, _curve_for, _progress_show, _refresh_bg,
+    _spawn)
 
 
 def _compare_title(displays) -> str:
@@ -656,14 +658,18 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
     if missing:
         if len(missing) > 1:
             # 批量进度记账（同 _plot_view）：完成任务/失败各计一次，
-            # 批走完自动清账
+            # 批走完自动清账（进度条与合并日志也走同一套）
             window._batch = {"view": "热图", "total": len(missing),
-                             "done": 0}
+                             "done": 0, "start": time.time(), "cached": 0}
+            _progress_show(window, len(missing))
+        else:
+            window._batch = {"view": "热图", "total": 1, "done": 0,
+                             "start": time.time(), "cached": 0}
         for i, path, display in missing:
             # 默认参数绑定防闭包晚绑定（循环变量到回调执行时已走到末尾）
             def spawn_one(i=i, path=path, display=display):
                 def done(window_, key_, task, result):
-                    suffix = _batch_step(window, key_)
+                    suffix, quiet = _batch_step(window, key_, display)
                     panel = window.plot_docks.get(key)
                     if (panel is None
                             or window._panel_epoch.get(key, 0) != epoch
@@ -672,13 +678,15 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
                     tth, intensity = result
                     panel.heat_results[i] = (Path(path).stem, tth, intensity)
                     panel.heat_pending -= 1
-                    _log(window, f"热图：{display} 积分完成（{len(tth)} 点）"
-                                 f"{suffix}")
+                    if not quiet:      # 大批量：逐张不写（见 _batch_step）
+                        _log(window, f"热图：{display} 积分完成（{len(tth)} 点）"
+                                     f"{suffix}")
                     if panel.heat_pending == 0:
                         _finish_heatmap(window, key)
 
                 def error(msg):
-                    suffix = _batch_step(window, key)   # error 包装器只有
+                    suffix, _ = _batch_step(window, key)   # 失败永远逐条写
+                    # error 包装器只有
                     # msg（key 取闭包外层；done 才有 key_ 形参）
                     panel = window.plot_docks.get(key)
                     if (panel is None

@@ -7241,31 +7241,100 @@ class TestBatchProgress(unittest.TestCase):
             self.assertIn("正在开面板：9/9…", log)
             self.assertEqual(log.count("正在开面板："), 1,
                              "9 块只跨过 8 一次")
+            # 9 张 > 合并阈值 → 开面板合并成一行（不再 9 行"打开面板"）
+            self.assertIn("打开1D面板 9 张：fake_n1.tif、fake_n2.tif、"
+                          "fake_n3.tif、fake_n4.tif、fake_n5.tif…", log)
+            self.assertNotIn("打开1D面板：fake_n9.tif", log)
         finally:
             w.close()
 
     def test_batch_cap_opens_only_max_panels(self):
-        """一次批量最多画前 MAX_PANELS_PER_BATCH 张，且不静默。"""
+        """一次批量最多画前 MAX_PANELS_PER_BATCH 张；超限的**只算不画**。"""
+        folder = tempfile.mkdtemp()
+        paths = [str(Path(folder, f"c{i}.tif")) for i in range(1, 5)]
+        for p in paths:      # 真文件：产物落盘要用到真路径（file 指纹）
+            Path(p).touch()
         w = create_window()
         try:
             with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
                     mock.patch.object(gui_views, "_compute_integration",
                                       side_effect=_fake_compute):
-                w.add_files([f"data/fake_c{i}.tif" for i in range(1, 5)])
+                w.add_files(paths)
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
                                 "这批判完应清账")
             opened = sorted(k for k in w.plot_docks if k.startswith("1D|"))
-            self.assertEqual(opened, ["1D|data/fake_c1.tif",
-                                      "1D|data/fake_c2.tif"],
+            self.assertEqual(opened, ["1D|" + p for p in paths[:2]],
                              "上限 2 张，只该开前两张（按列表顺序）")
             log = w.log_text.toPlainText()
-            # 少画一半必须说清楚，并指出出口
+            # 少画一半必须说清楚，并指出出口（1D 的出口 = 后台算完入库）
             self.assertIn("这批 4 张里先画前 2 张", log)
-            self.assertIn("[热图]", log)
-            # 计数只算真画的那两张：否则 k/n 永远到不了 n（批不清账）
-            self.assertIn("（2/2）", log)
-            self.assertNotIn("（4/4）", log)
+            self.assertIn("入库、点开即看", log)
+            # 计数含"只算不画"那两张：总数不对的话 k/n 到不了 n、批不清账
+            self.assertIn("（1/4）", log)
+            self.assertNotIn("（2/2）", log)
+            # 只算不画的真结果：产物落了盘（下次点开就是复用缓存）
+            geom = gui_panel_state._collect_geometry(w)
+            kw = dict(config=w.config_name,
+                      npt=int(w.params["输出点数"].value()),
+                      tth_min=geom.get("tth_min_deg"),
+                      tth_max=geom.get("tth_max_deg"))
+            from xrd_toolkit.services import stage_cache
+            for p in paths[2:]:
+                self.assertTrue(stage_cache.has_1d(Path(p), **kw),
+                                f"超限的 {Path(p).name} 该已算完入库")
+        finally:
+            w.close()
+
+    def test_batch_progress_bar_shows_and_hides(self):
+        """状态栏那条批量进度条：批里出现、范围=总数、批走完收起。
+
+        （用慢假积分把第一条卡住，才好在"飞行中"看它——批走完那一下
+        收起来，是"批结束"最直观的信号。）"""
+        def slow(path_str, geom, npt):
+            time.sleep(0.3)
+            return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
+
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=slow):
+                w.add_files(["data/fake_p1.tif", "data/fake_p2.tif"])
+                _open_view(w, "1D")
+                self.assertFalse(w.batch_progress.isHidden(), "批里该出现进度条")
+                self.assertEqual(w.batch_progress.maximum(), 2, "范围 = 这一批的总数")
+                self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
+                                "这批判完应清账")
+            self.assertTrue(w.batch_progress.isHidden(), "批走完该收起")
+            self.assertEqual(w.batch_progress.value(), 2, "该走到 n")
+        finally:
+            w.close()
+
+    def test_big_batch_merges_log_lines(self):
+        """大批量（> BATCH_LOG_MERGE_AFTER）：每 8 张一行进度 + 收尾汇总。
+
+        用户 2026-09-25："81 张 = 81 行「打开面板」+ 81 行「积分完成」，
+        把日志刷没了"。这条直接喂 _batch_step（不必真开 10 张面板），
+        钉三件事：合并模式、进度行的节奏（每 8）、收尾汇总（含用时与
+        复用缓存张数）——以及批照样清账。
+        """
+        w = create_window()
+        try:
+            w._batch = {"view": "1D", "total": 10, "done": 0,
+                        "start": time.time(), "cached": 3}
+            quiet_flags = []
+            for i in range(10):
+                suffix, quiet = gui_views._batch_step(
+                    w, f"1D|data/p{i}.tif", f"f{i}.tif")
+                quiet_flags.append(quiet)
+                self.assertEqual(suffix, f"（{i + 1}/10）")
+            log = w.log_text.toPlainText()
+            self.assertTrue(all(quiet_flags), "大批量该整批进入合并模式")
+            self.assertIn("1D 进度：8/10（最近：f7.tif）", log)
+            self.assertEqual(log.count("1D 进度："), 1, "10 张只跨过 8 一次")
+            self.assertIn("1D 批完成：10 张", log)
+            self.assertIn("复用缓存 3 张", log)
+            self.assertFalse(hasattr(w, "_batch"), "批该清账")
         finally:
             w.close()
 

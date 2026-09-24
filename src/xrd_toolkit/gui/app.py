@@ -58,7 +58,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
-    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
     QSpinBox, QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget,
     QDockWidget, QApplication)
 
@@ -1180,6 +1180,17 @@ def _build_status(window: QMainWindow) -> None:
     window.coord_label.setStyleSheet(
         "font-family: Menlo, Consolas, monospace; padding: 1px 4px;")
     window.statusBar().addPermanentWidget(window.coord_label)
+    # 批量进度条（[1D] 等一次勾多张时出现）：开面板、后台积分、只算不画
+    # 都走它（见 plot_views._progress_show/_batch_step）。平时藏起来，
+    # 不占状态栏的地方；宽度固定，出现时右侧那几项不会左右跳。
+    window.batch_progress = QProgressBar()
+    window.batch_progress.setObjectName("batch_progress")
+    window.batch_progress.setFixedWidth(150)
+    window.batch_progress.setMaximumHeight(14)
+    window.batch_progress.setTextVisible(True)
+    window.batch_progress.setFormat("%v/%m")
+    window.batch_progress.setVisible(False)
+    window.statusBar().addPermanentWidget(window.batch_progress)
     sep = QFrame()
     sep.setFrameShape(QFrame.Shape.VLine)
     sep.setFrameShadow(QFrame.Shadow.Sunken)

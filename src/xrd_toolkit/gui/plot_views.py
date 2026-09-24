@@ -28,11 +28,14 @@ builder 表 _VIEW_BUILDERS 在 plot_panels（视图名 → 建面板内容）—
     线，统一带 _AUX_GID_PREFIX）+ _bg_path_of + _refresh_bg（按各
     面板快照重画全部曲线面板）；
   - 文件 → 视图闭环：_plot_view（作图按钮的动作：对每个对号文件开
-    面板并计算）+ _batch_step（批量进度记账）。
+    面板并计算）+ _batch_step（批量进度记账：状态栏进度条 + 大批量
+    合并日志）+ _pending_products / _spawn_headless（超出画面板上限
+    的文件"只算不画"：照样算完入库，之后点开是复用缓存）。
 
 面板壳（画布容器、手势、悬停取点、每面板工具栏）在 plot_panels；
 多文件视图（对比 / 热图 / 锚点拾取）在 plot_compare。
 """
+import time
 from pathlib import Path
 
 import numpy as np
@@ -148,9 +151,14 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
         cached = None    # 缓存读失败（文件被删/权限）：当作没缓存
     if cached is not None and dock is not None:
         tth, intensity = cached
-        _log(window, f"复用缓存：{path.name}（几何 {window.config_name}，"
-                     f"{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）"
-                     f"{_batch_step(window, key)}")
+        suffix, quiet = _batch_step(window, key, path.name)
+        batch = getattr(window, "_batch", None)
+        if batch is not None:
+            batch["cached"] = batch.get("cached", 0) + 1   # 收尾汇总里报一句
+        if not quiet:
+            _log(window, f"复用缓存：{path.name}（几何 {window.config_name}，"
+                         f"{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）"
+                         f"{suffix}")
         window.status_text.setText(f"复用缓存 {path.name}"
                                    f"（{len(tth)} 点）")
         dock.last_tth, dock.last_intensity = tth, intensity
@@ -418,7 +426,9 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     情况是同一面板连点两次开了两个任务——先开的晚到会被丢弃
     （每面板只认最新任务，旧结果不得覆盖新图）。
     """
-    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
+    # 批量进度：完成任务即计数（大批量时 quiet=True → 不写张张一条）
+    suffix, quiet = _batch_step(
+        window, key, getattr(window.plot_docks.get(key), "panel_display", ""))
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
@@ -435,6 +445,8 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     dock.last_intensity = intensity
     _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
     _draw_1d(window, dock, tth, intensity)
+    if quiet:
+        return          # 大批量：逐张那行不写（进度与汇总由 _batch_step 出）
     if len(tth):
         _log(window, f"积分完成：{dock.panel_display}（{len(tth)} 点，"
                      f"2θ {tth.min():.3f}~{tth.max():.3f}°）{suffix}")
@@ -443,28 +455,66 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
                      f"{suffix}")
 
 
-def _batch_step(window: QMainWindow, key: str) -> str:
-    """批量进度计数：key 属于当前批（视图一致）就 +1，返回 "（k/n）"
-    后缀（贴到完成/失败日志末尾）；非批量或批已走完返回空串。
+def _progress_show(window: QMainWindow, total: int, value: int = 0) -> None:
+    """批量进度条：显示出来并把范围设成 total（开面板阶段也用它）。"""
+    bar = getattr(window, "batch_progress", None)
+    if bar is None:
+        return
+    bar.setRange(0, max(1, int(total)))
+    bar.setValue(int(value))
+    bar.setVisible(True)
+
+
+def _progress_hide(window: QMainWindow) -> None:
+    """批收尾：进度条收起来（平时不占状态栏的地方）。"""
+    bar = getattr(window, "batch_progress", None)
+    if bar is not None:
+        bar.setVisible(False)
+
+
+def _batch_step(window: QMainWindow, key: str, name: str = ""):
+    """批量进度计数：+1、推进度条，返回 (k/n 后缀, 是否让调用方别写日志)。
 
     [1D] 等按钮一次勾 N 个文件 = 一批（_plot_view 记账 total/视图）。
     每个任务结束时恰好回调一次（done 或 error），进度按"完成数/总
     数"计；批外零散的面板（[应用] 重算、单个开图）不计数。
+
+    日志（2026-09-25 用户："81 张 = 81 行「打开面板」+ 81 行「积分完成」，
+    把日志刷没了"）：大批量（total > BATCH_LOG_MERGE_AFTER）不逐张写，
+    改成每 8 张一行进度 + 批收尾一行汇总（带用时与复用缓存张数），
+    调用方拿到 quiet=True 就别写自己那行。**失败路径传 name=""**：它照常
+    用返回的（k/n）后缀逐条写——失败是要看的，不合并。单张与小批照旧
+    逐条写（一眼看清哪张好了）。
     """
     batch = getattr(window, "_batch", None)
     if batch is None or key.split("|", 1)[0] != batch["view"]:
-        return ""
+        return "", False
     batch["done"] += 1
-    suffix = f"（{batch['done']}/{batch['total']}）"
-    if batch["done"] >= batch["total"]:
+    total = batch["total"]
+    quiet = total > BATCH_LOG_MERGE_AFTER
+    bar = getattr(window, "batch_progress", None)
+    if bar is not None:
+        bar.setValue(batch["done"])
+    suffix = f"（{batch['done']}/{total}）"
+    if quiet and name and batch["done"] % 8 == 0 and batch["done"] < total:
+        _log(window, f"{batch['view']} 进度：{batch['done']}/{total}"
+                     f"（最近：{name}）")
+    if batch["done"] >= total:
+        _progress_hide(window)
+        if quiet:
+            dt = time.time() - batch.get("start", time.time())
+            cached = batch.get("cached", 0)
+            extra = f"；其中复用缓存 {cached} 张" if cached else ""
+            _log(window, f"{batch['view']} 批完成：{total} 张"
+                         f"（用时 {dt:.1f} s{extra}）")
         del window._batch   # 批走完：清账，之后零散任务回到无计数
-    return suffix
+    return suffix, quiet
 
 
 def _on_integration_error(window: QMainWindow, path: Path, key: str,
                           msg: str) -> None:
     """积分失败（主线程）：报错进日志区，不崩溃（批内带进度计数）。"""
-    suffix = _batch_step(window, key)
+    suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
     _log(window, f"积分失败：{path.name} — {msg}{suffix}")
 
 
@@ -475,7 +525,7 @@ def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
     what = 计算名（读取/剖面计算/瀑布积分），日志统一 "{what}失败：
     文件名 — 原因"；批内带进度计数后缀。
     """
-    suffix = _batch_step(window, key)
+    suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
     _log(window, f"{what}失败：{path.name} — {msg}{suffix}")
 
 
@@ -496,7 +546,9 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
     与 _on_integration_done 同款过期防护：每面板只认最新任务，
     面板关了静默丢弃。
     """
-    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
+    # 批量进度：完成任务即计数（大批量时 quiet=True → 不写张张一条）
+    suffix, quiet = _batch_step(
+        window, key, getattr(window.plot_docks.get(key), "panel_display", ""))
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
@@ -511,13 +563,16 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
     _cache_image(window, str(dock.panel_file), image)
     _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
     _draw_2d(window, dock, image)
-    _log(window, f"读取完成：{dock.panel_display}"
-                 f"（{image.shape[0]}×{image.shape[1]} 像素）{suffix}")
+    if not quiet:
+        _log(window, f"读取完成：{dock.panel_display}"
+                     f"（{image.shape[0]}×{image.shape[1]} 像素）{suffix}")
 
 
 def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
     """剖面计算完成（主线程）：结果留面板、画曲线（同 1D 的过期防护）。"""
-    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
+    # 批量进度：完成任务即计数（大批量时 quiet=True → 不写张张一条）
+    suffix, quiet = _batch_step(
+        window, key, getattr(window.plot_docks.get(key), "panel_display", ""))
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:
@@ -532,6 +587,8 @@ def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
     dock.last_profile_intensity = intensity
     _set_focus(window, key, dock.windowTitle())
     _draw_profile(window, dock, t, intensity)
+    if quiet:
+        return          # 大批量：逐张那行不写（见 _batch_step 的说明）
     if len(t):
         _log(window, f"剖面完成：{dock.panel_display}（{len(t)} 点，"
                      f"距离 {t.min():.0f}~{t.max():.0f} px）{suffix}")
@@ -542,7 +599,9 @@ def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
 
 def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
     """扇形积分完成（主线程）：结果留面板、画堆叠瀑布（同 1D 的过期防护）。"""
-    suffix = _batch_step(window, key)   # 批量进度：完成任务即计数
+    # 批量进度：完成任务即计数（大批量时 quiet=True → 不写张张一条）
+    suffix, quiet = _batch_step(
+        window, key, getattr(window.plot_docks.get(key), "panel_display", ""))
     if window._latest_task.get(key) is not task:
         dock = window.plot_docks.get(key)
         if dock is not None:
@@ -556,6 +615,8 @@ def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
     dock.last_waterfall = (tth, i2d, chi)
     _set_focus(window, key, dock.windowTitle())
     _draw_waterfall(window, dock, tth, i2d, chi)
+    if quiet:
+        return          # 大批量：逐张那行不写（见 _batch_step 的说明）
     if len(tth):
         _log(window, f"扇形积分完成：{dock.panel_display}"
                      f"（{i2d.shape[1]} 扇区 × {i2d.shape[0]} 点）{suffix}")
@@ -1014,6 +1075,12 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
 # [对比] 一张图放完整批，还会把整批算完落盘，之后单独点开是秒开）。
 MAX_PANELS_PER_BATCH = 24
 
+# 批量多大之后"日志合并"（2026-09-25 用户："81 张 = 81 行「打开面板」+
+# 81 行「积分完成」，把日志刷没了"）：超过这个张数就不再逐张写，改成
+# 开面板一行汇总 + 每 8 张一行进度 + 收尾一行汇总（用时/复用缓存张数）；
+# **失败永远逐条写**（那是要看的）。小批维持逐张写，一眼看清哪张好了。
+BATCH_LOG_MERGE_AFTER = 8
+
 
 def _resolve_dock(window: QMainWindow, name: str, item):
     """按「视图 + 文件条目」找已有面板：返回 (键, 面板或 None)。
@@ -1041,6 +1108,47 @@ def _resolve_dock(window: QMainWindow, name: str, item):
     return key, dock
 
 
+def _pending_products(window: QMainWindow, name: str, rest: list) -> list:
+    """超限文件里**还需要算**的那些（1D 专用；其余视图返回空表）。
+
+    为什么只认 1D：只有 1D 有产物可留（2D/剖面/瀑布是显示阶段，见
+    services/stage_cache 的说明），"只算不画"对它们没有意义。
+    已有产物的直接跳过——不重算，**也不计进这一批的总数**：总数为 0
+    的批不该开进度条，更不该让 k/n 永远到不了 n。
+    """
+    if name != "1D" or not rest:
+        return []
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    kw = dict(config=window.config_name, npt=npt,
+              tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    todo = []
+    for item in rest:
+        path = Path(item.data(Qt.UserRole))
+        if not stage_cache.has_1d(path, **kw):
+            todo.append(path)
+    return todo
+
+
+def _on_headless_done(window: QMainWindow, key: str, task, result) -> None:
+    """"只算不画"的完成回调：只记账（不画图、不写逐张日志）。"""
+    _batch_step(window, key, Path(key.split("|", 1)[1]).name)
+
+
+def _spawn_headless(window: QMainWindow, name: str, path: Path) -> None:
+    """只算不画：后台算 1D 并把产物落盘，**不建面板**（用户 2026-09-25 的 B 项）。
+
+    worker 与画面板那条完全共用（_spawn：算完顺手 stage_cache.store_1d），
+    差别只在回调——这里不画任何东西。记账归到**同一批**（键的视图段与
+    画面板一致），所以进度条与日志是一条线走完；失败照旧逐条报
+    （_spawn 的默认 error 回调）。
+    """
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    key = f"{name}|{path}"
+    _spawn(window, path, geom, npt, key, on_done=_on_headless_done)
+
+
 def _plot_view(window: QMainWindow, name: str) -> None:
     """工具栏作图按钮的动作：对每个对号文件开面板（或复用）并计算。
 
@@ -1064,17 +1172,27 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         _log(window, "没有选中的文件")
         return
     targets = checked[:MAX_PANELS_PER_BATCH]
-    skipped = len(checked) - len(targets)
-    if skipped:
+    rest = checked[len(targets):]
+    # 超出的文件**照样算完入库**（只算不画）：1D 有产物可留，之后单独
+    # 点开就是复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
+    # 其余视图（2D/剖面/瀑布）是显示阶段、没有产物可留，就只记日志。
+    pending = _pending_products(window, name, rest)
+    if rest:
+        tail = (f"其余 {len(rest)} 张后台算完入库、点开即看"
+                if name == "1D" else "要看全部：[热图] / [对比] 一张图看完整批")
         _log(window, f"这批 {len(checked)} 张里先画前 {len(targets)} 张"
                      "（按文件列表顺序，一次最多画 "
                      f"{MAX_PANELS_PER_BATCH} 张：每张 ≈15 MB、越开越慢）；"
-                     "要看全部：[热图] / [对比] 一张图放完整批，还会把"
-                     "整批算完落盘，之后单独点开是秒开")
-    if len(targets) > 1:
-        # 批量进度记账：这一批的总数/视图名；每个任务结束回调计数
-        # 一次（k/n 后缀贴在完成/失败日志末尾，批走完自动清账）
-        window._batch = {"view": name, "total": len(targets), "done": 0}
+                     f"{tail}")
+    total_tasks = len(targets) + len(pending)
+    if total_tasks > 1:
+        # 批量进度记账：这一批的总数/视图名/起算时刻；每个任务结束回调
+        # 计数一次（k/n 后缀与进度条都靠它，批走完自动清账）
+        window._batch = {"view": name, "total": total_tasks, "done": 0,
+                         "start": time.time(), "cached": 0}
+        _progress_show(window, total_tasks)
+    opened = []          # 新开的面板显示名（大批量时合并成一行）
+    merged = total_tasks > BATCH_LOG_MERGE_AFTER
     for i, item in enumerate(targets):
         path = Path(item.data(Qt.UserRole))
         display = item.text()
@@ -1085,6 +1203,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                 # 进度、顺手消化事件，界面不会一口气闷十几秒没反应
                 # （用户反馈"图一多就很卡"——开 81 张时的观感）
                 _log(window, f"正在开面板：{i + 1}/{len(targets)}…")
+                _progress_show(window, len(targets), i + 1)   # 开面板也有进度
                 _settle(window)
             title = f"{name}_{display}"
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
@@ -1094,6 +1213,16 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步
-            _log(window, f"打开{name}面板：{display}")
+            if merged:
+                opened.append(display)      # 大批量：攒着，循环后一行写完
+            else:
+                _log(window, f"打开{name}面板：{display}")
         dock.setVisible(True)
         _run_view(window, name, path, key)
+    if opened:
+        head = "、".join(opened[:5]) + ("…" if len(opened) > 5 else "")
+        _log(window, f"打开{name}面板 {len(opened)} 张：{head}")
+    if len(targets) + len(pending) > 1:
+        _progress_show(window, len(targets) + len(pending))   # 进入计算阶段
+    for path in pending:
+        _spawn_headless(window, name, path)

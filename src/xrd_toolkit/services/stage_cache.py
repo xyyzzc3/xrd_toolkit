@@ -147,6 +147,18 @@ def load_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
     return _read_curve(_cache_dir("1d") / f"{key}.npz")
 
 
+def has_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None) -> bool:
+    """这个文件的 1D 产物**在不在**（只看文件在不在，不读内容）。
+
+    给"批量超出画面板上限、剩下的只算不画"那条路用（界面 2026-09-25）：
+    要先数清"哪些已经有产物、根本不用再算"，才能把这一批的总数报准
+    （总数为 0 的批不该开进度条，也不该永远等不到 n）。
+    """
+    key = _safe_key(path, config=config, npt=npt, tth_min=tth_min,
+                    tth_max=tth_max)
+    return key is not None and (_cache_dir("1d") / f"{key}.npz").exists()
+
+
 def store_1d(path, tth, intensity, *, config: str, npt: int,
              tth_min=None, tth_max=None) -> Path:
     """写 1D 产物（原子）。返回产物路径。"""
