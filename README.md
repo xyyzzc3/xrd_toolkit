@@ -92,7 +92,7 @@ python -m xrd_toolkit.gui
   <tr>
     <td align="center" colspan="2">
       <img src="showcase/gui/gui_calib.png" width="50%"><br>
-      <sub>Calibration page on the LaB₆ standard — the current config beside comparison slots A and B, each column carrying distance / ring centre / ring-position deviation, with base-relative Δ rows and a verdict line. The borrowed start (0.259 px) is replaced by the first calibration result (0.236 px) — the rule for a new batch; the second run lands at 0.239 px, slightly worse, so it stays a comparison column instead of replacing anything</sub>
+      <sub>Calibration page on the LaB₆ standard — the current config beside comparison slots A and B, each column carrying distance / ring centre / ring-position deviation, with base-relative Δ rows and a verdict line. Two steps were run here: ① auto locate (recorded as 原始1, 0.26 px deviation) → ③ refine on the current config (精修1, 0.23 px). The first result of a new batch is adopted outright by rule — the verdict line states why (numbers are from this run; pyFAI refinement varies slightly run to run)</sub>
     </td>
   </tr>
 </table>
