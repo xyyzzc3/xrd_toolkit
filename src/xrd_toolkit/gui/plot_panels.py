@@ -175,6 +175,52 @@ def _restore_line_styles(ax, old_lines, restore_color=True):
         line.set_marker(marker)
 
 
+def _blit_take(dock, ax) -> dict:
+    """起一次"低成本重画"会话：把当前帧缓存下来，拖动期只贴变化的部分。
+
+    只给**框选**用（拖动期视图不变，只多一个选框 → 贴图与真画法视觉
+    等价）；平移不走这条路，原因见 _pan_press。
+
+    为什么需要（2026-09-24 用户"按照最快来优化"）：一次完整重绘 28 ms
+    （剖析：文字排版 22% + Line2D 13% + 光栅化 4%，其余是 mpl 每个
+    artist 的属性开销——没有单点能砍），一次拖动的每一个鼠标移动都付
+    这份钱就是"卡"。拖动期真正变的只有两样：选框（框选）或整块画面
+    的平移（平移），所以缓存一帧、每帧只贴这部分，松手再画一次完整
+    的（那时刻度/文字才需要重算）。
+
+    返回会话 dict 或空 dict（后端不支持 → 调用方退回整帧重绘）。
+    会话在**任何一次完整绘制后自动作废**（挂在 draw_event 上，见
+    _build_canvas_panel）：拖动期间后台算完一张别的图会触发重绘，
+    那时缓存的背景已经过期，拿它贴会把画面贴回旧样子。
+    """
+    canvas = ax.figure.canvas
+    if not all(hasattr(canvas, name)
+               for name in ("copy_from_bbox", "restore_region", "blit")):
+        return {}
+    canvas.draw()                      # 背景必须和屏幕上的当前帧一致
+    return {"canvas": canvas, "bg": canvas.copy_from_bbox(ax.figure.bbox),
+            "ax": canvas.copy_from_bbox(ax.bbox)}
+
+
+def _blit_drop(window: QMainWindow, key: str) -> None:
+    """作废拖动的位图会话（整帧重绘后缓存背景就过期了）。"""
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        dock._blit = None
+
+
+def _blit_box(dock, ax, patch) -> None:
+    """框选拖动期的一帧：贴回背景 → 只画选框 → 上屏（几毫秒）。"""
+    session = getattr(dock, "_blit", None)
+    if not session:
+        ax.figure.canvas.draw_idle()   # 没有会话（被重绘打断）：老实整帧画
+        return
+    canvas = session["canvas"]
+    canvas.restore_region(session["bg"])
+    ax.draw_artist(patch)
+    canvas.blit(ax.figure.bbox)
+
+
 def _panel_axes(dock):
     """面板的主坐标轴（各视图挂在画布上的名字不同，依次试）。
 
@@ -387,7 +433,7 @@ def _draw_box(dock, ax, x0: float, y0: float, x1: float, y1: float) -> None:
         dock._box_patch = box
     else:
         box.set_bounds(left, bottom, abs(u1 - u0), abs(v1 - v0))
-    ax.figure.canvas.draw_idle()
+    _blit_box(dock, ax, box)   # 拖动期只贴选框（见 _blit_take）
 
 
 def _pan_press(window: QMainWindow, key: str, event) -> None:
@@ -406,10 +452,17 @@ def _pan_press(window: QMainWindow, key: str, event) -> None:
     if _magnifier_on(dock):
         dock._box_start = (event.x, event.y)
         dock._box_axes = event.inaxes
+        dock._blit = _blit_take(dock, event.inaxes)   # 拖动期贴位图
         _draw_box(dock, event.inaxes, event.x, event.y, event.x, event.y)
         return
     dock._pan_start = (event.x, event.y)
     dock._pan_limits = (event.inaxes.get_xlim(), event.inaxes.get_ylim())
+    # 平移**不**贴位图：拖动期视图每帧都在变，要贴就得靠
+    # restore_region(xy=) 平移缓存块，而实测（mpl 3.11 + Qt 后端，
+    # /tmp/dbg_blit_api3.py 那个最小实验）它并不做干净的平移——点没挪
+    # 位、还贴出多份。宁可 30 ms/帧的整帧重画，也不要一个方向错的快速
+    # 预览。框选不同：拖动期视图不变，只多一个选框，贴图与真画法等价
+    # （见 _blit_box）。
 
 
 def _pan_motion(window: QMainWindow, key: str, event) -> None:
@@ -450,7 +503,7 @@ def _pan_motion(window: QMainWindow, key: str, event) -> None:
     ax.set_xlim(nx0, nx1)
     ax.set_ylim(ny0, ny1)
     dock._view_from_gesture = True   # 手势视图不算"家"（见 _refresh_home）
-    ax.figure.canvas.draw_idle()
+    ax.figure.canvas.draw_idle()     # 平移每次移动整帧重画（原因见 _pan_press）
 
 
 def _pan_release(window: QMainWindow, key: str, event) -> None:
@@ -474,6 +527,7 @@ def _pan_release(window: QMainWindow, key: str, event) -> None:
         if patch is not None:
             patch.remove()      # 选框是临时的：松开就撤，不留痕迹
         if ax is None:
+            dock._blit = None
             return
         if (abs(event.x - box_start[0]) >= BOX_MIN_PX
                 and abs(event.y - box_start[1]) >= BOX_MIN_PX):
@@ -494,7 +548,8 @@ def _pan_release(window: QMainWindow, key: str, event) -> None:
             toolbar = getattr(ax.figure.canvas, "toolbar", None)
             if toolbar is not None and toolbar._nav_stack() is None:
                 toolbar.push_current()
-        ax.figure.canvas.draw_idle()   # 撤掉的选框要重画一次
+        dock._blit = None
+        ax.figure.canvas.draw_idle()   # 松手：整帧重画（撤选框 + 刻度更新）
         return
     dock._pan_start = None
     dock._pan_limits = None
@@ -814,6 +869,11 @@ def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
     # 比例记忆。过滤器装在画布上而不是容器上：弹出/收回换容器
     # 不用重挂（逻辑见 _on_canvas_resized）
     canvas.installEventFilter(_PanelResizeFilter(window, key, canvas))
+    # 任何一次整帧重绘都作废拖动的位图会话（缓存背景已过期，再贴会
+    # 把画面贴回旧样子）；见 _blit_take。注意会话挂在**容器**上
+    # （dock），不是这个内容部件——弹出/收回会换容器
+    canvas.mpl_connect("draw_event",
+                       lambda ev, w=window, k=key: _blit_drop(w, k))
     # 悬停取点：鼠标移动 → 曲线上出点 + 状态栏出坐标；
     # 移出坐标轴 → 清空（细节见 _hover_motion/_hover_leave）
     if hover:
@@ -966,8 +1026,10 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     if dock is None or ax is None:
         _hover_leave(window, key)
         return
-    if getattr(dock, "_pan_start", None) is not None:
-        _hover_leave(window, key)   # 正在按住左键平移：悬停点退场，别乱跳
+    if (getattr(dock, "_pan_start", None) is not None
+            or getattr(dock, "_box_start", None) is not None):
+        # 正在按住左键平移/框选：悬停点退场，别乱跳（也省掉一次整帧重绘）
+        _hover_leave(window, key)
         return
     # 只在数据曲线上选线：背景扣除的原始曲线/基线/锚点标记不参与，
     # 否则悬停点会在"扣除后曲线"和"原始曲线"之间跳

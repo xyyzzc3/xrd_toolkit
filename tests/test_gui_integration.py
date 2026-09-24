@@ -3193,6 +3193,187 @@ class TestSlimPanelChrome(unittest.TestCase):
             w.close()
 
 
+class TestDragBlit(unittest.TestCase):
+    """框选拖动期的低成本重画（2026-09-24 用户："按照最快来优化"）。
+
+    框选拖动期视图不变、只多一个选框 → 缓存一帧、每帧只贴选框，
+    松手才整帧重画一次（那时刻度/文字才需要更新）。实测 30 → 0.96 ms
+    每次鼠标移动。
+
+    平移**不**走这条路：拖动期视图每帧都在变，贴图要靠
+    restore_region(xy=) 平移缓存块，而实测（最小实验）它在 mpl 3.11 上
+    不做干净的平移 → 宁可每帧整帧重画（30 ms ≈ 33 fps），不要方向错的
+    快速预览。所以下面这些测试都用**框选**手势。
+
+    这里守四件事：
+      - 拖动中的每一次移动都不整帧重绘；
+      - 松手整帧重画一次（刻度/文字这时才更新）；
+      - 任何一次整帧重绘作废会话（否则会贴回过期背景）；
+      - 按下落在轴外（误点）再松开不许炸（踩过 AttributeError）。
+    """
+
+    PATH = "data/fake_b.tif"
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([self.PATH])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
+        return _dock(w, "1D", self.PATH)
+
+    def _ev(self, canvas, name, x, y, **kw):
+        return MouseEvent(name, canvas, x, y, **kw)
+
+    def test_box_drag_motions_use_blit_not_full_redraw(self):
+        """框选拖动中的移动不整帧重绘（只有贴图），松手才重画一次。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax, canvas = content.axes_1d, content.canvas
+            xd = ax.lines[0].get_xdata()
+            xm = float(xd[len(xd) // 2])
+            ym = float(ax.lines[0].get_ydata()[len(xd) // 2])
+            px, py = ax.transData.transform((xm, ym))
+            content.toolbar._actions["zoom"].trigger()     # 框选
+            with mock.patch.object(canvas, "draw", wraps=canvas.draw) as draw:
+                canvas.callbacks.process("button_press_event", self._ev(
+                    canvas, "button_press_event", px, py, button=1))
+                self.assertTrue(getattr(dock, "_blit", None), "该建位图会话")
+                after_press = draw.call_count
+                for i in range(3):
+                    canvas.callbacks.process("motion_notify_event", self._ev(
+                        canvas, "motion_notify_event", px + 10 * (i + 1),
+                        py + 8 * (i + 1), buttons=frozenset({1})))
+                self.assertEqual(draw.call_count, after_press,
+                                 "拖动中的移动不该整帧重绘")
+                canvas.callbacks.process("button_release_event", self._ev(
+                    canvas, "button_release_event", px + 30, py + 24,
+                    button=1))
+            QApplication.processEvents()
+            self.assertIsNone(getattr(dock, "_blit", None), "松手该清会话")
+            self.assertNotEqual(tuple(ax.get_xlim()), (1.0, 8.0),
+                                "框选该生效（松手时整帧重画一次）")
+        finally:
+            w.close()
+
+    def test_full_redraw_invalidates_the_session(self):
+        """整帧重绘（比如后台算完一张别的图）作废会话：之后退回整帧画。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax, canvas = content.axes_1d, content.canvas
+            xd = ax.lines[0].get_xdata()
+            xm = float(xd[len(xd) // 2])
+            ym = float(ax.lines[0].get_ydata()[len(xd) // 2])
+            px, py = ax.transData.transform((xm, ym))
+            content.toolbar._actions["zoom"].trigger()
+            canvas.callbacks.process("button_press_event", self._ev(
+                canvas, "button_press_event", px, py, button=1))
+            self.assertTrue(getattr(dock, "_blit", None))
+            canvas.draw()          # 模拟外部整帧重绘
+            self.assertIsNone(getattr(dock, "_blit", None),
+                              "整帧重绘后会话该作废（背景已过期）")
+            with mock.patch.object(canvas, "draw_idle",
+                                   wraps=canvas.draw_idle) as idle:
+                canvas.callbacks.process("motion_notify_event", self._ev(
+                    canvas, "motion_notify_event", px + 12, py + 9,
+                    buttons=frozenset({1})))
+                self.assertGreaterEqual(idle.call_count, 1,
+                                        "没有会话时退回 draw_idle 整帧画")
+        finally:
+            w.close()
+
+    def test_release_without_a_valid_press_is_safe(self):
+        """按下落在轴外（误点再松手）不许炸——踩过 AttributeError。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            canvas = content.canvas
+            x0 = content.axes_1d.get_xlim()
+            # 轴外按下（画布左上角）+ 松开
+            canvas.callbacks.process("button_press_event", self._ev(
+                canvas, "button_press_event", 2, content.canvas.height() - 2,
+                button=1))
+            canvas.callbacks.process("button_release_event", self._ev(
+                canvas, "button_release_event", 2, content.canvas.height() - 2,
+                button=1))
+            # 只有松开、没有按下，也要安全
+            canvas.callbacks.process("button_release_event", self._ev(
+                canvas, "button_release_event", 100, 100, button=1))
+            self.assertEqual(tuple(content.axes_1d.get_xlim()), tuple(x0),
+                             "误点不该改变视图")
+        finally:
+            w.close()
+
+
+class TestBoxZoomScope(unittest.TestCase):
+    """框选只影响自己那块面板（用户 2026-09-24："确认区域放大不会影响
+    整体的图"）。另一块面板的范围 / 曲线数据 / "家" / 总缩放 / 几何
+    都不许动。"""
+
+    def _open_two(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(lambda: all(
+                len(_axes(w, "1D", p).lines) > 0
+                for p in ("data/fake_a.tif", "data/fake_b.tif"))))
+        return (_dock(w, "1D", "data/fake_a.tif"),
+                _dock(w, "1D", "data/fake_b.tif"))
+
+    def test_box_zoom_leaves_the_other_panel_alone(self):
+        w = create_window()
+        try:
+            dock_a, dock_b = self._open_two(w)
+            ax_a = gui_panel_state._content(dock_a).axes_1d
+            ax_b = gui_panel_state._content(dock_b).axes_1d
+
+            def snapshot(ax, dock):
+                return (tuple(ax.get_xlim()), tuple(ax.get_ylim()),
+                        [np.array(ln.get_xdata()).tolist() for ln in ax.lines],
+                        [np.array(ln.get_ydata()).tolist() for ln in ax.lines],
+                        getattr(dock, "view_home", None))
+
+            before_b = snapshot(ax_b, dock_b)
+            before_home_b = getattr(dock_b, "view_home", None)
+            zoom_before = w._area_zoom
+            geom_before = {k: (d.x(), d.y(), d.width(), d.height())
+                           for k, d in w.plot_docks.items()}
+
+            gui_panel_state._content(dock_a).toolbar._actions["zoom"].trigger()
+            canvas = gui_panel_state._content(dock_a).canvas
+            xd = ax_a.lines[0].get_xdata()
+            xm = float(xd[len(xd) // 2])
+            ym = float(ax_a.lines[0].get_ydata()[len(xd) // 2])
+            p0 = ax_a.transData.transform((xm, ym))
+            p1 = ax_a.transData.transform((min(xm + 0.4, 8.0), ym + 0.4))
+            for name, (x, y) in (("button_press_event", p0),
+                                 ("button_release_event", p1)):
+                canvas.callbacks.process(name, MouseEvent(
+                    name, canvas, x, y, button=1))
+            self.assertNotEqual(tuple(ax_a.get_xlim()), (1.0, 8.0),
+                                "A 应被框选放大")
+            after_b = snapshot(ax_b, dock_b)
+            self.assertEqual(before_b[0], after_b[0], "B 的 x 范围不该动")
+            self.assertEqual(before_b[1], after_b[1], "B 的 y 范围不该动")
+            self.assertEqual(before_b[2:4], after_b[2:4], "B 的曲线数据不该动")
+            self.assertEqual(before_home_b, getattr(dock_b, "view_home", None),
+                             "B 的「家」不该动")
+            self.assertEqual(zoom_before, w._area_zoom, "总缩放不该动")
+            self.assertEqual(
+                geom_before, {k: (d.x(), d.y(), d.width(), d.height())
+                              for k, d in w.plot_docks.items()},
+                "面板几何不该动")
+        finally:
+            w.close()
+
+
 class TestHomeView(unittest.TestCase):
     """[Home] = 回到"最初的样子"（2026-09-24 用户要求）。
 
