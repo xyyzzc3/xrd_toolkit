@@ -140,6 +140,15 @@ def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel,
     else:
         ax.set_ylabel(default_ylabel)
         dock._ylabel_ours = default_ylabel
+    # 版式：只在"内容变了"时重排一次（标题/轴标签刚改完），随后把布局
+    # 引擎卸掉。matplotlib 的 tight 引擎**每次绘制**都会重跑，单块面板
+    # 实测 24 ms（一次重绘 54 ms 里的 45%）——缩放/平移根本不改版式，
+    # 那笔钱是白付的（用户反馈"放大非常卡"）。下次内容重绘（[应用]/
+    # 重算/新开图）会再进来重排一次 ✓
+    fig = ax.figure
+    if fig.get_layout_engine() is not None:
+        fig.tight_layout()
+        fig.set_layout_engine("none")
 
 
 def _restore_line_styles(ax, old_lines, restore_color=True):
@@ -166,16 +175,48 @@ def _restore_line_styles(ax, old_lines, restore_color=True):
         line.set_marker(marker)
 
 
-def _refresh_home(dock):
-    """程序自己重画后清空视图账本：新画好的视图 = 新的"家"（Home）。
+def _panel_axes(dock):
+    """面板的主坐标轴（各视图挂在画布上的名字不同，依次试）。
 
-    mpl 只在用户手势（框选/平移）里记账，程序重画不自动刷新——
-    不刷的话 Home 会跳回重画前的老视图（与用户讨论定稿）。
+    2D/热图面板还有颜色条的轴，所以不能用 figure.axes[0] 蒙。
+    """
+    content = _content(dock)
+    canvas = getattr(content, "canvas", None)
+    for name in ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
+                 "axes_heat"):
+        for holder in (canvas, content):
+            ax = getattr(holder, name, None) if holder is not None else None
+            if ax is not None:
+                return ax
+    return None
+
+
+def _refresh_home(dock, ax=None):
+    """程序自己重画后：清空 mpl 的视图账本 + 维护这张面板的"家"视图。
+
+    mpl 只在用户手势（框选/平移）里记账，程序重画不自动刷新——不刷的
+    话它的 Home 会跳回重画前的老视图。
+
+    面板自己那条 [Home] 不跟 mpl 的历史栈（程序重画会清空它，按下去
+    常常"没反应"），用的是 `dock.view_home`，规则一句话：
+    **手势改的视图不算"家"**。
+      - 手势（滚轮/框选/平移）把范围写进了参数快照（那是"两处入口一套
+        真相"的既定设计），所以不能拿参数当"家"——三个手势处理器都置
+        `dock._view_from_gesture`，本次重画就不更新"家"；
+      - 其余的重画（首画、重算、[应用] 改显示参数、换文件/几何）都更新
+        "家"：那才是"这张图本来的样子"。
+    于是 Home 永远回得到最初（用户 2026-09-24："回到最初的样子，而不是
+    上次画的位置"）。
     """
     canvas = getattr(_content(dock), "canvas", None)
     toolbar = getattr(canvas, "toolbar", None)
     if toolbar is not None:
         toolbar.update()
+    from_gesture = getattr(dock, "_view_from_gesture", False)
+    dock._view_from_gesture = False
+    if ax is not None and not from_gesture:
+        dock.view_home = (tuple(ax.get_xlim()), tuple(ax.get_ylim()),
+                          ax.get_yscale())
 
 
 class _SlimToolbar(NavigationToolbar2QT):
@@ -218,10 +259,50 @@ class _SlimToolbar(NavigationToolbar2QT):
         self._actions["edit_parameters"].triggered.disconnect()
         self._actions["edit_parameters"].triggered.connect(
             self._open_customize)
+        # [Home] 也断开 mpl 的历史栈：程序重画（[应用]/重算/实时预览）
+        # 会清空那个栈，之后按 Home 常常"没反应"、或只回到"上次画的
+        # 位置"。换成**按面板参数重画**（与 [应用] 同一条路）= 参数是
+        # 什么样，Home 就是什么样（用户 2026-09-24 要求"回到最初的
+        # 样子，而不是上次画的位置"）
+        self._actions["home"].triggered.disconnect()
+        self._actions["home"].triggered.connect(self._reset_view)
 
     def _open_customize(self):
         if self._window is not None and self._panel_key is not None:
             _open_customize_dialog(self._window, self._panel_key)
+
+    def _reset_view(self):
+        """[Home]：回到这张面板的"家"视图（`dock.view_home`）。
+
+        "家" = 最近一次**算出结果**时的视图（见 _refresh_home）：手势缩放/
+        平移、改显示参数后 [应用]，都不动它——所以按 Home 就是回到
+        "最初的样子"，而不是"上次画的位置"（用户 2026-09-24 的要求）。
+        还没算过（没有"家"）就退回"按参数重画一张"（_redraw_panel）。
+        """
+        if self._window is None or self._panel_key is None:
+            return
+        window = self._window
+        dock = window.plot_docks.get(self._panel_key)
+        if dock is None:
+            return
+        title = dock.windowTitle()
+        home = getattr(dock, "view_home", None)
+        ax = _panel_axes(dock)
+        if home is None or ax is None:
+            from xrd_toolkit.gui.plot_views import _redraw_panel   # 破循环
+            reason = _redraw_panel(window, self._panel_key)
+            if reason:
+                _log(window, f"[Home] 暂时回不去：{reason}")
+            else:
+                _log(window, f"[Home] 已回到参数定义的视图：{title}")
+            return
+        (xlo, xhi), (ylo, yhi), yscale = home
+        ax.set_xlim(xlo, xhi)
+        ax.set_ylim(ylo, yhi)
+        if ax.get_yscale() != yscale:
+            ax.set_yscale(yscale)
+        ax.figure.canvas.draw_idle()
+        _log(window, f"[Home] 已回到最初的样子：{title}")
 
     def _log_zoom_toggle(self, on: bool) -> None:
         if self._window is not None:
@@ -368,6 +449,7 @@ def _pan_motion(window: QMainWindow, key: str, event) -> None:
     nx1, ny1 = inv.transform((p1[0] - dx, p1[1] - dy))
     ax.set_xlim(nx0, nx1)
     ax.set_ylim(ny0, ny1)
+    dock._view_from_gesture = True   # 手势视图不算"家"（见 _refresh_home）
     ax.figure.canvas.draw_idle()
 
 
@@ -407,6 +489,7 @@ def _pan_release(window: QMainWindow, key: str, event) -> None:
             ax.set_xlim(xlo, xhi)
             if ylo is not None:
                 ax.set_ylim(ylo, yhi)
+            dock._view_from_gesture = True   # 框选不算"家"（见 _refresh_home）
             # 同滚轮缩放：给 Home 记账（账本空着 Home 会无事可做）
             toolbar = getattr(ax.figure.canvas, "toolbar", None)
             if toolbar is not None and toolbar._nav_stack() is None:
@@ -447,9 +530,7 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
     if not _magnifier_on(dock):
         return   # 放大镜熄灭：滚轮只滚动绘图区，不缩图
     # 懒记账（照抄 mpl 框选/平移手势的做法）：滚轮直接改坐标轴范围、
-    # 绕过 mpl 的记账，账本一直空着 Home 就无事可做——首次滚轮缩放
-    # 前把当前视图记成"家"（程序重画时账本会被 _refresh_home 清空，
-    # 所以"家"= 最近一次画好的视图）
+    # 绕过 mpl 的记账，账本一直空着它自己的 Home 就无事可做
     toolbar = getattr(ax.figure.canvas, "toolbar", None)
     if toolbar is not None and toolbar._nav_stack() is None:
         toolbar.push_current()
@@ -468,6 +549,7 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
         ax.set_ylim(y * (ylo / y) ** factor, y * (yhi / y) ** factor)
     else:
         ax.set_ylim(y - (y - ylo) * factor, y + (yhi - y) * factor)
+    dock._view_from_gesture = True   # 滚轮缩放不算"家"（见 _refresh_home）
     ax.figure.canvas.draw_idle()
 
 

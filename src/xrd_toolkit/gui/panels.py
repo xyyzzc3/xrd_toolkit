@@ -38,6 +38,9 @@ _PANEL_ATTRS = (
     "compare_data", "_dragged", "_canvas_pref", "hover_marker",
     "_pan_start", "_pan_limits", "last_tth", "last_intensity",
     "_last_canvas", "_settling", "panel_key",
+    # 面板 [Home] 的"家"视图与手势标记（弹出/收回要跟着搬，见
+    # plot_panels._refresh_home）
+    "view_home", "_view_from_gesture",
     # Customize 对话框保护记账（重画不覆盖用户改动，见 _draw_1d）
     "_title_ours", "_title_display", "_xlabel_ours", "_ylabel_ours",
     "_yscale_ours", "_yscale_param",

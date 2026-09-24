@@ -222,10 +222,7 @@ def _apply_image_params(window: QMainWindow) -> None:
     别的图保持自己的设置不动；只有剖面角度真的变过才重算剖面。
     没算完的焦点面板提示先完成计算。
     """
-    # 对比/热图的重画入口在 plot_compare（模块级导入成环），只取本函数
-    # 用得到的三个
-    from xrd_toolkit.gui.plot_compare import (
-        _draw_heatmap, _heat_data, _redraw_compare)
+    # 具体重画在 _redraw_panel（它按视图类型再延迟导入 plot_compare）
     key = window.focus_panel
     if key is None:
         _log(window, "先点击要更新的图面板（如 1D），再点 [应用]")
@@ -238,62 +235,77 @@ def _apply_image_params(window: QMainWindow) -> None:
         return
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
     view = key.split("|", 1)[0]
-    if view == "1D":
-        if getattr(dock, "last_tth", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（积分完成后再试）")
-            return
-        _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
-    elif view == "对比":
-        if not getattr(dock, "compare_data", None):
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（积分完成后再试）")
-            return
-        _redraw_compare(window, key)
-    elif view == "2D":
-        if getattr(dock, "last_image", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（读取完成后再试）")
-            return
-        _draw_2d(window, dock, dock.last_image)
-    elif view == "剖面":
-        if getattr(dock, "last_profile_t", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（剖面算完后再试）")
-            return
+    if view == "剖面":
+        # 角度变了要先重算（读图 + 线剖面，后台线程），其余都是"用已有
+        # 数据重画"——统一走 _redraw_panel（与面板 [Home] 共用）
         angle = _panel_param(window, dock, "剖面角度 (°)", 0.0)
         if angle != getattr(dock, "profile_angle", None):
-            # 角度变了：剖面要重算（读图 + 线剖面，后台线程）
             _log(window, f"[应用] 图像参数：{dock.windowTitle()} 剖面"
                          f"角度改为 {angle:g}°，重新计算")
             _run_profile(window, dock.panel_file, key,
                          _collect_geometry(window),
                          int(window.params["输出点数"].value()))
             return
+    reason = _redraw_panel(window, key)
+    if reason:
+        _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
+                     f"计算结果（{reason}）")
+        return
+    _log(window, f"[应用] 图像参数已重画：{dock.windowTitle()}")
+
+
+def _redraw_panel(window: QMainWindow, key: str) -> str:
+    """按该面板自己的参数快照重画一张图（**用已有数据，不重算**）。
+
+    两个调用方共用：图像参数的 [应用]（改显示参数后重画编辑对象）与
+    面板的 [Home]（回到"参数定义的样子"）。Home 以前走 mpl 的历史栈，
+    而程序重画会清空那个栈 → 按下去常常"没反应"或只回到"上次画的
+    位置"（用户 2026-09-24 反馈）；现在 Home 与 [应用] 同源 = 确定性：
+    参数是什么样，Home 就是什么样（缩放/平移不写进参数，所以它确实
+    是"最初的样子"）。
+
+    返回 "" = 重画了；否则返回"还没算完"的说明（调用方拼进日志）。
+    视图类型没接线/面板已关也返回说明文本。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return "面板已关闭"
+    view = key.split("|", 1)[0]
+    if view == "1D":
+        if getattr(dock, "last_tth", None) is None:
+            return "积分完成后再试"
+        _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
+    elif view == "对比":
+        if not getattr(dock, "compare_data", None):
+            return "积分完成后再试"
+        from xrd_toolkit.gui.plot_compare import _redraw_compare
+        _redraw_compare(window, key)
+    elif view == "2D":
+        if getattr(dock, "last_image", None) is None:
+            return "读取完成后再试"
+        _draw_2d(window, dock, dock.last_image)
+    elif view == "剖面":
+        if getattr(dock, "last_profile_t", None) is None:
+            return "剖面算完后再试"
         _draw_profile(window, dock, dock.last_profile_t,
                       dock.last_profile_intensity)
     elif view == "瀑布":
         if getattr(dock, "last_waterfall", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（扇形积分完成后再试）")
-            return
+            return "扇形积分完成后再试"
         tth, i2d, chi = dock.last_waterfall
         _draw_waterfall(window, dock, tth, i2d, chi)
     elif view == "热图":
         if getattr(dock, "heat_data", None) is None:
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                         f"计算结果（热图完成后再试）")
-            return
+            return "热图完成后再试"
+        from xrd_toolkit.gui.plot_compare import _draw_heatmap, _heat_data
         data = _heat_data(window, dock)
         if data is None:
-            return
+            return "热图数据不完整"
         dock.heat_data = data   # 与画的保持同一份：_apply_auto_heatlim 读它
         _draw_heatmap(window, dock, data[0], data[1], data[2])
     else:
-        _log(window, f"[应用] 图像参数已更新编辑对象：{dock.windowTitle()}"
-                     f"（{view} 视图尚未接线）")
-        return
-    _log(window, f"[应用] 图像参数已重画：{dock.windowTitle()}")
+        return f"{view} 视图尚未接线"
+    return ""
 
 
 def _spawn_task(window: QMainWindow, key: str, worker, args: tuple,
@@ -653,7 +665,7 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
-    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
+    _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
@@ -708,7 +720,7 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
-    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
+    _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
@@ -755,7 +767,7 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key, ax=ax,
                        sync_x=False)   # 只写回纵轴（x = 像素距离）
-    _refresh_home(dock)
+    _refresh_home(dock, ax)
     dock.figure_saved = False
 
 
@@ -823,7 +835,7 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
-    _refresh_home(dock)
+    _refresh_home(dock, ax)
     dock.figure_saved = False
 
 

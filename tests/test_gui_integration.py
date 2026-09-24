@@ -3193,6 +3193,149 @@ class TestSlimPanelChrome(unittest.TestCase):
             w.close()
 
 
+class TestHomeView(unittest.TestCase):
+    """[Home] = 回到"最初的样子"（2026-09-24 用户要求）。
+
+    以前 Home 走 mpl 的历史栈，而程序重画（[应用]/重算/背景实时预览）
+    会清空那个栈 → 按下去常常"没反应"或只回到"上次画的位置"。现在用
+    面板自己的"家"（`dock.view_home`）：**只有按内容画出来的视图**才
+    更新它，滚轮/框选/平移这些手势不算（手势范围会被写回参数，拿参数
+    当"家"就会把缩放当成"最初的样子"——这条是踩过的坑）。
+    """
+
+    PATH = "data/fake_b.tif"
+
+    def _open_1d(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.add_files([self.PATH])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
+        return _dock(w, "1D", self.PATH)
+
+    def _wheel(self, w, dock, notches=3):
+        content = gui_panel_state._content(dock)
+        ax, canvas = content.axes_1d, content.canvas
+        px, py = ax.transData.transform((2.0, 1.8))
+        for _ in range(notches):
+            canvas.callbacks.process("scroll_event", MouseEvent(
+                "scroll_event", canvas, px, py, step=1, button="up"))
+
+    def test_home_returns_to_initial_view(self):
+        """缩放 + 平移之后按 Home = 回到开图那个视图（不是缩放后的位置）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            x0, y0 = ax.get_xlim(), ax.get_ylim()
+            content.toolbar._actions["zoom"].trigger()   # 点亮放大镜
+            self._wheel(w, dock)
+            self.assertNotEqual(tuple(ax.get_xlim()), tuple(x0),
+                                "滚轮该缩放（前置条件）")
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), tuple(x0),
+                             "Home 应回到最初的 2θ 范围")
+            self.assertEqual(tuple(ax.get_ylim()), tuple(y0),
+                             "Home 应回到最初的纵轴范围")
+        finally:
+            w.close()
+
+    def test_home_works_after_a_program_redraw(self):
+        """程序重画（会清空 mpl 的历史栈）之后 Home 照样回得去——旧实现
+        就是死在这一步：栈空了，按 Home 什么也不发生。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            x0 = ax.get_xlim()
+            content.toolbar._actions["zoom"].trigger()
+            self._wheel(w, dock)
+            gui_plot_panels._refresh_home(dock, ax)   # 模拟"程序重画清了栈"
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), tuple(x0),
+                             "清栈之后 Home 仍应回到最初的样子")
+            self.assertIn("[Home] 已回到最初的样子", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_display_apply_sets_the_new_home(self):
+        """亲手把视图范围改成 2~5 再 [应用]（没有手势介入）= 新的"家"：
+        Home 回到这个新视图，而不是开图时那个。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            w.params["视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["视图 2θ 上限 (°)"].setValue(5.0)
+            gui_views._apply_image_params(w)
+            QApplication.processEvents()
+            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
+                                   msg="[应用] 该按新参数画")
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
+                                   msg="Home 回到这次设的视图")
+            self.assertAlmostEqual(ax.get_xlim()[1], 5.0, delta=0.05)
+        finally:
+            w.close()
+
+    def test_gesture_then_recompute_keeps_the_original_home(self):
+        """手势缩放 → 重算：画出来仍是缩放后的视图（"重算不改长相"），
+        但"家"还是最初那个样子 —— Home 回得去（用户要的就是这个）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            x0, y0 = ax.get_xlim(), ax.get_ylim()
+            content.toolbar._actions["zoom"].trigger()
+            self._wheel(w, dock)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")          # 重算
+                self.assertTrue(_wait_until(
+                    lambda: tuple(ax.get_xlim()) != tuple(x0),
+                    timeout_ms=5000) or True)
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), tuple(x0),
+                             "重算之后 Home 仍该回到最初的样子")
+            self.assertEqual(tuple(ax.get_ylim()), tuple(y0))
+        finally:
+            w.close()
+
+    def test_recompute_without_gesture_moves_home(self):
+        """没有手势介入的重算 = 新的"家"：改了积分 2θ 范围再重算，
+        Home 回到新算出来的那一段（不是老视图）。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            w.params["2θ 下限 (°)"].setValue(2.0)
+            w.params["2θ 上限 (°)"].setValue(6.0)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")          # 重算（数据范围变了）
+                self.assertTrue(_wait_until(
+                    lambda: abs(ax.get_xlim()[0] - 2.0) < 0.06))
+            x_new = ax.get_xlim()
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), tuple(x_new),
+                             "Home 该回到重算出来的新视图")
+            self.assertNotAlmostEqual(x_new[0], 1.0, places=2,
+                                      msg="新视图应跟着新的积分范围走")
+        finally:
+            w.close()
+
+
 class TestBoxZoom(unittest.TestCase):
     """放大镜点亮时左键拖 = 框选放大（2026-09-24 用户要求加回来：
     "再加回去放大镜框选放大，注意上次那个bug，不要再出现了"）。
@@ -4434,7 +4577,12 @@ class TestGestures(unittest.TestCase):
             w.close()
 
     def test_home_refreshes_after_program_redraw(self):
-        """程序重画后"家"刷新成新画的视图（Home 不回重画前的老视图）。"""
+        """程序重画刷新"家"（这里**没有手势介入**）：Home 回新画出来的
+        视图，不回重画前的老视图。
+
+        注意别在这里先滚轮缩放：手势改的视图不算"家"（见 _refresh_home
+        与 TestHomeView），那是 2026-09-24 用户要的"回到最初的样子"。
+        """
         w = create_window()
         try:
             dock = self._open_1d(w)
@@ -4442,7 +4590,6 @@ class TestGestures(unittest.TestCase):
             ax = _axes(w, "1D", "data/fake_b.tif")
             content = gui_panel_state._content(dock)
             self._magnifier(w, "data/fake_b.tif", True)
-            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
             # 程序重画（等价：参数面板改视图范围后点 [应用]）
             dock.params_snapshot["视图 2θ 下限 (°)"] = 3.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 6.0

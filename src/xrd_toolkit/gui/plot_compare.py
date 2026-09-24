@@ -130,7 +130,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
-    _refresh_home(dock)   # 程序重画 = 新"家"（见 helper 注释）
+    _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
@@ -534,7 +534,7 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
-    _refresh_home(dock)
+    _refresh_home(dock, ax)
     dock.figure_saved = False
 
 
