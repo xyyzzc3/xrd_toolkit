@@ -50,6 +50,7 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.services import stage_cache
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
 
@@ -128,7 +129,32 @@ def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
 
 def _run_1d(window: QMainWindow, path: Path, key: str,
             geom: dict, npt: int) -> None:
-    """1D = 全角度积分：状态行/日志提示后交给后台线程。"""
+    """1D = 全角度积分：**先看分阶段产物缓存**，命中直接画；否则后台算。
+
+    跨会话的收益在这儿（见 services/stage_cache）：关掉程序第二天再开，
+    81 张图不用全部重积分。命中时**必须记日志**（"复用缓存：X"）——
+    静默复用会让人以为重算了、或怀疑数字不对。
+    """
+    dock = window.plot_docks.get(key)
+    cached = None
+    try:
+        cached = stage_cache.load_1d(
+            path, config=window.config_name, npt=npt,
+            tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    except Exception:                                    # noqa: BLE001
+        cached = None    # 缓存读失败（文件被删/权限）：当作没缓存
+    if cached is not None and dock is not None:
+        tth, intensity = cached
+        _log(window, f"复用缓存：{path.name}（几何 {window.config_name}，"
+                     f"{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）"
+                     f"{_batch_step(window, key)}")
+        window.status_text.setText(f"复用缓存 {path.name}"
+                                   f"（{len(tth)} 点）")
+        dock.last_tth, dock.last_intensity = tth, intensity
+        dock._new_data = True        # 这份是新数据 → 面板 [Home] 的家跟着走
+        _draw_1d(window, dock, tth, intensity)
+        _set_focus(window, key, dock.windowTitle())
+        return
     window.status_text.setText(f"正在积分 {path.name}…")
     _log(window, f"开始积分 {path.name}（后台线程）")
     _spawn(window, path, geom, npt, key)
@@ -347,7 +373,28 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
     单文件面板走默认回调（_on_integration_done 画一张图）；对比
     面板传入 on_done/on_error——一个面板有多个任务，各自把结果
     画到同一张图上、出错时各自计数。
+
+    1D 的产物顺手落进分阶段缓存（services/stage_cache）：写盘放在
+    算完那一刻（后台线程里，不占界面），下次开会话直接命中。
     """
+    # 派活这一刻抓住当前的 _compute_integration——**不是**任务跑起来后
+    # 再查模块属性：测试 patch 的正是 gui_views._compute_integration，而
+    # 它们的 mock 常常在点完按钮（with 块结束）就撤销了，现查会在那时
+    # 变回真函数、拿假路径去积分（2026-09-24 踩过：9 条测试因此超时）。
+    compute = _compute_integration
+
+    def worker(path_str, geom_, npt_, config):
+        """后台线程：算 1D，顺手把产物落盘。"""
+        tth, intensity = compute(path_str, geom_, npt_)
+        try:
+            stage_cache.store_1d(
+                path_str, tth, intensity, config=config, npt=npt_,
+                tth_min=geom_.get("tth_min_deg"),
+                tth_max=geom_.get("tth_max_deg"))
+        except Exception:                                # noqa: BLE001
+            pass      # 缓存写失败不影响这次计算（下次重算一遍而已）
+        return tth, intensity
+
     def done(window_, key_, task, result):
         (on_done or _on_integration_done)(window_, key_, task, result)
 
@@ -357,8 +404,8 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
         else:
             _on_integration_error(window, path, key, msg)
 
-    _spawn_task(window, key, _compute_integration, (str(path), geom, npt),
-                done, error)
+    _spawn_task(window, key, worker,
+                (str(path), geom, npt, window.config_name), done, error)
 
 
 def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:

@@ -12,6 +12,13 @@ from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry, GeometryRefinement, SingleGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+# 积分实现版本号：**算法或默认参数改了就要 +1**。
+# 分阶段产物缓存（services/stage_cache.py）用它做键的一部分——不升版本
+# 的话，旧算法算出来的曲线会被当成"同一份产物"直接复用，界面上看不出
+# 任何异常，数字却是老的（比"没缓存"糟得多）。
+#   1 = 2026-09-24 起：按几何缓存 integrator + cython→numpy 回退链
+INTEGRATION_VERSION = 1
+
 # pyFAI 内置信标数据库（calibrant），LaB₆ 标准 d 值：
 #   d = a / sqrt(h² + k² + l²)，a = 4.1568 Å（NIST 标准值）
 LAB6_NAME = "LaB6"

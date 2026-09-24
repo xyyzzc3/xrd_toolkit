@@ -116,6 +116,17 @@ from xrd_toolkit.gui import plot_views as gui_views
 
 _app = QApplication.instance() or QApplication([])
 
+# 分阶段产物缓存的隔离（2026-09-24）：GUI 测试走真实的 1D 积分链路
+# 时会顺手落盘产物——不隔离就会写进 outputs/_stage，还会让"该重算"的
+# 断言被缓存命中悄悄改掉（隔离不能依赖真目录内容，同 TestSaveCalibConfig
+# 对 config_user.json 的做法）
+_CACHE_TMP = tempfile.mkdtemp(prefix="xrd_stage_cache_")
+
+
+def setUpModule():
+    from xrd_toolkit.services import stage_cache
+    stage_cache.CACHE_ROOT = Path(_CACHE_TMP)
+
 
 def _wait_until(predicate, timeout_ms=5000):
     """轮询处理事件直到条件成立（后台结果靠事件循环排队投递）。"""
@@ -3558,6 +3569,94 @@ class TestHomeView(unittest.TestCase):
                              "Home 该回到重算出来的新视图")
             self.assertNotAlmostEqual(x_new[0], 1.0, places=2,
                                       msg="新视图应跟着新的积分范围走")
+        finally:
+            w.close()
+
+
+class TestStageCacheFlow(unittest.TestCase):
+    """分阶段产物缓存接进界面后的行为（services/stage_cache）。
+
+    跨会话的收益在真实使用里最明显（关掉程序第二天再开，81 张图不用
+    全部重积分），测试里守两件事：**算过就落盘**、**再点就命中且记
+    日志**（静默复用会让人以为重算了）。缓存根已在 setUpModule 指到
+    临时目录，不会污染 outputs/_stage。
+    """
+
+    def _real_file(self, name="cache_sample.tif"):
+        """真文件（缓存要算指纹：大小 + 修改时间，假路径 stat 会失败）。
+
+        内容无所谓——积分被 mock 掉了；但文件必须真存在，否则
+        `stage_cache.fingerprint` 抛 FileNotFoundError，落盘被吞掉、
+        测试就成了"假过"。
+        """
+        path = Path(tempfile.mkdtemp(prefix="xrd_cache_gui_")) / name
+        path.write_bytes(b"0" * 4096)
+        return str(path)
+
+    def test_second_click_reuses_the_cache(self):
+        w = create_window()
+        path = self._real_file()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as compute:
+                w.add_files([path])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: len(
+                    _axes(w, "1D", path).lines) > 0))
+                self.assertEqual(compute.call_count, 1, "第一次该真算")
+                # 再点一次同一视图 = 刷新那张图 → 这次该命中缓存
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: "复用缓存" in w.log_text.toPlainText()))
+                self.assertEqual(compute.call_count, 1,
+                                 "第二次不该再算（缓存命中）")
+            log = w.log_text.toPlainText()
+            self.assertIn("复用缓存：cache_sample.tif", log)
+            self.assertIn("几何", log)
+        finally:
+            w.close()
+
+    def test_changing_the_range_misses_the_cache(self):
+        """换了积分 2θ 范围 = 另一个键 → 老老实实重算（缓存不会串味）。"""
+        w = create_window()
+        path = self._real_file("cache_range.tif")
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as compute:
+                w.add_files([path])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: len(
+                    _axes(w, "1D", path).lines) > 0))
+                w.params["2θ 下限 (°)"].setValue(2.0)
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: compute.call_count == 2, timeout_ms=5000),
+                    "换了范围该重算")
+                self.assertNotIn("复用缓存", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_clear_cache_button_reports_and_empties(self):
+        """[清空缓存]：删产物并如实记日志；空缓存时也提示。"""
+        from xrd_toolkit.services import stage_cache
+        w = create_window()
+        path = self._real_file("cache_clear.tif")
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files([path])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: len(
+                    _axes(w, "1D", path).lines) > 0))
+            self.assertGreaterEqual(stage_cache.describe()["files"], 1,
+                                    "算过就该有产物")
+            w.clear_cache_btn.click()
+            QApplication.processEvents()
+            self.assertIn("已清空缓存", w.log_text.toPlainText())
+            self.assertEqual(stage_cache.describe()["files"], 0)
+            w.clear_cache_btn.click()      # 再点：空缓存也不炸
+            QApplication.processEvents()
+            self.assertIn("缓存本来就是空的", w.log_text.toPlainText())
         finally:
             w.close()
 

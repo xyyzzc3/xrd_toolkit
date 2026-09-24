@@ -108,8 +108,11 @@ def check_single_views(window, lab6: str) -> None:
     ym = float((ax.lines[0].get_ydata())[len(xd) // 2])
     px, py = ax.transData.transform((xm, ym))
     fire(canvas, "motion_notify_event", px, py, buttons=frozenset())
-    report(any(s in window.status_text.text() for s in ("2θ", "θ")),
-           "悬停：状态栏出坐标", window.status_text.text()[:32])
+    # 悬停读数写进状态行右侧的 coord_label（不是 status_text——后者是
+    # 消息行，之前拿它当证据是**假通过**：匹配到的是"积分完成…2θ …"
+    # 那条消息，跟悬停无关。2026-09-24 换成缓存命中消息后暴露）
+    report("2θ" in window.coord_label.text(),
+           "悬停：状态行右侧出坐标", window.coord_label.text()[:40])
     marker = getattr(dock, "hover_marker", None)
     report(marker is not None and len(marker.get_xdata()) > 0,
            "悬停：白边圆点标记出现")

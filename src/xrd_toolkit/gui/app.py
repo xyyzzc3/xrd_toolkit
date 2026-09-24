@@ -1092,7 +1092,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     plot_row.setSpacing(4)
     plot_row.addWidget(btn_plot_now, 1)
     plot_row.addWidget(btn_redraw_now, 1)
+    btn_clear_cache = QPushButton("清空缓存")
+    btn_clear_cache.setObjectName("clear_cache_btn")
+    btn_clear_cache.setToolTip("删掉分阶段产物缓存（outputs/_stage）"
+                               "——下次出图会重新积分")
+    btn_clear_cache.clicked.connect(lambda: _clear_stage_cache(window))
+    window.clear_cache_btn = btn_clear_cache
     plot_row.addWidget(btn_export_img, 1)
+    plot_row.addWidget(btn_clear_cache, 1)
     btns_draw.addLayout(plot_row)
     btns_draw.addLayout(btn_col2)   # [恢复默认][应用]（显示参数）
 
@@ -1280,6 +1287,22 @@ def _plot_selected_type(window: QMainWindow) -> None:
     """「绘图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
     name = getattr(window, "_plot_type", "1D")
     _select_plot_type(window, name)
+
+
+def _clear_stage_cache(window: QMainWindow) -> None:
+    """[清空缓存]：删掉分阶段产物（下次出图重新积分）。
+
+    缓存是"省时间"的，删了只会慢一点、不会算错——所以不做二次确认，
+    日志如实报删了多少（见 services/stage_cache）。
+    """
+    from xrd_toolkit.services import stage_cache
+    info = stage_cache.describe()
+    if not info["files"]:
+        _log(window, "缓存本来就是空的（还没有落过产物）")
+        return
+    n = stage_cache.clear()
+    _log(window, f"已清空缓存：{n} 个产物、{info['bytes'] / 1e6:.1f} MB"
+                 f"（下次出图会重新积分）")
 
 
 def _redraw_focus(window: QMainWindow) -> None:
