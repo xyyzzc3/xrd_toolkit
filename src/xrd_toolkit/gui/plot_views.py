@@ -46,6 +46,7 @@ from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _bg_curve,
     _bg_params, _bg_settings, _collect_geometry, _content, _curve_color,
     _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
+from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
@@ -1027,7 +1028,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         # 批量进度记账：这一批的总数/视图名；每个任务结束回调计数
         # 一次（k/n 后缀贴在完成/失败日志末尾，批走完自动清账）
         window._batch = {"view": name, "total": len(checked), "done": 0}
-    for item in checked:
+    for i, item in enumerate(checked):
         path = Path(item.data(Qt.UserRole))
         display = item.text()
         key = f"{name}|{path}"
@@ -1040,6 +1041,12 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                 key = f"{name}|{path}|{display}"
                 dock = window.plot_docks.get(key)
         if dock is None:
+            if i and i % 8 == 0:
+                # 开面板是主线程上的活（每块 130~290 ms）：每 8 块报一次
+                # 进度、顺手消化事件，界面不会一口气闷十几秒没反应
+                # （用户反馈"图一多就很卡"——开 81 张时的观感）
+                _log(window, f"正在开面板：{i + 1}/{len(checked)}…")
+                _settle(window)
             title = f"{name}_{display}"
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
             dock = _open_plot_panel(window, name, key, title)

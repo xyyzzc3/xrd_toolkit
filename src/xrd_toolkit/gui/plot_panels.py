@@ -1066,7 +1066,13 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     marker.set_color(line.get_color())
     marker.set_data([x], [y])
     marker.set_visible(True)
-    ax.figure.canvas.draw_idle()
+    # 悬停只挪一个点、坐标范围不变 → 和框选一样贴图：起手缓存一帧
+    # （一次整帧重绘 ~30 ms），之后每次移动只贴"背景 + 圆点"（~1 ms）。
+    # 用户反馈"图一多就很卡"里，鼠标移动是最频繁的动作，整帧重绘一次
+    # 30 ms 在 60 Hz 鼠标流下会把主线程占满（见 _blit_take）。
+    if not getattr(dock, "_blit", None):
+        dock._blit = _blit_take(dock, ax)
+    _blit_box(dock, ax, marker)
     # 坐标前缀 = 曲线名（对比图 = 文件名）；1D 没设图例名时
     # matplotlib 会默认给 _childN，不算数 → 回退面板标题
     name = line.get_label()
@@ -1081,10 +1087,13 @@ def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
     if dock is not None:
         marker = getattr(dock, "hover_marker", None)
         if marker is not None:
+            was_visible = marker.get_visible()
             marker.set_data([], [])
             marker.set_visible(False)
-            if marker.axes is not None:   # ax.clear() 后标记已与轴断开
-                marker.axes.figure.canvas.draw_idle()
+            if was_visible and marker.axes is not None:
+                # ax.clear() 后标记已与轴断开；只有真的画过才需要擦
+                # （贴回背景 = 擦掉圆点，同 _hover_motion 的贴图路径）
+                _blit_box(dock, marker.axes, marker)
     window.coord_label.setText("")
 
 

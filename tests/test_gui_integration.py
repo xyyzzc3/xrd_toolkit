@@ -7192,8 +7192,45 @@ class TestBatchProgress(unittest.TestCase):
                              f"两个文件都该报完成：{done}")
             self.assertEqual({k for _, k in done}, {"1", "2"},
                              f"进度计数应是 1/2 与 2/2：{done}")
+            self.assertNotIn("正在开面板", log,
+                             "两块面板是瞬时的，不该报开面板进度")
             self.assertFalse(hasattr(w, "_batch"),
                              "批走完应清账（之后零散任务不再计数）")
+        finally:
+            w.close()
+
+    def test_many_panels_log_opening_progress(self):
+        """一批 9 块面板：每 8 块报一次进度、顺手消化事件（E-2）。
+
+        开面板是主线程上的活（真数据 130~290 ms/块），一口气开几十块
+        会闷住界面十几秒——用户反馈"图一多就很卡"的真身。
+
+        这里**故意把 _open_plot_panel / _run_view 换成桩**、不真建 9 块
+        面板：offscreen 下在同一进程里连建十来块 Qt 工具栏会偶发在 Qt
+        的动作事件里递归挂死（实测 3/12，关窗后的延迟删除只是背景条
+        件；与本次改动无关，Qt/mpl 侧的老毛病）。所以真建面板那条路
+        由上面的两文件批量用例覆盖，这条只钉"记账与节奏"：总数、每
+        8 块报一次、每块都真的去开。
+        """
+        paths = [f"data/fake_n{i}.tif" for i in range(1, 10)]
+        opened = []
+        w = create_window()
+        try:
+            w.add_files(paths)
+            with mock.patch.object(
+                    gui_views, "_open_plot_panel",
+                    side_effect=lambda win, name, key, title:
+                    opened.append(key) or mock.MagicMock()), \
+                    mock.patch.object(gui_views, "_run_view"):
+                _open_view(w, "1D")
+            log = w.log_text.toPlainText()
+            # 第 9 块（i=8）跨过 8 的倍数 → 报一次；9 块都真的去开了
+            self.assertEqual(opened, [f"1D|data/fake_n{i}.tif"
+                                      for i in range(1, 10)],
+                             "九块面板都该去开，顺序照勾选顺序")
+            self.assertIn("正在开面板：9/9…", log)
+            self.assertEqual(log.count("正在开面板："), 1,
+                             "9 块只跨过 8 一次")
         finally:
             w.close()
 
