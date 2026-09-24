@@ -408,53 +408,74 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = QStackedWidget 两页翻面：页 0 = 分析工作台（编辑对象
-    # + 数据/图像参数对半），页 1 = 校准工作台（校准表单）。[校准]
-    # 按钮按下/弹起 = 翻页（见 _on_mode），用户参数不丢（页 0 原样
-    # 保留，退出模式还原）。
+    # 参数坞 = 一行"编辑对象" + **五个入口页**（校准 / 1D / 扣背景 /
+    # 对比 / 绘图）。工具栏那五个入口按钮翻页（位置 A = 窗口顶部，见
+    # _build_toolbar / _switch_entrance）——用户 2026-09-24 定稿：
+    # "最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
+    # 页 0 = 校准（几何一节 + 校准表单，calib.py 建）；其余四页放本阶段
+    # 的参数，底部各带一个"产出"按钮（1D：[出 1D 图]；扣背景：
+    # [重画]；对比：[出对比][出热图]；绘图：[出图][只重画当前]
+    # [导出图片]）。
+    # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
+    # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
-    lay.addWidget(window.param_stack)
+    window.PARAM_PAGES = {"校准": 0, "1D": 1, "扣背景": 2, "对比": 3,
+                          "绘图": 4}
 
-    # ── 页 0：分析工作台 ──
-    analysis_page = QWidget()
-    analysis_lay = QVBoxLayout(analysis_page)
-    analysis_lay.setContentsMargins(0, 0, 0, 0)
-    analysis_lay.setSpacing(0)
-
-    # 编辑对象：参数坞当前作用在哪个图面板上。点图面板（_FocusMarker）
-    # 或某视图计算完成（_on_integration_done）时更新；[应用] 重算它。
-    # 编辑对象标题 = 文件名直出，可能很长：_ElideLabel 单行缩略，
-    # 中间打省略号保留首尾（重名条目的区分后缀在尾部），悬停看
-    # 全名，不撑宽参数坞
+    # 编辑对象：五个入口共用的一行，固定在坞顶（不随页面滚动）。点图
+    # 面板（_FocusMarker）或某视图计算完成（_on_integration_done）时
+    # 更新；[应用] 作用在它身上。名字可能很长：_ElideLabel 单行缩略，
+    # 中间打省略号保留首尾（重名条目的区分后缀在尾部），悬停看全名，
+    # 不撑宽参数坞
     window.focus_label = _ElideLabel("编辑对象：未选中图面板",
                                      Qt.ElideMiddle)
     window.focus_label.setStyleSheet("color: gray;")
-    analysis_lay.addWidget(window.focus_label)   # 固定最上方，不随下面滚动
+    lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
+    lay.addWidget(window.param_stack)     # 下面才是五个入口页
 
-    # 下半区上下对半分：两块各自独立滚动的 QScrollArea + 底部固定
-    # 按钮行。分隔条可拖（初始 1:1）；两块不允许拖到完全收起
-    splitter = QSplitter(Qt.Vertical)
-    splitter.setChildrenCollapsible(False)
-    analysis_lay.addWidget(splitter, 1)
-    window.param_stack.addWidget(analysis_page)
+    def make_page():
+        """一页 = 滚动表单（装参数）+ 底部按钮行。
 
-    # ── 页 1：校准工作台（calib.py；见其模块 docstring）──
-    window.param_stack.addWidget(_build_calib_form(window))
+        返回 (页面, 表单, 底部行的布局)：参数一律加到表单上，按钮加到
+        返回的布局里（固定最下方，不随滚动走）。"""
+        page = QWidget()
+        pv = QVBoxLayout(page)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)   # 条目随滚动区宽度自动重排
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        fields = QWidget()
+        form = QFormLayout(fields)
+        form.setContentsMargins(2, 1, 2, 1)
+        scroll.setWidget(fields)
+        pv.addWidget(scroll, 1)
+        return page, form, pv
 
-    # ── 数据参数组（上半）──
-    data_box = QGroupBox("数据参数")
-    data_v = QVBoxLayout(data_box)
-    data_v.setContentsMargins(4, 2, 4, 4)
+    page_1d, form_1d, btns_1d = make_page()
+    page_bg, form_bg, btns_bg = make_page()
+    page_cmp, form_cmp, btns_cmp = make_page()
+    page_draw, form_draw, btns_draw = make_page()
+    geom_page, form_calib, _ = make_page()
 
-    data_scroll = QScrollArea()
-    data_scroll.setWidgetResizable(True)   # 条目随滚动区宽度自动重排
-    data_scroll.setFrameShape(QFrame.NoFrame)   # 分组框已有边框，不再套一层
-    data_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    data_fields = QWidget()
-    form = QFormLayout(data_fields)
-    form.setContentsMargins(2, 1, 2, 1)
-    data_scroll.setWidget(data_fields)
-    data_v.addWidget(data_scroll, 1)
+    # 校准页 = 几何一节（本文件建）+ 校准表单（calib.py；见其 docstring）
+    page_calib = QWidget()
+    calib_lay = QVBoxLayout(page_calib)
+    calib_lay.setContentsMargins(0, 0, 0, 0)
+    calib_lay.setSpacing(0)
+    calib_lay.addWidget(geom_page)
+    calib_lay.addWidget(_build_calib_form(window), 1)
+
+    window.param_stack.addWidget(page_calib)   # 0 校准
+    window.param_stack.addWidget(page_1d)      # 1 1D
+    window.param_stack.addWidget(page_bg)      # 2 扣背景
+    window.param_stack.addWidget(page_cmp)     # 3 对比
+    window.param_stack.addWidget(page_draw)    # 4 绘图
+    # 「绘图」页最上面：六个类型选择（点一个 = 选中并立即出图）
+    page_draw.layout().insertWidget(0, _build_plot_type_row(window))
+    window._plot_type = "1D"   # [出图] 用哪个类型（点类型按钮时更新）
+
 
     # 几何配置选择器：下拉框只显示短 key（如 lmfp1_lab6），完整
     # 批次备注走悬停提示（鼠标长放显示，不单独占一行——与用户
@@ -479,7 +500,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 分析页只读：这里只留下拉框选条目；几何值下面以只读摘要显示。
     # [加载参数][保存参数][删除] 三个按钮在校准页（配置的增删改查归
     # 校准页，分析页不提供修改入口——见 calib._build_calib_form）。
-    form.addRow("几何配置", window.config_combo)
+    form_calib.addRow("几何配置", window.config_combo)
 
     window.params = {}
     def add_caption(form, text):
@@ -547,24 +568,26 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         form.addRow(label, field)
         return lo_box, hi_box
 
-    add_caption(form, "标定几何（只读：由几何配置决定）")
-    add_float(form, "像素尺寸 (µm)", 0.0, 10000.0, 200.0, decimals=1,
+    add_caption(form_calib, "标定几何（只读：由几何配置决定）")
+    add_float(form_calib, "像素尺寸 (µm)", 0.0, 10000.0, 200.0,
+              decimals=1,
               label="像素尺寸", suffix=" µm", readonly=True,
               tooltip="探测器单个像素的边长；来自所选几何配置条目"
                       "（分析页只读，改几何请去校准页）")
-    add_float(form, "波长 (Å)", 0.0, 10.0, 0.1223, decimals=4,
+    add_float(form_calib, "波长 (Å)", 0.0, 10.0, 0.1223, decimals=4,
               label="波长", suffix=" Å", readonly=True,
               tooltip="X 射线波长；来自所选几何配置条目（分析页只读）")
     # 参数键仍是 "初始距离 (mm)"（_collect_geometry / 快照回放按它取控件，
     # 改名会牵动一大片），但显示名随语义改成"分析用距离"：它是**分析用**
     # 的几何（来自所选配置条目），校准的初值另在校准页设。
-    add_float(form, "初始距离 (mm)", 0.0, 10000.0, 1600.0, decimals=1,
+    add_float(form_calib, "初始距离 (mm)", 0.0, 10000.0, 1600.0,
+              decimals=1,
               label="分析用距离", suffix=" mm", readonly=True,
               tooltip="分析用的样品-探测器距离；来自所选几何配置条目。"
                       "校准的初值在校准页单独设（③ 二次精修取当前使用）")
 
-    add_caption(form, "积分设置")
-    add_range(form, "2θ 下限 (°)", "2θ 上限 (°)", 0.0, 90.0, 1.0, 8.0,
+    add_caption(form_1d, "积分设置")
+    add_range(form_1d, "2θ 下限 (°)", "2θ 上限 (°)", 0.0, 90.0, 1.0, 8.0,
               label="2θ 范围", suffix=" °", max_width=88,
               tooltip="参与积分的衍射角区间")
 
@@ -573,7 +596,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt.setValue(3000)
     npt.setToolTip("2θ 区间内取多少个采样点，越大曲线越细、计算越慢")
     window.params["输出点数"] = npt
-    form.addRow("输出点数", npt)
+    form_1d.addRow("输出点数", npt)
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
@@ -601,28 +624,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 通栏宽一分为二（与用户讨论定稿）：[恢复默认] 在左、[应用] 在右
     btn_col.addWidget(btn_reset_data, 1)
     btn_col.addWidget(btn_apply, 1)
-    data_v.addLayout(btn_col)   # 按钮列固定在数据区最下方（滚动区之外）
+    btns_1d.addLayout(btn_col)   # 按钮固定在本页最下方（滚动区之外）
+    # 本页产出：对勾选文件出 1D 图（常用循环不用切到「绘图」页）
+    btn_plot_1d = QPushButton("出 1D 图")
+    btn_plot_1d.setObjectName("plot_1d_btn")
+    window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
+    btn_plot_1d.clicked.connect(lambda: _plot_view(window, "1D"))
+    btns_1d.addWidget(btn_plot_1d)
 
-    splitter.addWidget(data_box)
-
-    # ── 图像参数组（下半）──
-    img_box = QGroupBox("图像参数")
-    img_v = QVBoxLayout(img_box)
-    img_v.setContentsMargins(4, 2, 4, 4)
-
-    img_scroll = QScrollArea()
-    img_scroll.setWidgetResizable(True)   # 条目随滚动区宽度自动重排
-    img_scroll.setFrameShape(QFrame.NoFrame)
-    img_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    img_fields = QWidget()
-    form2 = QFormLayout(img_fields)
-    form2.setContentsMargins(2, 1, 2, 1)
-    img_scroll.setWidget(img_fields)
-    img_v.addWidget(img_scroll, 1)
 
     # 组内分区：上面的对比度/剖面角只对二维视图有意义；下面的
     # "1D 显示" 子分组管曲线图自己的显示参数
-    add_caption(form2, "2D/剖面视图")
+    add_caption(form_draw, "2D/剖面视图")
 
     # 自动对比度（默认开）：显示区间按编辑对象（焦点图）数据的
     # 1%/99.9% 分位自定，与 view_diffraction 的默认行为一致；取消勾
@@ -633,9 +646,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     auto.setChecked(True)
     auto.setToolTip("显示区间按图像 1%~99.9% 分位自动确定")
     window.params["自动对比度"] = auto
-    form2.addRow(auto)
+    form_draw.addRow(auto)
 
-    add_range(form2, "对比度下限", "对比度上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(form_draw, "对比度下限", "对比度上限", 0.0, 1e9, 1.0, 100000.0,
               label="显示范围", decimals=1,
               tooltip="取消自动对比度后手填的显示区间（下限 ~ 上限）")
 
@@ -648,7 +661,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     auto.toggled.connect(sync_contrast)
     sync_contrast(True, silent=True)   # 初始状态：自动开 → 输入框置灰（不刷日志）
 
-    angle = add_float(form2, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
+    angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
                       label="剖面角度", suffix=" °",
                       tooltip="剖面线相对参考方向的角度")
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
@@ -660,7 +673,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     hint.setWordWrap(True)
     hint_row = QHBoxLayout()
     hint_row.addWidget(hint)
-    form2.addRow(hint_row)   # 全宽一行（不再挤在标签列里竖排）
+    form_draw.addRow(hint_row)   # 全宽一行（不再挤在标签列里竖排）
 
     # ── 1D 显示（小节）：曲线图自己的显示参数 ──
     # 不套子分组框（嵌套框自带一套标签列 + 边框，白白多占 ~30px
@@ -668,13 +681,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 差几个数量级，对数刻度把弱峰"抬起来"（XRD 软件行规）。纵轴
     # 范围与对比度同套路：自动 = 按曲线 1%/99.9% 分位，取消勾选
     # 手填；自动模式输入框置灰 = 只读展示正在用的区间
-    add_caption(form2, "1D 显示")
+    add_caption(form_draw, "1D 显示")
 
     # 视图 2θ 范围：只看图不参与计算的显示窗口。初始跟随数据组的
     # 积分 2θ 范围；在图里缩放/平移（滚轮/拖拽/Home/自定义对话框）
     # 会实时写回这里，[应用] 再用这里重画。与数据组的 2θ 范围完全
     # 分开——改这里不会影响积分的区间
-    add_range(form2, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
+    add_range(form_1d, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
               0.0, 90.0, 1.0, 8.0,
               label="视图 2θ 范围", suffix=" °", max_width=88,
               tooltip="看图的窗口：缩放/平移实时写回；[应用] 用这里重画。"
@@ -683,15 +696,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     log_y = QCheckBox("对数纵轴")
     log_y.setToolTip("对数刻度：强弱峰差几个数量级时弱峰也看得清")
     window.params["对数纵轴"] = log_y
-    form2.addRow(log_y)
+    form_draw.addRow(log_y)
 
     auto_y = QCheckBox("纵轴自动")
     auto_y.setChecked(True)
     auto_y.setToolTip("按曲线 1%~99.9% 分位自动确定纵轴区间")
     window.params["纵轴自动"] = auto_y
-    form2.addRow(auto_y)
+    form_draw.addRow(auto_y)
 
-    add_range(form2, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(form_draw, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
               label="纵轴范围", decimals=1,
               tooltip="取消自动后手填的纵轴区间（下限 ~ 上限）")
 
@@ -719,7 +732,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     norm_lay.setSpacing(2)
     norm_lay.addWidget(cmp_norm, 1)     # 同一行：模式在左、目标文件在右
     norm_lay.addWidget(norm_target, 1)
-    form2.addRow(norm_row)
+    form_cmp.addRow(norm_row)
 
     def sync_norm_target(*_):
         norm_target.setEnabled(cmp_norm.currentData() == "file")
@@ -737,13 +750,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     curve_palette.setToolTip("多曲线配色：高对比 = 色盲友好固定色序"
                              "（颜色跟着文件走）/ matplotlib 默认循环")
     window.params["曲线配色"] = curve_palette
-    form2.addRow(curve_palette)
+    form_cmp.addRow(curve_palette)
 
     cmp_stack = QCheckBox("堆叠显示")
     cmp_stack.setToolTip("瀑布式错开叠放：每条曲线按自身峰高抬到自己的"
                          "行上，y 刻度 = 样品名（堆叠下纵轴范围/对数不适用）")
     window.params["对比堆叠"] = cmp_stack
-    form2.addRow(cmp_stack)
+    form_cmp.addRow(cmp_stack)
 
     # ── 背景扣除（小节）：1D/对比/瀑布/热图四条曲线路径共用 ──
     # 三种模式 = 对"背景长什么样"的三个不同假设（物理依据见
@@ -753,7 +766,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     #   手动锚点 = 人判断：用户指出"这几处是纯背景"
     # 锚点列表与空扫曲线不是快照参数（快照只认 QCheckBox/QComboBox/
     # spinbox 三种控件），放窗级属性 window.bg_anchors / window.bg_blank。
-    add_caption(form2, "背景扣除")
+    add_caption(form_bg, "背景扣除")
 
     bg_mode = QComboBox()
     for text, data in (("关闭", "off"),
@@ -771,7 +784,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "手动锚点 = 人判断：在图上点几个只有背景的位置连成底线"
         "（最可控，适合宽鼓包样品）。")
     window.params["背景扣除模式"] = bg_mode
-    form2.addRow(bg_mode)
+    form_bg.addRow(bg_mode)
 
     def bg_group(rows):
         """把若干控件行打包成一个可整体显隐的竖直容器。
@@ -812,7 +825,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                             "时填比值（样品÷空扫），一致就保持 1.0")
     window.params["空扫归一化"] = bg_scale_box
     blank_row = bg_group([bg_row((bg_blank_btn, 1), (bg_scale_box, 1))])
-    form2.addRow(blank_row)
+    form_bg.addRow(blank_row)
 
     # 自动模式：窗口宽度（唯一的旋钮）
     bg_window_box = QDoubleSpinBox()
@@ -827,7 +840,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                              "跟不上背景自身的起伏")
     window.params["背景窗口 (°)"] = bg_window_box
     auto_row = bg_group([bg_row((bg_window_box, 1), (QWidget(), 1))])
-    form2.addRow(auto_row)
+    form_bg.addRow(auto_row)
 
     # 锚点模式：拾取开关 + 清空 + 计数；下一行是拟合方式
     bg_pick_btn = QPushButton("拾取锚点")
@@ -854,7 +867,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         bg_row((bg_pick_btn, 1), (bg_clear_btn, 1), (bg_count_lbl, 0)),
         bg_row((bg_fit_combo, 1)),
     ])
-    form2.addRow(anchor_row)
+    form_bg.addRow(anchor_row)
 
     bg_show_raw = QCheckBox("显示原始曲线对比")
     bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"
@@ -862,14 +875,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                            "只作用于 1D 单曲线面板——对比/瀑布/热图里多条"
                            "曲线叠在一起，再叠一层原始线会看不清")
     window.params["背景显示原始"] = bg_show_raw
-    form2.addRow(bg_show_raw)
+    form_bg.addRow(bg_show_raw)
 
     bg_clip = QCheckBox("负值截断为 0")
     bg_clip.setToolTip("默认不截断：背景是从两侧对称估的，扣完噪声摆到 0 "
                        "以下是正常的（噪声地板露出），强行截断会把噪声平均"
                        "抬高约 1σ。只在出图需要非负值时打开")
     window.params["负值截断为 0"] = bg_clip
-    form2.addRow(bg_clip)
+    form_bg.addRow(bg_clip)
 
     # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
     window.bg_rows = {"blank": blank_row, "auto": auto_row,
@@ -892,12 +905,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 宽度在本函数末尾按 minimumSizeHint 算一次，隐藏的行不计入尺寸；
     # 先收起再量会把宽度量小、切模式时被裁。所以放到末尾、量完之后。
 
+    # 扣背景页产出：[重画] = 按各面板快照重画全部曲线面板（改锚点/窗口
+    # 后手动触发；平时改控件是实时预览）
+    btn_bg_redraw = QPushButton("重画")
+    btn_bg_redraw.setObjectName("bg_redraw_btn")
+    window.bg_redraw_btn = btn_bg_redraw
+    btn_bg_redraw.clicked.connect(lambda: _refresh_bg(window))
+    btns_bg.addWidget(btn_bg_redraw)
+
     # ── 热图显示（小节）：批量热图的显示参数 ──
     # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比
     # 同款语义（热图没有"指定文件"模式）；对数强度 = 弱峰抬起来
     # （XRD 行规）；强度范围与对比度同套路：自动 = 按显示矩阵
     # 1%/99.9% 分位（含归一化后的口径，见 _heat_shown）
-    add_caption(form2, "热图显示")
+    add_caption(form_cmp, "热图显示")
 
     heat_cmap = QComboBox()
     for text, data in (("magma", "magma"), ("viridis", "viridis"),
@@ -906,7 +927,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         heat_cmap.addItem(text, data)
     heat_cmap.setToolTip("热图颜色映射（颜色 = 强度）")
     window.params["热图色图"] = heat_cmap
-    form2.addRow(heat_cmap)
+    form_cmp.addRow(heat_cmap)
 
     heat_norm = QComboBox()
     for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
@@ -916,20 +937,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     heat_norm.setToolTip("热图归一化：每行各自最强峰（抹平样品间绝对强度差，"
                          "看峰形/峰位随样品的变化）/ 全图最强峰 / 不归一化")
     window.params["热图归一化"] = heat_norm
-    form2.addRow(heat_norm)
+    form_cmp.addRow(heat_norm)
 
     heat_log = QCheckBox("对数强度")
     heat_log.setToolTip("颜色按对数强度：弱峰抬起来（XRD 行规）")
     window.params["热图对数"] = heat_log
-    form2.addRow(heat_log)
+    form_cmp.addRow(heat_log)
 
     auto_heat = QCheckBox("热图自动范围")
     auto_heat.setChecked(True)
     auto_heat.setToolTip("按显示矩阵 1%~99.9% 分位自动确定强度范围")
     window.params["热图自动范围"] = auto_heat
-    form2.addRow(auto_heat)
+    form_cmp.addRow(auto_heat)
 
-    add_range(form2, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(form_cmp, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
               label="热图范围", decimals=1,
               tooltip="取消自动后手填的强度范围（下限 ~ 上限）")
 
@@ -941,6 +962,21 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     auto_heat.toggled.connect(sync_heatlim)
     sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
+
+    # 对比页产出：多文件才成立的两种图（对比叠图 / 批量热图）
+    cmp_row = QHBoxLayout()
+    cmp_row.setSpacing(4)
+    btn_plot_cmp = QPushButton("出对比")
+    btn_plot_cmp.setObjectName("plot_cmp_btn")
+    window.plot_cmp_btn = btn_plot_cmp
+    btn_plot_cmp.clicked.connect(lambda: _plot_compare(window))
+    btn_plot_heat = QPushButton("出热图")
+    btn_plot_heat.setObjectName("plot_heat_btn")
+    window.plot_heat_btn = btn_plot_heat
+    btn_plot_heat.clicked.connect(lambda: _plot_heatmap(window))
+    cmp_row.addWidget(btn_plot_cmp, 1)
+    cmp_row.addWidget(btn_plot_heat, 1)
+    btns_cmp.addLayout(cmp_row)
 
     def sync_ylim(checked):
         window.params["纵轴下限"].setEnabled(not checked)
@@ -1038,15 +1074,27 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
     btn_col2.addWidget(btn_reset_img, 1)
     btn_col2.addWidget(btn_apply_img, 1)
-    img_v.addLayout(btn_col2)   # 按钮列固定在图像区最下方（滚动区之外）
-
-    splitter.addWidget(img_box)
-    splitter.setSizes([1, 1])          # 初始上下各一半
-    splitter.setStretchFactor(0, 1)    # 随坞变高/变矮两块等比例伸缩
-    splitter.setStretchFactor(1, 1)
-    # 每半的最低高度：至少露出标题 + 按钮行 + 几行内容（内容靠滚动看）
-    data_scroll.setMinimumHeight(110)
-    img_scroll.setMinimumHeight(110)
+    # 本页三个产出按钮：[出图] 按当前类型对勾选文件出图；[只重画当前]
+    # 用已有数据重画编辑对象（不重算）；[导出图片] 走批量存图流程
+    btn_plot_now = QPushButton("出图（勾选文件）")
+    btn_plot_now.setObjectName("plot_now_btn")
+    window.plot_now_btn = btn_plot_now
+    btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
+    btn_redraw_now = QPushButton("只重画当前")
+    btn_redraw_now.setObjectName("redraw_now_btn")
+    window.redraw_now_btn = btn_redraw_now
+    btn_redraw_now.clicked.connect(lambda: _redraw_focus(window))
+    btn_export_img = QPushButton("导出图片…")
+    btn_export_img.setObjectName("export_img_btn")
+    window.export_img_btn = btn_export_img
+    btn_export_img.clicked.connect(lambda: _save_figures(window))
+    plot_row = QHBoxLayout()
+    plot_row.setSpacing(4)
+    plot_row.addWidget(btn_plot_now, 1)
+    plot_row.addWidget(btn_redraw_now, 1)
+    plot_row.addWidget(btn_export_img, 1)
+    btns_draw.addLayout(plot_row)
+    btns_draw.addLayout(btn_col2)   # [恢复默认][应用]（显示参数）
 
     # 拖动坞边框的尺寸下限（上下左右都设）：左右 = 最宽一张表单的
     # 最小宽度 + "壳"（滚动条 + 分组/表单边距，另加少量余量），拖
@@ -1055,20 +1103,25 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 自己的滚动条接管。用表单 minimumSizeHint 而不是 content 的
     # sizeHint：转盘限宽后 sizeHint 低估了成对行的最小宽度（实测
     # 会横向裁掉近 20px）
-    form_min = max(data_fields.minimumSizeHint().width(),
-                   img_fields.minimumSizeHint().width())
-    chrome = (data_scroll.verticalScrollBar().sizeHint().width()
-              + data_v.contentsMargins().left() + data_v.contentsMargins().right()
-              + form.contentsMargins().left() + form.contentsMargins().right())
+    forms = (form_calib, form_1d, form_bg, form_cmp, form_draw)
+    form_min = max(f.parentWidget().minimumSizeHint().width()
+                   for f in forms)   # 量装表单的部件，不是布局
+    # 壳：一页的滚动条宽度 + 那一页表单的左右边距（各页相同）
+    # 壳 = 滚动条宽 + 表单左右边距 + 8（原来 QGroupBox 那圈 4 px 内边距，
+    # 页面化以后由页面自己的布局接管——漏算它会让校准页最宽的那行
+    # 差 5 px 越界，实测抓到）
+    chrome = (page_1d.findChild(QScrollArea).verticalScrollBar().sizeHint()
+              .width()
+              + form_1d.contentsMargins().left()
+              + form_1d.contentsMargins().right() + 8)
     dock.setMinimumWidth(form_min + chrome + 2)
     content.setMinimumWidth(form_min + chrome + 2)   # 双保险：坞本身也算上
-    # 坞的最小高度按分析页固定件显式算（编辑对象名 + 分隔条最小
-    # 提示）：翻页栈的最小尺寸只报当前页，且嵌套后布局 minimumSize
-    # 不再含子件 minimumSizeHint（探针验证），靠布局算会把下限
-    # 塌成一行标签的高度
+    # 坞的最小高度：编辑对象名 + 一页的固定件（滚动区最低 110 = 露出
+    # 标题 + 几个控件；按钮行 ~40）。翻页栈的最小尺寸只报当前页，且
+    # 嵌套后布局 minimumSize 不再含子件 minimumSizeHint（探针验证），
+    # 靠布局算会把下限塌成一行标签的高度
     dock.setMinimumHeight(
-        splitter.minimumSizeHint().height()
-        + window.focus_label.minimumSizeHint().height() + 4)
+        window.focus_label.minimumSizeHint().height() + 110 + 40)
 
     # 宽度量完再按当前模式收起"背景扣除"的无用行（隐藏的行不计入
     # minimumSizeHint，先收再量会把坞宽量小、切模式时被裁）
@@ -1118,55 +1171,53 @@ def _build_status(window: QMainWindow) -> None:
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = [校准] 模式开关 + 作图按钮（2D/剖面/1D/瀑布 + 对比）+
-    面板开关（文件/参数/日志）。"""
+    """工具栏 = 五个入口 + 面板开关（文件/参数/日志）。
+
+    入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
+    `[校准] [1D] [扣背景] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
+    （见 _switch_entrance）；出图动作由各页底部的产出按钮负责
+    （[出 1D 图] / [重画] / [出对比][出热图] / [出图]）。
+
+    六个作图类型按钮（2D/剖面/1D/瀑布/对比/热图）都搬进了「绘图」页
+    （_build_plot_type_row）：工具栏因此从 7 项收到 5 项，也消掉了
+    "1D" 一词两义（入口 vs 视图）。按钮属性名不变（window.view_buttons
+    / compare_btn / heat_btn），只是住的地方换了。
+    """
     tb = QToolBar("主工具栏", window)
     tb.setMovable(False)
     window.addToolBar(tb)
 
-    # 模式开关：[校准] 可勾选。按下 = 校准工作台（几何参数 +
-    # 点图微调束心），弹起 = 默认的分析工作台。原来的 [图像] 按钮
-    # 已删：outputs 摊成四个作图按钮后，它只剩空壳
-    btn_calib = QPushButton("校准")
-    btn_calib.setCheckable(True)   # 默认弹起 = 分析工作台
-    tb.addWidget(btn_calib)
-    window.calib_btn = btn_calib   # 登记按钮（测试用）
-    btn_calib.toggled.connect(lambda on: _on_mode(window, on))
-
-    tb.addSeparator()
-
-    # 作图按钮：[2D][剖面][1D][瀑布]——点一下 = 打开面板 + 计算
-    # 该视图并出图。纯动作不是开关：点几下算几下，重复点击安全；
-    # 面板的开/关只由 × 和拖动管理（勾选式的第二次点击会关面板，
-    # 让人误以为"画不了"）
-    window.view_buttons = {}   # 登记按钮（测试用）
-    for name in VIEW_NAMES:
+    # 五个入口：可勾选（当前页高亮）。[校准] 另有一层含义——进出校准
+    # 工作台（开/关校准面板），那条走 toggled → _on_mode（calib.py 的
+    # [返回分析模式] 也走同一条路：setChecked(False)）
+    window.entrance_buttons = {}
+    window._last_entrance = "1D"    # 退出校准翻回哪一页（最常用的入口）
+    for name in ("校准", "1D", "扣背景", "对比"):
         btn = QPushButton(name)
+        btn.setCheckable(True)
         tb.addWidget(btn)
-        window.view_buttons[name] = btn
-        btn.clicked.connect(
-            lambda checked=False, n=name: _plot_view(window, n))
+        window.entrance_buttons[name] = btn
+        btn.clicked.connect(lambda checked=False, n=name:
+                            _switch_entrance(window, n))
+    tb.addSeparator()
+    btn_plot = QPushButton("绘图")
+    btn_plot.setCheckable(True)
+    tb.addWidget(btn_plot)
+    window.entrance_buttons["绘图"] = btn_plot
+    btn_plot.clicked.connect(lambda: _switch_entrance(window, "绘图"))
 
-    # [对比]：把勾选文件的 1D 曲线叠到一张图（见 _plot_compare）。
-    # 同为纯动作：重复点击 = 刷新那张对比面板
-    btn_compare = QPushButton("对比")
-    tb.addWidget(btn_compare)
-    window.compare_btn = btn_compare   # 登记按钮（测试用）
-    btn_compare.clicked.connect(lambda: _plot_compare(window))
-
-    # [热图]：把勾选文件的 1D 曲线拼成一张 2θ×样品 强度热图（见
-    # _plot_heatmap）。同为纯动作：重复点击 = 刷新那张热图面板
-    btn_heat = QPushButton("热图")
-    tb.addWidget(btn_heat)
-    window.heat_btn = btn_heat   # 登记按钮（测试用）
-    btn_heat.clicked.connect(lambda: _plot_heatmap(window))
+    # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
+    window.calib_btn = window.entrance_buttons["校准"]
+    window.calib_btn.setToolTip("进入校准工作台：标样数据定几何"
+                               "（束心/距离/倾斜角）；再点别的入口即退出")
+    window.calib_btn.toggled.connect(lambda on: _on_mode(window, on))
 
     tb.addSeparator()
 
     # 面板开关：[文件][参数][日志] 三个勾选按钮，收起/展开对应坞。
     # 全收起来 = 中央只剩绘图区，看图视野最大。双向同步：按钮点
     # 击 → 坞显隐；坞被标题栏 × 关掉 → 按钮自动弹起（visibilityChanged
-    # 信号），下次点按钮还能再展开。
+    # 信号），下次点按钮还能再展开
     window.panel_toggles = {}   # 登记按钮（测试用）
     for name, dock in (("文件", window.file_dock),
                        ("参数", window.param_dock),
@@ -1179,6 +1230,115 @@ def _build_toolbar(window: QMainWindow) -> None:
         dock.visibilityChanged.connect(btn.setChecked)
         btn.toggled.connect(dock.setVisible)
 
+    # 开局落在 [1D] 页（最常用的入口；参数坞建好才翻得动，所以放在这里）
+    _switch_entrance(window, "1D")
+
+
+def _switch_entrance(window: QMainWindow, name: str) -> None:
+    """切到某个入口：参数坞翻页 + 五个按钮高亮。
+
+    [校准] 是入口 + 工作台开关：切进去 = 进校准（开校准面板，见
+    _on_mode），切出去 = 退校准（翻回最近用过的分析入口）。其余四个
+    是纯翻页——页底部的产出按钮才负责出图。
+    """
+    pages = getattr(window, "PARAM_PAGES", {})
+    if name not in pages or name not in window.entrance_buttons:
+        return
+    if name != "校准":
+        window._last_entrance = name
+    if name == "校准":
+        window.calib_btn.setChecked(True)    # → toggled → _on_mode(True)
+    else:
+        if window.calib_btn.isChecked():
+            window.calib_btn.setChecked(False)   # → toggled → _on_mode(False)
+        window.param_stack.setCurrentIndex(pages[name])
+    _highlight_entrance(window, name)
+
+
+def _highlight_entrance(window: QMainWindow, name: str) -> None:
+    """入口高亮：只有当前那一个勾着。"""
+    for key, btn in getattr(window, "entrance_buttons", {}).items():
+        btn.setChecked(key == name)
+
+
+def _select_plot_type(window: QMainWindow, name: str) -> None:
+    """点某个类型按钮：记住它 + 高亮它 + 立即出图（沿用旧工具栏手感）。"""
+    window._plot_type = name
+    for key, btn in window.view_buttons.items():
+        btn.setChecked(key == name)
+    window.compare_btn.setChecked(name == "对比")
+    window.heat_btn.setChecked(name == "热图")
+    if name == "对比":
+        _plot_compare(window)
+    elif name == "热图":
+        _plot_heatmap(window)
+    else:
+        _plot_view(window, name)
+
+
+def _plot_selected_type(window: QMainWindow) -> None:
+    """「绘图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
+    name = getattr(window, "_plot_type", "1D")
+    _select_plot_type(window, name)
+
+
+def _redraw_focus(window: QMainWindow) -> None:
+    """「绘图」页的 [只重画当前]：用已有数据重画编辑对象（不重算）。
+
+    与面板 [Home] 同一条路（plot_views._redraw_panel）；没选编辑对象
+    或还没算完时只记日志。
+    """
+    from xrd_toolkit.gui.plot_views import _redraw_panel
+    key = window.focus_panel
+    if key is None:
+        _log(window, "先点击要重画的图面板（如 1D），再点 [只重画当前]")
+        return
+    dock = window.plot_docks.get(key)
+    reason = _redraw_panel(window, key)
+    if reason:
+        _log(window, f"[只重画当前] {dock.windowTitle() if dock else key}"
+                     f"：{reason}")
+        return
+    _log(window, f"[只重画当前] 已重画：{dock.windowTitle()}")
+
+
+def _build_plot_type_row(window: QMainWindow) -> QWidget:
+    """「绘图」页顶部的类型选择行：2D / 剖面 / 1D / 瀑布 / 对比 / 热图。
+
+    点一个 = 选中该类型**并立即出图**（对勾选文件）——沿用旧的工具栏
+    手感（点一次算一次，纯动作不是开关）；页底部的 [出图] 再点一次是
+    同样的动作，方便"先改显示参数、再出图"的循环。按钮属性名沿用
+    window.view_buttons / compare_btn / heat_btn（测试与其它模块按它们
+    找按钮）。
+    """
+    row = QWidget()
+    box = QHBoxLayout(row)
+    box.setContentsMargins(2, 2, 2, 2)
+    box.setSpacing(3)
+    window.view_buttons = {}   # 登记按钮（测试用）
+    for name in VIEW_NAMES:
+        btn = QPushButton(name)
+        btn.setCheckable(True)     # 高亮 = 当前选的类型
+        btn.setFocusPolicy(Qt.NoFocus)
+        box.addWidget(btn)
+        window.view_buttons[name] = btn
+        btn.clicked.connect(lambda checked=False, n=name:
+                            _select_plot_type(window, n))
+    btn_compare = QPushButton("对比")
+    btn_compare.setCheckable(True)
+    btn_compare.setFocusPolicy(Qt.NoFocus)
+    box.addWidget(btn_compare)
+    window.compare_btn = btn_compare
+    btn_compare.clicked.connect(lambda: _select_plot_type(window, "对比"))
+    btn_heat = QPushButton("热图")
+    btn_heat.setCheckable(True)
+    btn_heat.setFocusPolicy(Qt.NoFocus)
+    box.addWidget(btn_heat)
+    window.heat_btn = btn_heat
+    btn_heat.clicked.connect(lambda: _select_plot_type(window, "热图"))
+    return row
+
+
 def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     """模式开关：勾选 = 校准工作台，弹起 = 分析工作台。
 
@@ -1186,23 +1346,22 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     文件开校准面板；没勾文件只记日志提示（不崩）。退出：翻回分析页
     + 关校准面板（校准状态清零，关闭即遗忘）。
 
-    开关文字随状态变（校准 ↔ 退出校准）：按钮自己就是"怎么回来"
-    的说明，与校准页底部的 [返回分析模式] 出口互为呼应。
+    2026-09-24 起入口是**五个页签式按钮**（[校准][1D][扣背景]
+    [对比][绘图]，见 _build_toolbar / _switch_entrance）：不再翻转
+    开关文字——"退出校准"就是点另一个入口，校准页底部仍留着
+    [返回分析模式] 这个显式出口（calib.py 走的就是这里的 setChecked）。
     """
     if calibrating:
-        window.calib_btn.setText("退出校准")
-        window.calib_btn.setToolTip("再点一次退出校准工作台，"
-                                    "返回常规参数面板")
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
-        window.param_stack.setCurrentIndex(1)
+        window.param_stack.setCurrentIndex(window.PARAM_PAGES["校准"])
         _enter_calib(window)
     else:
-        window.calib_btn.setText("校准")
-        window.calib_btn.setToolTip("进入校准工作台：标样数据定几何"
-                                    "（束心/距离/倾斜角）")
         window.mode_label.setText("分析模式")
-        window.param_stack.setCurrentIndex(0)
+        # 翻回最近用过的分析入口（默认 1D）
+        last = getattr(window, "_last_entrance", "1D")
+        window.param_stack.setCurrentIndex(
+            window.PARAM_PAGES.get(last, window.PARAM_PAGES["1D"]))
         _exit_calib(window)
         _log(window, "回到分析模式")
 

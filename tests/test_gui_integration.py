@@ -3,8 +3,14 @@
 用 mock 替换 _compute_integration（真积分慢且依赖 data/ 数据），
 验证接线本身：
   - 选文件只登记不算（点选本身轻快，不触发任何计算）；
-  - 点击作图按钮 = 为当前文件开面板并计算该视图 → 出图（点一次
-    算一次，按钮是纯动作不是开关）；
+  - 工具栏五个入口（校准/1D/扣背景/对比│绘图）：点一个 = 参数坞翻到
+    那一页 + 高亮跟着动；[校准] 另有一层"进出校准工作台"的含义
+    （TestParamDockSplitLayout.test_pages_structure /
+    test_entrance_switching_follows_buttons）；
+  - 六个作图类型按钮住在「绘图」页里（属性名不变）：点击 = 为当前文件
+    开面板并计算该视图 → 出图（点一次算一次，纯动作不是开关）；
+    页里另有 [出图（勾选文件）][只重画当前][导出图片…]，1D/扣背景/
+    对比页各带自己的产出按钮；
   - 面板按「视图 + 文件」成对创建：同一视图可同时开多张不同文件
     的图，标题 = 视图_文件名（如 1D_fake_a.tif）；
   - 计算完成的图自动成为"编辑对象"，[应用] 重算它（焦点指向
@@ -2108,69 +2114,103 @@ class TestParamDockSplitLayout(unittest.TestCase):
     （[恢复默认] 在左、[应用] 在右，各占一半宽度）固定在各区最
     下方——在滚动区之外，滚动时按钮不跟着走。"""
 
-    def test_split_structure(self):
+    def test_pages_structure(self):
+        """参数坞 = 一行编辑对象 + 五个入口页（校准/1D/扣背景/对比/绘图）。
+
+        2026-09-24 用户定稿：工具栏从 7 项收到 5 个入口，六个作图类型
+        按钮搬进「绘图」页（属性名不变：view_buttons / compare_btn /
+        heat_btn）。
+        """
         w = create_window()
         try:
             w.show()
             QApplication.processEvents()
             content = w.param_dock.widget()
             lay = content.layout()
-            # 参数坞 = QStackedWidget 两页翻面（页 0 = 分析工作台、
-            # 页 1 = 校准工作台），顶层层布局唯一的条目就是翻页栈
-            self.assertIs(lay.itemAt(0).widget(), w.param_stack)
-            self.assertEqual(w.param_stack.count(), 2)
-            # 分析页（页 0）：编辑对象名固定在最上方，分隔条紧随其后
-            # 占满剩余空间（下方没有别的同级条目）
-            page_lay = w.param_stack.widget(0).layout()
-            self.assertIs(page_lay.itemAt(0).widget(), w.focus_label)
-            splitter = page_lay.itemAt(1).widget()
-            self.assertIsInstance(splitter, QSplitter)
-            self.assertEqual(splitter.orientation(), Qt.Vertical)
-            self.assertEqual(splitter.count(), 2)
-            self.assertFalse(splitter.childrenCollapsible())
-
-            data_half, img_half = splitter.widget(0), splitter.widget(1)
-            self.assertEqual(data_half.title(), "数据参数")
-            self.assertEqual(img_half.title(), "图像参数")
-            # 初始对半分：两块等高（容差按 15% 或几个像素）
-            s0, s1 = splitter.sizes()
-            self.assertGreater(s0, 0)
-            self.assertAlmostEqual(s0, s1, delta=max(4, s0 * 0.15))
-
-            # 每半：滚动区在上、按钮行垫底；按钮不在滚动区内容物里
-            for half, reset_name, apply_name in (
-                    (data_half, "reset_data_btn", "apply_btn"),
-                    (img_half, "reset_image_btn", "apply_image_btn")):
-                scroll = half.findChild(QScrollArea)
-                self.assertIsNotNone(scroll)
-                reset = half.findChild(QPushButton, reset_name)
-                apply = half.findChild(QPushButton, apply_name)
-                self.assertIsNotNone(reset)
-                self.assertIsNotNone(apply)
-                # 滚动区内容物里找不到按钮 = 按钮固定在滚动区之外
-                self.assertIsNone(
-                    scroll.widget().findChild(QPushButton, apply_name))
-                self.assertIsNone(
-                    scroll.widget().findChild(QPushButton, reset_name))
-                # 布局顺序：滚动区在上、按钮行垫底（并排：
-                # [恢复默认] 在左、[应用] 在右，各占一半宽度）
-                v = half.layout()
-                self.assertIs(v.itemAt(0).widget(), scroll)
-                btn_row = v.itemAt(1)
-                self.assertIsInstance(btn_row, QHBoxLayout)
-                self.assertIs(btn_row.itemAt(0).widget(), reset)
-                self.assertIs(btn_row.itemAt(1).widget(), apply)
-                self.assertEqual(btn_row.stretch(0), 1)
-                self.assertEqual(btn_row.stretch(1), 1)
+            self.assertIs(lay.itemAt(0).widget(), w.focus_label,
+                          "编辑对象名固定最上方")
+            self.assertIs(lay.itemAt(1).widget(), w.param_stack)
+            self.assertEqual(w.param_stack.count(), 5)
+            self.assertEqual(w.PARAM_PAGES,
+                             {"校准": 0, "1D": 1, "扣背景": 2, "对比": 3,
+                              "绘图": 4})
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["1D"], "开局落在最常用的 1D 页")
+            self.assertEqual(list(w.entrance_buttons),
+                             ["校准", "1D", "扣背景", "对比", "绘图"])
+            for name, btn in w.entrance_buttons.items():
+                self.assertEqual(btn.isChecked(), name == "1D", name)
+            # 六个作图类型按钮都在「绘图」页里（工具栏只剩入口 + 面板开关）
+            draw_page = w.param_stack.widget(w.PARAM_PAGES["绘图"])
+            for btn in (list(w.view_buttons.values())
+                        + [w.compare_btn, w.heat_btn]):
+                self.assertTrue(draw_page.isAncestorOf(btn),
+                                f"{btn.text()} 应住在绘图页里")
         finally:
             w.close()
 
+    def test_produce_buttons_live_in_their_pages(self):
+        """每页底部的产出按钮住在自己那页，点了真出图（1D 页当代表）。
 
-class TestParamFormPolish(unittest.TestCase):
-    """参数面板排版细节：单位在输入框后缀、成对范围并排一行（中间
-    ~ 连接）、小节灰色标题、复选框名称精简（键不动）、坞的最小
-    宽高防拖动裁切。window.params 的键保持旧名——快照回放与既有
-    测试都按键找控件，只改显示排版。"""
+        出图链路本身由别的测试覆盖，这里守的是"按钮搬对页 + 接线没断"
+        （C 拆分时最容易犯的错就是把按钮留在旧页/忘了接）。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files(["data/fake_b.tif"])
+                # 1D 页：出 1D 图
+                w.entrance_buttons["1D"].click()
+                page_1d = w.param_stack.widget(w.PARAM_PAGES["1D"])
+                self.assertTrue(page_1d.isAncestorOf(w.plot_1d_btn))
+                w.plot_1d_btn.click()
+                self.assertTrue(_wait_until(lambda: len(
+                    _axes(w, "1D", "data/fake_b.tif").lines) > 0),
+                    "[出 1D 图] 该出图")
+                # 绘图页：[出图（勾选文件）] 按当前类型再出一次
+                w.entrance_buttons["绘图"].click()
+                draw = w.param_stack.widget(w.PARAM_PAGES["绘图"])
+                for btn in (w.plot_now_btn, w.redraw_now_btn,
+                            w.export_img_btn):
+                    self.assertTrue(draw.isAncestorOf(btn), btn.text())
+                w.plot_now_btn.click()
+                QApplication.processEvents()
+                # 当前类型 = 1D → 又起了一次积分（面板已开 = 刷新那张图）
+                self.assertEqual(
+                    w.log_text.toPlainText().count("开始积分"), 2,
+                    "[出图（勾选文件）] 该按当前类型再来一次")
+                # 扣背景页 / 对比页的产出按钮
+                for name, btn in (("扣背景", "bg_redraw_btn"),
+                                  ("对比", "plot_cmp_btn"),
+                                  ("对比", "plot_heat_btn")):
+                    page = w.param_stack.widget(w.PARAM_PAGES[name])
+                    self.assertTrue(
+                        page.isAncestorOf(getattr(w, btn)),
+                        f"{btn} 应在{name}页里")
+        finally:
+            w.close()
+
+    def test_entrance_switching_follows_buttons(self):
+        """点入口 = 翻到那一页 + 高亮跟着动；出入校准走同一条路。"""
+        w = create_window()
+        try:
+            for name in ("校准", "扣背景", "对比", "绘图", "1D"):
+                w.entrance_buttons[name].click()
+                QApplication.processEvents()
+                self.assertEqual(w.param_stack.currentIndex(),
+                                 w.PARAM_PAGES[name], name)
+                self.assertTrue(w.entrance_buttons[name].isChecked(), name)
+                for other, btn in w.entrance_buttons.items():
+                    if other != name:
+                        self.assertFalse(btn.isChecked(),
+                                         f"切到 {name} 时 {other} 不该还亮着")
+            self.assertIn("回到分析模式", w.log_text.toPlainText(),
+                          "从校准切出去 = 退校准")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
     def test_units_in_spinbox_suffix(self):
         w = create_window()
@@ -2933,20 +2973,25 @@ class TestArrangeModeClose(unittest.TestCase):
                 w.close()
 
     def test_calib_mode_toggle(self):
-        """[校准] 按下 = 校准模式提示，弹起 = 分析模式提示。
+        """[校准] 入口 = 校准模式提示 + 翻到校准页；点别的入口回分析模式。
 
-        开关文字随状态变（校准 ↔ 退出校准）：按钮自己说明怎么回来。
+        2026-09-24 起入口是五个页签式按钮（不再翻转开关文字——"退出
+        校准"就是点另一个入口；校准页底部另有 [返回分析模式] 显式出口，
+        见 TestCalibration.test_calib_page_exit_button_returns_to_analysis）。
         """
         w = create_window()
         try:
             w.calib_btn.click()
             self.assertIn("进入校准模式", w.log_text.toPlainText())
             self.assertIn("校准模式", w.mode_label.text())
-            self.assertEqual(w.calib_btn.text(), "退出校准")
-            w.calib_btn.click()
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["校准"])
+            w.entrance_buttons["对比"].click()
             self.assertIn("回到分析模式", w.log_text.toPlainText())
             self.assertIn("分析模式", w.mode_label.text())
-            self.assertEqual(w.calib_btn.text(), "校准")
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["对比"])
+            self.assertFalse(w.calib_btn.isChecked())
         finally:
             w.close()
 
@@ -5570,7 +5615,8 @@ class TestCalibration(unittest.TestCase):
         """
         w.add_files(["data/fake_a.tif"])
         w.calib_btn.click()
-        self.assertEqual(w.param_stack.currentIndex(), 1)
+        self.assertEqual(w.param_stack.currentIndex(),
+                         w.PARAM_PAGES["校准"])
         self.assertIsNotNone(w.calib_dock)
         w.calib_pixel_chk.setChecked(True)   # 校准前置：确认像素尺寸
 
@@ -5591,8 +5637,9 @@ class TestCalibration(unittest.TestCase):
                      == gui_calib_model.RING_COLOR.lower()]
             self.assertGreaterEqual(len(rings), 16)
             # 退出：面板关、参数坞还原
-            w.calib_btn.click()
-            self.assertEqual(w.param_stack.currentIndex(), 0)
+            w.entrance_buttons["1D"].click()   # 点别的入口 = 退出校准
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["1D"])
             self.assertIsNone(w.calib_dock)
             self.assertIn("回到分析模式", self._logs(w))
         finally:
@@ -5608,13 +5655,12 @@ class TestCalibration(unittest.TestCase):
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
-            self.assertEqual(w.calib_btn.text(), "退出校准")
             self.assertTrue(w.calib_btn.isChecked())
-            # 页面出口：点 [返回分析模式] → 开关弹起 → 翻回分析页
+            # 页面出口：点 [返回分析模式] → 入口弹起 → 翻回分析页
             w.calib_exit_btn.click()
             self.assertFalse(w.calib_btn.isChecked())
-            self.assertEqual(w.calib_btn.text(), "校准")
-            self.assertEqual(w.param_stack.currentIndex(), 0)
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["1D"])
             self.assertIsNone(w.calib_dock)
             self.assertIn("回到分析模式", self._logs(w))
         finally:
@@ -5626,7 +5672,8 @@ class TestCalibration(unittest.TestCase):
         w = create_window()
         try:
             w.calib_btn.click()
-            self.assertEqual(w.param_stack.currentIndex(), 1)
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["校准"])
             self.assertIsNone(getattr(w, "calib_dock", None))
             self.assertIn("请先在文件列表勾选标样文件", self._logs(w))
         finally:
@@ -5873,7 +5920,7 @@ class TestCalibration(unittest.TestCase):
                 self._enter_with_fake_a(w)
                 w.calib_start_auto.click()
                 self.assertTrue(started.wait(5))
-                w.calib_btn.click()   # 退出模式：面板关、代 +1
+                w.entrance_buttons["1D"].click()   # 点别的入口 = 退出
                 self.assertIsNone(w.calib_dock)
                 release.set()
                 # 等任务收尾投递后：状态与结果区仍为空（作废不炸）
@@ -5902,7 +5949,7 @@ class TestCalibration(unittest.TestCase):
                 self._enter_with_fake_a(w)
             w.param_dock.setMinimumWidth(w.param_dock.minimumWidth())
             QApplication.processEvents()
-            page = w.param_stack.widget(1).widget()
+            page = w.param_stack.widget(w.PARAM_PAGES["校准"])
             over = []
             for child in page.findChildren(QWidget):
                 if not child.isVisible() or child.width() == 0:
@@ -6854,7 +6901,7 @@ class TestCalibFlow(unittest.TestCase):
                                     page.sizeHint().width())
             self.assertLessEqual(w.param_dock.width(),
                                  w.width() - gui_calib_model.CALIB_PANEL_RESERVE_PX + 2)
-            w.calib_btn.click()          # 退出
+            w.entrance_buttons["1D"].click()   # 点别的入口 = 退出校准
             QApplication.processEvents()
             self.assertAlmostEqual(w.param_dock.width(), before, delta=2)
         finally:
