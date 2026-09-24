@@ -1007,6 +1007,40 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     dock.figure_saved = False
 
 
+# 一次批量作图最多画**前多少张**（按文件列表顺序，2026-09-24 用户"图一多
+# 就很卡"）。开图是唯一随数量变慢的成本：第 1 张 136 ms、第 100 张 287 ms
+# （每开一张都要把已经开着的子窗口重排一遍），而且每张 ≈15 MB（真机 81 张
+# ≈1.4 GB）。超出的文件不是不能看——日志写清画了几张、出口在哪（[热图]/
+# [对比] 一张图放完整批，还会把整批算完落盘，之后单独点开是秒开）。
+MAX_PANELS_PER_BATCH = 24
+
+
+def _resolve_dock(window: QMainWindow, name: str, item):
+    """按「视图 + 文件条目」找已有面板：返回 (键, 面板或 None)。
+
+    键 = "视图|路径"。同一文件可以有多条条目（重复文件改名加入）：短键
+    归**先开出面板的那条**，后来者键补显示名区分，各自成图、互不当过期；
+    条目删后重加 → 面板归位到新条目（显示名一样就是同一条）。
+
+    注意这条规则**依赖调用时机**：第二条条目的键要靠"短键上已有面板"
+    才补显示名，所以必须在**同一次单遍循环**里边找边建（2026-09-24 踩过：
+    先跑一遍预算、再跑一遍建面板，第二条条目预算时看不到第一条刚建的
+    面板 → 两条抢同一个键、只出一张图）。
+    """
+    path = Path(item.data(Qt.UserRole))
+    display = item.text()
+    key = f"{name}|{path}"
+    dock = window.plot_docks.get(key)
+    if dock is not None and getattr(dock, "panel_item", None) is not item:
+        if getattr(dock, "panel_display", None) == display:
+            dock.panel_item = item   # 条目删后重加：面板归位到新条目
+        else:
+            # 同路径的另一条目（重复文件改名加入）→ 键补显示名区分
+            key = f"{name}|{path}|{display}"
+            dock = window.plot_docks.get(key)
+    return key, dock
+
+
 def _plot_view(window: QMainWindow, name: str) -> None:
     """工具栏作图按钮的动作：对每个对号文件开面板（或复用）并计算。
 
@@ -1017,6 +1051,11 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     （xxx (1).tif），面板键补显示名区分，各自成图、互不当过期。
     按钮是纯动作不是开关——点一下算一下，重复点击安全；面板的
     开/关只由 × 和拖动管理。
+
+    一次批量最多画**前 MAX_PANELS_PER_BATCH 张**（按文件列表顺序，
+    理由见常量旁的注释）：超出的文件记一行日志并指出 [热图]/[对比]
+    这两条出口，不静默少画一半。进度记账的总数 = 这一批真画的张数，
+    否则 k/n 永远到不了 n、批也不清账。
     """
     checked = [window.file_list.item(i)
                for i in range(window.file_list.count())
@@ -1024,28 +1063,28 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     if not checked:
         _log(window, "没有选中的文件")
         return
-    if len(checked) > 1:
+    targets = checked[:MAX_PANELS_PER_BATCH]
+    skipped = len(checked) - len(targets)
+    if skipped:
+        _log(window, f"这批 {len(checked)} 张里先画前 {len(targets)} 张"
+                     "（按文件列表顺序，一次最多画 "
+                     f"{MAX_PANELS_PER_BATCH} 张：每张 ≈15 MB、越开越慢）；"
+                     "要看全部：[热图] / [对比] 一张图放完整批，还会把"
+                     "整批算完落盘，之后单独点开是秒开")
+    if len(targets) > 1:
         # 批量进度记账：这一批的总数/视图名；每个任务结束回调计数
         # 一次（k/n 后缀贴在完成/失败日志末尾，批走完自动清账）
-        window._batch = {"view": name, "total": len(checked), "done": 0}
-    for i, item in enumerate(checked):
+        window._batch = {"view": name, "total": len(targets), "done": 0}
+    for i, item in enumerate(targets):
         path = Path(item.data(Qt.UserRole))
         display = item.text()
-        key = f"{name}|{path}"
-        dock = window.plot_docks.get(key)
-        if dock is not None and getattr(dock, "panel_item", None) is not item:
-            if getattr(dock, "panel_display", None) == display:
-                dock.panel_item = item   # 条目删后重加：面板归位到新条目
-            else:
-                # 同路径的另一条目（重复文件改名加入）→ 键补显示名区分
-                key = f"{name}|{path}|{display}"
-                dock = window.plot_docks.get(key)
+        key, dock = _resolve_dock(window, name, item)
         if dock is None:
             if i and i % 8 == 0:
                 # 开面板是主线程上的活（每块 130~290 ms）：每 8 块报一次
                 # 进度、顺手消化事件，界面不会一口气闷十几秒没反应
                 # （用户反馈"图一多就很卡"——开 81 张时的观感）
-                _log(window, f"正在开面板：{i + 1}/{len(checked)}…")
+                _log(window, f"正在开面板：{i + 1}/{len(targets)}…")
                 _settle(window)
             title = f"{name}_{display}"
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）

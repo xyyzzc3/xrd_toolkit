@@ -7234,6 +7234,56 @@ class TestBatchProgress(unittest.TestCase):
         finally:
             w.close()
 
+    def test_batch_cap_opens_only_max_panels(self):
+        """一次批量最多画前 MAX_PANELS_PER_BATCH 张，且不静默。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_views, "_compute_integration",
+                                      side_effect=_fake_compute):
+                w.add_files([f"data/fake_c{i}.tif" for i in range(1, 5)])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
+                                "这批判完应清账")
+            opened = sorted(k for k in w.plot_docks if k.startswith("1D|"))
+            self.assertEqual(opened, ["1D|data/fake_c1.tif",
+                                      "1D|data/fake_c2.tif"],
+                             "上限 2 张，只该开前两张（按列表顺序）")
+            log = w.log_text.toPlainText()
+            # 少画一半必须说清楚，并指出出口
+            self.assertIn("这批 4 张里先画前 2 张", log)
+            self.assertIn("[热图]", log)
+            # 计数只算真画的那两张：否则 k/n 永远到不了 n（批不清账）
+            self.assertIn("（2/2）", log)
+            self.assertNotIn("（4/4）", log)
+        finally:
+            w.close()
+
+    def test_replot_inside_the_cap_reuses_panels(self):
+        """额度内的重复点 = 复用那几张面板，不新建也不报"少画"。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_views, "_compute_integration",
+                                      side_effect=_fake_compute):
+                paths = [f"data/fake_d{i}.tif" for i in range(1, 4)]
+                w.add_files(paths)
+                # 先只勾前两张（额度刚好用满）
+                for i in range(w.file_list.count()):
+                    w.file_list.item(i).setCheckState(
+                        Qt.Checked if i < 2 else Qt.Unchecked)
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")))
+                n_first = len(w.plot_docks)
+                _open_view(w, "1D")   # 同样的勾选再点一次
+                self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")))
+            log = w.log_text.toPlainText()
+            self.assertEqual(len(w.plot_docks), n_first,
+                             "重复点该复用面板，不该再建")
+            self.assertNotIn("先画前", log, "两张都在额度内，不该报少画")
+        finally:
+            w.close()
+
     def test_single_file_has_no_progress_suffix(self):
         w = create_window()
         try:
