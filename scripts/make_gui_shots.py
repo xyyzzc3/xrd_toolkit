@@ -4,15 +4,16 @@
 什么时候跑：**界面外观变了就重拍**（改了工具栏/面板壳/配色/对话框
 之后，README 里的图还是旧样子，评审一眼能看出来）。
 
-场景与 README 的图注一一对应（改图注前先看这里）：
-    gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）
-    gui_compare     两张 LMFP 叠图 + 图例
-    gui_customize   Customize 对话框（单张，460×542）
-    gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）
-    gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 txt + CSV
-    gui_heatmap     三个数据集的热图 + 旁边一条 1D
-    gui_background  真 LMFP 上的四个手动锚点（原始虚线 / 基线点线 / 结果实线）
-    gui_calib       校准页三列 + Δ + 结论（跑过自动 + 二次精修）
+场景与文档里的图注一一对应（改图注前先看这里；2026-09-25 起 README
+只放三张 GUI 图，其余四张在 docs/NOTES.md）：
+    gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
+    gui_calib       校准页三列 + Δ + 结论（自动 + 二次精修）  → README
+    gui_heatmap     三个数据集的热图 + 旁边一条 1D            → README
+    gui_compare     两张 LMFP 叠图 + 图例                     → NOTES
+    gui_customize   Customize 对话框（单张，460×542）         → NOTES
+    gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
+    gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
+    gui_background  真 LMFP 上的四个手动锚点（原始/基线/结果）→ NOTES
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**
