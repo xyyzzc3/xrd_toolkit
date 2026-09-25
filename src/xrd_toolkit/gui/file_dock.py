@@ -6,7 +6,7 @@
 
 文件栏是一棵树（用户 2026-09-24 提"每次完成一个大功能后在文件栏有一个
 新的子文件夹"）：顶上「原始数据」组，下面是各阶段产物分组（「1D 产物」=
-当前设置算好的；「扣背景 …」= 每次 [批量扣背景] 一组）。勾组 = 整组全选，
+当前设置算好的；「处理后 …」= 每次 [批量处理] 一组）。勾组 = 整组全选，
 半勾 = 只勾了一部分。**原始数据那部分的接口沿用老列表的写法**（item(i)/
 count()/addItem，见 FileTree），免得几十处读写全改一遍。
 
@@ -323,7 +323,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     window.file_list.itemClicked.connect(on_item_clicked)
     window.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
     window.file_list.customContextMenuRequested.connect(
-        lambda pos: _product_menu(window, window.file_list.itemAt(pos)))
+        lambda pos: _entry_menu(window, window.file_list.itemAt(pos)))
     # 记录鼠标按下时命中的条目与对号状态（区分方块点击/行体点击）
     window.file_list.viewport().installEventFilter(
         _PressRecorder(window, window.file_list))
@@ -375,37 +375,26 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             apply_selection(window, spec)
 
     def delete_selected():
-        """[删除]：移除勾选的**原始数据**条目。
+        """[删除]：勾选的**原始数据**从列表移除，勾选的**产物**真删掉。
 
-        产物条目不走这个按钮：它们**右键就能删**（单条或整组，见
-        _product_menu）——[删除] 的口径是"勾选 = 要处理的对象"，产物
-        不是"要处理的对象"而是"处理的结果"，两件事分开更好理解。
+        与右键同一套口径（用户 2026-09-25 定："不要区分原始和处理后"）。
+        唯一不可动摇的差别：原始数据**只从列表移除**，硬盘上的 tif 一个
+        字节都不碰；产物是程序自己生成的东西，删就是真删（连带台账）。
         """
-        checked = checked_raw_items(window)
-        if not checked:
-            _log(window, "没有选中要删除的文件"
-                         "（产物条目请右键删除）")
+        raw = checked_raw_items(window)
+        products = [s for s in gui_sources.checked_sources(window)
+                    if s.kind != gui_sources.RAW]
+        if not raw and not products:
+            _log(window, "没有选中要删除的条目")
             return
-        skipped = len([s for s in gui_sources.checked_sources(window)
-                       if s.kind != gui_sources.RAW])
-        # 屏蔽信号：移除过程中 Qt 会把当前项挪到相邻条目，别让
-        # 中间状态触发登记/日志
-        window.file_list.blockSignals(True)
-        for it in checked:
-            window.file_list.raw_group.removeChild(it)
-        window.file_list.blockSignals(False)
-        _sync_group_states(window)   # 批量删也是屏蔽信号做的：补组态
-        _sync_current_to_checks(window)   # 高亮跟随剩余对号集合
-        _refresh_file_label(window)   # 状态行跟随剩余对号集合
-        # 条目没了，面板绑定的列表条目随之失效：解除引用（面板照常
-        # 工作，靠 panel_file 记住自己的文件；重新加回时由 _plot_view
-        # 把面板归位到新条目）。对比面板没有 panel_item，跳过。
-        for dock in window.plot_docks.values():
-            if getattr(dock, "panel_item", None) in checked:
-                dock.panel_item = None
-        tail = f"，另有 {skipped} 个产物条目没动（要删请右键）" if skipped else ""
-        _log(window, f"已删除 {len(checked)} 个文件{tail}")
-        refresh_product_groups(window)    # 文件没了，它的产物分组也跟着收
+        if raw:
+            _remove_from_list(window, raw)
+        if products:
+            n = 0
+            for src in products:
+                n += stage_cache.drop_keys(src.kind, [src.key])
+            _log(window, f"已删除 {len(products)} 条产物（{n} 份文件）")
+            refresh_product_groups(window)
 
     btn_open.clicked.connect(open_dialog)
     btn_save.clicked.connect(lambda: _save_figures(window))
@@ -607,7 +596,7 @@ def _keys_of(item, kind: str = None) -> list:
 def drop_product_group(window: QMainWindow, item) -> int:
     """删掉**一组**产物（盘上的产物 + 对应的台账条目），返回删掉的份数。
 
-    两种组：扣背景批次（一整批，`drop_batch`）与「1D 产物」（当前设置下算好
+    两种组：处理批次（一整批，`drop_batch`）与「1D 产物」（当前设置下算好
     的那些，逐键删）。菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在
     PySide6 里打不了补丁，弹菜单那一步没法在无头环境里走——所以把"删"这一
     步单独摘出来，能测的就是它）。
@@ -649,46 +638,131 @@ def drop_product_item(window: QMainWindow, item) -> int:
     return n
 
 
-def _product_menu(window: QMainWindow, item) -> None:
-    """右键产物分组 / 产物条目 → 弹菜单删掉它（组 = 整组，条目 = 这一条）。
+def _entry_menu(window: QMainWindow, item) -> None:
+    """右键文件栏：**删除与导出**，一套手势、不区分原始与处理后。
 
-    原始数据组与原始数据条目不进这个菜单：它们的删除入口是 [删除] 按钮
-    （勾选 = 要处理的对象，语义不同，别混在一起）。
+    用户 2026-09-25 定："把删除和保存统一做成右键以及按键，不要区分原始和
+    处理后"。映射如下：
+
+        原始数据条目  → 从列表移除（**硬盘上的 tif 永远不动**）
+        产物条目      → 删除这一条产物（真删文件 + 台账）
+        产物分组      → 删除这一组产物 / 导出这一组（数据）
+        空白处 / 原始数据组 → 删除所有缓存…
+
+    两个词分工：**删除**管"不要了"，**导出**管"存出去"（图另存走面板上的
+    [保存]，那是图片不是数据）。差别只在日志里说明——菜单项本身长得一样。
     """
-    if item is None or item is window.file_list.raw_group:
-        return
-    if is_group(item):
-        if not item.childCount():
-            return
-        what = f"删除这一组产物（{item.childCount()} 个）"
-    else:
-        src = gui_sources.source_of(item)
-        if src is None or src.kind == gui_sources.RAW or not src.key:
-            return
-        what = f"删除这一条产物（{src.display}）"
     if not window.isVisible():
         return   # 窗口没显示（测试/无头）不弹模态菜单：会永远等不到人点
     menu = QMenu(window)
-    act = menu.addAction(what)
-    pos = window.file_list.viewport().mapToGlobal(QPoint(0, 0))
-    if menu.exec(pos) is not act:
-        return
-    if is_group(item):
-        drop_product_group(window, item)
+    actions = {}
+    src = None if is_group(item) else gui_sources.source_of(item)
+    if item is None or item is window.file_list.raw_group:
+        pass                      # 空白处 / 原始数据组：只给"清缓存"
+    elif is_group(item):
+        if item.childCount():
+            actions[menu.addAction(
+                f"删除这一组产物（{item.childCount()} 个）")] = "drop_group"
+            actions[menu.addAction("导出这一组（txt / chi / CSV）")] = \
+                "export_group"
+    elif src is None or src.kind == gui_sources.RAW:
+        actions[menu.addAction(f"从列表移除 {src.display if src else ''}"
+                               f"（硬盘上的文件不动）")] = "remove_raw"
     else:
+        actions[menu.addAction(f"删除这一条产物（{src.display}）")] = "drop_item"
+        actions[menu.addAction("导出这一条（txt / chi / CSV）")] = "export_item"
+    if actions:
+        menu.addSeparator()
+    actions[menu.addAction("删除所有缓存…")] = "clear_cache"
+    pos = window.file_list.viewport().mapToGlobal(QPoint(0, 0))
+    picked = menu.exec(pos)
+    what = actions.get(picked)
+    if what is None:
+        return
+    if what == "drop_group":
+        drop_product_group(window, item)
+    elif what == "drop_item":
         drop_product_item(window, item)
+    elif what == "remove_raw":
+        _remove_from_list(window, [item])
+    elif what == "export_group":
+        sources = [gui_sources.source_of(item.child(i))
+                   for i in range(item.childCount())]
+        export_sources(window, sources)
+    elif what == "export_item":
+        export_sources(window, [src])
+    elif what == "clear_cache":
+        ask_clear_cache(window)
+
+
+def export_sources(window: QMainWindow, sources) -> None:
+    """右键"导出这一条/这一组"：只导出给定来源（不动勾选状态）。
+
+    延迟导入 plot_export：它 import 本模块（打开文件/保存/导出按钮），
+    模块级互相 import 会成环。
+    """
+    from xrd_toolkit.gui.plot_export import _run_export
+    _run_export(window, sources=sources)
+
+
+def _remove_from_list(window: QMainWindow, items) -> None:
+    """把条目从文件栏移除（只动列表，硬盘上的文件一个字节都不碰）。"""
+    items = [it for it in items if it is not None and not is_group(it)]
+    if not items:
+        return
+    window.file_list.blockSignals(True)
+    for it in items:
+        window.file_list.raw_group.removeChild(it)
+    window.file_list.blockSignals(False)
+    for dock in window.plot_docks.values():
+        if getattr(dock, "panel_item", None) in items:
+            dock.panel_item = None
+    _sync_group_states(window)
+    _sync_current_to_checks(window)
+    _refresh_file_label(window)
+    refresh_product_groups(window)
+    _log(window, f"已从列表移除 {len(items)} 个文件（硬盘上的文件未改动）")
+
+
+def ask_clear_cache(window: QMainWindow) -> None:
+    """「删除所有缓存…」：二次确认后再清（菜单里点错比按钮上点错更容易）。
+
+    没显示的窗口（测试/无头）不弹模态框、直接清——与 _ask_duplicate 同理。
+    """
+    from xrd_toolkit.services import stage_cache
+    info = stage_cache.describe()
+    if not info["files"]:
+        _log(window, "缓存本来就是空的（还没有落过产物）")
+        return
+    n_prod = int(info["files"])
+    if window.isVisible():
+        box = QMessageBox(window)
+        box.setWindowTitle("删除所有缓存")
+        box.setText(f"要删掉全部 {n_prod} 个缓存文件吗"
+                    f"（约 {info['bytes'] / 1e6:.1f} MB）？")
+        box.setInformativeText("删掉的是处理产物与 1D 产物（outputs/_stage）。"
+                               "下次出图会重新积分——只慢一点，不会算错。")
+        ok = box.addButton("删除", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not ok:
+            _log(window, "已取消删除缓存")
+            return
+    cleared = stage_cache.clear()
+    window.refresh_groups()
+    _log(window, f"已删除所有缓存：{cleared} 个产物文件")
 
 
 def refresh_product_groups(window: QMainWindow) -> None:
-    """重建文件栏里的产物分组：「1D 产物」+ 各组「扣背景 …」。
+    """重建文件栏里的产物分组：「1D 产物」+ 各组「处理后 …」。
 
     数据来源两处，各有各的道理：
       - 1D 产物**正向查**：按当前设置算键 → 看文件在不在（与"点 [1D]
         会不会命中缓存"完全同源，设置一变分组自然跟着变）；
-      - 扣背景产物**读台账**：产物键里含设置哈希，反查不出来，只能靠
-        [批量扣背景] 当时记的那一笔（见 services/stage_cache 的台账一节）。
+      - 处理产物**读台账**：产物键里含设置哈希，反查不出来，只能靠
+        [批量处理] 当时记的那一笔（见 services/stage_cache 的台账一节）。
 
-    只在"有事发生"时调（导入/删除、批量扣背景、清空缓存）：每次要给列表
+    只在"有事发生"时调（导入/删除、批量处理、清空缓存）：每次要给列表
     里每个文件算一次指纹（读 64 KiB），200 个文件 ≈ 100 ms，定时刷新是
     白烧 CPU。台账里"产物已经没了"的条目顺手落盘清掉。
     """
@@ -738,7 +812,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
                 add_leaf(group, it, gui_sources.ONED, key, "1D")
             tree.addTopLevelItem(group)
 
-        # ② 扣背景：一次 [批量扣背景] = 一组（台账，新的在上）
+        # ② 处理：一次 [批量处理] = 一组（台账，新的在上）
         raw_batches = stage_cache.list_batches("bg")
         batches = stage_cache.list_batches("bg", prune=True)
         if sum(len(n["items"]) for n in raw_batches) != \
@@ -762,7 +836,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
             group.setData(0, GROUP_ROLE + 1, node["id"])   # 右键删这一组用
             for raw_item, meta in kids:
                 add_leaf(group, raw_item, gui_sources.BG,
-                         meta.get("key"), "扣背景")
+                         meta.get("key"), "处理后")
             tree.addTopLevelItem(group)
         tree.expandAll()
     finally:

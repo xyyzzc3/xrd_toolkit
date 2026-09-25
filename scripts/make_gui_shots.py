@@ -230,7 +230,7 @@ def shot_background(window) -> None:
     """背景扣除：真 LMFP 上四个手动锚点（原始/基线/结果三线同在）。"""
     from xrd_toolkit.gui import plot_compare as gui_compare
     path = LMFP[0]
-    add_all(window, [path], entrance="扣背景")
+    add_all(window, [path], entrance="处理")
     window.view_buttons["1D"].click()
     key = "1D|" + path
     wait_for(lambda: key in window.plot_docks

@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.services import process
 from xrd_toolkit.services.background import (
     compute_baseline, subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -124,6 +125,13 @@ _DISPLAY_DEFAULTS = {
     # 显示原始曲线对比（实时预览"扣前 vs 扣后"）与负值截断
     "背景显示原始": True,
     "负值截断为 0": False,
+    # 处理页的另两项（平滑 / 裁剪）：同样"画的时候才做"，改它即重画、
+    # 不需要重新积分。默认都关着——不勾就是没做处理（产物键也因此不变）。
+    "平滑曲线": False,
+    "平滑窗口 (°)": 0.10,
+    "裁剪区间": False,
+    "裁剪起点 (°)": 2.0,
+    "裁剪终点 (°)": 3.0,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 
@@ -218,8 +226,8 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
     """把一份面板快照回放进参数坞控件，期间挂 _param_replaying 旗标。
 
     旗标的作用：回放是**程序**在写控件，而每个背景扣除控件都连着
-    _refresh_bg（实时预览）。不挂旗标的话回放途中的 setValue 会一路触发
-    _refresh_bg → _display_snapshot，把"正回放到一半的控件状态"当成用户
+    _refresh_proc（实时预览）。不挂旗标的话回放途中的 setValue 会一路触发
+    _refresh_proc → _display_snapshot，把"正回放到一半的控件状态"当成用户
     的设置写进当前面板的快照——切一次焦点就把别的面板的显示参数（实测是
     注册在背景组之后的 热图色图/热图归一化/热图对数/热图范围 这几项）
     串到本面板上，而且不可逆。详见 _load_params_snapshot_body。
@@ -504,6 +512,42 @@ def _bg_params(window: QMainWindow, dock, path) -> dict:
     }
 
 
+def _smooth_cut_params(window: QMainWindow, dock) -> dict:
+    """「处理」页里平滑与裁剪两项的参数（各自可以关掉）。
+
+    两项都按**面板快照**取（_panel_param），所以整批处理时"每张图用自己
+    那份设置"这条口径与背景扣除一致；关掉时返回中性值（0 度 / 无区间），
+    链就退化成"只有背景扣除"。
+    """
+    smooth = bool(_panel_param(window, dock, "平滑曲线", False))
+    cut = bool(_panel_param(window, dock, "裁剪区间", False))
+    lo = float(_panel_param(window, dock, "裁剪起点 (°)", 0.0) or 0.0)
+    hi = float(_panel_param(window, dock, "裁剪终点 (°)", 0.0) or 0.0)
+    return {
+        "smooth_deg": (float(_panel_param(window, dock, "平滑窗口 (°)", 0.0)
+                             or 0.0) if smooth else 0.0),
+        "cut_ranges": [(lo, hi)] if (cut and hi > lo) else [],
+    }
+
+
+def _proc_params(window: QMainWindow, dock, path) -> dict:
+    """该面板当前的处理参数（背景 + 平滑 + 裁剪）→ services/process.apply_chain。"""
+    params = _bg_params(window, dock, path)
+    params.update(_smooth_cut_params(window, dock))
+    params["clip"] = bool(_panel_param(window, dock, "负值截断为 0", False))
+    return params
+
+
+def _proc_settings(window: QMainWindow, dock, path) -> dict:
+    """处理产物**键**用的口径：背景设置 + 平滑/裁剪（开着的才进，见
+    services/process.chain_parts）。没开平滑与裁剪时逐位等于 _bg_settings，
+    所以老产物继续命中。
+    """
+    settings = _bg_settings(window, dock, path)
+    settings.update(_smooth_cut_params(window, dock))
+    return settings
+
+
 def _bg_settings(window: QMainWindow, dock, path) -> dict:
     """该面板当前的背景设置（bg 产物键用的规范化字典）。
 
@@ -534,16 +578,19 @@ def _bg_settings(window: QMainWindow, dock, path) -> dict:
     }
 
 
-def _bg_curve(window: QMainWindow, dock, path, tth, intensity):
-    """按面板显示参数扣背景，返回 (tth, 扣后强度, 基线或 None)。
+def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
+    """按该面板的处理设置跑整条链：**背景扣除 → 平滑 → 裁剪**。
 
-    模式关闭（或选了空扫但还没积分）时原样返回、基线为 None——调用方
-    据此决定要不要画"原始/基线"辅助线。**缓存里的曲线永远不动**：扣除
-    只发生在绘制时，所以参数一变重画即可，不需要重新积分（实时预览的
-    前提，见 services/background.py 里关于积分线性的说明）。
+    返回 (tth, 处理后强度, 基线或 None)。三项全关时原样返回（基线 None）
+    ——调用方据此决定要不要画"原始/基线"辅助线。
+
+    **缓存里的曲线永远不动**：处理只发生在绘制时，所以参数一变重画即可、
+    不需要重新积分（实时预览的前提，见 services/background.py 里关于积分
+    线性的说明）。批量处理时写进产物的也是同一份 apply_chain 的输出——
+    屏幕与文件同源。
     path 可以是 None（拿不到路径的场景）→ 该曲线按无锚点处理。
     """
-    params = _bg_params(window, dock, path)
+    params = _proc_params(window, dock, path)
     blank = getattr(window, "bg_blank", None)
     blank_curve = None
     if params["mode"] == "blank" and blank is not None:
@@ -572,11 +619,9 @@ def _bg_curve(window: QMainWindow, dock, path, tth, intensity):
                 _log(window, f"背景扣除提示：空扫只覆盖 "
                              f"{b_tth[0]:.3f}~{b_tth[-1]:.3f}°，"
                              f"该区间以外的数据未扣背景")
-    base = compute_baseline(tth, intensity, params, blank_curve=blank_curve)
-    if base is None:
-        return tth, intensity, None
-    clip = _panel_param(window, dock, "负值截断为 0", False)
-    return tth, subtract_background(intensity, base, clip_negative=clip), base
+    out, base = process.apply_chain(tth, intensity, params,
+                                    blank_curve=blank_curve)
+    return tth, out, base
 
 
 def _compare_shown_curves(window: QMainWindow, dock) -> list:
@@ -616,10 +661,10 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
         tth, raw = dock.compare_data[display]
         # 背景扣除在归一化**之前**：先扣掉不含结构信息的加性背景，
         # 再谈"相对强度"才有意义（归一化会把这个尺度信息抹掉）。
-        # 产物条目（"· 扣背景"）本身已经是扣完的：再扣一遍就是二次相减
+        # 处理产物条目（"· 处理后"）本身已经是处理完的：再来一遍就是二次处理
         if src.kind == gui_sources.RAW:
-            _, raw, _ = _bg_curve(window, dock, src.path, tth,
-                                  np.asarray(raw, dtype=float))
+            _, raw, _ = _proc_curve(window, dock, src.path, tth,
+                                    np.asarray(raw, dtype=float))
         raw_curves.append((tth, np.asarray(raw, dtype=float), display,
                            i, src.path))
     divisor = 1.0
@@ -689,7 +734,13 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
             view = window.focus_panel.split("|", 1)[0]
             log_y = _panel_param(window, dock, "对数纵轴", False)
             if view == "1D" and getattr(dock, "last_tth", None) is not None:
-                ylo, yhi = _auto_y_range(dock.last_intensity, log_y)
+                # 用**画出来的那条**算范围（背景/平滑/裁剪都算进去）：
+                # 与 _draw_1d 同一口径——否则裁剪掉的巨峰还会把范围撑回去，
+                # 置灰框里显示的数字也跟图对不上
+                _, shown, _ = _proc_curve(window, dock,
+                                          getattr(dock, "panel_file", None),
+                                          dock.last_tth, dock.last_intensity)
+                ylo, yhi = _auto_y_range(shown, log_y)
                 loaded = True
             elif view == "对比" and getattr(dock, "compare_data", None):
                 shown = [s for _, s, _, _ in _compare_shown_curves(window, dock)]

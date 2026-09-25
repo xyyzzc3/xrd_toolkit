@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 
 from xrd_toolkit.services.integrator import INTEGRATION_VERSION
+from xrd_toolkit.services.process import chain_desc, chain_parts
 
 # 产物根目录：项目根下的 outputs/_stage（脚本与界面的 outputs 习惯一致）
 ROOT = Path(__file__).resolve().parents[3]
@@ -206,6 +207,12 @@ def store_1d(path, tth, intensity, *, config: str, npt: int,
                          "kind": "1d", "created": time.time()})
 
 
+# 处理产物在磁盘上的目录名**保持历史名字 "bg"**（第一版只有扣背景时起的）：
+# 换名字意味着老产物、老台账要么迁移要么读两处，收益只是好看——不值。
+# 代码里一律用这个常量，别再写字符串字面量。
+PROC_KIND = "bg"
+
+
 def bg_settings_hash(settings: dict) -> str:
     """背景设置 → 短哈希（bg 产物键的一半）。
 
@@ -227,50 +234,66 @@ def bg_settings_hash(settings: dict) -> str:
     return hashlib.blake2b(blob.encode("utf-8"), digest_size=8).hexdigest()
 
 
-def bg_key_of(key_1d: str, settings: dict) -> str:
-    """bg 产物的键 = **1D 产物的键** + 背景设置哈希。
+def proc_key_of(key_1d: str, settings: dict) -> str:
+    """处理产物的键 = **1D 产物的键** + 处理链哈希（背景 + 平滑 + 裁剪）。
 
-    先有 1D 才有扣背景（扣的是那条曲线），所以键里嵌 1D 的键——1D
-    产物换代（换几何/换点数/升版本）时 bg 自然跟着作废。
-    单独摘出来是因为"从 1D 产物扣背景"那条路要**用条目钉住的那把键**
-    （而不是按当前设置重算一把），见 store_bg_by_key。
+    先有 1D 才有处理（处理的是那条曲线），所以键里嵌 1D 的键——1D
+    产物换代（换几何/换点数/升版本）时处理产物自然跟着作废。
+    单独摘出来是因为"从 1D 产物处理"那条路要**用条目钉住的那把键**
+    （而不是按当前设置重算一把），见 store_proc_by_key。
     """
     return hashlib.blake2b(
-        (str(key_1d) + bg_settings_hash(settings)).encode("utf-8"),
+        (str(key_1d) + proc_settings_hash(settings)).encode("utf-8"),
         digest_size=10).hexdigest()
 
 
-def _bg_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
-                settings: dict) -> Path:
-    """bg 产物路径：按**当前设置**算出的 1D 键 + 背景设置哈希。"""
+def proc_settings_hash(settings: dict) -> str:
+    """处理产物键的一半：**背景设置哈希** + 链里其余开着的项（平滑 / 裁剪）。
+
+    没有平滑与裁剪时**逐位等于 `bg_settings_hash`**——今天之前存的"扣背景
+    产物"因此继续命中，不用迁移也不用重算（tests/test_stage_cache 里有一条
+    对照测试钉着这件事）。链里没有开着的项就不参与哈希，是同一个道理的
+    另一面：关掉平滑应当回到"未平滑"的那份产物，而不是又生成第三份。
+    """
+    base = bg_settings_hash(settings)
+    extra = chain_parts(settings)
+    if not extra:
+        return base
+    blob = base + json.dumps(extra, sort_keys=True, ensure_ascii=False)
+    return hashlib.blake2b(blob.encode("utf-8"), digest_size=8).hexdigest()
+
+
+def _proc_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
+                  settings: dict) -> Path:
+    """处理产物路径：按**当前设置**算出的 1D 键 + 处理链哈希。"""
     base = cache_key(path, config=config, npt=npt, tth_min=tth_min,
                      tth_max=tth_max)
-    return _cache_dir("bg") / f"{bg_key_of(base, settings)}.npz"
+    return _cache_dir(PROC_KIND) / f"{proc_key_of(base, settings)}.npz"
 
 
-def load_bg(path, *, config: str, npt: int, tth_min=None, tth_max=None,
-            settings: dict):
-    """读扣背景产物；没有 / 坏了 / 文件不在都返回 None（同 load_1d）。"""
+def load_proc(path, *, config: str, npt: int, tth_min=None, tth_max=None,
+             settings: dict):
+    """读处理产物（背景 → 平滑 → 裁剪）；没有 / 坏了 / 文件不在都返回 None。"""
     key = _safe_key(path, config=config, npt=npt, tth_min=tth_min,
                     tth_max=tth_max)
     if key is None:
         return None
-    return _read_curve(_bg_product(path, config=config, npt=npt,
-                                   tth_min=tth_min, tth_max=tth_max,
-                                   settings=settings))
+    return _read_curve(_proc_product(path, config=config, npt=npt,
+                                     tth_min=tth_min, tth_max=tth_max,
+                                     settings=settings))
 
 
-def store_bg(path, tth, intensity, *, config: str, npt: int, tth_min=None,
-             tth_max=None, settings: dict) -> Path:
-    """写扣背景产物（原子）。"""
+def store_proc(path, tth, intensity, *, config: str, npt: int, tth_min=None,
+               tth_max=None, settings: dict, source: str = "") -> Path:
+    """写处理产物（原子）。元数据里记下**整条链**与背景设置。"""
     return _write_curve(
-        _bg_product(path, config=config, npt=npt, tth_min=tth_min,
-                    tth_max=tth_max, settings=settings),
+        _proc_product(path, config=config, npt=npt, tth_min=tth_min,
+                      tth_max=tth_max, settings=settings),
         tth, intensity,
-        meta={"source": str(Path(path).name), "config": config,
+        meta={"source": source or str(Path(path).name), "config": config,
               "npt": int(npt), "engine": INTEGRATION_VERSION,
-              "kind": "bg", "created": time.time(),
-              "settings": settings})
+              "kind": PROC_KIND, "created": time.time(),
+              "chain": chain_desc(settings), "settings": settings})
 
 
 # ══ 产物台账（界面上的"阶段文件夹"靠它）══════════════════════
@@ -391,20 +414,21 @@ def drop_batch(kind: str, batch: str) -> int:
     return n
 
 
-def store_bg_by_key(key_1d: str, tth, intensity, *, settings: dict,
-                    source: str = "") -> Path:
-    """按**已有的 1D 产物键**存一份扣背景产物（原子）。
+def store_proc_by_key(key_1d: str, tth, intensity, *, settings: dict,
+                     source: str = "") -> Path:
+    """按**已有的 1D 产物键**存一份处理产物（原子）。
 
     给"1D 产物条目也能扣背景"这条路用（用户 2026-09-25 问起）：条目钉住的
     是**那一份** 1D 曲线，扣背景就该挂在那一份的键下面——不按当前设置重算
     键，否则"勾的那条"与"扣的那条"可能是两个设置下的曲线（设置变了以后
     尤其明显）。理由与 load_by_key 相同：产物条目说的是"那一份"。
     """
-    target = _cache_dir("bg") / f"{bg_key_of(key_1d, settings)}.npz"
+    target = _cache_dir(PROC_KIND) / f"{proc_key_of(key_1d, settings)}.npz"
     return _write_curve(target, tth, intensity,
-                        {"source": source or f"1d:{key_1d}", "kind": "bg",
+                        {"source": source or f"1d:{key_1d}", "kind": PROC_KIND,
                          "engine": INTEGRATION_VERSION, "created": time.time(),
-                         "base_key": str(key_1d), "settings": settings})
+                         "base_key": str(key_1d),
+                         "chain": chain_desc(settings), "settings": settings})
 
 
 def drop_keys(kind: str, keys) -> int:
@@ -440,6 +464,23 @@ def drop_keys(kind: str, keys) -> int:
                 data.pop("bg", None)
             _write_index(data)
     return n
+
+
+def meta_by_key(kind: str, key: str) -> dict:
+    """读一份产物的元数据；没有 / 坏了都返回空表。
+
+    产物自己带着"我是怎么来的"（`chain`、`settings`、`created`）——导出
+    文件头、以后的产物管理界面都读它，不必回头猜。
+    """
+    target = _cache_dir(kind) / f"{key}.npz"
+    if not key or not target.exists():
+        return {}
+    try:
+        with np.load(target) as data:
+            meta = json.loads(str(data["meta"]))
+        return meta if isinstance(meta, dict) else {}
+    except Exception:                                    # noqa: BLE001
+        return {}
 
 
 def describe() -> dict:

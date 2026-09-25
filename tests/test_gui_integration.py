@@ -758,7 +758,7 @@ class TestFileCheckSelection(unittest.TestCase):
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 0)
             self.assertEqual(w.file_label.text(), "未打开文件")
-            self.assertIn("已删除 2 个文件", w.log_text.toPlainText())
+            self.assertIn("已从列表移除 2 个文件", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1581,7 +1581,7 @@ def _store_product(w, path, kind="1d", values=None):
     if kind == "1d":
         produced = stage_cache.store_1d(path, tth, intensity, **kw)
     else:
-        produced = stage_cache.store_bg(
+        produced = stage_cache.store_proc(
             path, tth, intensity, **kw,
             settings={"mode": "anchor", "window_deg": 2.0,
                       "anchors": [(float(kw["tth_min"]), 1.0)]})
@@ -1597,7 +1597,7 @@ def _group_by_text(w, part):
 
 
 class TestProductGroups(unittest.TestCase):
-    """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量扣背景] 一组。
+    """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量处理] 一组。
 
     勾组 = 整组全选（半勾表示只勾了一部分）；产物条目出图/对比直接读
     产物（不重算、不再扣背景）；原始数据的对号语义一点没变。
@@ -1677,7 +1677,7 @@ class TestProductGroups(unittest.TestCase):
             w.close()
 
     def test_bg_product_panel_forces_background_off(self):
-        """扣背景产物面板：强制「不扣」（已经扣过，再扣就是二次相减）。"""
+        """处理产物面板：强制「不扣」（已经扣过，再扣就是二次相减）。"""
         w = create_window()
         try:
             files = _tmp_files(1)
@@ -1718,7 +1718,7 @@ class TestProductGroups(unittest.TestCase):
             w.close()
 
     def test_compare_uses_background_group(self):
-        """勾一整组扣背景产物 → [对比] 直接画出那两条（不重算、不重扣）。"""
+        """勾一整组处理产物 → [对比] 直接画出那两条（不重算、不再处理）。"""
         w = create_window()
         try:
             files = _tmp_files(2)
@@ -1745,13 +1745,13 @@ class TestProductGroups(unittest.TestCase):
             ax = _axes(w, "对比", key.split("|", 1)[1])
             self.assertEqual(len(ax.lines), 2)
             labels = [ln.get_label() for ln in ax.lines]
-            self.assertTrue(all("扣背景" in lb for lb in labels), labels)
-            self.assertIn("扣背景产物", w.log_text.toPlainText())
+            self.assertTrue(all("处理" in lb for lb in labels), labels)
+            self.assertIn("处理产物", w.log_text.toPlainText())
         finally:
             w.close()
 
-    def test_delete_ignores_product_items(self):
-        """[删除] 只认原始数据：只勾了产物时它什么都不删，并说清为什么。"""
+    def test_delete_handles_products_too(self):
+        """[删除] 与右键同一套口径：勾了产物也真删（原始数据只从列表移除）。"""
         w = create_window()
         try:
             files = _tmp_files(1)
@@ -1762,17 +1762,17 @@ class TestProductGroups(unittest.TestCase):
             _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
             QApplication.processEvents()
             w.findChild(QPushButton, "delete_btn").click()
-            self.assertEqual(w.file_list.count(), 1,
-                             "产物条目不是「原始数据」，删除不该动它")
-            self.assertIn("没有选中要删除的文件（产物条目请右键删除）",
-                          w.log_text.toPlainText())
-            self.assertEqual(len(w.file_list.groups()), 1, "产物分组还在")
-            # 原始数据与产物一起勾上时：删文件、留产物，并说明几个没动
+            self.assertEqual(w.file_list.count(), 1, "原始数据还在列表里")
+            self.assertIn("已删除 1 条产物", w.log_text.toPlainText())
+            self.assertIsNone(_group_by_text(w, "1D 产物"), "产物分组跟着收")
+            self.assertEqual(stage_cache.list_batches("bg"), [])
+            # 原始数据一起勾上时：从列表移除（硬盘上的文件不动），与产物各记一行
             w.file_list.raw_group.setCheckState(0, Qt.Checked)
             QApplication.processEvents()
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 0)
-            self.assertIn("另有 1 个产物条目没动", w.log_text.toPlainText())
+            self.assertIn("已从列表移除 1 个文件", w.log_text.toPlainText())
+            self.assertIn("硬盘上的文件未改动", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1792,7 +1792,7 @@ class TestProductGroups(unittest.TestCase):
             self.assertIsNotNone(group)
             # 没显示的窗口不弹模态菜单（会等不到人点，卡死套件）——这一步
             # 单独守；删除本身走 drop_product_group（菜单确认后调同一个）
-            gui_file_dock._product_menu(w, group)
+            gui_file_dock._entry_menu(w, group)
             self.assertEqual(w.file_list.groups()[-1].text(0),
                              group.text(0), "无头环境不弹菜单，也不该删掉什么")
             gui_file_dock.drop_product_group(w, group)
@@ -1884,8 +1884,69 @@ class TestProductGroups(unittest.TestCase):
                 w, w.file_list.raw_group), 0)
             self.assertEqual(gui_file_dock.drop_product_item(
                 w, w.file_list.item(0)), 0)
-            gui_file_dock._product_menu(w, w.file_list.item(0))   # 不炸即可
+            gui_file_dock._entry_menu(w, w.file_list.item(0))   # 不炸即可
             self.assertEqual(w.file_list.count(), 1)
+        finally:
+            w.close()
+
+    def test_remove_from_list_leaves_the_file_alone(self):
+        """右键「从列表移除」：只动列表，硬盘上的文件一个字节都不碰。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            add_checked(w, [str(p) for p in files])
+            size_before = files[0].stat().st_size
+            gui_file_dock._remove_from_list(w, [w.file_list.item(0)])
+            self.assertEqual(w.file_list.count(), 0)
+            self.assertTrue(files[0].exists(), "原始文件必须还在")
+            self.assertEqual(files[0].stat().st_size, size_before)
+            log = w.log_text.toPlainText()
+            self.assertIn("已从列表移除 1 个文件", log)
+            self.assertIn("硬盘上的文件未改动", log)
+        finally:
+            w.close()
+
+    def test_clear_cache_action_empties_products(self):
+        """「删除所有缓存」：产物与分组一起清（无头环境不弹确认框）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files])
+            _store_product(w, files[0])
+            w.refresh_groups()
+            self.assertIsNotNone(_group_by_text(w, "1D 产物"))
+            gui_file_dock.ask_clear_cache(w)      # 窗口没显示 → 不弹模态
+            self.assertIsNone(_group_by_text(w, "1D 产物"))
+            self.assertIn("已删除所有缓存", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_export_specific_sources_ignores_checks(self):
+        """右键「导出这一条」：导出给定来源，不改动勾选状态。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files])      # 一个都不勾
+            key = _store_product(w, files[0], kind="bg", values=[7.0, 8.0, 9.0])
+            stage_cache.record_batch("bg", "export-by-menu",
+                                     label="处理后 09-25 05:00（空扫相减）",
+                                     items=[(files[0], key)], **_kw_of(w),
+                                     settings={"mode": "blank"})
+            w.refresh_groups()
+            src = gui_sources.source_of(
+                _group_by_text(w, "处理后 09-25 05:00").child(0))
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": False, "bg": False}):
+                gui_export._run_export(w, sources=[src])
+            target = outdir / f"{files[0].stem}_处理后" / "integrated_2th.txt"
+            self.assertTrue(target.exists(), "右键导出该落一份文件")
+            data = np.loadtxt(str(target))
+            self.assertEqual(list(data[:, 1]), [7.0, 8.0, 9.0])
+            self.assertEqual(len(gui_sources.checked_sources(w)), 0,
+                             "导出不该改动勾选状态")
         finally:
             w.close()
 
@@ -1926,7 +1987,7 @@ class TestProductGroups(unittest.TestCase):
             QApplication.processEvents()
             out = gui_export._checked_1d_results(w)
             self.assertEqual(len(out), 1)
-            self.assertEqual(out[0][0], f"{files[0].stem}_扣背景")
+            self.assertEqual(out[0][0], f"{files[0].stem}_处理后")
         finally:
             w.close()
 
@@ -1951,7 +2012,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
     """1D 产物条目也能扣背景（用户 2026-09-25 问起的那条）。
 
     1D 产物就是那条原始积分曲线，只是钉在某一份缓存上——所以它跟原始
-    文件一个待遇（锚点/自动基线照用、也能进 [批量扣背景]），差别只在
+    文件一个待遇（锚点/自动基线照用、也能进 [批量处理]），差别只在
     **结果挂在那一份 1D 的键下面**（键 = 那条 1D 键 + 设置哈希）：勾的是
     哪一条就扣哪一条，不按当前设置另算一条。扣背景产物本身仍然跳过
     （它已经是扣完的，再扣就是二次相减）。
@@ -1992,16 +2053,16 @@ class TestBackgroundFromProduct(unittest.TestCase):
                                    for x in xs]
 
     def test_batch_background_subtracts_one_d_product(self):
-        """勾 1D 产物 → [批量扣背景]：真扣一份，且挂在**那份 1D 的键**下面。"""
+        """勾 1D 产物 → [批量处理]：真扣一份，且挂在**那份 1D 的键**下面。"""
         w = create_window()
         try:
             path, key1d, dock = self._one_d_panel(w)
             tth = np.asarray(dock.last_tth, dtype=float)
             self._anchors_on(w, dock, path, [float(tth[0]), float(tth[-1])])
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("批量扣背景完成：1/1", log)
+            self.assertIn("批量处理完成：1/1", log)
             self.assertIn("其中 1 条来自 1D 产物", log)
             batches = self._mine(path)
             self.assertEqual(len(batches), 1)
@@ -2015,7 +2076,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
                              "挂在勾的那份 1D 产物键下面（不按当前设置另算）")
             # 文件栏里长出一个扣背景分组，且子项可以整组勾上去比
             self.refresh_ok = _wait_until(
-                lambda: _group_by_text(w, "扣背景") is not None)
+                lambda: _group_by_text(w, "处理") is not None)
             self.assertTrue(self.refresh_ok, "扣完要出现扣背景分组")
         finally:
             w.close()
@@ -2046,11 +2107,11 @@ class TestBackgroundFromProduct(unittest.TestCase):
                                         **{"背景扣除模式": "anchor"})
             w.bg_anchors[str(files[0])] = [(1.0, 1.0)]
             before = len(self._mine(files[0]))
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
             self.assertIn("没有选中的文件", log)
-            self.assertIn("扣背景产物已经是扣完的结果", log)
+            self.assertIn("处理产物已经是处理完的结果", log)
             self.assertEqual(len(self._mine(files[0])), before, "不该新增批次")
         finally:
             w.close()
@@ -2071,13 +2132,168 @@ class TestBackgroundFromProduct(unittest.TestCase):
                 QApplication.processEvents()
             dock = _dock(w, "1D", str(files[0]))
             self._anchors_on(w, dock, files[0], [0.5, 1.0])
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
             self.assertIn("同一文件在批里只扣一份", log)
-            self.assertIn("批量扣背景完成：1/2 个文件", log)
+            self.assertIn("批量处理完成：1/2 个文件", log)
             self.assertEqual(
                 sum(len(b["items"]) for b in self._mine(files[0])), 1)
+        finally:
+            w.close()
+
+
+def _spiky_compute(path_str, geom, npt):
+    """一条窄尖峰曲线（200 点 / 0.5–8.5°）：平滑与裁剪都看得见效果。"""
+    tth = np.linspace(0.5, 8.5, 200)
+    y = 10.0 + 500.0 * np.exp(-0.5 * ((tth - 4.0) / 0.1) ** 2)
+    return tth, y
+
+
+class TestProcessingChain(unittest.TestCase):
+    """「处理」页三项（背景扣除 / 平滑 / 裁剪）端到端。
+
+    用户 2026-09-25 定：三项都进产物、都能批量应用，处理完的那一批进
+    「处理后」分组。这里守的是三个最要紧的性质：
+      ① 改参数即重画（实时预览这一条不能断）；
+      ② 裁剪让纵轴自动范围跳过那一段（这是用户要它的**唯一理由**）；
+      ③ 产出的文件里那一段是空的、头里写明处理链（屏幕与文件同源）。
+    """
+
+    def setUp(self):
+        stage_cache.write_batches("bg", [])
+
+    def _panel(self, w):
+        """开一张 1D 面板（窄尖峰曲线），返回 (路径, 面板)。"""
+        files = _tmp_files(1)
+        add_checked(w, [str(p) for p in files])
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_spiky_compute):
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", str(files[0])).lines) > 0))
+        return files[0], w.plot_docks["1D|" + str(files[0])]
+
+    def _enable(self, w, smooth=False, cut=False):
+        """按界面上的路径打开处理项（改控件 → 实时重画）。"""
+        if smooth:
+            w.params["平滑曲线"].setChecked(True)
+        if cut:
+            w.params["裁剪区间"].setChecked(True)
+        gui_views._refresh_proc(w)
+
+    def test_smoothing_lowers_the_peak_on_screen(self):
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            raw_peak = float(np.nanmax(dock.last_intensity))
+            w.params["平滑窗口 (°)"].setValue(0.5)
+            self._enable(w, smooth=True)
+            drawn = np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())
+            self.assertEqual(len(drawn), 200, "平滑不该改变点数")
+            self.assertLess(drawn.max(), raw_peak * 0.9,
+                            "0.5° 窗口应当把 0.1° 宽的尖峰明显削矮")
+            self.assertGreater(drawn.max(), raw_peak * 0.1, "别削没了")
+        finally:
+            w.close()
+
+    def test_cut_leaves_a_gap_and_frees_the_y_axis(self):
+        """裁剪：图上那段是空的，纵轴自动范围跟着跳过它（用户要的效果）。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            ax = _axes(w, "1D", str(path))
+            self.assertGreater(ax.get_ylim()[1], 400, "先确认大峰压着纵轴")
+            w.params["裁剪起点 (°)"].setValue(3.5)
+            w.params["裁剪终点 (°)"].setValue(4.5)
+            self._enable(w, cut=True)
+            drawn = np.asarray(ax.lines[0].get_ydata())
+            tth = np.asarray(ax.lines[0].get_xdata())
+            inside = (tth >= 3.5) & (tth <= 4.5)
+            self.assertTrue(inside.any(), "测试前提：区间里有采样点")
+            self.assertTrue(np.isnan(drawn[inside]).all(), "区间内该是空的")
+            self.assertTrue(np.isfinite(drawn[~inside]).all())
+            self.assertLess(ax.get_ylim()[1], 100,
+                            "纵轴该按剩下的数据自动定范围（大峰不再压扁它）")
+            self.assertGreater(ax.get_ylim()[1], 5, "别把范围压没了")
+        finally:
+            w.close()
+
+    def test_cut_only_when_checked(self):
+        """勾选框没勾时，起止框填了也不生效（三项都是可选项）。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["裁剪起点 (°)"].setValue(3.9)
+            w.params["裁剪终点 (°)"].setValue(4.1)
+            gui_views._refresh_proc(w)     # 没勾「裁剪区间」
+            drawn = np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())
+            self.assertTrue(np.isfinite(drawn).all())
+        finally:
+            w.close()
+
+    def test_batch_writes_the_whole_chain_into_the_product(self):
+        """[批量处理]：平滑 + 裁剪进产物，组名写清这一组做过什么。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["平滑窗口 (°)"].setValue(0.5)
+            w.params["裁剪起点 (°)"].setValue(3.9)
+            w.params["裁剪终点 (°)"].setValue(4.1)
+            self._enable(w, smooth=True, cut=True)
+            w.proc_batch_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("批量处理完成", log)
+            self.assertIn("平滑 0.5°", log)
+            self.assertIn("删 3.9–4.1°", log)
+            group = _group_by_text(w, "处理后")
+            self.assertIsNotNone(group, "文件栏该长出「处理后」分组")
+            self.assertIn("平滑 0.5°", group.text(0))
+            # 产物本身：那一段是空的，元数据写明整条链
+            batch = stage_cache.list_batches("bg")[0]
+            meta = batch["items"][str(path.resolve())]
+            with np.load(stage_cache.CACHE_ROOT / "bg"
+                         / f"{meta['key']}.npz") as data:
+                stored = np.asarray(data["intensity"], dtype=float)
+                stored_meta = json.loads(str(data["meta"]))
+            self.assertIn("smooth=boxcar/0.5°", stored_meta["chain"])
+            self.assertIn("cut=3.9–4.1°", stored_meta["chain"])
+            self.assertGreater(int(np.isnan(stored).sum()), 0)
+        finally:
+            w.close()
+
+    def test_export_skips_cut_points_and_notes_the_chain(self):
+        """导出：裁剪点不写行、头里写明处理链；CSV 里那几格留空。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["裁剪起点 (°)"].setValue(3.5)
+            w.params["裁剪终点 (°)"].setValue(4.5)
+            self._enable(w, cut=True)
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": True, "bg": True}):
+                gui_export._run_export(w)
+            txt = (outdir / path.stem / "integrated_2th.txt")
+            self.assertTrue(txt.exists(), "该导出一份 txt")
+            text = txt.read_text()
+            self.assertIn("processed:", text, "头里要写明处理链")
+            self.assertIn("cut=3.5–4.5°", text)
+            self.assertRegex(text, r"cut: \d+ points removed")
+            data = np.loadtxt(str(txt))
+            self.assertTrue(np.isfinite(data[:, 1]).all(),
+                            "文件里不该出现 nan 行")
+            # CSV：裁剪列里那几格是空的
+            csv_text = (outdir / "1d_summary.csv").read_text()
+            self.assertIn("空单元格", csv_text)
+            blank_rows = [ln for ln in csv_text.splitlines()
+                          if ln.endswith(",")]
+            self.assertGreater(len(blank_rows), 0,
+                               "裁剪段在 CSV 里应当是空单元格")
+            self.assertNotIn("nan", csv_text, "空值不能写成字面 nan")
         finally:
             w.close()
 
@@ -2874,12 +3090,12 @@ class TestParamDockSplitLayout(unittest.TestCase):
             self.assertIs(lay.itemAt(1).widget(), w.param_stack)
             self.assertEqual(w.param_stack.count(), 5)
             self.assertEqual(w.PARAM_PAGES,
-                             {"校准": 0, "1D": 1, "扣背景": 2, "对比": 3,
+                             {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
                               "绘图": 4})
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["1D"], "默认可停在 1D 页")
             self.assertEqual(list(w.entrance_buttons),
-                             ["校准", "1D", "扣背景", "对比", "绘图"])
+                             ["校准", "1D", "处理", "对比", "绘图"])
             # 开局谁都不点亮（用户 2026-09-25 定：上面什么都不选）
             for name, btn in w.entrance_buttons.items():
                 self.assertFalse(btn.isChecked(), name)
@@ -2924,7 +3140,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
                     w.log_text.toPlainText().count("开始积分"), 2,
                     "[出图（勾选文件）] 该按当前类型再来一次")
                 # 扣背景页 / 对比页的产出按钮
-                for name, btn in (("扣背景", "bg_redraw_btn"),
+                for name, btn in (("处理", "bg_redraw_btn"),
                                   ("对比", "plot_cmp_btn"),
                                   ("对比", "plot_heat_btn")):
                     page = w.param_stack.widget(w.PARAM_PAGES[name])
@@ -2976,7 +3192,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         """点入口 = 翻到那一页 + 高亮跟着动；出入校准走同一条路。"""
         w = create_window()
         try:
-            for name in ("校准", "扣背景", "对比", "绘图", "1D"):
+            for name in ("校准", "处理", "对比", "绘图", "1D"):
                 w.entrance_buttons[name].click()
                 QApplication.processEvents()
                 self.assertEqual(w.param_stack.currentIndex(),
@@ -4349,7 +4565,7 @@ class TestHomeView(unittest.TestCase):
 def _scaled_compute(path_str, geom, npt):
     """假积分：两个文件的曲线**尺度不同**（模拟不同曝光/衰减）。
 
-    批量扣背景的核心语义就靠它验：锚点跨文件只传 2θ，强度必须到每张
+    批量处理的核心语义就靠它验：锚点跨文件只传 2θ，强度必须到每张
     自己的曲线上重取——直接套 A 的强度会把 B 的基线抬错几倍。
     """
     # 按**结尾**判断（batch_a 里也有个 b，别用 in）
@@ -4359,7 +4575,7 @@ def _scaled_compute(path_str, geom, npt):
 
 
 class TestBackgroundBatch(unittest.TestCase):
-    """[批量扣背景]：锚点只传 2θ、强度各取各的；扣后落盘；对比优先读它。
+    """[批量处理]：锚点只传 2θ、强度各取各的；扣后落盘；对比优先读它。
 
     用户 2026-09-24 提的流程："1d 完了存一次，做扣背景时可直接使用，
     然后扣完一张，可以用这些锚点给其他的图批量扣，然后再存一份，后面
@@ -4410,9 +4626,9 @@ class TestBackgroundBatch(unittest.TestCase):
         try:
             self._open_both(w, files)
             dock_a, key_a = self._focus_a_with_anchors(w, files)
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
-            self.assertIn("批量扣背景完成", w.log_text.toPlainText())
+            self.assertIn("批量处理完成", w.log_text.toPlainText())
             key_b = str(gui_views._bg_path_of(_dock(w, "1D", files[1])))
             self.assertIn(key_b, w.bg_anchors, "B 也该拿到一套锚点")
             got_a, got_b = w.bg_anchors[key_a], w.bg_anchors[key_b]
@@ -4426,7 +4642,7 @@ class TestBackgroundBatch(unittest.TestCase):
                 dock = _dock(w, "1D", f)
                 st = gui_panel_state._bg_settings(
                     w, dock, str(gui_views._bg_path_of(dock)))
-                self.assertIsNotNone(stage_cache.load_bg(
+                self.assertIsNotNone(stage_cache.load_proc(
                     f, config=w.config_name,
                     npt=int(w.params["输出点数"].value()),
                     tth_min=geom.get("tth_min_deg"),
@@ -4441,32 +4657,32 @@ class TestBackgroundBatch(unittest.TestCase):
         try:
             self._open_both(w, files)
             self._focus_a_with_anchors(w, files)
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
             before = len(w.log_text.toPlainText())
             w.compare_btn.click()
             self.assertTrue(_wait_until(lambda: "对比完成" in
                                         w.log_text.toPlainText()), "对比该完成")
             log = w.log_text.toPlainText()
-            self.assertIn("扣背景产物", log,
-                          "对比该优先用扣背景产物（不是重新积分）")
+            self.assertIn("处理产物", log,
+                          "对比该优先用处理产物（不是重新积分）")
             self.assertNotIn("开始积分", log[before:],
                              "对比不该再起积分任务")
         finally:
             w.close()
 
     def test_batch_with_mode_off_hints(self):
-        """模式还是"关闭"时点批量：只提示，不产出（不静默）。"""
+        """「处理」页三项全关时点批量：只提示，不产出（不静默）。"""
         w = create_window()
         files = self._two_files()
         try:
             self._open_both(w, files)
             gui_panel_state._set_focus(w, "1D|" + files[0],
                                        Path(files[0]).name)
-            w.bg_batch_btn.click()
+            w.proc_batch_btn.click()
             QApplication.processEvents()
-            self.assertIn("先把背景扣除模式切到", w.log_text.toPlainText())
-            self.assertNotIn("批量扣背景完成", w.log_text.toPlainText())
+            self.assertIn("三项都关着", w.log_text.toPlainText())
+            self.assertNotIn("批量处理完成", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -8379,11 +8595,11 @@ class TestExportData(unittest.TestCase):
             real_write = gui_export._write_export
             calls = {"n": 0}
 
-            def flaky_write(target, tth, intensity):
+            def flaky_write(target, tth, intensity, chain=""):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise OSError("磁盘已满")
-                real_write(target, tth, intensity)
+                real_write(target, tth, intensity, chain)
 
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
@@ -9533,11 +9749,11 @@ class TestBackgroundSubtraction(unittest.TestCase):
                     lambda: getattr(dock, "last_waterfall", None) is not None))
                 self._set_mode(w, "auto")
                 _, i2d, _ = dock.last_waterfall
-                # 直接验设计决定：_bg_curve 只被调用一次，且喂进去的是
+                # 直接验设计决定：_proc_curve 只被调用一次，且喂进去的是
                 # **扇区均值**（共同基线）。逐扇区各扣各的会调用 4 次、
                 # 每次喂一条扇区曲线——扇区之间的真实强度差就被抹平了
-                with mock.patch.object(gui_views, "_bg_curve",
-                                       wraps=gui_panel_state._bg_curve) as spy:
+                with mock.patch.object(gui_views, "_proc_curve",
+                                       wraps=gui_panel_state._proc_curve) as spy:
                     gui_views._draw_waterfall(w, dock, *dock.last_waterfall)
                 self.assertEqual(spy.call_count, 1, "应只估一条共同基线")
                 fed = spy.call_args[0][4]
@@ -9604,9 +9820,9 @@ class TestBackgroundSubtraction(unittest.TestCase):
     def test_switching_focus_does_not_mix_panel_snapshots(self):
         """回归：反复切焦点后，两块面板的显示参数快照仍各是各的。
 
-        背景扣除控件连着 _refresh_bg（实时预览），而 _set_focus 会回放面板
+        背景扣除控件连着 _refresh_proc（实时预览），而 _set_focus 会回放面板
         快照进控件 → 不挂回放旗标的话，回放途中的 setValue 会触发
-        _refresh_bg 把"回放了一半的控件值"写进本面板快照，把上一块面板的
+        _refresh_proc 把"回放了一半的控件值"写进本面板快照，把上一块面板的
         显示参数（实测是 热图色图 等注册在背景组之后的几项）串过来。
         """
         w = create_window()

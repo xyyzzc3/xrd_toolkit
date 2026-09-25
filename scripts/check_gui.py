@@ -24,6 +24,7 @@ import argparse
 import os
 import sys
 import time
+from unittest import mock
 from pathlib import Path
 
 # 项目根 = 本文件所在 scripts/ 的上一级（与 scripts/ 下其他脚本同一惯例：
@@ -212,18 +213,18 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
 
 
 def check_batch_background(window, lab6: str, lmfp: str) -> None:
-    """D. 批量扣背景产物（用户 2026-09-24 的流程）。
+    """D. 批量处理产物（用户 2026-09-24 的流程）。
 
-    1D 产物 → 在一张图上放锚点 → [批量扣背景] → 各存一份 → 对比直接读。
+    1D 产物 → 在一张图上放锚点 → [批量处理] → 各存一份 → 对比直接读。
     锚点**只传 2θ**：这里用一个锚点强度明显不同的检查来印证（同一个 2θ
     在两个文件上的 y 必须不同，除非两条曲线恰好一样）。
     """
     from xrd_toolkit.services import stage_cache
-    print("\nD. 批量扣背景（真数据）")
+    print("\nD. 批量处理（真数据）")
     key1d = "1D|" + lab6
     dock = window.plot_docks.get(key1d)
     if dock is None:
-        report(False, "批量扣背景：没有 1D 面板（前面的检查没过）")
+        report(False, "批量处理：没有 1D 面板（前面的检查没过）")
         return
     # 确保两个文件都勾着（对比/批量都按勾选走）
     for i in range(window.file_list.count()):
@@ -243,11 +244,11 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
     key_a = str(gui_views._bg_path_of(dock))
     window.bg_anchors[key_a] = [(x, float(np.interp(x, tth, inten)))
                                 for x in xs]
-    window.bg_batch_btn.click()
+    window.proc_batch_btn.click()
     QApplication.processEvents()
     log = window.log_text.toPlainText()
-    report("批量扣背景完成" in log, "批量扣背景：跑完",
-           [ln for ln in log.splitlines() if ln.startswith("批量扣背景完成")][:1])
+    report("批量处理完成" in log, "批量处理：跑完",
+           [ln for ln in log.splitlines() if ln.startswith("批量处理完成")][:1])
     # lmfp 未必开过 1D 面板（本探针前面只给它开了对比/热图）→ 从文件
     # 列表拿它的路径字符串（面板键与锚点键都用这一份）
     other = [k for k in window.bg_anchors if k != key_a]
@@ -273,7 +274,7 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
         # 用同一个面板取"控件那部分"参数（模式/窗口/截断都在坞里，窗级），
         # 锚点按 path 取——这正是 _bg_settings 的口径
         st = gui_state._bg_settings(window, dock, path)
-        if stage_cache.load_bg(path, config=window.config_name, npt=npt,
+        if stage_cache.load_proc(path, config=window.config_name, npt=npt,
                                tth_min=geom.get("tth_min_deg"),
                                tth_max=geom.get("tth_max_deg"),
                                settings=st) is not None:
@@ -283,20 +284,20 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
     window.compare_btn.click()
     wait_until(lambda: "对比完成" in window.log_text.toPlainText())
     tail = window.log_text.toPlainText()[before:]
-    report("扣背景产物" in tail, "对比直接读扣背景产物",
+    report("处理产物" in tail, "对比直接读扣背景产物",
            [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
 
 
 def check_stage_folders(window, lab6: str) -> None:
     """E. 阶段文件夹（文件栏里的产物分组，用户 2026-09-25 的流程）。
 
-    前面的 D 已经跑过 [批量扣背景] → 文件栏里该长出一个"扣背景 …"组；
+    前面的 D 已经跑过 [批量处理] → 文件栏里该长出一个"扣背景 …"组；
     勾整组 → [对比] 直接读那批产物（不重算）；产物条目出 1D 图也是读盘
     （面板快照的背景扣除应为「不扣」，免得二次相减）。
     """
     print("\nE. 阶段文件夹（真数据）")
     groups = {g.text(0): g for g in window.file_list.groups()}
-    bg_groups = [t for t in groups if t.startswith("扣背景")]
+    bg_groups = [t for t in groups if t.startswith("处理")]
     report(bool(bg_groups), "文件栏里出现了扣背景分组", bg_groups[:1])
     if not bg_groups:
         return
@@ -322,7 +323,7 @@ def check_stage_folders(window, lab6: str) -> None:
     window.compare_btn.click()
     wait_until(lambda: "对比完成" in window.log_text.toPlainText()[before:])
     tail = window.log_text.toPlainText()[before:]
-    report("扣背景产物" in tail, "对比读到的是扣背景产物",
+    report("处理产物" in tail, "对比读到的是扣背景产物",
            [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
     ckeys = [k for k in window.plot_docks if k.startswith("对比|")]
     n_curves = max((len(content_of(window, k).axes_1d.lines) for k in ckeys),
@@ -335,7 +336,7 @@ def check_one_d_product_background(window) -> None:
     """F. 1D 产物条目也能扣背景（用户 2026-09-25 问起的那条）。
 
     "1D 产物"= 那条原始积分曲线（钉在某份缓存上），不是"已完成"的东西：
-    勾它 → [批量扣背景] → 真扣一份，且**挂在勾的那份 1D 的键下面**；
+    勾它 → [批量处理] → 真扣一份，且**挂在勾的那份 1D 的键下面**；
     而"扣背景产物"条目仍然跳过（再扣就是二次相减）。
     """
     print("\nF. 1D 产物扣背景（真数据）")
@@ -379,12 +380,12 @@ def check_one_d_product_background(window) -> None:
     window.bg_anchors[str(dock.panel_file)] = [
         (x, float(np.interp(x, tth, inten))) for x in xs]
     before = len(stage_cache.list_batches("bg"))
-    window.bg_batch_btn.click()
+    window.proc_batch_btn.click()
     QApplication.processEvents()
     log = window.log_text.toPlainText()
-    report("条来自 1D 产物" in log, "[批量扣背景] 收下了 1D 产物条目",
+    report("条来自 1D 产物" in log, "[批量处理] 收下了 1D 产物条目",
            [ln for ln in log.splitlines()
-            if ln.startswith("批量扣背景完成")][-1:])
+            if ln.startswith("批量处理完成")][-1:])
     batches = stage_cache.list_batches("bg")
     report(len(batches) == before + 1, "新落了一个扣背景批次",
            f"{before} → {len(batches)}")
@@ -402,7 +403,7 @@ def check_one_d_product_background(window) -> None:
                    "产物挂在**勾的那份 1D 的键**下面（不按当前设置另算）",
                    f"base={str(stored.get('base_key'))[:8]} 勾的={base[:8]}")
     # 分组刷新出来了
-    report(any(g.text(0).startswith("扣背景") for g in
+    report(any(g.text(0).startswith("处理") for g in
                window.file_list.groups()), "文件栏里出现新的扣背景分组")
 
 
@@ -445,12 +446,112 @@ def check_product_delete(window) -> None:
                    for g in window.file_list.groups()), "分组消失")
     # ③ 扣背景那边同理（台账不留空壳）
     bg = next((g for g in window.file_list.groups()
-               if g.text(0).startswith("扣背景")), None)
+               if g.text(0).startswith("处理")), None)
     if bg is not None:
         n = gui_file_dock.drop_product_group(window, bg)
         report(n == 0 or n > 0, "扣背景分组整组删除跑通", f"{n} 份")
         report(not any(g.text(0) == bg.text(0)
                        for g in window.file_list.groups()), "那一组也没了")
+
+
+def check_processing_chain(window, lab6: str) -> None:
+    """H. 处理链（背景 / 平滑 / 裁剪，用户 2026-09-25 定稿）在真数据上跑一遍。
+
+    守三件事：① 改参数即重画（平滑削峰、裁剪挖空 + 纵轴跟着放开）；
+    ② [批量处理] 把三项一起写进产物（组名与元数据都写明链）；
+    ③ 导出文件里裁剪点不写行、头里注明链。
+    """
+    print("\nH. 处理链（平滑 + 裁剪，真数据）")
+    from xrd_toolkit.gui import plot_views as gui_views
+    from xrd_toolkit.services import stage_cache
+    key = "1D|" + lab6
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        report(False, "处理链：没有 1D 面板（前面的检查没过）")
+        return
+    gui_state._set_focus(window, key, dock.panel_display)
+    ax = content_of(window, key).axes_1d
+    raw = np.asarray(dock.last_intensity, dtype=float)
+    tth = np.asarray(dock.last_tth, dtype=float)
+    peak_x = float(tth[int(np.argmax(raw))])
+    raw_peak = float(np.nanmax(raw))
+    # ① 平滑：窗口取峰宽量级（0.3°），峰值该明显下降
+    window.params["平滑曲线"].setChecked(True)
+    window.params["平滑窗口 (°)"].setValue(0.30)
+    gui_views._refresh_proc(window)
+    QApplication.processEvents()
+    shown = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    report(np.nanmax(shown) < raw_peak * 0.95, "平滑削峰（真数据）",
+           f"{raw_peak:.0f} → {np.nanmax(shown):.0f}")
+    report(len(shown) == len(raw), "平滑不改变点数")
+    # ② 裁剪：挖掉最强峰附近 ±0.5°，纵轴自动范围该放开
+    lo, hi = peak_x - 0.5, peak_x + 0.5
+    window.params["裁剪区间"].setChecked(True)
+    window.params["裁剪起点 (°)"].setValue(lo)
+    window.params["裁剪终点 (°)"].setValue(hi)
+    gui_views._refresh_proc(window)
+    QApplication.processEvents()
+    shown = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    inside = (tth >= lo) & (tth <= hi)
+    report(np.isnan(shown[inside]).all(), "裁剪区间内是空的（图上断开）",
+           f"{int(inside.sum())} 点")
+    report(np.isfinite(shown[~inside]).all(), "区间外不受影响")
+    # 自动范围按**画出来的那条**算（裁剪掉的部分不参与）——这正是用户要的效果；
+    # 注意别用 ax.get_ylim()：面板可能停在手动范围模式，那不代表自动范围
+    hi_auto = gui_state._auto_y_range(shown, False)[1]
+    hi_raw = gui_state._auto_y_range(raw, False)[1]
+    report(hi_auto < hi_raw * 0.5, "裁剪后自动范围放开（大峰不再压扁）",
+           f"{hi_raw:.0f} → {hi_auto:.0f}")
+    # ③ [批量处理]：三项进产物，组名与元数据写明链
+    # 勾上这个文件的**原始条目**（前面的段落删过产物、也清过勾选，这里
+    # 不能指望还有谁被勾着——探针踩过：批处理静默地"没有选中"）
+    for i in range(window.file_list.count()):
+        item = window.file_list.item(i)
+        item.setCheckState(Qt.Checked
+                           if item.data(Qt.UserRole) == lab6 else Qt.Unchecked)
+    for g in window.file_list.groups():
+        g.setCheckState(Qt.Unchecked)
+    QApplication.processEvents()
+    window.proc_batch_btn.click()
+    QApplication.processEvents()
+    log = window.log_text.toPlainText()
+    report("批量处理完成" in log, "批量处理跑完",
+           [ln for ln in log.splitlines()
+            if ln.startswith("批量处理完成")][-1:])
+    group = next((g for g in window.file_list.groups()
+                  if g.text(0).startswith("处理后")), None)
+    report(group is not None, "文件栏里出现「处理后」分组",
+           group.text(0) if group is not None else None)
+    if group is not None:
+        report("平滑 0.3°" in group.text(0) and "删 " in group.text(0),
+               "组名写明这一组做过什么", group.text(0))
+    mine = [b for b in stage_cache.list_batches("bg")
+            if str(Path(lab6).resolve()) in b["items"]]
+    if mine:
+        item = mine[0]["items"][str(Path(lab6).resolve())]
+        meta = stage_cache.meta_by_key("bg", item["key"])
+        report("smooth=boxcar/0.3°" in str(meta.get("chain")),
+               "产物元数据里记着链", str(meta.get("chain"))[:60])
+    else:
+        report(False, "产物元数据里记着链", "没有批次")
+    # ④ 导出：裁剪点不写行、头里注明
+    import tempfile
+    from pathlib import Path as _P
+    from xrd_toolkit.gui import plot_export as gui_export
+    outdir = _P(tempfile.mkdtemp(prefix="xrd_probe_export_"))
+    with mock.patch.object(gui_export, "_build_export_dialog",
+                           return_value={"dir": outdir, "suffix": ".txt",
+                                         "csv": False, "bg": True}):
+        gui_export._run_export(window)
+    target = outdir / (lab6 and _P(lab6).stem) / "integrated_2th.txt"
+    ok = target.exists()
+    report(ok, "导出落盘", str(target.name))
+    if ok:
+        text = target.read_text()
+        report("processed:" in text and "cut:" in text,
+               "文件头写明处理链与删除点数",
+               [ln for ln in text.splitlines()[:3] if ln.startswith("#")][-1:])
+        report("nan" not in text.lower(), "文件里没有 nan 行")
 
 
 def main() -> int:
@@ -488,6 +589,7 @@ def main() -> int:
         check_stage_folders(window, lab6_key)
         check_one_d_product_background(window)
         check_product_delete(window)
+        check_processing_chain(window, lab6_key)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:

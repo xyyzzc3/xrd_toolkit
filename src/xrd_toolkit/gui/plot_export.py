@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
-from xrd_toolkit.gui.panel_state import _bg_curve, _content, _log
+from xrd_toolkit.gui.panel_state import (_content, _log, _proc_curve,
+                                            _proc_settings)
+from xrd_toolkit.services import process, stage_cache
 
 
 def _ask_save_options(window: QMainWindow):
@@ -138,19 +140,24 @@ def _choose_panels(window: QMainWindow, panels) -> list:
 
 
 def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
-                        quiet: bool = False) -> list:
-    """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity), ...]。
+                        quiet: bool = False, sources=None) -> list:
+    """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity, 处理链), ...]。
 
     只认已经算好的 1D 面板缓存（last_tth / last_intensity），按文件
     列表顺序返回；勾选里没算过的文件跳过并记日志（提示先点 [1D]
     出图）。重复文件改名加入的条目按显示名找各自面板。
 
-    want_bg=True 时扣掉背景（锚点按文件路径取，与画图走同一个
-    _bg_curve——导出与屏幕同一个口径）；模式关闭时原样返回。
+    want_bg=True 时跑整条处理链（背景 → 平滑 → 裁剪，锚点按文件路径取，
+    与画图共用同一个 _proc_curve——导出与屏幕同一个口径）；全关时原样
+    返回。第 4 项是链的一句话描述（空 = 没做处理），写进导出文件的头里
+    ——文件自己说清它是怎么来的。
     quiet=True 不记日志：导出要拿数量去填弹窗标题，之后再正式收一遍，
     两遍都记就会把"跳过 X"打两次。
+    sources 给定一组来源（右键"导出这一条/这一组"那条路）时只处理这一组，
+    不看勾选状态——右键导出不该悄悄改动用户的对号。
     """
-    checked = gui_sources.checked_sources(window)
+    checked = (gui_sources.checked_sources(window) if sources is None
+               else list(sources))
     if not checked:
         if not quiet:
             _log(window, "没有选中的文件")
@@ -166,19 +173,24 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                 if not quiet:
                     _log(window, f"跳过 {display}：产物读不到了（被删了？）")
                 continue
-            # 名字带阶段后缀：同一张图的原始结果与扣背景结果各存一份，
+            # 名字带阶段后缀：同一张图的原始结果与处理结果各存一份，
             # 不重名、不互相覆盖（导出文件名 = 这个名字）
             tail = gui_sources.KIND_TAIL.get(src.kind, src.kind)
-            out.append((f"{Path(path).stem}_{tail}", got[0], got[1]))
+            out.append((f"{Path(path).stem}_{tail}", got[0], got[1],
+                        stage_cache.meta_by_key(src.kind, src.key)
+                        .get("chain", "")))
             continue
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
             if dock is not None and getattr(dock, "last_tth", None) is not None:
                 tth, intensity = dock.last_tth, dock.last_intensity
+                chain = ""
                 if want_bg:
-                    _, intensity, _ = _bg_curve(window, dock, path, tth,
-                                                intensity)
-                out.append((Path(path).stem, tth, intensity))
+                    settings = _proc_settings(window, dock, path)
+                    tth, intensity, _ = _proc_curve(window, dock, path, tth,
+                                                    intensity)
+                    chain = process.chain_desc(settings)
+                out.append((Path(path).stem, tth, intensity, chain))
                 break
         else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
             if not quiet:
@@ -251,11 +263,24 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
             "csv": csv_check.isChecked(), "bg": bg_check.isChecked()}
 
 
-def _write_export(target: Path, tth, intensity) -> None:
-    """写一个两列 1D 数据文件（头行与格式逐字镜像 CLI integrate_pattern）。"""
+def _write_export(target: Path, tth, intensity, chain: str = "") -> None:
+    """写一个两列 1D 数据文件（头行与格式逐字镜像 CLI integrate_pattern）。
+
+    **裁剪过的点不写行**：那些点在数据里是"空"（NaN），写出去就是字面
+    "nan"，别的软件读不了；跳过它们并在头里写明处理链——文件自己说清它
+    是怎么来的（用户 2026-09-25 定的"都存文件"）。
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    np.savetxt(str(target), np.c_[tth, intensity], fmt="%.6g",
-               header="2theta(deg)  intensity")
+    tth = np.asarray(tth, dtype=float)
+    intensity = np.asarray(intensity, dtype=float)
+    keep = np.isfinite(intensity)
+    header = "2theta(deg)  intensity"
+    if chain:
+        header += f"\nprocessed: {chain}"
+    if not keep.all():
+        header += f"\ncut: {int((~keep).sum())} points removed"
+    np.savetxt(str(target), np.c_[tth[keep], intensity[keep]], fmt="%.6g",
+               header=header)
 
 
 def _ask_csv_range(window: QMainWindow) -> str:
@@ -282,14 +307,28 @@ def _ask_csv_range(window: QMainWindow) -> str:
     return "cancel"
 
 
+def _as4(row) -> tuple:
+    """结果行统一成 4 元组 (名, tth, 强度, 处理链)。
+
+    第 4 项是可选备注（老调用方与测试可能只给三元组）——写盘的两个函数
+    都从这里进，缺了就补空串。
+    """
+    return tuple(row) if len(row) == 4 else (*row, "")
+
+
 def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
     """把一批 1D 结果汇总成一张 CSV：第一列 2θ，其后每文件一列强度。
 
     所有结果的 2θ 网格一致（同 npt 同范围）时直接按列拼；网格不一
     致时弹窗问用户（取公共交集重插值 / 跳过范围不同的文件 / 取消）。
     重插值 = 公共区间内按最大点数均匀取样，原数据 np.interp 上去。
+
+    裁剪过的点是"空"：CSV 里那几格**留空**，不写 0——0 会被当成真实
+    强度参与后面的计算，空白才是"这里没有数据"的诚实表示。为此整张表
+    按字符串写（np.savetxt 的 %.6g 会把空值写成字面 nan）。
     """
-    grids = [tth for _, tth, _ in results]
+    results = [_as4(r) for r in results]
+    grids = [tth for _, tth, _, _ in results]
     ref = grids[0]
     same_grid = all(len(g) == len(ref) and np.allclose(g, ref, atol=1e-9)
                     for g in grids[1:])
@@ -303,8 +342,9 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
             hi = min(g.max() for g in grids)
             npt = max(len(g) for g in grids)
             common = np.linspace(lo, hi, npt)
-            results = [(stem, common, np.interp(common, tth, intensity))
-                       for stem, tth, intensity in results]
+            results = [(stem, common, np.interp(common, tth, intensity),
+                        chain)
+                       for stem, tth, intensity, chain in results]
             _log(window, f"CSV 总表取公共交集 2θ {lo:.3f}~{hi:.3f}°"
                          f"（重插值到 {npt} 点）")
         else:   # "skip"：只保留与第一个文件同网格的
@@ -317,22 +357,38 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
             _log(window, f"CSV 总表跳过 {len(results) - len(kept)} 个"
                          f" 2θ 范围不同的文件")
             results = kept
-    grid = results[0][1]
-    data = np.column_stack([grid] + [intensity for _, _, intensity in results])
-    header = "2theta(deg)," + ",".join(stem for stem, _, _ in results)
+    grid = np.asarray(results[0][1], dtype=float)
+    columns = [np.asarray(intensity, dtype=float)
+               for _, _, intensity, _ in results]
+
+    def fmt(v):
+        return "" if not np.isfinite(v) else f"{v:.6g}"
+
+    rows = [",".join([fmt(x)] + [fmt(c[i]) for c in columns])
+            for i, x in enumerate(grid)]
+    header = "2theta(deg)," + ",".join(stem for stem, _, _, _ in results)
+    cut_cols = [stem for stem, _, inten, _ in results
+                if not np.isfinite(np.asarray(inten, dtype=float)).all()]
+    if cut_cols:
+        header += ("\n# 空单元格 = 该 2θ 段被裁剪（"
+                   + "、".join(cut_cols) + "）")
     target = outdir / "1d_summary.csv"
     try:
         # comments=""：头行不带 # 前缀，读回时第一行就是列名
-        np.savetxt(str(target), data, fmt="%.6g", delimiter=",",
-                   header=header, comments="")
+        target.write_text(header + "\n" + "\n".join(rows) + "\n",
+                          encoding="utf-8")
     except OSError as err:
         _log(window, f"CSV 总表写入失败（{err}）")
         return
-    _log(window, f"已生成 CSV 总表 → {target}")
+    _log(window, f"已生成 CSV 总表 → {target}"
+                 + (f"（{len(cut_cols)} 列有裁剪区，空格 = 无数据）"
+                    if cut_cols else ""))
 
 
-def _run_export(window: QMainWindow) -> None:
-    """[导出数据]：勾选文件的 1D 结果批量落盘（镜像 CLI 的 txt 格式）。
+def _run_export(window: QMainWindow, sources=None) -> None:
+    """[导出数据]：勾选文件（或指定的一组来源）的 1D 结果批量落盘。
+
+    镜像 CLI 的 txt 格式；右键"导出这一条/这一组"走 sources 那条路。
 
     输出路径 = {目录}/{文件名}/integrated_2th{suffix}（与命令行
     integrate_pattern 同目录同格式）；可选 CSV 总表。单个文件写盘
@@ -341,33 +397,39 @@ def _run_export(window: QMainWindow) -> None:
     """
     # 先数一遍（确定"扣不扣背景"要等弹窗，但弹窗标题要个数量）——这一遍
     # 静默：否则"跳过 X：还没有 1D 结果"会在下面第二遍里再打一次
-    n = len(_checked_1d_results(window, quiet=True))
+    n = len(_checked_1d_results(window, quiet=True, sources=sources))
     if not n:
-        _checked_1d_results(window)   # 让跳过/空结果的原因照常记进日志
+        # 让跳过/空结果的原因照常记进日志
+        _checked_1d_results(window, sources=sources)
         return
     fields = _build_export_dialog(window, n)
     if fields is None:
         _log(window, "已取消导出")
         return
     want_bg = bool(fields.get("bg"))
-    results = _checked_1d_results(window, want_bg=want_bg)
+    results = _checked_1d_results(window, want_bg=want_bg, sources=sources)
     if not results:
         return
     if want_bg:
-        # 不报具体模式：扣除是**按面板快照**算的（每张图各记各的），
+        # 不报具体模式：处理是**按面板快照**算的（每张图各记各的），
         # 而此处读到的控件值只反映当前编辑对象
-        _log(window, "导出：按各面板自己的背景扣除设置扣背景")
+        _log(window, "导出：按各面板自己的处理设置（背景/平滑/裁剪）")
     outdir, suffix = fields["dir"], fields["suffix"]
-    ok = 0
-    for stem, tth, intensity in results:
+    ok = dropped = 0
+    for stem, tth, intensity, chain in map(_as4, results):
         target = outdir / stem / f"integrated_2th{suffix}"
+        if np.isfinite(np.asarray(intensity, dtype=float)).all() is False:
+            dropped += 1
         try:
-            _write_export(target, tth, intensity)
+            _write_export(target, tth, intensity, chain)
         except OSError as err:
             _log(window, f"导出失败 {stem}（{err}）")
             continue
         ok += 1
         _log(window, f"已导出 {stem} → {target}")
+    if dropped:
+        _log(window, f"提示：{dropped} 个文件的裁剪区间没有写进文件"
+                     f"（文件头注明删了多少点），空值行不落盘")
     if ok:
         _log(window, f"导出完成：{ok} 个文件")
     if fields["csv"]:

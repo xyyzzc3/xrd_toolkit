@@ -15,14 +15,14 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (
-    _auto_y_range, _AUX_GID_PREFIX, _bg_curve, _collect_geometry,
+    _auto_y_range, _AUX_GID_PREFIX, _proc_curve, _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
     _heat_shown, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _batch_step, _bg_path_of, _curve_for, _progress_show, _refresh_bg,
+    _batch_step, _bg_path_of, _curve_for, _progress_show, _refresh_proc,
     _spawn)
 
 
@@ -376,7 +376,7 @@ def _anchor_release(window: QMainWindow, key: str, event) -> None:
     path = _bg_path_of(dock)
     if path is None:
         return
-    # 点哪张图就编辑哪张图（与点面板选中编辑对象一致）：_refresh_bg 把参数
+    # 点哪张图就编辑哪张图（与点面板选中编辑对象一致）：_refresh_proc 把参数
     # 坞控件值推进的正是编辑对象的快照，不切焦点会出现"点了没反应"。放在
     # 这里而不是按下时——此刻已确认是点击，不会误伤平移手势（见 _anchor_press）
     _set_focus(window, key, dock.panel_display)
@@ -451,7 +451,7 @@ def _anchor_changed(window: QMainWindow, msg: str) -> None:
     updater = getattr(window, "_bg_count_refresh", None)
     if updater is not None:
         updater(window)
-    _refresh_bg(window)
+    _refresh_proc(window)
     _log(window, msg)
 
 
@@ -594,7 +594,7 @@ def _heat_data(window: QMainWindow, dock):
         if src is not None and src.kind != gui_sources.RAW:
             rows.append((stem, tth, intensity))   # 产物本身就是扣完的
             continue
-        _, sub, _ = _bg_curve(window, dock, src.path, tth, intensity)
+        _, sub, _ = _proc_curve(window, dock, src.path, tth, intensity)
         rows.append((stem, tth, sub))
     return _assemble_heatmap(rows)
 
@@ -611,6 +611,10 @@ def _finish_heatmap(window: QMainWindow, key: str) -> None:
         _log(window, "热图失败：所有文件的积分都失败了，面板留空")
         return
     tth, matrix, stems, interp = data
+    n_blank = int((~np.isfinite(np.asarray(matrix, dtype=float))).sum())
+    if n_blank:
+        _log(window, f"热图提示：{n_blank} 个格子是空的（那几段被裁剪过）"
+                     f"——显示为该行的一段空白带")
     if interp:
         _log(window, "热图提示：各文件 2θ 网格不一致，已重插值到"
                      "第一个文件的网格")

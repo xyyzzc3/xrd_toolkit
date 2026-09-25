@@ -97,6 +97,45 @@ The failure criterion is **relative arc coverage** — the ring's fraction of az
 
 Datasets recorded with the beam deliberately placed at the detector edge or corner (each ring only partially captured, revealing higher-2θ rings) are handled end to end: a built-in numpy polar integration takes over automatically when pyFAI's radial binning becomes unreliable (pyFAI bins relative to the detector center, verified on synthetic rings), sector χ labels report the actually covered azimuth span instead of a fake 360°, and the waterfall statistics average only over sectors with real signal. Calibration on such datasets should be done on a centered standard image (distance/tilt are instrument properties); `--center` documents this.
 
+## Processing (background / smoothing / cut)
+
+The 处理 page carries three steps. **All three are optional** (unticked = not applied), all three redraw
+live as you change them (milliseconds — no re-integration), and all three go to the whole batch through
+[批量处理], landing in a 处理后 … group in the file bar.
+
+**The order is fixed: background → smoothing → cut.** Two boundary reasons: anchors are sampled *before*
+the cut (an anchor inside the cut window would sample a blank and take the whole baseline with it), and
+smoothing never sees a hole (smooth the complete curve first, punch the hole last — the other order needs
+"half the window is blank" edge handling, which quietly makes every image's edges slightly different).
+
+| Step | What it does | Knob |
+|:---|:---|:---|
+| Background | removes the additive part carrying no structure (empty scan / auto baseline / manual anchors) | see the next section |
+| Smoothing | rolling average | window width in **degrees** (not points, so it survives a change of output point count) |
+| Cut | punches a chosen 2θ interval out of the curve (the plot shows a gap there) | start and end 2θ |
+
+**The cut blanks values, it does not delete points**: samples inside the window become NaN, so the 2θ grid
+and every array length stay put (compare / heatmap / CSV alignment is untouched). All three consequences
+are intended:
+
+- the plot **shows a gap** there (matplotlib breaks the line at NaN) and the automatic y-range **skips it** —
+  which is the whole point when one giant peak squashes everything else;
+- the processing product has the same gap, the exported txt/chi **omits those rows**, and the file header
+  records `processed: …` and `cut: N points removed`;
+- the CSV summary leaves those cells **blank** (not 0 — a zero would be read as real intensity) and names
+  the affected columns.
+
+**The product key = 1D product key + hash of the chain** (background, smoothing and cut together). With
+smoothing and cut off, that hash is **bit-identical** to the old background-only product, so upgrading
+never invalidates previously stored products. The group name states what the batch went through
+(处理后 09-25 16:40（锚点 5 个、窗口 2°、平滑 0.15°、删 2–3°）), and the product metadata carries a
+machine-readable chain (`bg=anchor(n=5)/win=2 → smooth=boxcar/0.15° → cut=2–3°`) — any product can
+explain how it was made.
+
+**The one-line model**: a 1D product is the integration's result, a processing product is the processing
+result, and Compare / Heatmap / export read the processing product when there is one (saying so in the
+log: "处理产物 N 条"). What you see on screen is produced by the same function that writes the file.
+
 ## Background subtraction
 
 The parameter dock's 背景扣除 section removes what carries no structural information: air scatter, amorphous diffuse scattering, fluorescence, detector dark current, beam-stop halo. It matters here: both samples' background rises 3.8–5.2× toward low 2θ (LMFP 1429 counts at 1–2° vs 275 at 9–10°), so a constant offset cannot work.

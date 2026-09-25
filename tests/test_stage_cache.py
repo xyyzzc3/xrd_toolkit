@@ -125,6 +125,71 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(stage_cache.clear(), 0, "再清一次是幂等的")
 
 
+class TestChainKeys(unittest.TestCase):
+    """处理链进键：开了平滑/裁剪才换键，没开时与老产物逐位一致。
+
+    这条不变量是"老缓存不用重算"的全部依据——今天之前存的扣背景产物
+    必须继续命中，否则用户升级一次就得把几百张图重跑一遍。
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xrd_cache_src_"))
+        self.f = self.dir / "sample.tif"
+        self.f.write_bytes(b"0" * 1024)
+        self.kw = dict(config="lmfp1_lab6", npt=1000, tth_min=1.0, tth_max=8.0)
+        self.bg = {"mode": "anchor", "window_deg": 2.0, "anchor_method": "linear",
+                   "clip": False, "anchors": [(1.0, 5.0)], "blank": None}
+        self.tth = np.linspace(1.0, 8.0, 100)
+        self.inten = np.cos(self.tth) * 10
+
+    def test_no_extras_matches_the_old_hash(self):
+        """没有平滑/裁剪：处理链哈希 == 背景设置哈希（老键原样）。"""
+        self.assertEqual(stage_cache.proc_settings_hash(self.bg),
+                         stage_cache.bg_settings_hash(self.bg))
+        # 老设置字典里根本没有 smooth_deg / cut_ranges 这两个键也要等价
+        self.assertEqual(stage_cache.proc_settings_hash({**self.bg}),
+                         stage_cache.bg_settings_hash(self.bg))
+
+    def test_extras_change_the_hash(self):
+        base = stage_cache.proc_settings_hash(self.bg)
+        self.assertNotEqual(base, stage_cache.proc_settings_hash(
+            {**self.bg, "smooth_deg": 0.15}))
+        self.assertNotEqual(base, stage_cache.proc_settings_hash(
+            {**self.bg, "cut_ranges": [(2.0, 3.0)]}))
+        # 关掉平滑 = 回到未平滑那一份（不是又生成第三份）
+        self.assertEqual(
+            stage_cache.proc_settings_hash({**self.bg, "smooth_deg": 0.0}),
+            base)
+
+    def test_round_trip_with_a_chain(self):
+        """带平滑的产物能存能读，且与"只有背景"的那份互不覆盖。"""
+        settings = {**self.bg, "smooth_deg": 0.15, "cut_ranges": [(2.0, 3.0)]}
+        p1 = stage_cache.store_proc(self.f, self.tth, self.inten, **self.kw,
+                                    settings=settings)
+        p2 = stage_cache.store_proc(self.f, self.tth, self.inten, **self.kw,
+                                    settings=self.bg)
+        self.assertNotEqual(p1, p2, "两份产物不能是同一个文件")
+        got = stage_cache.load_proc(self.f, **self.kw, settings=settings)
+        self.assertIsNotNone(got)
+        self.assertTrue(np.array_equal(got[1], self.inten))
+        self.assertIsNone(stage_cache.load_proc(self.f, **self.kw,
+                                                settings={**self.bg,
+                                                          "smooth_deg": 0.5}),
+                          "没存过的链配置 = 没缓存")
+
+    def test_meta_records_the_chain(self):
+        """产物元数据里记下整条链（拿到一份产物能查清它经过了什么）。"""
+        import json
+        settings = {**self.bg, "smooth_deg": 0.15, "cut_ranges": [(2.0, 3.0)]}
+        path = stage_cache.store_proc(self.f, self.tth, self.inten, **self.kw,
+                                      settings=settings)
+        with np.load(path) as data:
+            meta = json.loads(str(data["meta"]))
+        self.assertIn("bg=anchor(n=1)", meta["chain"])
+        self.assertIn("smooth=boxcar/0.15°", meta["chain"])
+        self.assertIn("cut=2–3°", meta["chain"])
+
+
 class TestProductLedger(unittest.TestCase):
     """产物台账：record_batch / list_batches / drop_batch / clear 联动。
 
@@ -141,11 +206,11 @@ class TestProductLedger(unittest.TestCase):
         stage_cache.write_batches("bg", [])
         stage_cache.write_batches("1d", [])
 
-    def _store_bg(self, name: str):
+    def _store_proc(self, name: str):
         """真存一份 bg 产物，返回 (源文件路径, 产物键)。"""
         f = self.dir / name
         f.write_bytes(b"0" * 1024)
-        produced = stage_cache.store_bg(
+        produced = stage_cache.store_proc(
             f, self.tth, self.inten, **self.kw,
             settings={"mode": "anchor", "window_deg": 2.0,
                       "anchors": [(1.0, 5.0)]})
@@ -157,8 +222,8 @@ class TestProductLedger(unittest.TestCase):
             settings={"mode": "anchor", "window_deg": 2.0})
 
     def test_record_then_list(self):
-        a, ka = self._store_bg("a.tif")
-        b, kb = self._store_bg("b.tif")
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
         self.assertEqual(self._record("20260925-101010-ab12cd", [(a, ka), (b, kb)]), 2)
         batches = stage_cache.list_batches("bg")
         self.assertEqual(len(batches), 1)
@@ -173,8 +238,8 @@ class TestProductLedger(unittest.TestCase):
     def test_same_batch_id_overwrites_and_new_is_first(self):
         """同一个批次号再记一次 = 覆盖（重复点不长得重复分组）；
         列出来的顺序 = 新的在前。"""
-        a, ka = self._store_bg("a.tif")
-        b, kb = self._store_bg("b.tif")
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
         self._record("batch-1", [(a, ka)])
         self._record("batch-1", [(a, ka), (b, kb)])
         self._record("batch-2", [(a, ka)], label="扣背景 09-25 11:11（空扫相减）")
@@ -185,8 +250,8 @@ class TestProductLedger(unittest.TestCase):
     def test_list_prune_hides_dead_items(self):
         """产物被删掉（用户清了 outputs/）→ prune 后这一条不再出现，
         但**不写盘**（要不要落盘由调用方决定）。"""
-        a, ka = self._store_bg("a.tif")
-        b, kb = self._store_bg("b.tif")
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
         self._record("batch-1", [(a, ka), (b, kb)])
         (stage_cache.CACHE_ROOT / "bg" / f"{kb}.npz").unlink()
         self.assertEqual(len(stage_cache.list_batches("bg")[0]["items"]), 2)
@@ -196,8 +261,8 @@ class TestProductLedger(unittest.TestCase):
                          "prune 只清返回值，不落盘")
 
     def test_write_batches_persists_prune(self):
-        a, ka = self._store_bg("a.tif")
-        b, kb = self._store_bg("b.tif")
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
         self._record("batch-1", [(a, ka), (b, kb)])
         (stage_cache.CACHE_ROOT / "bg" / f"{kb}.npz").unlink()
         stage_cache.write_batches("bg", stage_cache.list_batches("bg", prune=True))
@@ -205,8 +270,8 @@ class TestProductLedger(unittest.TestCase):
 
     def test_drop_batch_removes_files_and_entry(self):
         """删一组 = 台账条目 + 盘上的产物一起没；别的组的产物不受影响。"""
-        a, ka = self._store_bg("a.tif")
-        b, kb = self._store_bg("b.tif")
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
         self._record("batch-1", [(a, ka), (b, kb)])
         ka_path = stage_cache.CACHE_ROOT / "bg" / f"{ka}.npz"
         self.assertTrue(ka_path.exists())
@@ -218,7 +283,7 @@ class TestProductLedger(unittest.TestCase):
         self.assertEqual(stage_cache.drop_batch("bg", "没有这个批"), 0)
 
     def test_clear_one_kind_keeps_other_kinds_ledger(self):
-        a, ka = self._store_bg("a.tif")
+        a, ka = self._store_proc("a.tif")
         self._record("batch-1", [(a, ka)])
         stage_cache.record_batch("1d", "one-d", label="1D", items=[(a, "k1")],
                                  **self.kw)
@@ -229,7 +294,7 @@ class TestProductLedger(unittest.TestCase):
                          "只清一类，别类的台账要留着")
 
     def test_clear_all_removes_ledger(self):
-        a, ka = self._store_bg("a.tif")
+        a, ka = self._store_proc("a.tif")
         self._record("batch-1", [(a, ka)])
         stage_cache.clear()
         self.assertFalse((stage_cache.CACHE_ROOT / "index.json").exists())
@@ -240,7 +305,7 @@ class TestProductLedger(unittest.TestCase):
         (stage_cache.CACHE_ROOT / "index.json").write_text("{半截",
                                                            encoding="utf-8")
         self.assertEqual(stage_cache.list_batches("bg"), [])
-        a, ka = self._store_bg("a.tif")
+        a, ka = self._store_proc("a.tif")
         self._record("batch-1", [(a, ka)])          # 还能正常记
         self.assertEqual(len(stage_cache.list_batches("bg")), 1)
 

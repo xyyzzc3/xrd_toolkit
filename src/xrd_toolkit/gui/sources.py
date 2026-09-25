@@ -31,8 +31,11 @@ BG = "bg"          # 扣背景产物
 SOURCE_KIND_ROLE = Qt.UserRole + 1     # 条目属于哪个阶段
 SOURCE_KEY_ROLE = Qt.UserRole + 2      # 产物键（raw 条目为 None）
 
-KIND_TAIL = {ONED: "1D", BG: "扣背景"}   # 产物条目的名字后缀（图例/标题里
+KIND_TAIL = {ONED: "1D", BG: "处理后"}   # 产物条目的名字后缀（图例/标题里
                                         # 分得清"这份是哪一阶段的结果"）
+
+# 日志里"这一条是从哪儿来的"的说法（与名字后缀分开：后缀要短，说明要清楚）
+KIND_TEXT = {ONED: "1D 产物", BG: "处理产物"}
 
 
 def set_item_source(item, path, kind: str = RAW, key: str = None) -> None:
@@ -131,4 +134,4 @@ def describe_source(source) -> str:
     但日志要说一句——用哪一份得看得见）。"""
     if source.kind == RAW:
         return "原始数据"
-    return f"{KIND_TAIL.get(source.kind, source.kind)}产物"
+    return KIND_TEXT.get(source.kind, source.kind)

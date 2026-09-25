@@ -25,7 +25,7 @@ builder 表 _VIEW_BUILDERS 在 plot_panels（视图名 → 建面板内容）—
     _on_view_error；_apply_params / _apply_image_params（两个
     [应用] 各管各的）；
   - 背景扣除：_draw_bg_overlay（原始曲线 / 基线 / 锚点标记的辅助
-    线，统一带 _AUX_GID_PREFIX）+ _bg_path_of + _refresh_bg（按各
+    线，统一带 _AUX_GID_PREFIX）+ _bg_path_of + _refresh_proc（按各
     面板快照重画全部曲线面板）；
   - 文件 → 视图闭环：_plot_view（作图按钮的动作：对每个对号文件开
     面板并计算）+ _batch_step（批量进度记账：状态栏进度条 + 大批量
@@ -46,8 +46,8 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
-    _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _bg_curve,
-    _bg_params, _bg_settings, _collect_geometry, _content, _curve_color,
+    _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
+    _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
     _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panels import _settle
@@ -55,7 +55,7 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.tasks import BackgroundTask
-from xrd_toolkit.services import stage_cache
+from xrd_toolkit.services import process, stage_cache
 from xrd_toolkit.services.background import (compute_baseline,
                                               subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -685,64 +685,69 @@ def _curve_for(window, path):
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
     dock = window.plot_docks.get(window.focus_panel)
     if dock is not None:
-        # 设置模板 = 当前编辑对象那份（模式/窗口/拟合/截断），锚点按**该
-        # 文件自己的**取（_bg_settings 内部按 path 查 window.bg_anchors）
-        settings = _bg_settings(window, dock, path)
-        if settings["mode"] != "off":
-            got = stage_cache.load_bg(path, **kw, settings=settings)
+        # 设置模板 = 当前编辑对象那份（背景三项 + 平滑 + 裁剪），锚点按**该
+        # 文件自己的**取（_proc_settings 内部按 path 查 window.bg_anchors）
+        settings = _proc_settings(window, dock, path)
+        if settings["mode"] != "off" or process.chain_parts(settings):
+            got = stage_cache.load_proc(path, **kw, settings=settings)
             if got is not None:
-                return got[0], got[1], "扣背景产物"
+                return got[0], got[1], "处理产物"
     got = stage_cache.load_1d(path, **kw)
     if got is not None:
         return got[0], got[1], "1D 产物"
     return None
 
 
-def _bg_batch_apply(window: QMainWindow) -> None:
-    """[批量扣背景]：给勾选文件各生成一份扣后曲线产物。
+def _proc_batch_apply(window: QMainWindow) -> None:
+    """[批量处理]：把「处理」页当前这套链用到勾选文件，各生成一份处理产物。
+
+    链 = **背景扣除 → 平滑 → 裁剪**（顺序见 services/process），三项都可关：
+    全关时这个按钮只记一条提示、不写产物。
 
     锚点**只传 2θ 位置**，强度到每个文件自己的曲线上重新取：一批数据的
     背景**形状**（空气散射 / 光路 / 探测器）是共同的，绝对强度不是——
     直接套 A 的强度会把 B 的基线抬错几倍（与用户 2026-09-24 讨论定稿）。
-    空扫模式本来就整批共用一条空扫曲线，直接照各自的设置扣。
+    平滑窗口与裁剪区间是整批共用的（它们是"要看什么"的选择，不是每张图
+    各自的物理属性）。
 
-    扣完存进分阶段产物（kind=bg）：对比 / 热图下次直接读它，跨会话秒开。
+    处理完存进分阶段产物：对比 / 热图 / 导出下次直接读它，跨会话秒开。
     每个目标面板的参数快照也写成同一套设置——这样"面板上看到的曲线"与
     "对比里用的曲线"是同一条（否则两处数字对不上，最容易让人怀疑自己）。
 
-    可扣的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，只是
-    钉在某一份缓存上，见 _open_product_panel 的说明）；**扣背景产物**跳过
-    ——它已经是扣完的结果，再扣一遍是二次相减（用户 2026-09-25 问起才发
-    现原先一刀切把 1D 产物也跳过了）。
+    可处理的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，
+    只是钉在某一份缓存上，见 _open_product_panel 的说明）；**处理产物**
+    跳过——它已经是处理完的结果，再处理一遍就是二次扣除/二次平滑。
     """
     dock = window.plot_docks.get(window.focus_panel)
     focus_path = _bg_path_of(dock) if dock is not None else None
     if dock is None or focus_path is None:
-        _log(window, "先点一张 1D 图（编辑对象），再点 [批量扣背景]")
+        _log(window, "先点一张 1D 图（编辑对象），再点 [批量处理]")
         return
-    settings = _bg_settings(window, dock, focus_path)
-    if settings["mode"] == "off":
-        _log(window, "先把背景扣除模式切到「自动基线」或「手动锚点」"
-                     "（空扫相减也行），再点 [批量扣背景]")
+    settings = _proc_settings(window, dock, focus_path)
+    params0 = _proc_params(window, dock, focus_path)
+    chain = process.chain_parts(settings)
+    if settings["mode"] == "off" and not chain:
+        _log(window, "「处理」页里三项都关着（背景扣除 / 平滑 / 裁剪）——"
+                     "先开一项，再点 [批量处理]")
         return
     xs = [x for x, _ in settings["anchors"]]
     if settings["mode"] == "anchor" and not xs:
         _log(window, "先在图上点几个锚点（背景扣除模式 = 手动锚点），"
-                     "再点 [批量扣背景]")
+                     "再点 [批量处理]")
         return
-    # 可扣的是原始数据 + 1D 产物；扣背景产物本身跳过（见 docstring）
+    # 可处理的是原始数据 + 1D 产物；处理产物本身跳过（见 docstring）
     picked = gui_sources.checked_sources(window)
     targets = [s for s in picked
                if s.kind in (gui_sources.RAW, gui_sources.ONED)]
     already = [s for s in picked if s.kind == gui_sources.BG]
     if not targets:
         _log(window, "没有选中的文件"
-                     "（扣背景产物已经是扣完的结果，不用再扣一遍）"
+                     "（处理产物已经是处理完的结果，不用再来一遍）"
                      if already else "没有选中的文件")
         return
     if already:
-        _log(window, f"跳过 {len(already)} 个扣背景产物条目："
-                     "它们已经是扣完背景的结果（幂等，不再扣一遍）")
+        _log(window, f"跳过 {len(already)} 个处理产物条目："
+                     "它们已经是处理完的结果（幂等，不再来一遍）")
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
@@ -772,23 +777,22 @@ def _bg_batch_apply(window: QMainWindow) -> None:
             skipped += 1
             continue
         per_file = [(x, float(np.interp(x, tth, intensity))) for x in xs]
-        params = {**_bg_params(window, dock, focus_path),
-                  "anchors": per_file}
-        base = compute_baseline(tth, intensity, params,
-                                blank_curve=blank_curve)
-        if base is None:
+        params = {**params0, "anchors": per_file}
+        # 整条链一次跑完（背景 → 平滑 → 裁剪）：屏幕上的曲线与写进产物的
+        # 这一份是同一个函数的输出，不存在两处实现漂移
+        processed, base = process.apply_chain(tth, intensity, params,
+                                              blank_curve=blank_curve)
+        if base is None and settings["mode"] != "off":
             skipped += 1
             continue
-        sub = subtract_background(intensity, base,
-                                  clip_negative=settings["clip"])
-        bg_settings = {**settings, "anchors": per_file}
+        proc_settings = {**settings, "anchors": per_file}
         if source.kind == gui_sources.RAW:
-            produced = stage_cache.store_bg(path, tth, sub, **kw,
-                                            settings=bg_settings)
+            produced = stage_cache.store_proc(path, tth, processed, **kw,
+                                              settings=proc_settings)
         else:
-            # 挂在**那份 1D 产物**的键下面：勾的是哪一条，扣的就是哪一条
-            produced = stage_cache.store_bg_by_key(
-                source.key, tth, sub, settings=bg_settings,
+            # 挂在**那份 1D 产物**的键下面：勾的是哪一条，处理的就是哪一条
+            produced = stage_cache.store_proc_by_key(
+                source.key, tth, processed, settings=proc_settings,
                 source=path.name)
             from_product += 1
         records.append((path, Path(produced).stem))
@@ -802,20 +806,25 @@ def _bg_batch_apply(window: QMainWindow) -> None:
             snap["背景窗口 (°)"] = settings["window_deg"]
             snap["锚点拟合方式"] = settings["anchor_method"]
             snap["负值截断为 0"] = settings["clip"]
+            snap["平滑曲线"] = bool(params0["smooth_deg"] > 0)
+            snap["平滑窗口 (°)"] = settings.get("smooth_deg") or 0.10
+            cuts = settings.get("cut_ranges") or []
+            snap["裁剪区间"] = bool(cuts)
+            if cuts:
+                snap["裁剪起点 (°)"], snap["裁剪终点 (°)"] = cuts[0]
         done += 1
         if (i + 1) % 20 == 0:
-            _log(window, f"批量扣背景：{i + 1}/{len(targets)}…")
+            _log(window, f"批量处理：{i + 1}/{len(targets)}…")
     tail = (f"，跳过 {skipped} 个（还没有 1D 结果，先点 [1D] 出图）"
             if skipped else "")
     via = f"，其中 {from_product} 条来自 1D 产物" if from_product else ""
-    _log(window, f"批量扣背景完成：{done}/{len(targets)} 个文件（"
-                 + (f"锚点 {len(xs)} 个，" if xs else "")
-                 + f"窗口 {settings['window_deg']:g}°）{tail}{via}")
+    _log(window, f"批量处理完成：{done}/{len(targets)} 个文件"
+                 f"（{process.chain_label(settings)}）{tail}{via}")
     # 记台账：这一批 = 文件坞里的一个"扣背景"分组（用户 2026-09-25 定：
     # 每次 [批量扣背景] 一组）。整批写一次，中途不留半截台账。跳过的
     # 文件不进台账（它们没有产物，进组了也是空壳）
     if records:
-        label, batch = _bg_batch_label(settings)
+        label, batch = _proc_batch_label(settings)
         stage_cache.record_batch(
             "bg", batch, label=label, items=records,
             config=window.config_name, npt=npt,
@@ -827,42 +836,38 @@ def _bg_batch_apply(window: QMainWindow) -> None:
         window.refresh_groups()   # 文件栏里立刻长出这一组
 
 
-def _bg_batch_label(settings: dict) -> tuple:
-    """这一批扣背景的标签与批次号。
+def _proc_batch_label(settings: dict) -> tuple:
+    """这一批处理的标签与批次号。
 
-    标签给人看（进文件坞的分组名 + 日志）：时间 + 模式 + 窗口 + 锚点数
-    ——一个分组为什么是这样，一眼看得出来（用户要看的是"哪一套参数的
-    结果"）。批次号给程序用 = 时间戳 + 设置哈希前 6 位：同一套设置在同
-    一个时间戳上下标 → 同号（幂等，重复点不会长出重复分组），换了设置
-    就是另一批（两套参数的结果并存，正是拿来对比的用法）。
+    标签给人看（进文件坞的分组名 + 日志）：「处理后 09-25 16:40（锚点 5 个、
+    窗口 2°、平滑 0.15°、删 2–3°）」——三项都真的作用在数据上，所以三项都
+    写；组名必须描述数据本身，不能写没生效的东西（见 process.chain_label）。
+    批次号给程序用 = 时间戳 + 处理链哈希前 6 位：同一套设置在同一个时间戳上
+    下标 → 同号（幂等，重复点不会长出重复分组），换了设置就是另一批（两套
+    参数的结果并存，正是拿来对比的用法）。
     """
-    mode = settings.get("mode")
-    if mode == "anchor":
-        how = f"锚点 {len(settings.get('anchors') or [])} 个"
-    elif mode == "blank":
-        how = "空扫相减"
-    else:
-        how = "自动基线"
-    label = (f"扣背景 {time.strftime('%m-%d %H:%M')}"
-             f"（{how}，窗口 {float(settings.get('window_deg') or 0):g}°）")
+    label = (f"处理后 {time.strftime('%m-%d %H:%M')}"
+             f"（{process.chain_label(settings)}）")
     batch = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
-             f"{stage_cache.bg_settings_hash(settings)[:6]}")
+             f"{stage_cache.proc_settings_hash(settings)[:6]}")
     return label, batch
 
 
-def _refresh_bg(window: QMainWindow) -> None:
-    """背景扣除参数/锚点一变就立刻重画（不重新积分）。
+def _refresh_proc(window: QMainWindow) -> None:
+    """「处理」页任一参数一变就立刻重画（不重新积分）。
 
     这是全代码库唯一的"改控件即重画"通路：其余显示参数都等图像组
     [应用]。锚点点选本身是点击驱动的，每点一次都要 [应用] 不可接受，
-    所以背景这块走实时。基线估计是纯函数、毫秒级（实测 3000 点 1.4 ms），
-    直接拿缓存里的曲线重画一遍就够。
+    所以处理这三项（背景扣除 / 平滑 / 裁剪）都走实时。三项都是纯函数、
+    毫秒级（基线估计实测 3000 点 1.4 ms；滑动平均是卷积，更快），直接拿
+    缓存里的曲线重画一遍就够。
 
-    两步：① 把参数坞里背景控件的当前值推进**编辑对象**面板的快照
+    三步：① 把参数坞里处理控件的当前值推进**编辑对象**面板的快照
     （与图像组 [应用] 同一个动作，见 _apply_image_params——显示参数按
-    面板各记各的，不推进去的话画图读到的还是旧快照）；② 按各面板
-    自己的快照重画全部曲线面板，编辑对象跟着控件实时走，其余面板
-    维持各自已设的显示参数。
+    面板各记各的，不推进去的话画图读到的还是旧快照）；② 顺手把"平滑
+    窗口折成几个点"的灰度提示填上（教学用：窗口宽度是度、曲线是点）；
+    ③ 按各面板自己的快照重画全部曲线面板，编辑对象跟着控件实时走，其余
+    面板维持各自已设的显示参数。
     """
     # 对比/热图的重画入口在 plot_compare（模块级导入成环），只取本函数
     # 用得到的三个
@@ -875,6 +880,7 @@ def _refresh_bg(window: QMainWindow) -> None:
     # 热图色图等注册在背景组之后的几项），且不可逆。重画本身照做
     if dock is not None and not getattr(window, "_param_replaying", False):
         dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+    _update_smooth_points(window, dock)
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]
         try:
@@ -892,6 +898,25 @@ def _refresh_bg(window: QMainWindow) -> None:
                     _draw_heatmap(window, dock, data[0], data[1], data[2])
         except Exception as err:                      # 重画失败不该拖垮整窗
             _log(window, f"背景扣除重画失败：{type(err).__name__}: {err}")
+
+
+def _update_smooth_points(window: QMainWindow, dock) -> None:
+    """把"平滑窗口 ▲° ≈ 几个点"的提示填进参数坞（教学用，不参与计算）。
+
+    窗口按度给（换点数不失效），但真正做平均的是点——两个数字摆在一起，
+    "窗口取到峰宽量级会明显削峰"才有可操作的手感。面板还没算过就留空。
+    """
+    lbl = getattr(window, "smooth_points_lbl", None)
+    if lbl is None:
+        return
+    deg = float(window.params["平滑窗口 (°)"].value() or 0.0)
+    tth = getattr(dock, "last_tth", None) if dock is not None else None
+    if tth is None or deg <= 0:
+        lbl.setText("")
+        return
+    from xrd_toolkit.services.background import _window_to_points
+    n = _window_to_points(tth, deg)
+    lbl.setText(f"≈ {2 * n + 1} 点")
 
 
 def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
@@ -918,7 +943,7 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     # 必须同一个口径
     path = _bg_path_of(dock)
     raw = intensity          # 辅助线里的"原始曲线"要的是未扣的那份
-    tth, intensity, base = _bg_curve(window, dock, path, tth, intensity)
+    tth, intensity, base = _proc_curve(window, dock, path, tth, intensity)
     window._setting_limits = True
     try:
         ax.clear()
@@ -1106,7 +1131,7 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         sums = np.where(finite, raw2d, 0.0).sum(axis=1)
         mean_curve = np.divide(sums, counts, out=np.zeros_like(sums),
                                where=counts > 0)
-        _, _, base = _bg_curve(window, dock, _bg_path_of(dock), tth,
+        _, _, base = _proc_curve(window, dock, _bg_path_of(dock), tth,
                                mean_curve)
         i2d = raw2d - np.asarray(base, dtype=float)[:, None] \
             if base is not None else raw2d

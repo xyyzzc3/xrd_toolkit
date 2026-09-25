@@ -26,7 +26,7 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
   window.log(text)        写日志区 + 状态行
   window.add_files(paths) 把文件加进左侧文件栏（默认不勾选，见 file_dock）
   window.drop_folder(path) 扫描文件夹加入文件栏（与 [打开文件夹] 同逻辑）
-  window.refresh_groups() 重建文件栏里的产物分组（批量扣背景/算完 1D/
+  window.refresh_groups() 重建文件栏里的产物分组（批量处理/算完 1D/
                           清空缓存之后调；实现见 file_dock）
   window.mdi              QMdiArea（绘图区，所有图子窗口的父场地）
   window.plot_docks       {面板键: QMdiSubWindow 或 _FloatedWindow}，
@@ -100,15 +100,15 @@ from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _reload_config_combo, _set_focus)
-from xrd_toolkit.gui.panel_state import _bg_curve
+from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import _plot_compare, _plot_heatmap
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
     _pan_motion, _pan_press, _pan_release, _sync_bar_active, _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _bg_batch_apply, _compute_integration,
-    _draw_1d, _plot_view, _refresh_bg, _spawn_task)
+    _apply_image_params, _apply_params, _proc_batch_apply, _compute_integration,
+    _draw_1d, _plot_view, _refresh_proc, _spawn_task)
 
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -295,8 +295,8 @@ def _sync_bg_rows(window: QMainWindow) -> None:
 def _on_bg_mode(window: QMainWindow) -> None:
     """背景扣除模式切换：调好专用行的显隐、立刻重画、记一条日志。
 
-    模式是显示参数（不重新积分），所以走 _refresh_bg 实时重画——
-    与其余显示参数"等 [应用]"不同，理由见 _refresh_bg 的说明。
+    模式是显示参数（不重新积分），所以走 _refresh_proc 实时重画——
+    与其余显示参数"等 [应用]"不同，理由见 _refresh_proc 的说明。
     """
     _sync_bg_rows(window)
     mode = window.params["背景扣除模式"].currentData()
@@ -309,7 +309,7 @@ def _on_bg_mode(window: QMainWindow) -> None:
                      "左键点选只有背景的位置")
     else:
         _log(window, f"背景扣除：{labels.get(mode, mode)}")
-    _refresh_bg(window)
+    _refresh_proc(window)
 
 
 def _on_pick_anchor(window: QMainWindow, on: bool) -> None:
@@ -344,7 +344,7 @@ def _on_clear_anchors(window: QMainWindow) -> None:
         return
     anchors.pop(str(path), None)
     _update_bg_count(window)
-    _refresh_bg(window)
+    _refresh_proc(window)
     _log(window, f"已清空 {Path(path).name} 的 {n} 个锚点")
 
 
@@ -372,7 +372,7 @@ def _on_choose_blank(window: QMainWindow) -> None:
         # 换了空扫图，两条提示重新计起
         window._bg_geom_warned = False
         window._bg_cover_warned = False
-        _refresh_bg(window)
+        _refresh_proc(window)
         _log(window, f"空扫积分完成：{Path(path_str).name}"
                      f"（{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）")
 
@@ -415,18 +415,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = 一行"编辑对象" + **五个入口页**（校准 / 1D / 扣背景 /
+    # 参数坞 = 一行"编辑对象" + **五个入口页**（校准 / 1D / 处理 /
     # 对比 / 绘图）。工具栏那五个入口按钮翻页（位置 A = 窗口顶部，见
     # _build_toolbar / _switch_entrance）——用户 2026-09-24 定稿：
     # "最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
     # 页 0 = 校准（几何一节 + 校准表单，calib.py 建）；其余四页放本阶段
-    # 的参数，底部各带一个"产出"按钮（1D：[出 1D 图]；扣背景：
+    # 的参数，底部各带一个"产出"按钮（1D：[出 1D 图]；处理：
     # [重画]；对比：[出对比][出热图]；绘图：[出图][只重画当前]
     # [导出图片]）。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
-    window.PARAM_PAGES = {"校准": 0, "1D": 1, "扣背景": 2, "对比": 3,
+    window.PARAM_PAGES = {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
                           "绘图": 4}
 
     # 编辑对象：五个入口共用的一行，固定在坞顶（不随页面滚动）。点图
@@ -476,7 +476,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     window.param_stack.addWidget(page_calib)   # 0 校准
     window.param_stack.addWidget(page_1d)      # 1 1D
-    window.param_stack.addWidget(page_bg)      # 2 扣背景
+    window.param_stack.addWidget(page_bg)      # 2 处理
     window.param_stack.addWidget(page_cmp)     # 3 对比
     window.param_stack.addWidget(page_draw)    # 4 绘图
     # 「绘图」页最上面：六个类型选择（点一个 = 选中并立即出图）
@@ -891,6 +891,63 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["负值截断为 0"] = bg_clip
     form_bg.addRow(bg_clip)
 
+    # ── 平滑（小节）：先只给最朴素的一种（滑动平均） ──
+    # 为什么不给 Savitzky–Golay：先把"平滑了多宽、削掉多少峰高"这件事做
+    # 对；方法以后要加就是一个下拉框的事（唯一入口在 services/process）。
+    add_caption(form_bg, "平滑")
+
+    smooth_chk = QCheckBox("平滑曲线")
+    smooth_chk.setToolTip("滑动平均：窗口内取平均。\n"
+                          "窗口按 **2θ** 给（不是点数），所以换输出点数重算"
+                          "之后「平滑了多宽」仍然一样。\n"
+                          "代价：峰会变矮变宽——窗口要远小于峰宽，"
+                          "旁边那个灰度提示会告诉你它折成几个点")
+    window.params["平滑曲线"] = smooth_chk
+    form_bg.addRow(smooth_chk)
+
+    smooth_box = QDoubleSpinBox()
+    smooth_box.setRange(0.0, 2.0)
+    smooth_box.setDecimals(2)
+    smooth_box.setSingleStep(0.05)
+    smooth_box.setValue(0.10)
+    smooth_box.setMaximumWidth(84)
+    smooth_box.setToolTip("窗口宽度（度）：参与平均的 2θ 跨度。\n"
+                          "典型峰宽 0.1~0.3°，窗口取到峰宽量级就会明显削峰；"
+                          "先取 0.05~0.15° 试，看削掉多少再定")
+    window.params["平滑窗口 (°)"] = smooth_box
+    smooth_pts_lbl = QLabel("")           # 折成几个点（刷新时按当前曲线填）
+    smooth_pts_lbl.setStyleSheet("color: gray;")
+    window.smooth_points_lbl = smooth_pts_lbl
+    form_bg.addRow(bg_row((smooth_box, 1), (smooth_pts_lbl, 1)))
+
+    # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
+    add_caption(form_bg, "裁剪区间")
+
+    cut_chk = QCheckBox("裁剪区间")
+    cut_chk.setToolTip("把指定 2θ 区间从曲线里挖掉：图上那一段空着，"
+                       "纵轴自动范围也跟着跳过它。\n"
+                       "典型用途：某个巨峰把其余部分压扁了，挖掉它让其余"
+                       "看得清。\n"
+                       "**影响的是数据**：处理产物与导出文件里这段同样是空的"
+                       "（导出文件头会写明删了哪一段）")
+    window.params["裁剪区间"] = cut_chk
+    form_bg.addRow(cut_chk)
+
+    cut_lo = QDoubleSpinBox()
+    cut_hi = QDoubleSpinBox()
+    for box, val in ((cut_lo, 2.0), (cut_hi, 3.0)):
+        box.setRange(0.0, 180.0)
+        box.setDecimals(3)
+        box.setSingleStep(0.1)
+        box.setValue(val)
+        box.setMaximumWidth(84)
+        box.setSuffix(" °")
+        box.setToolTip("裁剪区间的起止 2θ（含两端）。起点 ≥ 终点时视为"
+                       "不裁剪（不会出错）")
+    window.params["裁剪起点 (°)"] = cut_lo
+    window.params["裁剪终点 (°)"] = cut_hi
+    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("~"), 0), (cut_hi, 1)))
+
     # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
     window.bg_rows = {"blank": blank_row, "auto": auto_row,
                       "anchor": anchor_row}
@@ -899,12 +956,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.bg_clear_btn = bg_clear_btn
     window.bg_count_lbl = bg_count_lbl
     bg_mode.currentIndexChanged.connect(lambda _=0: _on_bg_mode(window))
-    bg_window_box.valueChanged.connect(lambda _=0.0: _refresh_bg(window))
+    bg_window_box.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
     window.params["空扫归一化"].valueChanged.connect(
-        lambda _=0.0: _refresh_bg(window))
-    bg_show_raw.toggled.connect(lambda _=False: _refresh_bg(window))
-    bg_clip.toggled.connect(lambda _=False: _refresh_bg(window))
-    bg_fit_combo.currentIndexChanged.connect(lambda _=0: _refresh_bg(window))
+        lambda _=0.0: _refresh_proc(window))
+    bg_show_raw.toggled.connect(lambda _=False: _refresh_proc(window))
+    bg_clip.toggled.connect(lambda _=False: _refresh_proc(window))
+    bg_fit_combo.currentIndexChanged.connect(lambda _=0: _refresh_proc(window))
+    # 处理页的另两项（平滑 / 裁剪）：改参数即重画，与背景扣除同一条实时通路
+    smooth_chk.toggled.connect(lambda _=False: _refresh_proc(window))
+    smooth_box.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
+    cut_chk.toggled.connect(lambda _=False: _refresh_proc(window))
+    cut_lo.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
+    cut_hi.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
     bg_blank_btn.clicked.connect(lambda: _on_choose_blank(window))
     bg_pick_btn.toggled.connect(lambda on: _on_pick_anchor(window, on))
     bg_clear_btn.clicked.connect(lambda: _on_clear_anchors(window))
@@ -912,23 +975,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 宽度在本函数末尾按 minimumSizeHint 算一次，隐藏的行不计入尺寸；
     # 先收起再量会把宽度量小、切模式时被裁。所以放到末尾、量完之后。
 
-    # 扣背景页产出：[重画] = 按各面板快照重画全部曲线面板（改锚点/窗口
+    # 处理页产出：[重画] = 按各面板快照重画全部曲线面板（改锚点/窗口
     # 后手动触发；平时改控件是实时预览）
     btn_bg_redraw = QPushButton("重画")
     btn_bg_redraw.setObjectName("bg_redraw_btn")
     window.bg_redraw_btn = btn_bg_redraw
-    btn_bg_redraw.clicked.connect(lambda: _refresh_bg(window))
+    btn_bg_redraw.clicked.connect(lambda: _refresh_proc(window))
     btns_bg.addWidget(btn_bg_redraw)
-    # [批量扣背景]：把编辑对象的锚点（只传 2θ 位置）用到所有勾选文件，
+    # [批量处理]：把编辑对象的锚点（只传 2θ 位置）用到所有勾选文件，
     # 各扣各的并存成产物——对比/热图下次直接读它（跨会话秒开）。
-    # 绝对强度不能跨文件套，见 plot_views._bg_batch_apply 的说明
-    btn_bg_batch = QPushButton("批量扣背景（勾选文件）")
-    btn_bg_batch.setObjectName("bg_batch_btn")
+    # 绝对强度不能跨文件套，见 plot_views._proc_batch_apply 的说明
+    btn_bg_batch = QPushButton("批量处理（勾选文件）")
+    btn_bg_batch.setObjectName("proc_batch_btn")
     btn_bg_batch.setToolTip("把当前图上的锚点用到所有勾选文件："
                             "锚点只传 2θ 位置，强度到每张图自己的曲线上"
                             "重新取；扣完存成产物，对比 / 热图直接复用")
-    btn_bg_batch.clicked.connect(lambda: _bg_batch_apply(window))
-    window.bg_batch_btn = btn_bg_batch
+    btn_bg_batch.clicked.connect(lambda: _proc_batch_apply(window))
+    window.proc_batch_btn = btn_bg_batch
     btns_bg.addWidget(btn_bg_batch)
 
     # ── 热图显示（小节）：批量热图的显示参数 ──
@@ -1210,7 +1273,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     """工具栏 = 五个入口 + 面板开关（文件/参数/日志）。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
-    `[校准] [1D] [扣背景] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
+    `[校准] [1D] [处理] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
     （见 _switch_entrance）；出图动作由各页底部的产出按钮负责
     （[出 1D 图] / [重画] / [出对比][出热图] / [出图]）。
 
@@ -1230,7 +1293,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 退出校准翻回哪一页：None = 还没选过任何一个入口（开局就是这样，
     # 退出校准就回到"什么都没选"，见 _clear_entrance / _on_mode）
     window._last_entrance = None
-    for name in ("校准", "1D", "扣背景", "对比"):
+    for name in ("校准", "1D", "处理", "对比"):
         btn = QPushButton(name)
         btn.setCheckable(True)
         tb.addWidget(btn)
@@ -1422,7 +1485,7 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     文件开校准面板；没勾文件只记日志提示（不崩）。退出：翻回分析页
     + 关校准面板（校准状态清零，关闭即遗忘）。
 
-    2026-09-24 起入口是**五个页签式按钮**（[校准][1D][扣背景]
+    2026-09-24 起入口是**五个页签式按钮**（[校准][1D][处理]
     [对比][绘图]，见 _build_toolbar / _switch_entrance）：不再翻转
     开关文字——"退出校准"就是点另一个入口，校准页底部仍留着
     [返回分析模式] 这个显式出口（calib.py 走的就是这里的 setChecked）。
@@ -1528,7 +1591,7 @@ def create_window() -> QMainWindow:
     # 对象销毁，Qt 自动把它从应用事件分发里摘掉
     QApplication.instance().installEventFilter(_PanelClickTracker(window))
     window.file_dock = _build_file_dock(window)
-    # 产物分组刷新入口（文件栏里的"阶段文件夹"）：批量扣背景 / 1D 批量
+    # 产物分组刷新入口（文件栏里的"阶段文件夹"）：批量处理 / 1D 批量
     # 算完 / 清空缓存之后要重建。挂成窗口回调而不是让 plot_views 反向
     # import 文件坞（同 _bg_count_refresh 的老规矩）
     window.refresh_groups = lambda: refresh_product_groups(window)
