@@ -45,6 +45,7 @@ from PySide6.QtWidgets import QApplication               # noqa: E402
 from xrd_toolkit.gui import panel_state as gui_state     # noqa: E402
 from xrd_toolkit.gui import plot_panels as gui_plot_panels   # noqa: E402
 from xrd_toolkit.gui import plot_views as gui_views      # noqa: E402
+from xrd_toolkit.gui import app as gui_app               # noqa: E402
 from xrd_toolkit.gui.app import create_window            # noqa: E402
 
 # 默认样例数据（不入仓库，换机器要自己拷；见 scripts/check_env.py）
@@ -484,11 +485,29 @@ def check_processing_chain(window, lab6: str) -> None:
     report(np.nanmax(shown) < raw_peak * 0.95, "平滑削峰（真数据）",
            f"{raw_peak:.0f} → {np.nanmax(shown):.0f}")
     report(len(shown) == len(raw), "平滑不改变点数")
+    # ①b 换 Savitzky–Golay：同一个窗口，峰该比滑动平均**高**（保峰）
+    w_avg = 0.30
+    cb = window.params["平滑方法"]
+    cb.setCurrentIndex(cb.findData("savgol"))
+    gui_views._refresh_proc(window)
+    QApplication.processEvents()
+    shown_sg = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    report(np.nanmax(shown_sg) > np.nanmax(shown),
+           "同样的窗口下 SG 比滑动平均保峰",
+           f"滑动平均 {np.nanmax(shown):.0f} vs SG {np.nanmax(shown_sg):.0f}"
+           f"（窗口 {w_avg:g}°，原始 {raw_peak:.0f}）")
+    report(bool(window.params["平滑阶数"].isEnabled()), "SG 下阶数可编辑")
+    cb.setCurrentIndex(cb.findData("boxcar"))     # 后面的检查回到默认方法
+    gui_views._refresh_proc(window)
+    QApplication.processEvents()
+    shown = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+
     # ② 裁剪：挖掉最强峰附近 ±0.5°，纵轴自动范围该放开
     lo, hi = peak_x - 0.5, peak_x + 0.5
-    window.params["裁剪区间"].setChecked(True)
+    # 界面的自然手势：先填起止、再勾上开关（勾上 = 把这一段加进清单）
     window.params["裁剪起点 (°)"].setValue(lo)
     window.params["裁剪终点 (°)"].setValue(hi)
+    window.params["裁剪区间"].setChecked(True)
     gui_views._refresh_proc(window)
     QApplication.processEvents()
     shown = np.asarray(ax.lines[0].get_ydata(), dtype=float)
@@ -496,6 +515,15 @@ def check_processing_chain(window, lab6: str) -> None:
     report(np.isnan(shown[inside]).all(), "裁剪区间内是空的（图上断开）",
            f"{int(inside.sum())} 点")
     report(np.isfinite(shown[~inside]).all(), "区间外不受影响")
+    # ②b 多段：再加一段远处的窄区间，两段都该是空的
+    window.params["裁剪起点 (°)"].setValue(float(tth[-1]) - 0.4)
+    window.params["裁剪终点 (°)"].setValue(float(tth[-1]) - 0.1)
+    gui_app._on_cut_add(window)
+    QApplication.processEvents()
+    shown2 = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    band2 = (tth >= float(tth[-1]) - 0.4) & (tth <= float(tth[-1]) - 0.1)
+    report(np.isnan(shown2[band2]).all() and np.isnan(shown2[inside]).all(),
+           "多段裁剪：两段都是空的", window.cut_list_lbl.text())
     # 自动范围按**画出来的那条**算（裁剪掉的部分不参与）——这正是用户要的效果；
     # 注意别用 ax.get_ylim()：面板可能停在手动范围模式，那不代表自动范围
     hi_auto = gui_state._auto_y_range(shown, False)[1]

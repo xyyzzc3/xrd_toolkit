@@ -93,9 +93,10 @@ from PySide6.QtWidgets import (
     QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
-from xrd_toolkit.services import stage_cache
+from xrd_toolkit.services import process, stage_cache
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
+_gui_app = gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import plot_views as gui_plot_views
@@ -2229,6 +2230,84 @@ class TestProcessingChain(unittest.TestCase):
             gui_views._refresh_proc(w)     # 没勾「裁剪区间」
             drawn = np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())
             self.assertTrue(np.isfinite(drawn).all())
+        finally:
+            w.close()
+
+    def test_multiple_cut_ranges(self):
+        """多段裁剪：[添加] 攒清单、每段都挖空、[清空] 收回。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["裁剪起点 (°)"].setValue(1.5)
+            w.params["裁剪终点 (°)"].setValue(2.0)
+            _gui_app._on_cut_add(w)
+            w.params["裁剪起点 (°)"].setValue(6.0)
+            w.params["裁剪终点 (°)"].setValue(6.3)
+            _gui_app._on_cut_add(w)
+            QApplication.processEvents()
+            drawn = np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())
+            tth = np.asarray(_axes(w, "1D", str(path)).lines[0].get_xdata())
+            for lo, hi in ((1.5, 2.0), (6.0, 6.3)):
+                band = (tth >= lo) & (tth <= hi)
+                self.assertTrue(np.isnan(drawn[band]).all(),
+                                f"{lo}–{hi}° 该是空的")
+            self.assertIn("1.5–2°、6–6.3°", w.cut_list_lbl.text())
+            self.assertEqual(dock.params_snapshot["裁剪区间"],
+                             [(1.5, 2.0), (6.0, 6.3)],
+                             "快照里存的是一串区间（面板各记各的）")
+            _gui_app._on_cut_clear(w)
+            self.assertEqual(w.cut_list, [])
+            self.assertFalse(w.params["裁剪区间"].isChecked())
+            drawn = np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())
+            self.assertTrue(np.isfinite(drawn).all(), "清空后不再有空洞")
+        finally:
+            w.close()
+
+    def test_cut_add_refuses_inverted_and_duplicate(self):
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["裁剪起点 (°)"].setValue(5.0)
+            w.params["裁剪终点 (°)"].setValue(4.0)
+            _gui_app._on_cut_add(w)
+            self.assertIn("终点要大于起点", w.log_text.toPlainText())
+            self.assertEqual(w.cut_list, [])
+            w.params["裁剪终点 (°)"].setValue(5.5)
+            _gui_app._on_cut_add(w)
+            _gui_app._on_cut_add(w)      # 再加一次同样的
+            self.assertEqual(w.cut_list, [(5.0, 5.5)], "同一段只留一份")
+            self.assertIn("已经在清单里了", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_savgol_is_what_gets_stored(self):
+        """切到 SG：链里带上方法与阶数，产物元数据也写明。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["平滑窗口 (°)"].setValue(0.5)
+            self._enable(w, smooth=True)
+            cb = w.params["平滑方法"]
+            cb.setCurrentIndex(cb.findData("savgol"))
+            self.assertTrue(w.params["平滑阶数"].isEnabled(), "SG 下阶数可编辑")
+            gui_views._refresh_proc(w)
+            box_peak = float(np.nanmax(
+                np.asarray(_axes(w, "1D", str(path)).lines[0].get_ydata())))
+            w.params["平滑阶数"].setValue(2)
+            gui_views._refresh_proc(w)
+            self.assertIn("smooth_method", process.chain_parts(
+                gui_state._proc_settings(w, dock, str(path))))
+            w.proc_batch_btn.click()
+            QApplication.processEvents()
+            self.assertIn("SG 0.5°/2阶", w.log_text.toPlainText())
+            batch = stage_cache.list_batches("bg")[0]
+            meta = stage_cache.meta_by_key(
+                "bg", batch["items"][str(path.resolve())]["key"])
+            self.assertIn("smooth=savgol/0.5°/p2", meta["chain"])
+            # 滑动平均下阶数框置灰
+            cb.setCurrentIndex(cb.findData("boxcar"))
+            self.assertFalse(w.params["平滑阶数"].isEnabled())
+            self.assertGreater(box_peak, 0)
         finally:
             w.close()
 

@@ -61,6 +61,46 @@ class TestSmooth(unittest.TestCase):
         self.assertTrue(np.array_equal(y, before))
 
 
+class TestSmoothMethods(unittest.TestCase):
+    """两种平滑方法：滑动平均 vs Savitzky–Golay（SG 保峰）。"""
+
+    def test_savgol_keeps_more_peak_than_boxcar(self):
+        """同一个窗口，SG 削峰明显少于滑动平均（真数据上也是这个方向）。"""
+        tth, y = _curve()
+        box = process.smooth(tth, y, 0.3, "boxcar")
+        sg = process.smooth(tth, y, 0.3, "savgol", 3)
+        self.assertGreater(sg.max(), box.max(),
+                           "SG 的峰该比滑动平均高（保峰）")
+
+    def test_savgol_keeps_the_constant_background(self):
+        """常数背景不该被 SG 弄出波纹（边缘用 interp 模式）。"""
+        tth = np.linspace(1.0, 8.0, 300)
+        y = np.full_like(tth, 5.0)
+        out = process.smooth(tth, y, 0.3, "savgol", 3)
+        self.assertTrue(np.allclose(out, 5.0, atol=1e-9))
+
+    def test_dispatch_defaults_to_boxcar(self):
+        tth, y = _curve()
+        self.assertTrue(np.array_equal(
+            process.smooth(tth, y, 0.3), process.smooth_boxcar(tth, y, 0.3)))
+        self.assertTrue(np.array_equal(
+            process.smooth(tth, y, 0.3, "savgol", 3),
+            process.smooth_savgol(tth, y, 0.3, 3)))
+
+    def test_extreme_order_does_not_crash(self):
+        """阶数比窗口还大时不炸、也不乱抹：要么抬窗口，要么原样返回。"""
+        tth, y = _curve(n=40)
+        out = process.smooth(tth, y, 0.05, "savgol", 6)
+        self.assertEqual(out.shape, y.shape)
+        self.assertTrue(np.isfinite(out).all())
+
+    def test_wrong_order_raises(self):
+        """阶数为 0/负值是调用方的错——让它以清楚的方式失败，而不是静默不做事。"""
+        tth, y = _curve(n=40)
+        with self.assertRaises(Exception):
+            process.smooth(tth, y, 0.2, "savgol", 0)
+
+
 class TestCut(unittest.TestCase):
     def test_marks_only_the_window(self):
         tth, y = _curve()
@@ -124,7 +164,14 @@ class TestChain(unittest.TestCase):
         """没开的操作不进键：背景单独时 parts 为空（老产物键不变的根据）。"""
         self.assertEqual(process.chain_parts(self._params()), {})
         with_smooth = process.chain_parts(self._params(smooth_deg=0.15))
-        self.assertEqual(with_smooth, {"smooth_deg": 0.15})
+        self.assertEqual(with_smooth, {"smooth_deg": 0.15},
+                         "默认方法（滑动平均）不写方法字段——老键逐位不变")
+        with_sg = process.chain_parts(self._params(smooth_deg=0.15,
+                                                  smooth_method="savgol",
+                                                  smooth_order=3))
+        self.assertEqual(with_sg, {"smooth_deg": 0.15,
+                                   "smooth_method": "savgol",
+                                   "smooth_order": 3})
         with_cut = process.chain_parts(self._params(cut_ranges=[(3.0, 2.0),
                                                                (7.0, 8.0)]))
         self.assertEqual(with_cut, {"cut_ranges": [[7.0, 8.0]]},

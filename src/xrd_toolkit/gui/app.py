@@ -920,6 +920,32 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.smooth_points_lbl = smooth_pts_lbl
     form_bg.addRow(bg_row((smooth_box, 1), (smooth_pts_lbl, 1)))
 
+    smooth_method = QComboBox()
+    for text, data in (("滑动平均", "boxcar"),
+                       ("Savitzky–Golay", "savgol")):
+        smooth_method.addItem(text, data)
+    smooth_method.setToolTip(
+        "滑动平均 = 窗口内取平均（最简单，削峰明显）。\n"
+        "Savitzky–Golay = 窗口内拟合多项式再取中心值：**同样的窗口宽度削峰"
+        "少得多**、峰形保得更住，代价是接触陡边（低角鼓包）时可能压出轻微"
+        "负值下冲。窄峰、要做峰形分析时用它。")
+    window.params["平滑方法"] = smooth_method
+
+    smooth_order = QSpinBox()
+    smooth_order.setRange(2, 6)
+    smooth_order.setValue(3)
+    smooth_order.setMaximumWidth(60)
+    smooth_order.setSuffix(" 阶")
+    smooth_order.setToolTip("Savitzky–Golay 的多项式阶数（2~3 常用：阶数越高"
+                            "越贴合峰形，但也越容易跟着噪声抖）")
+    window.params["平滑阶数"] = smooth_order
+    form_bg.addRow(bg_row((smooth_method, 2), (smooth_order, 1)))
+
+    smooth_chk.toggled.connect(lambda _=False: _sync_smooth_rows(window))
+    smooth_method.currentIndexChanged.connect(
+        lambda _=0: _sync_smooth_rows(window))
+    window._sync_smooth_rows = lambda: _sync_smooth_rows(window)
+
     # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
     add_caption(form_bg, "裁剪区间")
 
@@ -946,7 +972,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        "不裁剪（不会出错）")
     window.params["裁剪起点 (°)"] = cut_lo
     window.params["裁剪终点 (°)"] = cut_hi
-    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("~"), 0), (cut_hi, 1)))
+    cut_add_btn = QPushButton("添加")
+    cut_add_btn.setObjectName("cut_add_btn")
+    cut_add_btn.setStyleSheet("padding: 2px 5px;")
+    cut_add_btn.setToolTip("把这一段的起止加进下面的清单——可以删好几段"
+                           "（例如同时删 2–3° 和 7–8°）")
+    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("~"), 0), (cut_hi, 1),
+                          (cut_add_btn, 0)))
+    cut_list_lbl = QLabel("清单：空")
+    cut_list_lbl.setStyleSheet("color: gray;")
+    cut_list_lbl.setToolTip("当前要挖掉的全部区间（屏幕、产物与导出文件"
+                            "同一个口径）")
+    window.cut_list_lbl = cut_list_lbl
+    cut_clear_btn = QPushButton("清空")
+    cut_clear_btn.setObjectName("cut_clear_btn")
+    cut_clear_btn.setStyleSheet("padding: 2px 5px;")
+    cut_clear_btn.setToolTip("清空清单（= 不裁剪）")
+    form_bg.addRow(bg_row((cut_list_lbl, 2), (cut_clear_btn, 0)))
 
     # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
     window.bg_rows = {"blank": blank_row, "auto": auto_row,
@@ -965,9 +1007,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 处理页的另两项（平滑 / 裁剪）：改参数即重画，与背景扣除同一条实时通路
     smooth_chk.toggled.connect(lambda _=False: _refresh_proc(window))
     smooth_box.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
-    cut_chk.toggled.connect(lambda _=False: _refresh_proc(window))
-    cut_lo.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
-    cut_hi.valueChanged.connect(lambda _=0.0: _refresh_proc(window))
+    cut_chk.toggled.connect(lambda on: _on_cut_toggled(window, on))
+    cut_add_btn.clicked.connect(lambda: _on_cut_add(window))
+    cut_clear_btn.clicked.connect(lambda: _on_cut_clear(window))
+    smooth_method.currentIndexChanged.connect(
+        lambda _=0: _refresh_proc(window))
+    smooth_order.valueChanged.connect(lambda _=0: _refresh_proc(window))
     bg_blank_btn.clicked.connect(lambda: _on_choose_blank(window))
     bg_pick_btn.toggled.connect(lambda on: _on_pick_anchor(window, on))
     bg_clear_btn.clicked.connect(lambda: _on_clear_anchors(window))
@@ -1211,6 +1256,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     dock.setMinimumHeight(
         window.focus_label.minimumSizeHint().height() + 110 + 40)
 
+    _sync_cut_label(window)      # 裁剪清单标签：空
+    _sync_smooth_rows(window)    # 平滑阶数只在 SG 下可编辑
     # 宽度量完再按当前模式收起"背景扣除"的无用行（隐藏的行不计入
     # minimumSizeHint，先收再量会把坞宽量小、切模式时被裁）
     _sync_bg_rows(window)
@@ -1478,6 +1525,69 @@ def _build_plot_type_row(window: QMainWindow) -> QWidget:
     return row
 
 
+def _sync_smooth_rows(window: QMainWindow) -> None:
+    """平滑阶数只有 Savitzky–Golay 用得上：别的模式下置灰，别让人白填。"""
+    sg = window.params["平滑方法"].currentData() == "savgol"
+    window.params["平滑阶数"].setEnabled(
+        bool(window.params["平滑曲线"].isChecked()) and sg)
+
+
+def _on_cut_toggled(window: QMainWindow, on: bool) -> None:
+    """勾上「裁剪区间」：清单空时把旁边那一段直接加进去（勾了就该有反应）。
+
+    清单才是权威（可以删好几段），但"填了起止、勾上开关"是最自然的手势——
+    空清单时按这个手势补一段，符合直觉；[添加] 用于往清单里再加一段。
+    """
+    if on and not window.cut_list:
+        _on_cut_add(window)          # 内部会实时重画
+        return
+    _refresh_proc(window)
+
+
+def _on_cut_add(window: QMainWindow) -> None:
+    """[添加]：把当前起止加进裁剪清单（同一段重复加只留一份）。"""
+    lo = float(window.params["裁剪起点 (°)"].value())
+    hi = float(window.params["裁剪终点 (°)"].value())
+    if not hi > lo:
+        _log(window, "裁剪区间：终点要大于起点")
+        return
+    cuts = window.cut_list
+    if (lo, hi) in cuts:
+        _log(window, f"裁剪区间：{lo:g}–{hi:g}° 已经在清单里了")
+        return
+    cuts.append((lo, hi))
+    cuts.sort()
+    window.params["裁剪区间"].setChecked(True)   # 添加即生效（勾选框跟着亮）
+    _sync_cut_label(window)
+    _log(window, f"裁剪区间：加了 {lo:g}–{hi:g}°"
+                 f"（共 {len(cuts)} 段：{_cut_text(cuts)}）")
+    _refresh_proc(window)
+
+
+def _on_cut_clear(window: QMainWindow) -> None:
+    """[清空]：清掉裁剪清单（勾选框也弹起 = 不裁剪）。"""
+    n = len(window.cut_list)
+    window.cut_list.clear()
+    window.params["裁剪区间"].setChecked(False)
+    _sync_cut_label(window)
+    _log(window, f"裁剪区间：已清空清单（原有 {n} 段）")
+    _refresh_proc(window)
+
+
+def _cut_text(cuts) -> str:
+    """"2–3°、7–8°"。"""
+    return "、".join(f"{float(lo):g}–{float(hi):g}°" for lo, hi in cuts)
+
+
+def _sync_cut_label(window: QMainWindow) -> None:
+    """清单标签：非空时顺带写明"怎么改"——勾上以后再改起止框不会自动生效
+    （清单才是权威），这句话省掉一次"怎么没反应"。
+    """
+    cuts = window.cut_list
+    window.cut_list_lbl.setText(
+        f"清单：{_cut_text(cuts)}（改起止后点 [添加]）" if cuts else "清单：空")
+
+
 def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     """模式开关：勾选 = 校准工作台，弹起 = 分析工作台。
 
@@ -1574,6 +1684,9 @@ def create_window() -> QMainWindow:
     # bg_blank = 空扫曲线 {"path", "tth", "intensity"}，整批实验共用一条
     window.bg_anchors = {}
     window.bg_blank = None
+    # 裁剪清单（窗口级，不是快照参数：快照只认控件值，列表放不进控件）——
+    # 编辑它的是「处理」页的 [添加]/[清空]，实时重画时再拷进各面板快照
+    window.cut_list = []
     # 锚点计数标签的刷新入口（plot_views 里点选锚点后回调，避免
     # plot_views 反向 import app）
     window._bg_count_refresh = _update_bg_count

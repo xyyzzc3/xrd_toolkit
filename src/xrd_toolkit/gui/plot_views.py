@@ -809,9 +809,9 @@ def _proc_batch_apply(window: QMainWindow) -> None:
             snap["平滑曲线"] = bool(params0["smooth_deg"] > 0)
             snap["平滑窗口 (°)"] = settings.get("smooth_deg") or 0.10
             cuts = settings.get("cut_ranges") or []
-            snap["裁剪区间"] = bool(cuts)
-            if cuts:
-                snap["裁剪起点 (°)"], snap["裁剪终点 (°)"] = cuts[0]
+            snap["裁剪区间"] = list(cuts) if cuts else False
+            snap["平滑方法"] = settings.get("smooth_method") or "boxcar"
+            snap["平滑阶数"] = int(settings.get("smooth_order") or 3)
         done += 1
         if (i + 1) % 20 == 0:
             _log(window, f"批量处理：{i + 1}/{len(targets)}…")
@@ -879,7 +879,12 @@ def _refresh_proc(window: QMainWindow) -> None:
     # 设置写进当前面板，就会把上一个面板的显示参数串过来（实测串的是
     # 热图色图等注册在背景组之后的几项），且不可逆。重画本身照做
     if dock is not None and not getattr(window, "_param_replaying", False):
-        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+        snap = _display_snapshot(window, dock.params_snapshot)
+        # 裁剪清单是窗口级的（不是控件值），这里显式拷进快照——快照才是
+        # "这张图用什么画的"的权威来源（批量处理时也要逐面板写一遍）
+        if snap.get("裁剪区间"):
+            snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
+        dock.params_snapshot = snap
     _update_smooth_points(window, dock)
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]

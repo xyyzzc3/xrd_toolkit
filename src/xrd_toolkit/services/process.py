@@ -51,6 +51,47 @@ def smooth_boxcar(tth, intensity, window_deg: float) -> np.ndarray:
     return num / den
 
 
+def smooth_savgol(tth, intensity, window_deg: float, order: int = 3) -> np.ndarray:
+    """Savitzky–Golay 平滑：窗口内拟合多项式、取中心点的拟合值。
+
+    比滑动平均**保峰**（同样的窗口宽度，峰削得更少、峰形保得更住），代价
+    是接触陡边的低角鼓包处可能压出轻微负值下冲——看背景水平时留意。
+    scipy 惰性导入（本仓惯例：只有这条路用到它）。
+
+    窗口按 2θ（度）给，换算成点数后取奇数；点数不足以容纳多项式阶数时
+    自动抬窗口、仍不够就**原样返回**（不炸：界面把阶数限在合理范围内，
+    真出现极端组合也只是"没平滑"，日志/提示里看得见折成了几个点）。
+    """
+    y = np.asarray(intensity, dtype=float)
+    deg = float(window_deg or 0.0)
+    if deg <= 0 or y.size < 3:
+        return y.copy()
+    n = _window_to_points(tth, deg)
+    if n % 2 == 0:
+        n += 1
+    p = 3 if order is None else int(order)
+    if p < 2:
+        # 阶数 < 2 = 调用方写错了（界面把范围限在 2~6）。静默当 3 会让
+        # "我明明传了 0，怎么还是有平滑"变成谜案——直接说清。
+        raise ValueError("Savitzky–Golay 的阶数至少 2")
+    n = max(n, p + 2 if (p + 2) % 2 else p + 3)     # SG 要 奇数 且 > 阶数
+    if n > y.size:
+        return y.copy()
+    from scipy.signal import savgol_filter                 # 惰性导入
+    return savgol_filter(y, window_length=n, polyorder=p, mode="interp")
+
+
+def smooth(tth, intensity, window_deg: float, method: str = "boxcar",
+           order: int = 3) -> np.ndarray:
+    """按方法分发平滑：boxcar = 滑动平均（默认）/ savgol = Savitzky–Golay。
+
+    默认值就是原来的行为——老产物键因此不变（见 chain_parts 的说明）。
+    """
+    if str(method or "boxcar").lower() in ("savgol", "sg"):
+        return smooth_savgol(tth, intensity, window_deg, order)
+    return smooth_boxcar(tth, intensity, window_deg)
+
+
 def cut_ranges(tth, intensity, ranges) -> np.ndarray:
     """把落在指定 2θ 区间里的点标成"空"（NaN）。返回新数组。
 
@@ -88,7 +129,9 @@ def apply_chain(tth, intensity, params: dict, *, blank_curve=None):
     if base is not None:
         y = subtract_background(y, base,
                                 clip_negative=bool(params.get("clip")))
-    y = smooth_boxcar(t, y, params.get("smooth_deg") or 0.0)
+    y = smooth(t, y, params.get("smooth_deg") or 0.0,
+               params.get("smooth_method") or "boxcar",
+               params.get("smooth_order") or 3)
     return cut_ranges(t, y, params.get("cut_ranges")), base
 
 
@@ -103,6 +146,10 @@ def chain_parts(settings: dict) -> dict:
     deg = float(settings.get("smooth_deg") or 0.0)
     if deg > 0:
         out["smooth_deg"] = round(deg, 6)
+        method = str(settings.get("smooth_method") or "boxcar").lower()
+        if method != "boxcar":      # 默认方法不写字段 → 老产物键逐位不变
+            out["smooth_method"] = method
+            out["smooth_order"] = int(settings.get("smooth_order") or 3)
     cuts = sorted([round(float(lo), 6), round(float(hi), 6)]
                   for lo, hi in (settings.get("cut_ranges") or [])
                   if float(hi) > float(lo))
@@ -138,7 +185,11 @@ def chain_label(settings: dict) -> str:
         parts.append("负值截断")
     deg = float(settings.get("smooth_deg") or 0.0)
     if deg > 0:
-        parts.append(f"平滑 {deg:g}°")
+        method = str(settings.get("smooth_method") or "boxcar").lower()
+        if method == "boxcar":
+            parts.append(f"平滑 {deg:g}°")
+        else:
+            parts.append(f"SG {deg:g}°/{int(settings.get('smooth_order') or 3)}阶")
     cuts = [(lo, hi) for lo, hi in (settings.get("cut_ranges") or [])
             if float(hi) > float(lo)]
     if cuts:
@@ -164,7 +215,12 @@ def chain_desc(settings: dict) -> str:
         steps.append(head)
     deg = float(settings.get("smooth_deg") or 0.0)
     if deg > 0:
-        steps.append(f"smooth=boxcar/{deg:g}°")
+        method = str(settings.get("smooth_method") or "boxcar").lower()
+        if method == "boxcar":
+            steps.append(f"smooth=boxcar/{deg:g}°")
+        else:
+            steps.append(f"smooth={method}/{deg:g}°"
+                         f"/p{int(settings.get('smooth_order') or 3)}")
     cuts = [(lo, hi) for lo, hi in (settings.get("cut_ranges") or [])
             if float(hi) > float(lo)]
     if cuts:

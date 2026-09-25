@@ -129,6 +129,8 @@ _DISPLAY_DEFAULTS = {
     # 不需要重新积分。默认都关着——不勾就是没做处理（产物键也因此不变）。
     "平滑曲线": False,
     "平滑窗口 (°)": 0.10,
+    "平滑方法": "boxcar",
+    "平滑阶数": 3,
     "裁剪区间": False,
     "裁剪起点 (°)": 2.0,
     "裁剪终点 (°)": 3.0,
@@ -518,16 +520,38 @@ def _smooth_cut_params(window: QMainWindow, dock) -> dict:
     两项都按**面板快照**取（_panel_param），所以整批处理时"每张图用自己
     那份设置"这条口径与背景扣除一致；关掉时返回中性值（0 度 / 无区间），
     链就退化成"只有背景扣除"。
+
+    裁剪是**一串区间**（用户 2026-09-25 要的"同时删 2–3° 和 7–8°"）：
+    快照里的 "裁剪区间" 存列表；老快照存的是布尔 + 起止两个数字，这里
+    兼容读（不改老数据，只在读的时候折成一段）。
     """
     smooth = bool(_panel_param(window, dock, "平滑曲线", False))
-    cut = bool(_panel_param(window, dock, "裁剪区间", False))
-    lo = float(_panel_param(window, dock, "裁剪起点 (°)", 0.0) or 0.0)
-    hi = float(_panel_param(window, dock, "裁剪终点 (°)", 0.0) or 0.0)
+    listed = _panel_param(window, dock, "裁剪区间", False)
+    if isinstance(listed, (list, tuple)):
+        ranges = [(float(lo), float(hi)) for lo, hi in listed
+                  if float(hi) > float(lo)]
+        if not ranges:              # 列表为空 = 不裁（勾选框只是开关）
+            ranges = []
+    elif listed:
+        lo = float(_panel_param(window, dock, "裁剪起点 (°)", 0.0) or 0.0)
+        hi = float(_panel_param(window, dock, "裁剪终点 (°)", 0.0) or 0.0)
+        ranges = [(lo, hi)] if hi > lo else []
+    else:
+        ranges = []
     return {
         "smooth_deg": (float(_panel_param(window, dock, "平滑窗口 (°)", 0.0)
                              or 0.0) if smooth else 0.0),
-        "cut_ranges": [(lo, hi)] if (cut and hi > lo) else [],
+        "smooth_method": _panel_param(window, dock, "平滑方法", "boxcar"),
+        "smooth_order": int(_panel_param(window, dock, "平滑阶数", 3) or 3),
+        "cut_ranges": ranges,
     }
+
+
+def _cut_list_of(window: QMainWindow) -> list:
+    """窗口级的"要裁剪的区间"清单（界面上 [添加]/[清空] 改的就是它）。"""
+    if getattr(window, "cut_list", None) is None:
+        window.cut_list = []
+    return window.cut_list
 
 
 def _proc_params(window: QMainWindow, dock, path) -> dict:

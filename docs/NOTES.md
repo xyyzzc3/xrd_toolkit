@@ -111,8 +111,20 @@ smoothing never sees a hole (smooth the complete curve first, punch the hole las
 | Step | What it does | Knob |
 |:---|:---|:---|
 | Background | removes the additive part carrying no structure (empty scan / auto baseline / manual anchors) | see the next section |
-| Smoothing | rolling average | window width in **degrees** (not points, so it survives a change of output point count) |
-| Cut | punches a chosen 2θ interval out of the curve (the plot shows a gap there) | start and end 2θ |
+| Smoothing | two methods: **rolling average** (default) / **Savitzky–Golay** | window width in **degrees** (not points, so it survives a change of output point count); SG also takes a polynomial order (2–3 in practice) |
+| Cut | punches chosen 2θ intervals out of the curve (the plot shows gaps there) | start/end 2θ plus [添加] — the list holds **as many intervals as you like** (e.g. 2–3° and 7–8° at once) |
+
+**Choosing between the two smoothers** (measured on the LaB₆ standard, same 0.30° window): the rolling
+average takes the strongest peak down by **90.6 %** and widens its FWHM from 0.18° to 0.31°;
+Savitzky–Golay takes it down by only **82.3 %** and leaves the FWHM at 0.18°. So **use SG when peak
+shape, height or width matter**; the rolling average is the faster, simpler choice when you only want
+the curve to look clean. SG's price: against a steep edge (the low-angle hump) it can push slightly
+below zero — worth watching when you read background levels.
+
+The cut list is the authority (window-level). Ticking 「裁剪区间」 with an empty list adds the interval
+sitting in the two spin boxes — filling them in and ticking the box is the natural gesture — [添加]
+appends another, [清空] takes them all back. Duplicates collapse, and a start ≥ end is refused with a
+message rather than silently doing nothing.
 
 **The cut blanks values, it does not delete points**: samples inside the window become NaN, so the 2θ grid
 and every array length stay put (compare / heatmap / CSV alignment is untouched). All three consequences
