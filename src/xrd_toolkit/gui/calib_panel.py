@@ -79,7 +79,9 @@ def _calib_draw_geometry(window: QMainWindow) -> dict:
     """画图几何（统一 px 键）：**当前配置**的几何。
 
     图上那圈青线画的就是"当前配置"预测的环——A/B 只用于对比、不动图；
-    只有采纳（谁拟合得好）才换图。没设定当前配置时退回分析配置。
+    采纳（谁拟合得好）、[编辑…] 手改、借用条目/导入 .poni 都会换图
+    （每个出口自己调 _redraw_calib_if_open，改完即重画）。没设定当前
+    配置时退回分析配置。
     """
     state = _calib_state(window)
     geom = state.get("current_geom")
@@ -146,11 +148,14 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     sub.move(off, off)
     sub.show()
     _settle(window)
+    # 新面板 = 新一轮：当前配置从分析页选中的条目借起（登记成"原始"），
+    # 并异步算它的环位偏差（表里那一格先显示 —）。**借完再画**：反过来
+    # 的话第一帧画的是"还没借"的几何，青线与表里的"当前配置"不是同一份。
+    # 借用内部已按借到的几何画了一帧，下面这画是兜底——注册表里没有那条
+    # 条目时借不出来（current_geom 仍是 None），也不该留一块空图
+    _ensure_current(window)
     _draw_calib_image(window, key, image, _calib_draw_geometry(window))
     _log(window, f"打开校准面板：{path.name}（点击衍射环选点）")
-    # 新面板 = 新一轮：当前配置从分析页选中的条目借起（登记成"原始"），
-    # 并异步算它的环位偏差（表里那一格先显示 —）
-    _ensure_current(window)
     _calib_sync(window)
     _refresh_current_metrics(window)
 
@@ -276,9 +281,25 @@ def _add_calib_marker(window: QMainWindow, x, y, ring: int) -> None:
     window.calib_canvas.draw_idle()
 
 
+def _redraw_calib_if_open(window: QMainWindow) -> None:
+    """几何变了就重画青线——但只有面板开着才画。
+
+    为什么要有这个守卫：[编辑当前配置] 只能在校准页点到，可 [加载参数]
+    （导入 .poni → 借成当前配置）分析模式下就能用，那时没有画布。
+
+    面板开着的判据是 calib_dock **不是** calib_ax：关面板时只把
+    calib_dock 置 None（calib_ax / calib_canvas 是悬空的旧对象，画布
+    C++ 侧随子窗口一起删了），拿它判断会在"用过校准、退回分析模式、
+    再导入 .poni"时画到已删除的画布上。
+    """
+    if (getattr(window, "calib_dock", None) is not None
+            and getattr(window, "calib_ax", None) is not None):
+        _redraw_calib(window)
+
+
 def _redraw_calib(window: QMainWindow) -> None:
-    """按当前状态整幅重画：理论环（最近结果几何）+ 用户点 + 自动校准
-    控制点（若有）。撤销/清空/校准完成后调用。"""
+    """按当前状态整幅重画：理论环（当前配置的几何）+ 用户点 + 自动校准
+    控制点（若有）。撤销/清空/校准完成/几何被改后调用。"""
     from xrd_toolkit.gui.calib import (_calib_sync, _ensure_current, _refresh_current_metrics,
         _reset_calib_form)   # 破循环：见模块说明
     state = _calib_state(window)

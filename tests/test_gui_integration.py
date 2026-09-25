@@ -8020,6 +8020,117 @@ class TestCalibCurrent(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    # ── 青线跟着"当前配置"走（2026-09-26 用户报：编辑当前配置青环不动）──
+
+    def _ring_lines(self, w):
+        """画布上的青环折线 (x, y)：此刻没有绿点/选点标记，lines 就是环。"""
+        return [(np.asarray(line.get_xdata(), dtype=float),
+                 np.asarray(line.get_ydata(), dtype=float))
+                for line in w.calib_ax.lines]
+
+    def _assert_rings_match_geometry(self, w):
+        """画出来的每条青线 == 按"当前配置"独立算出的那条环路径。
+
+        用"逐点等于重算结果"而不是"和上一次不同"：前者钉住的是真正
+        要的不变量（画的就是当前配置的几何），几何微调也能抓到。
+        """
+        px = gui_calib_panel._geom_px_keys(w.calib_state["current_geom"])
+        paths = gui_calib_panel.theoretical_ring_paths(
+            pixel_size_m=px["pixel_size_m"], wavelength_m=px["wavelength_m"],
+            dist_m=px["dist_m"], poni1_px=px["poni1_px"],
+            poni2_px=px["poni2_px"], rot1_deg=px["rot1_deg"],
+            rot2_deg=px["rot2_deg"], image_shape=(256, 256))
+        drawn = self._ring_lines(w)
+        self.assertEqual(len(drawn), len(paths["rings"]))
+        for (got_x, got_y), (_, want) in zip(drawn, paths["rings"]):
+            np.testing.assert_allclose(got_x, want[:, 0], equal_nan=True)
+            np.testing.assert_allclose(got_y, want[:, 1], equal_nan=True)
+
+    def _rings_equal(self, first, second):
+        """两次采样的青线是否逐点相同（用来抓"根本没重画"）。"""
+        return all(all(np.allclose(a, b, equal_nan=True)
+                       for a, b in zip(p, q))
+                   for p, q in zip(first, second))
+
+    def test_edit_dialog_redraws_the_rings(self):
+        """[编辑…] 改几何 → 青线按新几何重画（表里的数字换了，图也得换）。
+
+        原来只换状态与表格、漏了重画：改完距离，图上还是旧几何的环。
+        """
+        from PySide6.QtWidgets import QDialog
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_pixel_chk.setChecked(True)
+                before = self._ring_lines(w)
+                self._assert_rings_match_geometry(w)
+                dist0 = w.calib_state["current_geom"]["dist_m"]
+
+                def fake_exec(self):
+                    boxes = self.findChildren(QDoubleSpinBox)
+                    boxes[2].setValue(boxes[2].value() * 1.05)   # 距离 +5%
+                    return QDialog.Accepted
+
+                with mock.patch.object(QDialog, "exec", new=fake_exec):
+                    gui_calib._edit_current(w)
+                self.assertAlmostEqual(
+                    w.calib_state["current_geom"]["dist_m"], dist0 * 1.05,
+                    places=5)
+                after = self._ring_lines(w)
+                self.assertFalse(self._rings_equal(before, after),
+                                 "几何改了而青线与改前逐点相同 = 没有重画")
+                self._assert_rings_match_geometry(w)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_borrow_entry_redraws_rings_and_skips_closed_panel(self):
+        """借用条目换了几何 → 青线跟着换；面板没开时借用不碰画布。
+
+        借用是 [加载参数]（导入 .poni）那条通道，分析模式下就能点到：
+        那时画布随面板一起没了（calib_dock=None，calib_ax 是悬空旧对象），
+        重画必须跳过而不是画到已删除的画布上。
+        """
+        other = {"label": "测试几何", "beam_center": (120.0, 130.0),
+                 "geometry": {"pixel_size_m": 200e-6,
+                              "wavelength_m": 1.223e-11, "dist_m": 1.30,
+                              "poni1_m": 0.20904, "poni2_m": 0.20440,
+                              "rot1_deg": 0.0, "rot2_deg": 0.4}}
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+                w.calib_pixel_chk.setChecked(True)
+                before = self._ring_lines(w)
+                with mock.patch.dict(config_mod.CONFIGS, {"test_geom": other}):
+                    gui_calib._borrow_entry(w, "test_geom")
+                    self.assertIn("借用条目 test_geom", w.log_text.toPlainText())
+                    after = self._ring_lines(w)
+                    self.assertFalse(self._rings_equal(before, after),
+                                     "借用了新几何而青线与借前逐点相同 = 没有重画")
+                    self._assert_rings_match_geometry(w)
+                    # 退出校准模式（面板关闭）后再借用：静默跳过重画。
+                    # 五个入口按钮互斥，click() 不会取消已选中的那个，
+                    # 退出走 setChecked(False)（[返回分析模式] 也是这么做的）
+                    w.calib_btn.setChecked(False)
+                    self.assertIsNone(w.calib_dock)
+                    with mock.patch.object(
+                            gui_calib_panel, "_redraw_calib",
+                            side_effect=AssertionError("画到已关面板上")):
+                        gui_calib._borrow_entry(w, "test_geom")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_pixel_confirmation_only_rearms_when_value_changes(self):
         """规则 (b)：换来源/再借同一像素的条目**不**要求重确认；改像素才要。"""
         w = create_window()

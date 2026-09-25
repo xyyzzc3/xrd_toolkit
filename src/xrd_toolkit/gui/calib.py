@@ -75,7 +75,8 @@ from xrd_toolkit.gui.calib_table import (
 from xrd_toolkit.gui.calib_panel import (
     _CalibSubWindow, _calib_standard_path, _clear_calib_points,
     _close_calib_panel, _geom_px_keys, _load_image, _open_calib_panel,
-    _redraw_calib, _undo_calib_point, _warn_rings_off_image)
+    _redraw_calib, _redraw_calib_if_open, _undo_calib_point,
+    _warn_rings_off_image)
 from xrd_toolkit.gui.config_ops import (
     _delete_config, _import_poni, _save_calib_config, _save_poni,
     _suggest_config_key, _sync_del_config_btn)
@@ -150,6 +151,8 @@ def _borrow_entry(window: QMainWindow, key: str, silent: bool = False) -> str:
         _log(window, f"当前配置 ← 借用条目 {key}"
                      f"（距离 {geom['dist_m'] * 1e3:.2f} mm）")
     _refresh_current_metrics(window)
+    # 借用/导入 .poni 换了当前配置的几何 → 青线跟着换（面板没开时是空操作）
+    _redraw_calib_if_open(window)
     return state["current_from"]
 
 
@@ -289,6 +292,9 @@ def _edit_current(window: QMainWindow) -> None:
                  f"{new_geom['dist_m'] * 1e3:.2f} mm、像素 {pixel * 1e6:.1f} µm")
     _refresh_current_metrics(window)
     _calib_sync(window)
+    # 改完即重画：不然表里数字换了、图上的青线还是旧几何的（2026-09-26
+    # 用户报的"编辑当前配置青环不动"——改的是状态、漏了这一笔）
+    _redraw_calib_if_open(window)
 
 
 def _metrics_worker(path_str: str, geom: dict) -> dict:
