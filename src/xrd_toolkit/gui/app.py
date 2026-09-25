@@ -9,6 +9,10 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
       → plot_views.py   视图注册表 + 出图调度 + 绘图（2D/剖面/1D/
                          瀑布全接线）+ 悬停取点 + 手势（扩展点：
                          _VIEW_BUILDERS/_VIEW_RUNNERS 两张注册表）
+      → file_dock.py    左侧文件坞：文件栏（树：原始数据 + 各阶段产物
+                         分组）+ 导入/拖放 + 选择工具
+      → sources.py      条目的"数据来源"：条目是原始文件还是哪个阶段的
+                         产物、该去哪儿取数（跨组读勾选集合的地方只认它）
       → calib.py        校准工作台：参数坞第 2 页表单 + 中央校准图
                          面板 + 自动/手动校准后台任务
       → panels.py        面板容器生命周期：MDI 子窗口/弹出窗口、
@@ -20,8 +24,10 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 
 窗口上的公共接口（供面板与测试使用）：
   window.log(text)        写日志区 + 状态行
-  window.add_files(paths) 把文件加进左侧列表
-  window.drop_folder(path) 扫描文件夹加入列表（与 [打开文件夹] 同逻辑）
+  window.add_files(paths) 把文件加进左侧文件栏（默认不勾选，见 file_dock）
+  window.drop_folder(path) 扫描文件夹加入文件栏（与 [打开文件夹] 同逻辑）
+  window.refresh_groups() 重建文件栏里的产物分组（批量扣背景/算完 1D/
+                          清空缓存之后调；实现见 file_dock）
   window.mdi              QMdiArea（绘图区，所有图子窗口的父场地）
   window.plot_docks       {面板键: QMdiSubWindow 或 _FloatedWindow}，
                           键 = f"{视图}|{路径}"，重复文件改名条目再补
@@ -70,9 +76,10 @@ from xrd_toolkit.gui.plot_export import (
     _ask_save_options, _build_export_dialog, _checked_1d_results,
     _run_export, _save_figures, _write_csv_summary, _write_export)
 from xrd_toolkit.gui.file_dock import (
-    FILE_FILTER, NarrowList, _ask_duplicate, _ask_rename, _build_file_dock, _dropped_items,
-    _on_file_selected, _refresh_file_label, _scan_folder,
-    _sync_current_to_checks, _unique_display_name, add_files)
+    FILE_FILTER, FileTree, _ask_duplicate, _ask_rename, _build_file_dock,
+    _dropped_items, _on_file_selected, _refresh_file_label, _scan_folder,
+    _sync_current_to_checks, _unique_display_name, add_files,
+    refresh_product_groups)
 # 校准相关按职责分了三块（2026-09-23 拆分）：页面与流程在 calib，
 # 中央校准图面板在 calib_panel，配置条目进出在 config_ops。这里全部
 # 再导出（见模块 docstring 的"兼容再导出"），外部照旧经 gui_app 取用。
@@ -1220,7 +1227,9 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 工作台（开/关校准面板），那条走 toggled → _on_mode（calib.py 的
     # [返回分析模式] 也走同一条路：setChecked(False)）
     window.entrance_buttons = {}
-    window._last_entrance = "1D"    # 退出校准翻回哪一页（最常用的入口）
+    # 退出校准翻回哪一页：None = 还没选过任何一个入口（开局就是这样，
+    # 退出校准就回到"什么都没选"，见 _clear_entrance / _on_mode）
+    window._last_entrance = None
     for name in ("校准", "1D", "扣背景", "对比"):
         btn = QPushButton(name)
         btn.setCheckable(True)
@@ -1259,8 +1268,25 @@ def _build_toolbar(window: QMainWindow) -> None:
         dock.visibilityChanged.connect(btn.setChecked)
         btn.toggled.connect(dock.setVisible)
 
-    # 开局落在 [1D] 页（最常用的入口；参数坞建好才翻得动，所以放在这里）
-    _switch_entrance(window, "1D")
+    # 开局谁都不选（参数坞建好才动得了，所以放在这里）：不点亮任何入口
+    # + 收起参数坞。用户 2026-09-25 定：开界面时上面什么都不选、右边
+    # 参数栏是隐藏的——"选到谁才放谁的参数"。
+    _clear_entrance(window)
+
+
+def _clear_entrance(window: QMainWindow) -> None:
+    """"什么都没选"状态：入口全不点亮 + 收起参数坞。
+
+    两个调用点：开局（_build_toolbar 收尾）与"没选过入口就退出校准"
+    （_on_mode(False)）。参数坞的显隐与 [参数] 开关双向同步
+    （见 _build_toolbar），所以收坞 = 按钮自动弹起，不用额外接线。
+    """
+    window._last_entrance = None
+    _highlight_entrance(window, None)
+    # 收起时停在分析侧的默认页：用户手动点 [参数] 展开时看到的是分析页，
+    # 而不是上一次停在的校准页（页号唯一来源就在入口切换这一处）
+    window.param_stack.setCurrentIndex(window.PARAM_PAGES["1D"])
+    window.param_dock.setVisible(False)
 
 
 def _switch_entrance(window: QMainWindow, name: str) -> None:
@@ -1269,10 +1295,14 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     [校准] 是入口 + 工作台开关：切进去 = 进校准（开校准面板，见
     _on_mode），切出去 = 退校准（翻回最近用过的分析入口）。其余四个
     是纯翻页——页底部的产出按钮才负责出图。
+
+    点入口先让参数坞露出来：开局它是收起的（_clear_entrance），
+    "选到谁才放谁的参数"；[校准] 的拉宽要量坞的宽度，所以必须先可见。
     """
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
+    window.param_dock.setVisible(True)
     if name != "校准":
         window._last_entrance = name
     if name == "校准":
@@ -1285,7 +1315,7 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
 
 
 def _highlight_entrance(window: QMainWindow, name: str) -> None:
-    """入口高亮：只有当前那一个勾着。"""
+    """入口高亮：只有当前那一个勾着；name=None = 谁都不勾。"""
     for key, btn in getattr(window, "entrance_buttons", {}).items():
         btn.setChecked(key == name)
 
@@ -1323,6 +1353,7 @@ def _clear_stage_cache(window: QMainWindow) -> None:
         _log(window, "缓存本来就是空的（还没有落过产物）")
         return
     n = stage_cache.clear()
+    window.refresh_groups()   # 文件栏里的产物分组跟着清空
     _log(window, f"已清空缓存：{n} 个产物、{info['bytes'] / 1e6:.1f} MB"
                  f"（下次出图会重新积分）")
 
@@ -1403,11 +1434,17 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
         _enter_calib(window)
     else:
         window.mode_label.setText("分析模式")
-        # 翻回最近用过的分析入口（默认 1D）
-        last = getattr(window, "_last_entrance", "1D")
+        # 翻回最近用过的分析入口；一个都没选过（开局直接进校准、
+        # 或点了校准页的 [返回分析模式]）→ 回到"什么都没选"：
+        # 入口不点亮、参数坞收起（用户 2026-09-25 定）
+        last = getattr(window, "_last_entrance", None)
+        # 页号总归要翻回分析侧的默认页（坞是收起的，看不见；但用户手动
+        # 点 [参数] 展开时该看到分析页，而不是停留在校准页）
         window.param_stack.setCurrentIndex(
             window.PARAM_PAGES.get(last, window.PARAM_PAGES["1D"]))
-        _exit_calib(window)
+        _exit_calib(window)     # 先还原坞宽（收起后量不到）
+        if last is None:
+            _clear_entrance(window)
         _log(window, "回到分析模式")
 
 # ══ 保存：勾选已输出的图 → 选分辨率/格式 → 逐个选文件名存图 ══
@@ -1491,6 +1528,10 @@ def create_window() -> QMainWindow:
     # 对象销毁，Qt 自动把它从应用事件分发里摘掉
     QApplication.instance().installEventFilter(_PanelClickTracker(window))
     window.file_dock = _build_file_dock(window)
+    # 产物分组刷新入口（文件栏里的"阶段文件夹"）：批量扣背景 / 1D 批量
+    # 算完 / 清空缓存之后要重建。挂成窗口回调而不是让 plot_views 反向
+    # import 文件坞（同 _bg_count_refresh 的老规矩）
+    window.refresh_groups = lambda: refresh_product_groups(window)
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     _build_status(window)

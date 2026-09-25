@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QMainWindow, QMdiSubWindow, QWidget)
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services.background import (
     compute_baseline, subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -321,7 +322,8 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
         if files:
             norm_target.blockSignals(True)
             norm_target.clear()
-            for path, display in files:
+            for src in files:
+                path, display = src.path, src.display
                 # data 存字符串路径：findData 对 Path 不按 Python 相等
                 # 比较（Path 不是 Qt 认识的类型），字符串才找得回
                 norm_target.addItem(display, str(path))
@@ -605,18 +607,21 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     # 走的承诺在隐藏/恢复来回切时也不破）
     hidden = set(getattr(dock, "compare_hidden", None) or ())
     raw_curves = []
-    for i, (path, display) in enumerate(dock.compare_files):
+    for i, src in enumerate(dock.compare_files):
+        display = src.display
         if display in hidden:
             continue
         if display not in dock.compare_data:
             continue   # 这条还没算成（本函数只在全部到齐后调用）
         tth, raw = dock.compare_data[display]
         # 背景扣除在归一化**之前**：先扣掉不含结构信息的加性背景，
-        # 再谈"相对强度"才有意义（归一化会把这个尺度信息抹掉）
-        _, raw, _ = _bg_curve(window, dock, path, tth,
-                              np.asarray(raw, dtype=float))
+        # 再谈"相对强度"才有意义（归一化会把这个尺度信息抹掉）。
+        # 产物条目（"· 扣背景"）本身已经是扣完的：再扣一遍就是二次相减
+        if src.kind == gui_sources.RAW:
+            _, raw, _ = _bg_curve(window, dock, src.path, tth,
+                                  np.asarray(raw, dtype=float))
         raw_curves.append((tth, np.asarray(raw, dtype=float), display,
-                           i, path))
+                           i, src.path))
     divisor = 1.0
     if mode == "global":
         divisor = max((float(np.nanmax(r)) if r.size else 0.0

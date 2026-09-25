@@ -125,5 +125,125 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(stage_cache.clear(), 0, "再清一次是幂等的")
 
 
+class TestProductLedger(unittest.TestCase):
+    """产物台账：record_batch / list_batches / drop_batch / clear 联动。
+
+    界面上"一次 [批量扣背景] = 一个分组（阶段文件夹）"，这一层是它的
+    数据来源——产物键是哈希，反查不出来，所以必须单独记一笔。
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xrd_cache_src_"))
+        self.kw = dict(config="lmfp1_lab6", npt=1000, tth_min=1.0, tth_max=8.0)
+        self.tth = np.linspace(1.0, 8.0, 100)
+        self.inten = np.cos(self.tth) * 10
+        # 每个用例自己一份台账（缓存根是模块级共享的临时目录）
+        stage_cache.write_batches("bg", [])
+        stage_cache.write_batches("1d", [])
+
+    def _store_bg(self, name: str):
+        """真存一份 bg 产物，返回 (源文件路径, 产物键)。"""
+        f = self.dir / name
+        f.write_bytes(b"0" * 1024)
+        produced = stage_cache.store_bg(
+            f, self.tth, self.inten, **self.kw,
+            settings={"mode": "anchor", "window_deg": 2.0,
+                      "anchors": [(1.0, 5.0)]})
+        return f, produced.stem
+
+    def _record(self, batch, items, label="扣背景 09-25 10:10（锚点 2 个，窗口 2°）"):
+        return stage_cache.record_batch(
+            "bg", batch, label=label, items=items, **self.kw,
+            settings={"mode": "anchor", "window_deg": 2.0})
+
+    def test_record_then_list(self):
+        a, ka = self._store_bg("a.tif")
+        b, kb = self._store_bg("b.tif")
+        self.assertEqual(self._record("20260925-101010-ab12cd", [(a, ka), (b, kb)]), 2)
+        batches = stage_cache.list_batches("bg")
+        self.assertEqual(len(batches), 1)
+        node = batches[0]
+        self.assertEqual(node["id"], "20260925-101010-ab12cd")
+        self.assertIn("锚点 2 个", node["label"])
+        self.assertEqual(node["config"], "lmfp1_lab6")
+        self.assertEqual(sorted(m["source"] for m in node["items"].values()),
+                         ["a.tif", "b.tif"])
+        self.assertEqual(stage_cache.list_batches("1d"), [], "别的类没有台账")
+
+    def test_same_batch_id_overwrites_and_new_is_first(self):
+        """同一个批次号再记一次 = 覆盖（重复点不长得重复分组）；
+        列出来的顺序 = 新的在前。"""
+        a, ka = self._store_bg("a.tif")
+        b, kb = self._store_bg("b.tif")
+        self._record("batch-1", [(a, ka)])
+        self._record("batch-1", [(a, ka), (b, kb)])
+        self._record("batch-2", [(a, ka)], label="扣背景 09-25 11:11（空扫相减）")
+        batches = stage_cache.list_batches("bg")
+        self.assertEqual([n["id"] for n in batches], ["batch-2", "batch-1"])
+        self.assertEqual(len(batches[1]["items"]), 2, "同号覆盖成后记的那份")
+
+    def test_list_prune_hides_dead_items(self):
+        """产物被删掉（用户清了 outputs/）→ prune 后这一条不再出现，
+        但**不写盘**（要不要落盘由调用方决定）。"""
+        a, ka = self._store_bg("a.tif")
+        b, kb = self._store_bg("b.tif")
+        self._record("batch-1", [(a, ka), (b, kb)])
+        (stage_cache.CACHE_ROOT / "bg" / f"{kb}.npz").unlink()
+        self.assertEqual(len(stage_cache.list_batches("bg")[0]["items"]), 2)
+        self.assertEqual(sorted(stage_cache.list_batches("bg", prune=True)[0]["items"]),
+                         [str(a.resolve())])
+        self.assertEqual(len(stage_cache.list_batches("bg")[0]["items"]), 2,
+                         "prune 只清返回值，不落盘")
+
+    def test_write_batches_persists_prune(self):
+        a, ka = self._store_bg("a.tif")
+        b, kb = self._store_bg("b.tif")
+        self._record("batch-1", [(a, ka), (b, kb)])
+        (stage_cache.CACHE_ROOT / "bg" / f"{kb}.npz").unlink()
+        stage_cache.write_batches("bg", stage_cache.list_batches("bg", prune=True))
+        self.assertEqual(len(stage_cache.list_batches("bg")[0]["items"]), 1)
+
+    def test_drop_batch_removes_files_and_entry(self):
+        """删一组 = 台账条目 + 盘上的产物一起没；别的组的产物不受影响。"""
+        a, ka = self._store_bg("a.tif")
+        b, kb = self._store_bg("b.tif")
+        self._record("batch-1", [(a, ka), (b, kb)])
+        ka_path = stage_cache.CACHE_ROOT / "bg" / f"{ka}.npz"
+        self.assertTrue(ka_path.exists())
+        self.assertEqual(stage_cache.drop_batch("bg", "batch-1"), 2)
+        self.assertFalse(ka_path.exists())
+        self.assertEqual(stage_cache.list_batches("bg"), [])
+
+    def test_drop_batch_is_missing_safe(self):
+        self.assertEqual(stage_cache.drop_batch("bg", "没有这个批"), 0)
+
+    def test_clear_one_kind_keeps_other_kinds_ledger(self):
+        a, ka = self._store_bg("a.tif")
+        self._record("batch-1", [(a, ka)])
+        stage_cache.record_batch("1d", "one-d", label="1D", items=[(a, "k1")],
+                                 **self.kw)
+        removed = stage_cache.clear("bg")
+        self.assertGreaterEqual(removed, 1)
+        self.assertEqual(stage_cache.list_batches("bg"), [])
+        self.assertEqual(len(stage_cache.list_batches("1d")), 1,
+                         "只清一类，别类的台账要留着")
+
+    def test_clear_all_removes_ledger(self):
+        a, ka = self._store_bg("a.tif")
+        self._record("batch-1", [(a, ka)])
+        stage_cache.clear()
+        self.assertFalse((stage_cache.CACHE_ROOT / "index.json").exists())
+        self.assertEqual(stage_cache.list_batches("bg"), [])
+
+    def test_corrupt_index_reads_empty_not_crash(self):
+        """台账坏了当空表：它只是台账，产物还在、还能命中。"""
+        (stage_cache.CACHE_ROOT / "index.json").write_text("{半截",
+                                                           encoding="utf-8")
+        self.assertEqual(stage_cache.list_batches("bg"), [])
+        a, ka = self._store_bg("a.tif")
+        self._record("batch-1", [(a, ka)])          # 还能正常记
+        self.assertEqual(len(stage_cache.list_batches("bg")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

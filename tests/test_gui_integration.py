@@ -64,6 +64,7 @@
 运行：python -m unittest discover -s tests -v
 """
 import ast
+import json
 import os
 import re
 import sys
@@ -87,14 +88,16 @@ from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QSplitter, QSpinBox, QToolButton,
-    QVBoxLayout, QWidget)
+    QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QMenu, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSplitter,
+    QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
+from xrd_toolkit.services import stage_cache
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import plot_views as gui_plot_views
 from xrd_toolkit.gui import panel_state as gui_panel_state
 from xrd_toolkit.gui import plot_compare as gui_plot_compare
@@ -176,6 +179,17 @@ def _fake_compute(path_str, geom, npt):
 def _open_view(w, name):
     """点击工具栏作图按钮（模拟用户点 [1D] 这类按钮）。"""
     w.view_buttons[name].click()
+
+
+def add_checked(w, paths, **kw):
+    """测试辅助：加文件 + 全勾上（select=True）。
+
+    导入默认**不勾选**（用户 2026-09-25 定：200 张数据要自己说了算），
+    而绝大多数测试关心的是"勾上以后出图/对比/导出"那条链，逐个手勾
+    是噪音。要测"导入默认不勾"本身，直接用 w.add_files。
+    """
+    w.add_files(paths, select=True, **kw)
+    return w
 
 
 def _dock(w, view, path_str):
@@ -278,7 +292,7 @@ class TestSelectionOnly(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 time.sleep(0.6)          # 给足"防抖级"时间
                 QApplication.processEvents()
                 self.assertEqual(fake.call_count, 0,
@@ -297,7 +311,7 @@ class TestViewButtonRuns(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 drawn = _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -327,7 +341,7 @@ class TestViewButtonRuns(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: fake.call_count >= 1))
                 _open_view(w, "1D")   # 第二次点击：必须重新计算
@@ -364,7 +378,7 @@ class TestViewButtonRuns(unittest.TestCase):
 
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=fake_ordered):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 self.assertEqual(w.file_label.text(), "已选 2 个文件")
                 _open_view(w, "1D")   # 批量：点一下，两个文件各开一张
                 drawn_b = _wait_until(
@@ -412,7 +426,7 @@ class TestNewViews(unittest.TestCase):
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=fake_image):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
                 drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0)
@@ -446,7 +460,7 @@ class TestNewViews(unittest.TestCase):
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(gui_views, "line_profile",
                                    side_effect=fake_profile):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "剖面")
                 drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "剖面", "data/fake_b.tif")).axes_profile.lines) > 0)
@@ -497,7 +511,7 @@ class TestNewViews(unittest.TestCase):
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(gui_views, "integrate_sectors",
                                    side_effect=fake_sectors):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
                 drawn = _wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0)
@@ -520,7 +534,7 @@ class TestNewViews(unittest.TestCase):
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=fake_image):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "2D", "data/fake_b.tif")).axes_2d.images) > 0))
@@ -549,7 +563,7 @@ class TestNewViews(unittest.TestCase):
                  mock.patch.object(
                     gui_views, "integrate_sectors",
                     return_value=(tth, i2d, chi)) as fake_sectors:
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
                 self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0))
@@ -569,7 +583,7 @@ class TestApplyAndFocus(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: fake.call_count >= 1))
                 self.assertTrue(_wait_until(
@@ -586,7 +600,7 @@ class TestApplyAndFocus(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertEqual(fake.call_count, 0)
                 self.assertIn("先点击要更新的图面板",
@@ -597,7 +611,7 @@ class TestApplyAndFocus(unittest.TestCase):
     def test_clicking_placeholder_focuses_view(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "2D")
             self.assertIsNone(w.focus_panel)
             # 模拟点击面板内容 → 事件过滤器切焦点（焦点=具体面板）
@@ -614,7 +628,7 @@ class TestApplyAndFocus(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
-                w.add_files(["data/fake_a.tif"])   # A 慢 0.2 s
+                add_checked(w, ["data/fake_a.tif"])   # A 慢 0.2 s
                 _open_view(w, "1D")   # 任务 1（慢）
                 _open_view(w, "1D")   # 任务 2（即时）= 最新任务
                 drawn = _wait_until(
@@ -633,13 +647,30 @@ class TestApplyAndFocus(unittest.TestCase):
 
 class TestFileCheckSelection(unittest.TestCase):
     """文件列表：对号是唯一的选择表达（点行 = 加选不取消；取消对号
-    只能点对号方块；背景高亮跟随对号集合）。"""
+    只能点对号方块；背景高亮跟随对号集合）。
 
-    def test_add_files_checks_all_added(self):
-        """一批选入/拖入的文件默认全部勾上（选中）。"""
+    导入默认**不勾选**（用户 2026-09-25 定）——勾选出 [全选] /
+    [按条件选…] / 点方块三条路；select=True 保留老行为（脚本/测试用）。"""
+
+    def test_add_files_unchecked_by_default(self):
+        """导入（选入/拖入/文件夹扫描）默认一个都不勾。"""
         w = create_window()
         try:
             w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            self.assertEqual(w.file_list.item(0).checkState(), Qt.Unchecked)
+            self.assertEqual(w.file_list.item(1).checkState(), Qt.Unchecked)
+            self.assertIsNone(w.file_list.currentItem())   # 没对号就不高亮
+            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertIn("已添加 2 个文件", w.log_text.toPlainText())
+            self.assertIn("未选中", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_add_files_select_true_checks_all(self):
+        """select=True（脚本/测试用）仍是一批全勾 + 高亮最后一条。"""
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
             self.assertIs(w.file_list.currentItem(), w.file_list.item(1))
@@ -651,18 +682,18 @@ class TestFileCheckSelection(unittest.TestCase):
         """点行 = 加选：勾上这一行，其他对号不动。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             # 先点 A 的方块取消 A → 只剩 B 勾着
             item_a = w.file_list.item(0)
             w._press_item, w._press_state = item_a, Qt.Checked
             item_a.setCheckState(Qt.Unchecked)
-            w.file_list.itemClicked.emit(item_a)
+            w.file_list.itemClicked.emit(item_a, 0)
             self.assertEqual(item_a.checkState(), Qt.Unchecked)
             # 再点 A 行体 → 勾回 A，B 的对号不动（Qt 原生：按下时
             # 事件过滤器记录 A 为未勾、并把当前项移到 A；手动补上）
             w._press_item, w._press_state = item_a, Qt.Unchecked
             w.file_list.setCurrentItem(item_a)
-            w.file_list.itemClicked.emit(item_a)
+            w.file_list.itemClicked.emit(item_a, 0)
             self.assertEqual(item_a.checkState(), Qt.Checked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
             self.assertIs(w.file_list.currentItem(), item_a)
@@ -674,8 +705,8 @@ class TestFileCheckSelection(unittest.TestCase):
         """已勾的行再点 = 没反应（点行不会取消对号）。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])   # 最后加的文件已勾
-            w.file_list.itemClicked.emit(w.file_list.item(0))   # 点它
+            add_checked(w, ["data/fake_b.tif"])
+            w.file_list.itemClicked.emit(w.file_list.item(0), 0)   # 点它
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
             self.assertEqual(w.file_label.text(), "fake_b.tif")
         finally:
@@ -686,11 +717,11 @@ class TestFileCheckSelection(unittest.TestCase):
         生效——这是取消对号的唯一途径。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             item = w.file_list.item(0)
             w._press_item, w._press_state = item, Qt.Checked   # 按下时勾着
             item.setCheckState(Qt.Unchecked)   # Qt 在弹起时自动取消
-            w.file_list.itemClicked.emit(item)
+            w.file_list.itemClicked.emit(item, 0)
             self.assertEqual(item.checkState(), Qt.Unchecked)
             self.assertEqual(w.file_label.text(), "未打开文件")
         finally:
@@ -702,12 +733,12 @@ class TestFileCheckSelection(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 # 点 B 的对号方块取消 → 只剩 A 勾着
                 item_b = w.file_list.item(1)
                 w._press_item, w._press_state = item_b, Qt.Checked
                 item_b.setCheckState(Qt.Unchecked)
-                w.file_list.itemClicked.emit(item_b)
+                w.file_list.itemClicked.emit(item_b, 0)
                 self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
                 self.assertEqual(w.file_list.item(1).checkState(),
                                  Qt.Unchecked)
@@ -723,11 +754,164 @@ class TestFileCheckSelection(unittest.TestCase):
         """删除 = 批量：所有对号文件一起移除。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])   # 默认全勾
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 0)
             self.assertEqual(w.file_label.text(), "未打开文件")
             self.assertIn("已删除 2 个文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    # ── 选择工具（全选 / 全不选 / 按条件选）──
+    @staticmethod
+    def _add_many(w, n=9):
+        """加 n 个文件（名字 s1.tif…s9.tif），**不勾**（导入默认）。"""
+        w.add_files([f"data/s{i + 1}.tif" for i in range(n)])
+
+    def test_select_all_and_none_buttons(self):
+        """[全选] 全勾上；[全不选] 全部取消（各只记一行日志）。"""
+        w = create_window()
+        try:
+            w.add_files([f"data/s{i + 1}.tif" for i in range(5)])
+            w.findChild(QPushButton, "select_all_btn").click()
+            self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Checked
+                                for i in range(5)))
+            self.assertEqual(w.file_label.text(), "已选 5 个文件")
+            self.assertIn("全选：5 个文件", w.log_text.toPlainText())
+            w.findChild(QPushButton, "select_none_btn").click()
+            self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Unchecked
+                                for i in range(5)))
+            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertIn("全不选：5 个条目的对号已取消",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_all_on_empty_list_logs(self):
+        w = create_window()
+        try:
+            w.findChild(QPushButton, "select_all_btn").click()
+            self.assertIn("文件列表是空的", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_by_range_replaces_selection(self):
+        """区间：第 3 到第 6 个 → 只有这 4 个勾上（默认"只选这些"）。"""
+        w = create_window()
+        try:
+            self._add_many(w)
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 3, "stop": 6, "text": "",
+                    "append": False})
+            got = [i + 1 for i in range(9)
+                   if w.file_list.item(i).checkState() == Qt.Checked]
+            self.assertEqual(got, [3, 4, 5, 6])
+            self.assertEqual(w.file_label.text(), "已选 4 个文件")
+            self.assertIn("按条件选中 4 个文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_by_stride(self):
+        """间隔：从第 2 个起每 3 个选 1 个 → 第 2、5、8 个。"""
+        w = create_window()
+        try:
+            self._add_many(w)
+            gui_file_dock.apply_selection(
+                w, {"mode": "stride", "every": 3, "offset": 2, "text": "",
+                    "append": False})
+            got = [i + 1 for i in range(9)
+                   if w.file_list.item(i).checkState() == Qt.Checked]
+            self.assertEqual(got, [2, 5, 8])
+        finally:
+            w.close()
+
+    def test_select_by_name_filter_stacks_with_range(self):
+        """名字包含与区间叠加（都命中才选）：第 1–6 个里名字含 "s1" 的。"""
+        w = create_window()
+        try:
+            self._add_many(w)
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 1, "stop": 6, "text": "s1",
+                    "append": False})
+            got = [i + 1 for i in range(9)
+                   if w.file_list.item(i).checkState() == Qt.Checked]
+            self.assertEqual(got, [1])   # s1.tif（s10 不存在）
+            self.assertIn("名字含“s1”", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_append_keeps_existing_checks(self):
+        """追加：跨两个区间攒一批（前面的对号不被取消）。"""
+        w = create_window()
+        try:
+            self._add_many(w)
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 1, "stop": 2, "text": "",
+                    "append": False})
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 8, "stop": 9, "text": "",
+                    "append": True})
+            got = [i + 1 for i in range(9)
+                   if w.file_list.item(i).checkState() == Qt.Checked]
+            self.assertEqual(got, [1, 2, 8, 9])
+        finally:
+            w.close()
+
+    def test_select_without_match_logs_and_clears(self):
+        """没有命中：记一行日志、对号清空（不静默什么都不做）。"""
+        w = create_window()
+        try:
+            self._add_many(w)
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 1, "stop": 2, "text": "",
+                    "append": False})
+            gui_file_dock.apply_selection(
+                w, {"mode": "range", "start": 1, "stop": 3, "text": "没有这个词",
+                    "append": False})
+            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertIn("没有命中任何文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_dialog_spec_and_preview(self):
+        """弹窗：勾"间隔" + 填名字 → 预览行实时更新，确定返回 spec。
+
+        模态 exec 用 patch 兜住（跟导出弹窗的测法同一路）：side_effect
+        拿到的是弹窗实例，按 objectName 找到控件驱动它。
+        """
+        w = create_window()
+        try:
+            self._add_many(w)
+            w.show()
+            seen = {}
+
+            def fake_exec(self):    # new= 打补丁 → 描述符协议 → self = 弹窗
+                seen["preview0"] = self.findChild(
+                    QLabel, "sel_preview").text()
+                self.findChild(QRadioButton, "sel_stride").setChecked(True)
+                self.findChild(QSpinBox, "sel_every").setValue(2)
+                self.findChild(QSpinBox, "sel_offset").setValue(1)
+                self.findChild(QLineEdit, "sel_text").setText("s")
+                seen["preview1"] = self.findChild(
+                    QLabel, "sel_preview").text()
+                return QDialog.Accepted
+
+            with mock.patch.object(QDialog, "exec", new=fake_exec):
+                spec = gui_file_dock._selection_dialog_spec(w, 9)
+            self.assertEqual(spec["mode"], "stride")
+            self.assertEqual((spec["every"], spec["offset"]), (2, 1))
+            self.assertEqual(spec["text"], "s")
+            self.assertIn("将选中 9 个文件（列表共 9 个）", seen["preview0"])
+            self.assertIn("将选中 5 个文件", seen["preview1"])   # 1,3,5,7,9
+        finally:
+            w.close()
+
+    def test_select_dialog_hidden_window_returns_none(self):
+        """窗口没显示（测试/无头环境）不弹模态框，直接返回 None。"""
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif"])
+            self.assertIsNone(gui_file_dock._selection_dialog_spec(w, 1))
         finally:
             w.close()
 
@@ -736,7 +920,7 @@ def _draw_one_1d(w):
     """画一张 fake_b 的 1D 图（mock 积分），返回面板。"""
     with mock.patch.object(gui_views, "_compute_integration",
                            side_effect=_fake_compute):
-        w.add_files(["data/fake_b.tif"])
+        add_checked(w, ["data/fake_b.tif"])
         _open_view(w, "1D")
         assert _wait_until(
             lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -749,7 +933,7 @@ class TestSaveFigures(unittest.TestCase):
     def test_save_with_no_figures_logs(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_b.tif"])   # 只选中没出图
+            add_checked(w, ["data/fake_b.tif"])   # 只选中没出图
             w.findChild(QPushButton, "save_btn").click()
             self.assertIn("没有已输出的图可保存", w.log_text.toPlainText())
         finally:
@@ -811,7 +995,7 @@ class TestSaveFigures(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
@@ -996,7 +1180,7 @@ class TestCurveColors(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
@@ -1012,7 +1196,7 @@ class TestCurveColors(unittest.TestCase):
     def _plot_compare(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compare_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
             keys = [k for k in w.plot_docks if k.startswith("对比|")]
             self.assertEqual(len(keys), 1)
@@ -1102,7 +1286,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
     def _plot_compare(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compare_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
             keys = [k for k in w.plot_docks if k.startswith("对比|")]
             self.assertEqual(len(keys), 1)
@@ -1180,8 +1364,10 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
             # 给面板挂 heat_files（行→文件），行 1 = fake_b.tif
-            dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
-                               ("data/fake_b.tif", "fake_b.tif")]
+            dock.heat_files = [gui_sources.make_source(
+                "data/fake_a.tif", "fake_a.tif"),
+                               gui_sources.make_source(
+                                                   "data/fake_b.tif", "fake_b.tif")]
             gui_plot_compare._heat_row_press(w, key, self._synthetic_event(ax, 1))
             gui_plot_compare._heat_row_release(w, key, self._synthetic_event(ax, 1))
             self.assertEqual(dock.compare_hidden, {"fake_b.tif"})
@@ -1203,8 +1389,10 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         try:
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
-            dock.heat_files = [("data/fake_a.tif", "fake_a.tif"),
-                               ("data/fake_b.tif", "fake_b.tif")]
+            dock.heat_files = [gui_sources.make_source(
+                "data/fake_a.tif", "fake_a.tif"),
+                               gui_sources.make_source(
+                                                   "data/fake_b.tif", "fake_b.tif")]
             gui_plot_compare._heat_row_press(w, key,
                                       self._synthetic_event(ax, 1, x=50, y=50))
             gui_plot_compare._heat_row_release(w, key,
@@ -1221,12 +1409,13 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
             dock1 = _dock(w, "1D", "data/fake_b.tif")
-            dock1.heat_files = [("data/fake_b.tif", "fake_b.tif")]
+            dock1.heat_files = [gui_sources.make_source(
+                "data/fake_b.tif", "fake_b.tif")]
             ax1 = gui_panel_state._content(dock1).axes_1d
             gui_plot_compare._heat_row_press(w, "1D|data/fake_b.tif",
                                       self._synthetic_event(ax1, 0))
@@ -1329,11 +1518,11 @@ class TestDragDrop(unittest.TestCase):
             self.assertEqual(w.file_list.count(), 2)
             self.assertEqual(w.file_list.item(0).text(), "fake_a.tif")
             self.assertEqual(w.file_list.item(1).text(), "fake_b.tif")
-            # 一起拖入的文件默认全部勾上
-            self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
-            self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
-            self.assertIs(w.file_list.currentItem(), w.file_list.item(1))
-            self.assertEqual(w.file_label.text(), "已选 2 个文件")
+            # 拖入也不自动勾（导入默认不勾选，用户 2026-09-25 定）
+            self.assertEqual(w.file_list.item(0).checkState(), Qt.Unchecked)
+            self.assertEqual(w.file_list.item(1).checkState(), Qt.Unchecked)
+            self.assertIsNone(w.file_list.currentItem())
+            self.assertEqual(w.file_label.text(), "未打开文件")
             self.assertIn("已添加 2 个文件", w.log_text.toPlainText())
         finally:
             w.close()
@@ -1355,10 +1544,450 @@ class TestDragDrop(unittest.TestCase):
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _drop_event(w, [abs_b])
+                w.findChild(QPushButton, "select_all_btn").click()   # 勾上
                 _open_view(w, "1D")
                 drawn = _wait_until(
                     lambda: len(_axes(w, "1D", abs_b).lines) > 0)
                 self.assertTrue(drawn, "拖入的文件应能直接作图")
+        finally:
+            w.close()
+
+
+def _kw_of(w):
+    """窗口当前的积分参数（与 plot_views 取缓存键用的那一套同源）。"""
+    geom = gui_state._collect_geometry(w)
+    return dict(config=w.config_name,
+                npt=int(w.params["输出点数"].value()),
+                tth_min=geom.get("tth_min_deg"),
+                tth_max=geom.get("tth_max_deg"))
+
+
+def _tmp_files(n=2, prefix="s"):
+    """临时目录里造 n 个真文件（产物要有真文件才算得出指纹）。"""
+    folder = Path(tempfile.mkdtemp(prefix="xrd_gui_src_"))
+    out = []
+    for i in range(1, n + 1):
+        p = folder / f"{prefix}{i}.tif"
+        p.write_bytes(b"x" * (1000 + i))
+        out.append(p)
+    return out
+
+
+def _store_product(w, path, kind="1d", values=None):
+    """给真文件落一份产物（1d 或 bg），返回产物键。"""
+    kw = _kw_of(w)
+    tth = np.linspace(kw["tth_min"], kw["tth_max"], 3)
+    intensity = np.array(values if values is not None else [1.0, 2.0, 3.0])
+    if kind == "1d":
+        produced = stage_cache.store_1d(path, tth, intensity, **kw)
+    else:
+        produced = stage_cache.store_bg(
+            path, tth, intensity, **kw,
+            settings={"mode": "anchor", "window_deg": 2.0,
+                      "anchors": [(float(kw["tth_min"]), 1.0)]})
+    return Path(produced).stem
+
+
+def _group_by_text(w, part):
+    """按组名里的一段文字找组节点。"""
+    for node in w.file_list.groups():
+        if part in node.text(0):
+            return node
+    return None
+
+
+class TestProductGroups(unittest.TestCase):
+    """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量扣背景] 一组。
+
+    勾组 = 整组全选（半勾表示只勾了一部分）；产物条目出图/对比直接读
+    产物（不重算、不再扣背景）；原始数据的对号语义一点没变。
+    """
+
+    def test_group_check_propagates_both_ways(self):
+        """勾组 → 组里全勾；取消一个 → 组变半勾；全取消 → 组回到不勾。"""
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
+                            "data/s3.tif"])
+            raw = w.file_list.raw_group
+            raw.setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            states = [raw.child(i).checkState(0) for i in range(3)]
+            self.assertEqual(states, [Qt.Checked] * 3, "勾组 = 组里全勾")
+            self.assertIn("已选中整组 原始数据", w.log_text.toPlainText())
+            raw.child(0).setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            self.assertEqual(raw.checkState(0), Qt.PartiallyChecked)
+            for i in range(3):
+                raw.child(i).setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            self.assertEqual(raw.checkState(0), Qt.Unchecked)
+        finally:
+            w.close()
+
+    def test_one_d_group_appears_for_cached_files(self):
+        """算过 1D 的文件进「1D 产物」组；没算过的不进。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            self.assertIsNone(_group_by_text(w, "1D 产物"), "还没有产物")
+            _store_product(w, files[0])
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group)
+            self.assertEqual(group.childCount(), 1)
+            self.assertIn(files[0].name, group.child(0).text(0))
+            self.assertIn("· 1D", group.child(0).text(0))
+        finally:
+            w.close()
+
+    def test_product_item_draws_from_cache_without_integrating(self):
+        """产物条目出 1D 图 = 直接读盘画线（积分函数一次都不该被调）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            key = _store_product(w, files[0], values=[7.0, 8.0, 9.0])
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            group.child(0).setCheckState(0, Qt.Checked)
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as compute:
+                _open_view(w, "1D")
+                QApplication.processEvents()
+                self.assertEqual(compute.call_count, 0, "产物不该重新积分")
+            dock = w.plot_docks[f"1D|1d#{key}"]
+            lines = _axes(w, "1D", "1d#" + key).lines
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(list(lines[0].get_ydata()), [7.0, 8.0, 9.0])
+            self.assertIn("直接读盘不重算", w.log_text.toPlainText())
+            # 1D 产物 = 那条原始积分曲线（不是"已完成"的东西）：不强制「不扣」，
+            # 模式照默认起步，锚点/自动基线和原始文件一样能用
+            self.assertNotIn("面板背景扣除已置「不扣」", w.log_text.toPlainText())
+            self.assertEqual(dock.params_snapshot["背景扣除模式"], "off",
+                             "默认就是不扣（面板快照的出厂值），不是被强制的")
+        finally:
+            w.close()
+
+    def test_bg_product_panel_forces_background_off(self):
+        """扣背景产物面板：强制「不扣」（已经扣过，再扣就是二次相减）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files])
+            key = _store_product(w, files[0], kind="bg", values=[5.0, 6.0, 7.0])
+            stage_cache.record_batch("bg", "force-off",
+                                     label="扣背景 09-25 07:00（空扫相减）",
+                                     items=[(files[0], key)], **_kw_of(w),
+                                     settings={"mode": "blank"})
+            w.refresh_groups()
+            _group_by_text(w, "扣背景 09-25 07:00").child(0).setCheckState(
+                0, Qt.Checked)
+            QApplication.processEvents()
+            _open_view(w, "1D")
+            QApplication.processEvents()
+            dock = w.plot_docks[f"1D|bg#{key}"]
+            self.assertEqual(dock.params_snapshot["背景扣除模式"], "off")
+            self.assertIn("面板背景扣除已置「不扣」", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_product_item_on_2d_view_is_skipped_with_log(self):
+        """产物条目点了 [2D]：点名跳过（1D 曲线没有 2D 视图）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            _store_product(w, files[0])
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            group.child(0).setCheckState(0, Qt.Checked)
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            _open_view(w, "2D")
+            QApplication.processEvents()
+            self.assertIn("跳过 1 个产物条目", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_compare_uses_background_group(self):
+        """勾一整组扣背景产物 → [对比] 直接画出那两条（不重算、不重扣）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            keys = [_store_product(w, p, kind="bg", values=[i, i, i])
+                    for i, p in enumerate(files, start=1)]
+            stage_cache.record_batch(
+                "bg", "probe-batch",
+                label="扣背景 09-25 14:03（锚点 1 个，窗口 2°）",
+                items=[(p, k) for p, k in zip(files, keys)], **_kw_of(w),
+                settings={"mode": "anchor"})
+            w.refresh_groups()
+            group = _group_by_text(w, "扣背景 09-25 14:03")
+            self.assertIsNotNone(group)
+            group.setCheckState(0, Qt.Checked)
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as compute:
+                w.compare_btn.click()
+                QApplication.processEvents()
+                self.assertEqual(compute.call_count, 0, "产物不该重新积分")
+            key = "对比|" + ",".join(sorted(f"bg#{k}" for k in keys))
+            ax = _axes(w, "对比", key.split("|", 1)[1])
+            self.assertEqual(len(ax.lines), 2)
+            labels = [ln.get_label() for ln in ax.lines]
+            self.assertTrue(all("扣背景" in lb for lb in labels), labels)
+            self.assertIn("扣背景产物", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_delete_ignores_product_items(self):
+        """[删除] 只认原始数据：只勾了产物时它什么都不删，并说清为什么。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            _store_product(w, files[0])
+            w.refresh_groups()
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            w.findChild(QPushButton, "delete_btn").click()
+            self.assertEqual(w.file_list.count(), 1,
+                             "产物条目不是「原始数据」，删除不该动它")
+            self.assertIn("没有选中要删除的文件（产物条目要从分组上右键删）",
+                          w.log_text.toPlainText())
+            self.assertEqual(len(w.file_list.groups()), 1, "产物分组还在")
+            # 原始数据与产物一起勾上时：删文件、留产物，并说明几个没动
+            w.file_list.raw_group.setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            w.findChild(QPushButton, "delete_btn").click()
+            self.assertEqual(w.file_list.count(), 0)
+            self.assertIn("另有 1 个产物条目没动", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_delete_group_menu_drops_products(self):
+        """右键产物分组 → 删掉这一组（台账 + 盘上的产物一起没）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            key = _store_product(w, files[0], kind="bg")
+            stage_cache.record_batch(
+                "bg", "menu-batch", label="扣背景 09-25 09:00（空扫相减）",
+                items=[(files[0], key)], **_kw_of(w),
+                settings={"mode": "blank"})
+            w.refresh_groups()
+            group = _group_by_text(w, "扣背景 09-25 09:00")
+            self.assertIsNotNone(group)
+            # 没显示的窗口不弹模态菜单（会等不到人点，卡死套件）——这一步
+            # 单独守；删除本身走 drop_product_group（菜单确认后调同一个）
+            gui_file_dock._group_menu(w, group)
+            self.assertEqual(w.file_list.groups()[-1].text(0),
+                             group.text(0), "无头环境不弹菜单，也不该删掉什么")
+            gui_file_dock.drop_product_group(w, group)
+            QApplication.processEvents()
+            self.assertIsNone(_group_by_text(w, "扣背景 09-25 09:00"))
+            self.assertIn("已删除产物分组", w.log_text.toPlainText())
+            self.assertFalse(stage_cache.has_key("bg", key), "盘上的产物也删了")
+        finally:
+            w.close()
+
+    def test_calib_standard_ignores_product_items(self):
+        """校准取标样只认原始数据：勾了产物不算数。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            _store_product(w, files[0])
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            group.child(0).setCheckState(0, Qt.Checked)
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            self.assertIsNone(gui_calib_panel._calib_standard_path(w))
+            w.file_list.raw_group.setCheckState(0, Qt.Checked)
+            self.assertEqual(gui_calib_panel._calib_standard_path(w), files[0])
+        finally:
+            w.close()
+
+    def test_export_names_product_with_stage_suffix(self):
+        """导出产物条目：名字带 `_扣背景`/`_1D` 后缀（与原始结果不撞名）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            key = _store_product(w, files[0], kind="bg",
+                                 values=[4.0, 5.0, 6.0])
+            stage_cache.record_batch("bg", "export-batch", label="扣背景 batch",
+                                     items=[(files[0], key)], **_kw_of(w),
+                                     settings={"mode": "anchor"})
+            w.refresh_groups()
+            self.assertIsNone(_group_by_text(w, "1D 产物"), "bg 产物不进 1D 组")
+            w.refresh_groups()
+            _group_by_text(w, "扣背景 batch").child(0).setCheckState(0, Qt.Checked)
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            out = gui_export._checked_1d_results(w)
+            self.assertEqual(len(out), 1)
+            self.assertEqual(out[0][0], f"{files[0].stem}_扣背景")
+        finally:
+            w.close()
+
+    def test_clear_cache_empties_groups(self):
+        """[清空缓存] → 产物分组跟着消失（台账也清了）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            _store_product(w, files[0])
+            w.refresh_groups()
+            self.assertIsNotNone(_group_by_text(w, "1D 产物"))
+            w.entrance_buttons["1D"].click()   # [清空缓存] 在 1D 页底部
+            w.clear_cache_btn.click()
+            QApplication.processEvents()
+            self.assertIsNone(_group_by_text(w, "1D 产物"))
+        finally:
+            w.close()
+
+
+class TestBackgroundFromProduct(unittest.TestCase):
+    """1D 产物条目也能扣背景（用户 2026-09-25 问起的那条）。
+
+    1D 产物就是那条原始积分曲线，只是钉在某一份缓存上——所以它跟原始
+    文件一个待遇（锚点/自动基线照用、也能进 [批量扣背景]），差别只在
+    **结果挂在那一份 1D 的键下面**（键 = 那条 1D 键 + 设置哈希）：勾的是
+    哪一条就扣哪一条，不按当前设置另算一条。扣背景产物本身仍然跳过
+    （它已经是扣完的，再扣就是二次相减）。
+    """
+
+    def setUp(self):
+        # 台账是模块级共享的临时缓存根：每个用例自己清一份，断言才数得准
+        stage_cache.write_batches("bg", [])
+
+    def _mine(self, path):
+        """这个文件相关的扣背景批次（台账里按**源文件路径**找）。"""
+        key = str(Path(path).resolve())
+        return [b for b in stage_cache.list_batches("bg") if key in b["items"]]
+
+    def _one_d_panel(self, w, values=(1.0, 2.0, 3.0)):
+        """建一个"只有 1D 产物被勾着"的窗口，返回 (文件, 1D 键, 面板)。"""
+        files = _tmp_files(1)
+        w.add_files([str(p) for p in files])          # 导入默认不勾
+        key1d = _store_product(w, files[0], values=values)
+        w.refresh_groups()
+        _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
+        QApplication.processEvents()
+        _open_view(w, "1D")                           # 产物条目出 1D 面板
+        QApplication.processEvents()
+        return files[0], key1d, w.plot_docks[f"1D|1d#{key1d}"]
+
+    def _anchors_on(self, w, dock, path, xs):
+        """把模式切到手动锚点并在给定 2θ 上放锚点（用面板自己的曲线取强度）。"""
+        cb = w.params["背景扣除模式"]
+        cb.setCurrentIndex(cb.findData("anchor"))
+        w.params["背景窗口 (°)"].setValue(1.0)
+        dock.params_snapshot = dict(
+            dock.params_snapshot or {},
+            **{"背景扣除模式": "anchor", "背景窗口 (°)": 1.0})
+        tth = np.asarray(dock.last_tth, dtype=float)
+        inten = np.asarray(dock.last_intensity, dtype=float)
+        w.bg_anchors[str(path)] = [(x, float(np.interp(x, tth, inten)))
+                                   for x in xs]
+
+    def test_batch_background_subtracts_one_d_product(self):
+        """勾 1D 产物 → [批量扣背景]：真扣一份，且挂在**那份 1D 的键**下面。"""
+        w = create_window()
+        try:
+            path, key1d, dock = self._one_d_panel(w)
+            tth = np.asarray(dock.last_tth, dtype=float)
+            self._anchors_on(w, dock, path, [float(tth[0]), float(tth[-1])])
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("批量扣背景完成：1/1", log)
+            self.assertIn("其中 1 条来自 1D 产物", log)
+            batches = self._mine(path)
+            self.assertEqual(len(batches), 1)
+            meta = batches[0]["items"][str(Path(path).resolve())]
+            self.assertTrue(stage_cache.has_key("bg", meta["key"]),
+                            "产物真落盘了")
+            with np.load(stage_cache.CACHE_ROOT / "bg"
+                         / f"{meta['key']}.npz") as data:
+                stored = json.loads(str(data["meta"]))
+            self.assertEqual(stored["base_key"], key1d,
+                             "挂在勾的那份 1D 产物键下面（不按当前设置另算）")
+            # 文件栏里长出一个扣背景分组，且子项可以整组勾上去比
+            self.refresh_ok = _wait_until(
+                lambda: _group_by_text(w, "扣背景") is not None)
+            self.assertTrue(self.refresh_ok, "扣完要出现扣背景分组")
+        finally:
+            w.close()
+
+    def test_batch_background_skips_bg_products(self):
+        """扣背景产物条目跳过（已经是扣完的），日志说清原因。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files])
+            key = _store_product(w, files[0], kind="bg")
+            stage_cache.record_batch(
+                "bg", "skip-batch", label="扣背景 09-25 08:00（空扫相减）",
+                items=[(files[0], key)], **_kw_of(w),
+                settings={"mode": "blank"})
+            w.refresh_groups()
+            _group_by_text(w, "扣背景 09-25 08:00").child(0).setCheckState(
+                0, Qt.Checked)
+            QApplication.processEvents()
+            # 给个编辑对象（否则先卡在"先点一张 1D 图"）
+            _open_view(w, "1D")
+            QApplication.processEvents()
+            dock = next(d for k, d in w.plot_docks.items()
+                        if k.startswith("1D|"))
+            cb = w.params["背景扣除模式"]
+            cb.setCurrentIndex(cb.findData("anchor"))
+            dock.params_snapshot = dict(dock.params_snapshot or {},
+                                        **{"背景扣除模式": "anchor"})
+            w.bg_anchors[str(files[0])] = [(1.0, 1.0)]
+            before = len(self._mine(files[0]))
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("没有选中的文件", log)
+            self.assertIn("扣背景产物已经是扣完的结果", log)
+            self.assertEqual(len(self._mine(files[0])), before, "不该新增批次")
+        finally:
+            w.close()
+
+    def test_batch_background_dedupes_same_file(self):
+        """同一文件既勾了原始又勾了 1D 产物：只扣一份，另一条记一行跳过。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            add_checked(w, [str(p) for p in files])   # 原始也勾上
+            _store_product(w, files[0])
+            w.refresh_groups()
+            _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")
+                QApplication.processEvents()
+            dock = _dock(w, "1D", str(files[0]))
+            self._anchors_on(w, dock, files[0], [0.5, 1.0])
+            w.bg_batch_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("同一文件在批里只扣一份", log)
+            self.assertIn("批量扣背景完成：1/2 个文件", log)
+            self.assertEqual(
+                sum(len(b["items"]) for b in self._mine(files[0])), 1)
         finally:
             w.close()
 
@@ -1434,10 +2063,10 @@ class TestDuplicateFiles(unittest.TestCase):
     def test_duplicate_overwrite_keeps_single_entry(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="overwrite"):
-                w.add_files(["data/fake_a.tif"])   # 再拖入一次
+                add_checked(w, ["data/fake_a.tif"])   # 再拖入一次
             self.assertEqual(w.file_list.count(), 1)
             self.assertEqual(w.file_list.item(0).text(), "fake_a.tif")
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
@@ -1451,10 +2080,10 @@ class TestDuplicateFiles(unittest.TestCase):
         """改名输入框预填编号名（测试环境直接返回预填值）。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 2)
             self.assertEqual(w.file_list.item(0).text(), "fake_a.tif")
             self.assertEqual(w.file_list.item(1).text(), "fake_a (1).tif")
@@ -1466,7 +2095,7 @@ class TestDuplicateFiles(unittest.TestCase):
             # 第三次加入 → 编号继续涨，不与 (1) 撞名
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             texts = [w.file_list.item(i).text()
                      for i in range(w.file_list.count())]
             self.assertEqual(texts, ["fake_a.tif", "fake_a (1).tif",
@@ -1477,10 +2106,10 @@ class TestDuplicateFiles(unittest.TestCase):
     def test_duplicate_cancel_skips(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="cancel"):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 1)
             self.assertIn("跳过", w.log_text.toPlainText())
         finally:
@@ -1490,12 +2119,12 @@ class TestDuplicateFiles(unittest.TestCase):
         """改名输入框：用户自己输入的名字生效。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
                  mock.patch.object(gui_file_dock, "_ask_rename",
                                    return_value="我的数据.tif"):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 2)
             self.assertEqual(w.file_list.item(1).text(), "我的数据.tif")
             # 显示名随便改，但底层仍指向同一个文件
@@ -1510,12 +2139,12 @@ class TestDuplicateFiles(unittest.TestCase):
         """改名输入框取消（返回 None）→ 这次不加。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
                  mock.patch.object(gui_file_dock, "_ask_rename",
                                    return_value=None):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 1)
             self.assertIn("已跳过重复文件", w.log_text.toPlainText())
         finally:
@@ -1525,12 +2154,12 @@ class TestDuplicateFiles(unittest.TestCase):
         """输入的名字已被占用 → 要求换一个，输入框重新弹。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"), \
                  mock.patch.object(gui_file_dock, "_ask_rename",
                                    side_effect=["fake_b.tif", "自定义.tif"]):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
             self.assertEqual(w.file_list.count(), 3)
             self.assertEqual(w.file_list.item(2).text(), "自定义.tif")
             self.assertIn("显示名 fake_b.tif 已被占用", w.log_text.toPlainText())
@@ -1561,10 +2190,10 @@ class TestDuplicateFiles(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                        return_value="rename"):
-                    w.add_files(["data/fake_a.tif"])
+                    add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
                 drawn1 = _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0)
@@ -1637,7 +2266,7 @@ class TestTthRangeFlowsToCompute(unittest.TestCase):
                 return np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=recorder):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: len(calls) >= 1))
                 self.assertAlmostEqual(calls[0]["tth_min_deg"], 1.0)
@@ -1672,7 +2301,7 @@ class TestAutoContrast(unittest.TestCase):
         fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
         with mock.patch.object(gui_views, "load_diffraction_image",
                                return_value=fake_image):
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "2D")
             self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                 _dock(w, "2D", "data/fake_a.tif")).axes_2d.images) > 0))
@@ -1684,7 +2313,7 @@ class TestAutoContrast(unittest.TestCase):
         """画一张 fake_a 的 1D 图并等它完成 → 编辑对象 = 该面板。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
@@ -1802,7 +2431,7 @@ class TestParamSnapshot(unittest.TestCase):
         """只勾这一个文件、改参数、出图并等完成 → 返回面板键。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([file])
+            add_checked(w, [file])
             # 只留这一个对号（其余取消），点作图按钮才只画它
             for i in range(w.file_list.count()):
                 item = w.file_list.item(i)
@@ -1935,19 +2564,27 @@ class TestPanelToggles(unittest.TestCase):
                                return_value="discard"):
             self.w.close()
 
-    def test_default_all_visible_and_checked(self):
-        """初始状态：三个开关都勾着、三个坞都可见。"""
-        for name, dock in (("文件", self.w.file_dock),
-                           ("参数", self.w.param_dock),
-                           ("日志", self.w.log_dock)):
-            self.assertTrue(self.w.panel_toggles[name].isChecked())
-            self.assertTrue(dock.isVisible())
+    def test_default_docks_visible(self):
+        """初始状态：[文件][日志] 可见，**[参数] 收起**（开局什么都没选）。
+
+        用户 2026-09-25 定："开界面时上面什么都不选、右边参数栏是隐藏的"
+        ——参数坞跟入口走（点入口才露出来），见 TestEntrances。
+        """
+        for name in ("文件", "日志"):
+            self.assertTrue(self.w.panel_toggles[name].isChecked(), name)
+        self.assertTrue(self.w.file_dock.isVisible())
+        self.assertTrue(self.w.log_dock.isVisible())
+        self.assertFalse(self.w.panel_toggles["参数"].isChecked())
+        self.assertFalse(self.w.param_dock.isVisible())
 
     def test_toggle_hides_and_restores_each_dock(self):
-        """点开关收起、再点展开，三个坞各试一遍。"""
+        """点开关收起、再点展开，三个坞各试一遍（从各自当前状态起步）。"""
         for name, dock in (("文件", self.w.file_dock),
                            ("参数", self.w.param_dock),
                            ("日志", self.w.log_dock)):
+            if not dock.isVisible():             # [参数] 开局就是收起的
+                self.w.panel_toggles[name].click()
+            self.assertTrue(dock.isVisible())
             self.w.panel_toggles[name].click()   # 收起
             self.assertFalse(dock.isVisible())
             self.assertFalse(self.w.panel_toggles[name].isChecked())
@@ -1957,6 +2594,8 @@ class TestPanelToggles(unittest.TestCase):
 
     def test_close_button_syncs_toggle(self):
         """点标题栏 × 关坞 → 按钮自动弹起；再点按钮还能展开。"""
+        self.w.panel_toggles["参数"].click()   # 先展开（开局收起）
+        self.assertTrue(self.w.param_dock.isVisible())
         self.w.param_dock.close()   # 等价于标题栏 ×
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.panel_toggles["参数"].isChecked())
@@ -1965,13 +2604,16 @@ class TestPanelToggles(unittest.TestCase):
 
     def test_all_hidden_plot_still_works(self):
         """全收起来只剩绘图区，照常出图（开关不影响作图流程）。"""
-        for btn in self.w.panel_toggles.values():
-            btn.click()
+        for name, dock in (("文件", self.w.file_dock),
+                           ("参数", self.w.param_dock),
+                           ("日志", self.w.log_dock)):
+            if dock.isVisible():
+                self.w.panel_toggles[name].click()
         for dock in (self.w.file_dock, self.w.param_dock, self.w.log_dock):
             self.assertFalse(dock.isVisible())
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            self.w.add_files(["data/fake_b.tif"])
+            add_checked(self.w, ["data/fake_b.tif"])
             _open_view(self.w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(self.w, "1D", "data/fake_b.tif").lines)
@@ -1988,7 +2630,7 @@ class Test1dDisplay(unittest.TestCase):
         """画 fake_b 的 1D 图并等完成 → 返回坐标轴（强度 1/2/3）。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
@@ -2075,7 +2717,7 @@ class TestLongNames(unittest.TestCase):
         """画一张长文件名的 1D 图并等完成（编辑对象 = 该面板）。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([self.LONG])
+            add_checked(w, [self.LONG])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.LONG).lines) > 0))
@@ -2145,11 +2787,12 @@ class TestParamDockSplitLayout(unittest.TestCase):
                              {"校准": 0, "1D": 1, "扣背景": 2, "对比": 3,
                               "绘图": 4})
             self.assertEqual(w.param_stack.currentIndex(),
-                             w.PARAM_PAGES["1D"], "开局落在最常用的 1D 页")
+                             w.PARAM_PAGES["1D"], "默认可停在 1D 页")
             self.assertEqual(list(w.entrance_buttons),
                              ["校准", "1D", "扣背景", "对比", "绘图"])
+            # 开局谁都不点亮（用户 2026-09-25 定：上面什么都不选）
             for name, btn in w.entrance_buttons.items():
-                self.assertEqual(btn.isChecked(), name == "1D", name)
+                self.assertFalse(btn.isChecked(), name)
             # 六个作图类型按钮都在「绘图」页里（工具栏只剩入口 + 面板开关）
             draw_page = w.param_stack.widget(w.PARAM_PAGES["绘图"])
             for btn in (list(w.view_buttons.values())
@@ -2169,7 +2812,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 # 1D 页：出 1D 图
                 w.entrance_buttons["1D"].click()
                 page_1d = w.param_stack.widget(w.PARAM_PAGES["1D"])
@@ -2200,6 +2843,44 @@ class TestParamDockSplitLayout(unittest.TestCase):
                         f"{btn} 应在{name}页里")
         finally:
             w.close()
+
+    def test_startup_selects_nothing_and_hides_param_dock(self):
+        """开局：五个入口一个都不亮 + 参数坞收起（用户 2026-09-25 定：
+        "开界面后上面什么都没选，右边参数栏是隐藏的"）。"""
+        w = create_window()
+        try:
+            w.show()
+            QApplication.processEvents()
+            for name, btn in w.entrance_buttons.items():
+                self.assertFalse(btn.isChecked(), name)
+            self.assertFalse(w.param_dock.isVisible())
+            self.assertFalse(w.panel_toggles["参数"].isChecked())
+            self.assertIsNone(w._last_entrance)
+            # 其余两个坞照常：开局只剩文件列 + 日志
+            self.assertTrue(w.file_dock.isVisible())
+            self.assertTrue(w.log_dock.isVisible())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_clicking_entrance_shows_param_dock(self):
+        """点入口 = 参数坞露出来并翻到那一页（[参数] 开关自动跟着勾上）。"""
+        w = create_window()
+        try:
+            w.show()
+            QApplication.processEvents()
+            for name in ("1D", "对比"):
+                w.entrance_buttons[name].click()
+                QApplication.processEvents()
+                self.assertTrue(w.param_dock.isVisible(), name)
+                self.assertTrue(w.panel_toggles["参数"].isChecked(), name)
+                self.assertEqual(w.param_stack.currentIndex(),
+                                 w.PARAM_PAGES[name], name)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
     def test_entrance_switching_follows_buttons(self):
         """点入口 = 翻到那一页 + 高亮跟着动；出入校准走同一条路。"""
@@ -2280,6 +2961,9 @@ class TestParamDockSplitLayout(unittest.TestCase):
         w = create_window()
         try:
             w.show()
+            # 参数坞开局是收起的（入口一个都没选）：Qt 只在坞**显示出来**
+            # 时才把内容的最小尺寸并进坞的最小尺寸，所以先点个入口再量
+            w.entrance_buttons["1D"].click()
             QApplication.processEvents()
             # 坞的最小宽高已设：左右 = 完整显示最宽一行的宽度，
             # 上下 = 固定件（编辑对象名 + 标题/按钮行）不被遮没
@@ -2337,7 +3021,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
@@ -2365,7 +3049,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    side_effect=OSError("boom")):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(
                     lambda: "读取失败" in w.log_text.toPlainText()))
@@ -2385,12 +3069,12 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
                     > 0))
-                w.add_files(["data/fake_b.tif"])   # fake_a 仍勾着
+                add_checked(w, ["data/fake_b.tif"])   # fake_a 仍勾着
                 w.compare_btn.click()
                 cax = gui_panel_state._content([d for k, d in w.plot_docks.items()
                                         if k.startswith("对比|")][0]).axes_1d
@@ -2419,7 +3103,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")   # 两张都出图（默认线性）
                 self.assertTrue(_wait_until(
                     lambda: all(len(_axes(w, "1D", f"data/{n}.tif").lines) > 0
@@ -2453,7 +3137,7 @@ class TestImageApply(unittest.TestCase):
             # A：先按默认出图，再改成手填范围并图像 [应用]
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
@@ -2465,7 +3149,7 @@ class TestImageApply(unittest.TestCase):
             self.assertEqual(_axes(w, "1D", "data/fake_a.tif").get_ylim(),
                              (10.0, 500.0))
             # B：只勾 B 新开一张（新面板显示参数从默认起步 = 自动开）
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             for i in range(w.file_list.count()):
                 item = w.file_list.item(i)
                 item.setCheckState(
@@ -2498,7 +3182,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
@@ -2512,7 +3196,7 @@ class TestImageApply(unittest.TestCase):
             # 新开对比图 → 显示参数是默认，不是上面的对数/手填
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif"])   # fake_b 仍勾着
+                add_checked(w, ["data/fake_a.tif"])   # fake_b 仍勾着
                 w.compare_btn.click()
                 cdock = [d for k, d in w.plot_docks.items()
                          if k.startswith("对比|")][0]
@@ -2540,7 +3224,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
@@ -2552,7 +3236,7 @@ class TestImageApply(unittest.TestCase):
                 _axes(w, "1D", "data/fake_a.tif").get_yscale(), "log")
             # 加一张 fake_b 两张都勾着重按 1D：重算两张。新开的 fake_b
             # 从默认（线性）起步，fake_a 保留自己的对数设置
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
@@ -2574,7 +3258,7 @@ class TestImageApply(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
@@ -2615,7 +3299,7 @@ class TestImageApply(unittest.TestCase):
             # 区间是它的 1%/99.9% 分位，不是占位默认
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
@@ -2628,7 +3312,7 @@ class TestImageApply(unittest.TestCase):
             self.assertGreater(w.params["纵轴下限"].value(), 5.0)   # 不是占位 1.0
             # 只勾 fake_a（数据 [1, 2, 3]）再开一张 → 焦点切到 A，
             # 置灰框按 A 的数据重算；切回 B 又变回 B 的区间
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             for i in range(w.file_list.count()):
                 item = w.file_list.item(i)
                 item.setCheckState(
@@ -2677,7 +3361,7 @@ class TestCompare(unittest.TestCase):
         """勾 fake_a + fake_b 点 [对比] 并等两条曲线到齐 → 返回坐标轴。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compare_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
             ax = self._compare_axes(w)
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
@@ -2687,7 +3371,7 @@ class TestCompare(unittest.TestCase):
         """只勾一个文件点 [对比] → 提示至少两个，不开面板。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             w.compare_btn.click()
             self.assertIn("对比至少勾选两个文件", w.log_text.toPlainText())
             self.assertFalse(
@@ -2868,7 +3552,7 @@ class TestCompare(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=boom):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 ax = self._compare_axes(w)
                 self.assertTrue(_wait_until(
@@ -2892,7 +3576,7 @@ class TestCompare(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=fake3):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif",
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
                              "data/fake_c.tif"])
                 w.compare_btn.click()
                 ax = self._compare_axes(w)
@@ -2915,7 +3599,7 @@ class TestCompare(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=all_boom):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 ax = self._compare_axes(w)
                 self.assertTrue(_wait_until(
@@ -2932,7 +3616,7 @@ class TestCompare(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 w.compare_btn.click()   # 第一代 fake_a 还在睡 0.2s
                 ax = self._compare_axes(w)
@@ -2968,7 +3652,7 @@ class TestArrangeModeClose(unittest.TestCase):
             w.show()   # 面板要可见才参与重排（offscreen 下不 show 不可见）
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
@@ -3015,7 +3699,7 @@ class TestArrangeModeClose(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")   # 任务立刻在后台开睡
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -3058,7 +3742,7 @@ class TestPlotFixedSize(unittest.TestCase):
             w.resize(1400, 900)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 drawn = _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -3094,7 +3778,7 @@ class TestSlimPanelChrome(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([self.PATH])
+            add_checked(w, [self.PATH])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
@@ -3272,7 +3956,7 @@ class TestDragBlit(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([self.PATH])
+            add_checked(w, [self.PATH])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
@@ -3374,7 +4058,7 @@ class TestBoxZoomScope(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(lambda: all(
                 len(_axes(w, "1D", p).lines) > 0
@@ -3444,7 +4128,7 @@ class TestHomeView(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([self.PATH])
+            add_checked(w, [self.PATH])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
@@ -3607,7 +4291,7 @@ class TestBackgroundBatch(unittest.TestCase):
     def _open_both(self, w, files):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_scaled_compute):
-            w.add_files(files)
+            add_checked(w, files)
             _open_view(w, "1D")
             self.assertTrue(_wait_until(lambda: all(
                 len(_axes(w, "1D", f).lines) > 0 for f in files)))
@@ -3723,7 +4407,7 @@ class TestStageCacheFlow(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
-                w.add_files([path])
+                add_checked(w, [path])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: len(
                     _axes(w, "1D", path).lines) > 0))
@@ -3747,7 +4431,7 @@ class TestStageCacheFlow(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
-                w.add_files([path])
+                add_checked(w, [path])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: len(
                     _axes(w, "1D", path).lines) > 0))
@@ -3768,7 +4452,7 @@ class TestStageCacheFlow(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files([path])
+                add_checked(w, [path])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: len(
                     _axes(w, "1D", path).lines) > 0))
@@ -3801,7 +4485,7 @@ class TestBoxZoom(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([self.PATH])
+            add_checked(w, [self.PATH])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
@@ -3936,7 +4620,7 @@ class TestZoomToolbar(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -3974,7 +4658,7 @@ class TestHoverDot(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
             _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -4040,7 +4724,7 @@ class TestHoverDot(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 key = next(k for k in w.plot_docks
                            if k.startswith("对比|"))
@@ -4067,7 +4751,7 @@ class TestArrangeGrid(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             both = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -4132,7 +4816,7 @@ class TestTilingGroups(unittest.TestCase):
         """按开图先后：1D(fake_a) → 2D(fake_c) → 1D(fake_b)。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif",
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
                          "data/fake_c.tif"])
             for keep, view in (("fake_a.tif", "1D"),
                                ("fake_c.tif", "2D"),
@@ -4208,7 +4892,7 @@ class TestTilingGroups(unittest.TestCase):
             # 三张同类型 1D 挤在同一行，窗口收窄后必然放不下
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif",
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
                              "data/fake_c.tif"])
                 _open_view(w, "1D")
             self.assertTrue(_wait_until(
@@ -4234,7 +4918,7 @@ class TestFreeResize(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             both = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -4295,7 +4979,7 @@ class TestResizeGrips(unittest.TestCase):
     def _open_one(self, w, view="1D", path_str="data/fake_b.tif"):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([path_str])
+            add_checked(w, [path_str])
             _open_view(w, view)
         if view == "1D":
             self.assertTrue(_wait_until(
@@ -4426,7 +5110,7 @@ class TestCustomizeDialog(unittest.TestCase):
     def _open_one(self, w, path_str="data/fake_b.tif"):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files([path_str])
+            add_checked(w, [path_str])
             _open_view(w, "1D")
         self.assertTrue(_wait_until(
             lambda: len(_axes(w, "1D", path_str).lines) > 0))
@@ -4597,7 +5281,7 @@ class TestWindowClickFocus(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -4673,7 +5357,7 @@ class TestCanvasTrue53(unittest.TestCase):
             w.resize(1400, 900)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -4695,7 +5379,7 @@ class TestCustomRatioMemory(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             both = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -4714,7 +5398,7 @@ class TestCustomRatioMemory(unittest.TestCase):
             geo = d2.geometry()
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_c.tif"])
+                add_checked(w, ["data/fake_c.tif"])
                 _open_view(w, "1D")
                 _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_c.tif").lines) > 0)
@@ -4780,7 +5464,7 @@ class TestViewLimitSync(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
             drawn = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -4872,7 +5556,7 @@ class TestGestures(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
             drawn = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -5102,7 +5786,7 @@ class TestCustomizeProtection(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "1D")
             drawn = _wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0)
@@ -5534,7 +6218,7 @@ class TestPopOut(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_b.tif"])
+            add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
@@ -5614,7 +6298,7 @@ class TestPopOut(unittest.TestCase):
             w.resize(1400, 900)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -5642,7 +6326,7 @@ class TestPanelClose(unittest.TestCase):
     def _open_two(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -5711,7 +6395,7 @@ class TestPanelClose(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")   # 后台开算（0.3s）
                 key = "1D|data/fake_b.tif"
                 self.assertTrue(_wait_until(lambda: key in w.plot_docks))
@@ -5735,7 +6419,7 @@ class TestPanelClose(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 keys = [k for k in w.plot_docks if k.startswith("对比|")]
                 self.assertTrue(_wait_until(lambda: keys))
@@ -5784,7 +6468,7 @@ class TestSavePromptExcludesClosed(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0
@@ -5847,7 +6531,7 @@ class TestCalibration(unittest.TestCase):
         注意：自动/手动校准的后台 worker 还会再读一次图，调用方要
         自己把 load_diffraction_image 的 patch 罩住整个测试体。
         """
-        w.add_files(["data/fake_a.tif"])
+        add_checked(w, ["data/fake_a.tif"])
         w.calib_btn.click()
         self.assertEqual(w.param_stack.currentIndex(),
                          w.PARAM_PAGES["校准"])
@@ -5882,7 +6566,12 @@ class TestCalibration(unittest.TestCase):
                 w.close()
 
     def test_calib_page_exit_button_returns_to_analysis(self):
-        """校准页底部 [返回分析模式] = 把工具栏开关弹起（同源切换）。"""
+        """校准页底部 [返回分析模式] = 把工具栏开关弹起（同源切换）。
+
+        没选过别的入口就进校准（测试就是这么走的）→ 退出来回到"什么都
+        没选"：入口不亮、参数坞收起（用户 2026-09-25 定，另一种情形
+        见下一条 test_exit_calib_to_prior_entrance_keeps_dock）。
+        """
         w = create_window()
         try:
             w.show()
@@ -5890,13 +6579,33 @@ class TestCalibration(unittest.TestCase):
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             self.assertTrue(w.calib_btn.isChecked())
-            # 页面出口：点 [返回分析模式] → 入口弹起 → 翻回分析页
+            # 页面出口：点 [返回分析模式] → 入口弹起 → 回分析侧
             w.calib_exit_btn.click()
             self.assertFalse(w.calib_btn.isChecked())
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["1D"])
             self.assertIsNone(w.calib_dock)
+            self.assertFalse(w.param_dock.isVisible())
+            self.assertIsNone(w._last_entrance)
             self.assertIn("回到分析模式", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_exit_calib_to_prior_entrance_keeps_dock(self):
+        """先点过 [1D] 再进校准 → 退出来回 1D 页、参数坞还开着。"""
+        w = create_window()
+        try:
+            w.show()
+            w.entrance_buttons["1D"].click()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            w.calib_exit_btn.click()
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["1D"])
+            self.assertTrue(w.param_dock.isVisible())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -6315,7 +7024,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                                return_value=TestCalibration.FAKE_CENTER), \
              mock.patch.object(gui_calib, "calibrate_lab6",
                                return_value=dict(self.FAKE_AUTO)):
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             w.calib_btn.click()
             w.calib_pixel_chk.setChecked(True)   # 校准前置：确认像素尺寸
             w.calib_start_auto.click()
@@ -6435,7 +7144,7 @@ class TestSaveCalibConfig(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             # 借到条目 → 可以存（借来的那份也是"当前配置"）
             self.assertTrue(w.calib_save_btn.isEnabled())
@@ -6645,7 +7354,7 @@ class TestCalibMetrics(unittest.TestCase):
                                    side_effect=lambda image, **kw:
                                    dict(self.METRICS if kw["dist_m"] == 1.5970
                                         else self.INITIAL)):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)   # 校准前置：确认像素尺寸
                 w.calib_start_auto.click()
@@ -6867,7 +7576,7 @@ class TestCalibCurrent(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             st = w.calib_state
             cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
@@ -6889,7 +7598,7 @@ class TestCalibCurrent(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)
                 self.assertTrue(gui_calib._pixel_ok(w))
@@ -6933,7 +7642,7 @@ class TestCalibCurrent(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)
                 self.assertTrue(gui_calib._pixel_ok(w))
@@ -6971,7 +7680,7 @@ class TestCalibCurrent(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_start_auto.click()
                 self.assertNotIn("calib_auto", w._latest_task)   # 没建校准任务
@@ -7011,7 +7720,7 @@ class TestCalibFlow(unittest.TestCase):
                                    side_effect=lambda image, **kw:
                                    self._metrics(0.20 if kw["dist_m"] > 1.596
                                                  else 0.60)):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)
                 _wait_until(lambda: gui_calib._pixel_ok(w) and
@@ -7051,7 +7760,7 @@ class TestCalibFlow(unittest.TestCase):
                  mock.patch.object(gui_calib, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    self._metrics(0.30)):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)
                 _wait_until(lambda: w.calib_state["current_metrics"] is not None,
@@ -7088,7 +7797,7 @@ class TestCalibFlow(unittest.TestCase):
                  mock.patch.object(gui_calib, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    self._metrics(0.60)):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)
                 w.calib_start_auto.click()
@@ -7120,14 +7829,20 @@ class TestCalibFlow(unittest.TestCase):
                 w.close()
 
     def test_dock_widens_on_enter_and_restores_on_exit(self):
-        """进校准模式按内容拉宽参数坞（给绘图区留 620 px），退出还原。"""
+        """进校准模式按内容拉宽参数坞（给绘图区留 620 px），退出还原。
+
+        先点过 [1D]（参数坞可见）再进校准——开局它是收起的，量不到
+        "之前的宽度"，那种情况由下一条测试单独守。
+        """
         w = create_window()
         try:
             w.show()
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
             before = w.param_dock.width()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             QApplication.processEvents()
             page = w.calib_scroll.widget()
@@ -7138,6 +7853,36 @@ class TestCalibFlow(unittest.TestCase):
             w.entrance_buttons["1D"].click()   # 点别的入口 = 退出校准
             QApplication.processEvents()
             self.assertAlmostEqual(w.param_dock.width(), before, delta=2)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_widens_dock_when_opened_first_thing(self):
+        """开局第一件事就点 [校准]（参数坞刚从隐藏转可见）也要按内容拉宽。
+
+        量宽度前先手动走一遍布局（app._clear_entrance 让坞开局收起，
+        刚 setVisible(True) 时 width() 还是旧值——2026-09-25 修）。
+        """
+        w = create_window()
+        try:
+            w.show()
+            QApplication.processEvents()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+            QApplication.processEvents()
+            page = w.calib_scroll.widget()
+            self.assertGreaterEqual(w.param_dock.width(),
+                                    page.sizeHint().width())
+            # 退出校准：没选过入口 → 坞收起；再点 [1D] 露出时必须是分析
+            # 模式的窄宽度（量错的"假宽度"会把坞撑到 640 上下）
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertTrue(w.param_dock.isVisible())
+            self.assertLessEqual(w.param_dock.width(),
+                                 w.param_dock.minimumSizeHint().width() + 20)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -7155,7 +7900,7 @@ class TestCalibFlow(unittest.TestCase):
                                    side_effect=lambda k, e: saved.update(
                                        {k: e}) or True), \
                  mock.patch.object(gui_config_ops, "_reload_config_combo"):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_key_edit.setText("lmfp9_lab6")
                 w.calib_label_edit.setText("第 9 批")
@@ -7182,7 +7927,7 @@ class TestBatchProgress(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 # fake_a 慢 0.2 s → fake_b 先完成 =（1/2），fake_a =（2/2）
                 self.assertTrue(_wait_until(
@@ -7226,7 +7971,7 @@ class TestBatchProgress(unittest.TestCase):
         opened = []
         w = create_window()
         try:
-            w.add_files(paths)
+            add_checked(w, paths)
             with mock.patch.object(
                     gui_views, "_open_plot_panel",
                     side_effect=lambda win, name, key, title:
@@ -7259,7 +8004,7 @@ class TestBatchProgress(unittest.TestCase):
             with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
                     mock.patch.object(gui_views, "_compute_integration",
                                       side_effect=_fake_compute):
-                w.add_files(paths)
+                add_checked(w, paths)
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
                                 "这批判完应清账")
@@ -7299,7 +8044,7 @@ class TestBatchProgress(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=slow):
-                w.add_files(["data/fake_p1.tif", "data/fake_p2.tif"])
+                add_checked(w, ["data/fake_p1.tif", "data/fake_p2.tif"])
                 _open_view(w, "1D")
                 self.assertFalse(w.batch_progress.isHidden(), "批里该出现进度条")
                 self.assertEqual(w.batch_progress.maximum(), 2, "范围 = 这一批的总数")
@@ -7346,7 +8091,7 @@ class TestBatchProgress(unittest.TestCase):
                     mock.patch.object(gui_views, "_compute_integration",
                                       side_effect=_fake_compute):
                 paths = [f"data/fake_d{i}.tif" for i in range(1, 4)]
-                w.add_files(paths)
+                add_checked(w, paths)
                 # 先只勾前两张（额度刚好用满）
                 for i in range(w.file_list.count()):
                     w.file_list.item(i).setCheckState(
@@ -7368,7 +8113,7 @@ class TestBatchProgress(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
@@ -7390,7 +8135,7 @@ class TestBatchProgress(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=flaky):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: not hasattr(w, "_batch")))
@@ -7460,7 +8205,7 @@ class TestExportData(unittest.TestCase):
         """勾两个文件出 1D（mock 计算），等结果进面板缓存。"""
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_compute):
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: all(
@@ -7524,7 +8269,7 @@ class TestExportData(unittest.TestCase):
         """勾了文件但没出过 1D：逐条提示先点 [1D]，不弹导出设置框。"""
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             with mock.patch.object(gui_export, "_build_export_dialog") as dlg:
                 gui_export._run_export(w)
             dlg.assert_not_called()
@@ -7658,7 +8403,7 @@ class TestExportCsv(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_b.tif"])
+                add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
@@ -8024,7 +8769,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as c:
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
                     lambda: all(
@@ -8055,7 +8800,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
@@ -8077,7 +8822,7 @@ class TestHeatmap(unittest.TestCase):
     def test_heatmap_single_file_hint(self):
         w = create_window()
         try:
-            w.add_files(["data/fake_a.tif"])
+            add_checked(w, ["data/fake_a.tif"])
             w.heat_btn.click()
             self.assertIn("热图至少勾选两个文件", w.log_text.toPlainText())
         finally:
@@ -8094,7 +8839,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=flaky):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
@@ -8122,7 +8867,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=grids):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
@@ -8139,7 +8884,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as c:
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
                 calls = c.call_count
@@ -8162,7 +8907,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             dock = self._heat_dock(w)
@@ -8182,7 +8927,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as c:
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
                 calls = c.call_count
@@ -8202,7 +8947,7 @@ class Test2DColorbar(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=np.ones((64, 64)) * 5.0):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(
                     lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
@@ -8224,7 +8969,7 @@ class Test2DColorbar(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=np.ones((64, 64)) * 5.0):
-                w.add_files(["data/fake_a.tif"])
+                add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(
                     lambda: getattr(_dock(w, "2D", "data/fake_a.tif"),
@@ -8301,7 +9046,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
     def _open_1d(self, w):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_bg_compute):
-            w.add_files([self.PATH])
+            add_checked(w, [self.PATH])
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", self.PATH).lines) > 0))
@@ -8657,7 +9402,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
-                w.add_files(["data/fake_a.tif", "data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 gui_plot_compare._plot_compare(w)
                 keys = [k for k in w.plot_docks if k.startswith("对比|")]
                 self.assertTrue(_wait_until(lambda: len(keys) == 1))
@@ -8691,7 +9436,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_waterfall",
                                    side_effect=_fake_waterfall_compute):
-                w.add_files(["data/fake_w.tif"])
+                add_checked(w, ["data/fake_w.tif"])
                 _open_view(w, "瀑布")
                 dock = _dock(w, "瀑布", "data/fake_w.tif")
                 self.assertTrue(_wait_until(
@@ -8721,7 +9466,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
         try:
             dock = self._open_1d(w)
             tth = np.linspace(0.5, 8.5, 200)
-            dock.heat_files = [(gui_views._bg_path_of(dock), "fake_bg.tif")]
+            dock.heat_files = [gui_sources.make_source(
+                gui_views._bg_path_of(dock), "fake_bg.tif")]
             dock.heat_results = [("fake_bg", tth,
                                   _fake_bg_compute("", {}, 0)[1])]
             blank = 0.5 * (100.0 + 900.0 * np.exp(-tth / 2.0))
@@ -8777,7 +9523,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
-                w.add_files(["data/fg_a.tif", "data/fg_b.tif"])
+                add_checked(w, ["data/fg_a.tif", "data/fg_b.tif"])
                 _open_view(w, "1D")
                 keys = [k for k in w.plot_docks if k.startswith("1D|")]
                 self.assertTrue(_wait_until(
@@ -8810,7 +9556,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
-                w.add_files(["data/fg_a.tif", "data/fg_b.tif"])
+                add_checked(w, ["data/fg_a.tif", "data/fg_b.tif"])
                 _open_view(w, "1D")
                 keys = [k for k in w.plot_docks if k.startswith("1D|")]
                 self.assertTrue(_wait_until(
@@ -8847,7 +9593,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             try:
                 with mock.patch.object(gui_views, "_compute_integration",
                                        side_effect=_fake_bg_compute):
-                    w2.add_files([self.PATH])
+                    add_checked(w2, [self.PATH])
                     _open_view(w2, "1D")
                     self.assertTrue(_wait_until(
                         lambda: getattr(w2.plot_docks.get(self.KEY), "last_tth",

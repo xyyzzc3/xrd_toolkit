@@ -13,6 +13,7 @@ from matplotlib.colors import LogNorm, Normalize
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow
 
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (
     _auto_y_range, _AUX_GID_PREFIX, _bg_curve, _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
@@ -209,11 +210,24 @@ def _run_compare(window: QMainWindow, key: str) -> None:
         if panel.compare_pending == 0:
             _finish_compare(window, key)
 
-    # 取数：**产物优先**——扣背景产物 / 1D 产物命中就直接用（跨会话秒开，
-    # 见 plot_views._curve_for），没有的才起后台任务真算。用了哪一份记进
-    # compare_sources，收尾时写进日志（"看得见"，不是悄悄发生的）
+    # 取数分两种来源（用户 2026-09-25 定的"阶段文件夹"语义）：
+    #   - 产物条目（"1D"/"扣背景"）说的是**那一份产物**：直接读盘，
+    #     不比对设置、不重算（读不到就跳过并说清楚）；
+    #   - 原始数据条目照老规矩：**产物优先**（扣背景产物 / 1D 产物命中
+    #     就直接用，跨会话秒开，见 plot_views._curve_for），没有的才起
+    #     后台任务真算。
+    # 用了哪一份记进 compare_sources，收尾时写进日志（"看得见"）
     dock.compare_sources = {}
-    for path, display in dock.compare_files:
+    for source in dock.compare_files:
+        path, display = source.path, source.display
+        if source.kind != gui_sources.RAW:
+            got = gui_sources.load_product(source)
+            if got is None:
+                fail_one(path, display, "产物读不到了（被删了？）")
+                continue
+            dock.compare_sources[display] = gui_sources.describe_source(source)
+            finish_one(path, display, got)
+            continue
         got = _curve_for(window, path)
         if got is not None:
             dock.compare_sources[display] = got[2]
@@ -229,7 +243,7 @@ def _run_compare(window: QMainWindow, key: str) -> None:
             def error(msg):
                 fail_one(path, display, msg)
 
-            window.status_text.setText(f"正在积分 {path.name}…")
+            window.status_text.setText(f"正在积分 {Path(path).name}…")
             _spawn(window, path, geom, npt, key,
                    on_done=done, on_error=error)
 
@@ -250,30 +264,28 @@ def _plot_compare(window: QMainWindow) -> None:
     张面板刷新；换集合 = 新开一张。面板键 = "对比|排序后的路径串"
     （与单文件面板 "1D|路径" 并存，互不干扰）。
     """
-    checked = [window.file_list.item(i)
-               for i in range(window.file_list.count())
-               if window.file_list.item(i).checkState() == Qt.Checked]
+    checked = gui_sources.checked_sources(window)
     if len(checked) < 2:
         _log(window, "对比至少勾选两个文件（勾上的文件叠到一张图）")
         return
-    files = [(Path(item.data(Qt.UserRole)), item.text()) for item in checked]
-    key = "对比|" + ",".join(sorted(str(p) for p, _ in files))
+    files = list(checked)   # 来源条目：原始文件 + 各组产物混着也能对比
+    key = "对比|" + ",".join(sorted(gui_sources.source_id(s) for s in files))
     dock = window.plot_docks.get(key)
     if dock is None:
-        title = _compare_title([d for _, d in files])
+        title = _compare_title([s.display for s in files])
         # 新面板级联摆放，现有面板原地不动（同 _plot_view）
         dock = _open_plot_panel(window, "1D", key, title)
         dock.panel_display = title   # 标题/日志/默认存盘名用
         dock.figure_saved = False
-        dock.compare_files = files   # 面板绑定这组文件（重算用）
+        dock.compare_files = files   # 面板绑定这组来源（重算用）
         dock.compare_gen = 0
         dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
-        _log(window, f"打开对比面板：{len(files)} 个文件叠一张图")
+        _log(window, f"打开对比面板：{len(files)} 条曲线叠一张图")
     else:
         # 复用面板：文件显示名可能变过（删除重加/改名）→ 绑定刷新，
         # 标题/图例跟着新名字走
         dock.compare_files = files
-        title = _compare_title([d for _, d in files])
+        title = _compare_title([s.display for s in files])
         if title != dock.panel_display:
             dock.setWindowTitle(title)
             dock.panel_display = title
@@ -481,12 +493,12 @@ def _heat_row_release(window: QMainWindow, key: str, event) -> None:
     x0, y0, row = info
     if (event.x - x0) ** 2 + (event.y - y0) ** 2 > 5 ** 2:
         return   # 拖过了 = 平移手势，不是点击
-    _path, display = dock.heat_files[row]
+    display = dock.heat_files[row].display
     targets = []
     for ckey, cdock in window.plot_docks.items():
         if not ckey.startswith("对比|"):
             continue
-        if any(d == display for _p, d in
+        if any(s.display == display for s in
                getattr(cdock, "compare_files", ())):
             targets.append((ckey, cdock))
     if not targets:
@@ -578,8 +590,11 @@ def _heat_data(window: QMainWindow, dock):
         if r is None:
             continue
         stem, tth, intensity = r
-        path = files[i][0] if i < len(files) else None
-        _, sub, _ = _bg_curve(window, dock, path, tth, intensity)
+        src = files[i] if i < len(files) else None
+        if src is not None and src.kind != gui_sources.RAW:
+            rows.append((stem, tth, intensity))   # 产物本身就是扣完的
+            continue
+        _, sub, _ = _bg_curve(window, dock, src.path, tth, intensity)
         rows.append((stem, tth, sub))
     return _assemble_heatmap(rows)
 
@@ -643,7 +658,16 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
         got = _curve_for(window, path)
         return (got[0], got[1]) if got is not None else None
 
-    for i, (path, display) in enumerate(dock.heat_files):
+    for i, source in enumerate(dock.heat_files):
+        path, display = source.path, source.display
+        if source.kind != gui_sources.RAW:
+            # 产物条目：直接读盘（不重算、不再扣背景），读不到当失败
+            got = gui_sources.load_product(source)
+            if got is None:
+                _log(window, f"热图：{display} 的产物读不到了（被删了？）——跳过")
+                continue
+            results[i] = (Path(path).stem, got[0], got[1])
+            continue
         cached = cache_of(str(path), display)
         if cached is not None:
             results[i] = (Path(path).stem, cached[0], cached[1])
@@ -698,7 +722,7 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
                     if panel.heat_pending == 0:
                         _finish_heatmap(window, key)
 
-                window.status_text.setText(f"正在积分 {path.name}…")
+                window.status_text.setText(f"正在积分 {Path(path).name}…")
                 _spawn(window, path, geom, npt, key,
                        on_done=done, on_error=error)
 
@@ -717,14 +741,12 @@ def _plot_heatmap(window: QMainWindow) -> None:
     同一勾选集合重复点 = 复用同一张面板刷新；换集合 = 新开一张。
     面板键 = "热图|排序后的路径串"（与单文件面板并存，互不干扰）。
     """
-    checked = [window.file_list.item(i)
-               for i in range(window.file_list.count())
-               if window.file_list.item(i).checkState() == Qt.Checked]
+    checked = gui_sources.checked_sources(window)
     if len(checked) < 2:
         _log(window, "热图至少勾选两个文件（多条 1D 曲线拼成一张强度图）")
         return
-    files = [(Path(item.data(Qt.UserRole)), item.text()) for item in checked]
-    key = "热图|" + ",".join(sorted(str(p) for p, _ in files))
+    files = list(checked)   # 来源条目：原始文件 + 各组产物混着也行
+    key = "热图|" + ",".join(sorted(gui_sources.source_id(s) for s in files))
     dock = window.plot_docks.get(key)
     if dock is None:
         title = f"热图_{len(files)} 个样品"

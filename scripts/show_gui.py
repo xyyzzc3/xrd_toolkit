@@ -144,7 +144,7 @@ def main() -> int:
 
     # ① 每个文件一张 1D（真积分；已算过的会走产物缓存）
     print("① 开 1D 面板（真数据）")
-    window.add_files(files)
+    window.add_files(files, select=True)   # 导入默认不勾选（界面用 [全选]）
     window.view_buttons["1D"].click()
     keys = ["1D|" + f for f in files]
     drawn = pump(lambda: all(k in window.plot_docks

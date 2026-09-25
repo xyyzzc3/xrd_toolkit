@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSpinBox,
     QVBoxLayout, QWidget)
 
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _bg_curve, _content, _log
 
 
@@ -149,17 +150,27 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
     quiet=True 不记日志：导出要拿数量去填弹窗标题，之后再正式收一遍，
     两遍都记就会把"跳过 X"打两次。
     """
-    checked = [window.file_list.item(i)
-               for i in range(window.file_list.count())
-               if window.file_list.item(i).checkState() == Qt.Checked]
+    checked = gui_sources.checked_sources(window)
     if not checked:
         if not quiet:
             _log(window, "没有选中的文件")
         return []
     out = []
-    for item in checked:
-        path = str(Path(item.data(Qt.UserRole)))
-        display = item.text()
+    for src in checked:
+        path = str(src.path)
+        display = src.display
+        if src.kind != gui_sources.RAW:
+            # 产物条目：直接导出那一份产物（已经是算好/扣好的曲线）
+            got = gui_sources.load_product(src)
+            if got is None:
+                if not quiet:
+                    _log(window, f"跳过 {display}：产物读不到了（被删了？）")
+                continue
+            # 名字带阶段后缀：同一张图的原始结果与扣背景结果各存一份，
+            # 不重名、不互相覆盖（导出文件名 = 这个名字）
+            tail = gui_sources.KIND_TAIL.get(src.kind, src.kind)
+            out.append((f"{Path(path).stem}_{tail}", got[0], got[1]))
+            continue
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
             if dock is not None and getattr(dock, "last_tth", None) is not None:

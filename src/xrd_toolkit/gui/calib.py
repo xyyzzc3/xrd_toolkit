@@ -923,7 +923,14 @@ def _widen_dock_for_calib(window: QMainWindow) -> None:
     if dock is None or page is None:
         return
     if getattr(window, "_dock_w_before", None) is None:
-        window._dock_w_before = dock.width()      # 记住分析模式的宽度
+        # 记住分析模式的宽度。参数坞开局是收起的（app._clear_entrance，
+        # 用户 2026-09-25 定），点 [校准] 时才刚由隐藏转可见、还没走
+        # 布局，此刻 width() 是旧值/默认值 → 先手动走一遍布局再量，
+        # 否则"退出校准还原宽度"会还原成一个假数字
+        lay = window.layout()
+        if lay is not None:
+            lay.activate()
+        window._dock_w_before = dock.width()
     need = page.widget().sizeHint().width() + 24  # 滚动区边框/条余量
     limit = max(360, window.width() - CALIB_PANEL_RESERVE_PX)
     target = int(min(need, limit))

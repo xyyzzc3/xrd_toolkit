@@ -83,7 +83,7 @@ for r in range(ROUNDS):
     w = create_window()
     keys = [f"1D|data/s{i}.tif" for i in range(N)]
     with mock.patch.object(gui_views, "_compute_integration", side_effect=fake):
-        w.add_files([f"data/s{i}.tif" for i in range(N)])
+        w.add_files([f"data/s{i}.tif" for i in range(N)], select=True)
         w.view_buttons["1D"].click()
         ok = pump(lambda: all(
             getattr(w.plot_docks.get(k), "last_tth", None) is not None

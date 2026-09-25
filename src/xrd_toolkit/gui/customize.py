@@ -165,7 +165,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         # （#2a78d6 → #6fadf4）；带 border 声明即改用纯色渲染（真机
         # 探针实测），细灰边也让浅色块在白底上有个轮廓。
         _swatch_qss = lambda c: f"background-color: {c}; border: 1px solid #999"
-        for i, (_path, display) in enumerate(dock.compare_files):
+        for i, src in enumerate(dock.compare_files):
+            display = src.display
             swatch = QPushButton()
             swatch.setObjectName(f"swatch_{i}")
             swatch.setFixedSize(30, 20)

@@ -85,7 +85,7 @@ def fire(canvas, name: str, x: float, y: float, **kw) -> None:
 def check_single_views(window, lab6: str) -> None:
     """单文件视图：面板壳（plot_panels）+ 出图（plot_views）。"""
     print("\nA. 单文件视图（真积分）")
-    window.add_files([lab6])
+    window.add_files([lab6], select=True)
     window.view_buttons["1D"].click()
     key1d = "1D|" + lab6
     ok = wait_until(
@@ -175,7 +175,7 @@ def check_single_views(window, lab6: str) -> None:
 def check_multi_views(window, lab6: str, lmfp: str) -> None:
     """多文件视图：整个在 plot_compare 里（对比 + 热图）。"""
     print("\nC. 多文件视图（plot_compare）")
-    window.add_files([lmfp])          # 新加入的文件默认打勾 → 两个都选中
+    window.add_files([lmfp], select=True)   # 导入默认不勾选：探针要两个都选上
     window.compare_btn.click()
     ok = wait_until(lambda: any(
         k.startswith("对比|")
@@ -287,6 +287,125 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
            [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
 
 
+def check_stage_folders(window, lab6: str) -> None:
+    """E. 阶段文件夹（文件栏里的产物分组，用户 2026-09-25 的流程）。
+
+    前面的 D 已经跑过 [批量扣背景] → 文件栏里该长出一个"扣背景 …"组；
+    勾整组 → [对比] 直接读那批产物（不重算）；产物条目出 1D 图也是读盘
+    （面板快照的背景扣除应为「不扣」，免得二次相减）。
+    """
+    print("\nE. 阶段文件夹（真数据）")
+    groups = {g.text(0): g for g in window.file_list.groups()}
+    bg_groups = [t for t in groups if t.startswith("扣背景")]
+    report(bool(bg_groups), "文件栏里出现了扣背景分组", bg_groups[:1])
+    if not bg_groups:
+        return
+    group = groups[bg_groups[0]]
+    report(group.childCount() >= 2, "分组里有东西", group.childCount())
+    # 整组勾上（勾组 = 全选组里子项），别的都取消
+    for i in range(window.file_list.count()):
+        window.file_list.item(i).setCheckState(Qt.Unchecked)
+    group.setCheckState(Qt.Checked)
+    QApplication.processEvents()
+    kids = [group.child(i) for i in range(group.childCount())]
+    report(all(k.checkState() == Qt.Checked for k in kids),
+           "勾组 = 组里全勾")
+    # 产物条目出 1D 图：读盘画线，日志里能看到"直接读盘不重算"
+    before = len(window.log_text.toPlainText())
+    window.view_buttons["1D"].click()
+    ok = wait_until(lambda: "直接读盘不重算" in window.log_text.toPlainText())
+    report(ok, "产物条目出 1D 图（读盘，不重算）")
+    tail = window.log_text.toPlainText()[before:]
+    report("背景扣除已置「不扣」" in tail, "产物面板不再二次扣背景")
+    # 对比：整组勾着点 [对比] → 曲线数与组里条目数一致
+    before = len(window.log_text.toPlainText())
+    window.compare_btn.click()
+    wait_until(lambda: "对比完成" in window.log_text.toPlainText()[before:])
+    tail = window.log_text.toPlainText()[before:]
+    report("扣背景产物" in tail, "对比读到的是扣背景产物",
+           [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
+    ckeys = [k for k in window.plot_docks if k.startswith("对比|")]
+    n_curves = max((len(content_of(window, k).axes_1d.lines) for k in ckeys),
+                   default=0)
+    report(n_curves >= group.childCount(), "整组都画进去了",
+           f"{n_curves} 条 / 组里 {group.childCount()} 个")
+
+
+def check_one_d_product_background(window) -> None:
+    """F. 1D 产物条目也能扣背景（用户 2026-09-25 问起的那条）。
+
+    "1D 产物"= 那条原始积分曲线（钉在某份缓存上），不是"已完成"的东西：
+    勾它 → [批量扣背景] → 真扣一份，且**挂在勾的那份 1D 的键下面**；
+    而"扣背景产物"条目仍然跳过（再扣就是二次相减）。
+    """
+    print("\nF. 1D 产物扣背景（真数据）")
+    from xrd_toolkit.services import stage_cache
+    group = next((g for g in window.file_list.groups()
+                  if g.text(0).startswith("1D 产物")), None)
+    report(group is not None, "文件栏里有「1D 产物」组",
+           group.text(0) if group is not None else None)
+    if group is None:
+        return
+    # 只勾 1D 产物条目，别的都取消
+    for i in range(window.file_list.count()):
+        window.file_list.item(i).setCheckState(Qt.Unchecked)
+    for g in window.file_list.groups():
+        for i in range(g.childCount()):
+            g.child(i).setCheckState(Qt.Unchecked)
+    group.setCheckState(Qt.Checked)
+    QApplication.processEvents()
+    window.view_buttons["1D"].click()             # 产物条目出图 = 读盘
+    ok = wait_until(lambda: "直接读盘不重算" in window.log_text.toPlainText())
+    report(ok, "1D 产物条目出图（读盘）")
+    # 编辑对象 = 产物面板；切手动锚点 + 放两个锚点
+    key = next((k for k in window.plot_docks if k.startswith("1D|1d#")), None)
+    if key is None:
+        report(False, "1D 产物面板出来了")
+        return
+    dock = window.plot_docks[key]
+    report(dock.params_snapshot.get("背景扣除模式") == "off",
+           "1D 产物面板不强制「不扣」（跟原始文件一个待遇）",
+           dock.params_snapshot.get("背景扣除模式"))
+    gui_state._set_focus(window, key, dock.panel_display)
+    combo = window.params["背景扣除模式"]
+    combo.setCurrentIndex(combo.findData("anchor"))
+    window.params["背景窗口 (°)"].setValue(1.0)
+    dock.params_snapshot = dict(dock.params_snapshot or {},
+                                **{"背景扣除模式": "anchor",
+                                   "背景窗口 (°)": 1.0})
+    tth = np.asarray(dock.last_tth, dtype=float)
+    inten = np.asarray(dock.last_intensity, dtype=float)
+    xs = [float(tth[int(len(tth) * f)]) for f in (0.1, 0.6)]
+    window.bg_anchors[str(dock.panel_file)] = [
+        (x, float(np.interp(x, tth, inten))) for x in xs]
+    before = len(stage_cache.list_batches("bg"))
+    window.bg_batch_btn.click()
+    QApplication.processEvents()
+    log = window.log_text.toPlainText()
+    report("条来自 1D 产物" in log, "[批量扣背景] 收下了 1D 产物条目",
+           [ln for ln in log.splitlines()
+            if ln.startswith("批量扣背景完成")][-1:])
+    batches = stage_cache.list_batches("bg")
+    report(len(batches) == before + 1, "新落了一个扣背景批次",
+           f"{before} → {len(batches)}")
+    if len(batches) > before:
+        # 按**这个文件**取它那一条（批里可能有别的文件）
+        item = batches[0]["items"].get(str(Path(dock.panel_file).resolve()))
+        report(item is not None, "台账里有这个文件的一条")
+        if item is not None:
+            import json as _json
+            with np.load(stage_cache.CACHE_ROOT / "bg"
+                         / f"{item['key']}.npz") as data:
+                stored = _json.loads(str(data["meta"]))
+            base = key.split("#", 1)[1]
+            report(stored.get("base_key") == base,
+                   "产物挂在**勾的那份 1D 的键**下面（不按当前设置另算）",
+                   f"base={str(stored.get('base_key'))[:8]} 勾的={base[:8]}")
+    # 分组刷新出来了
+    report(any(g.text(0).startswith("扣背景") for g in
+               window.file_list.groups()), "文件栏里出现新的扣背景分组")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="GUI 真数据探针（跑完给出退出码）")
@@ -319,6 +438,8 @@ def main() -> int:
         check_single_views(window, lab6_key)
         check_multi_views(window, lab6_key, lmfp_key)
         check_batch_background(window, lab6_key, lmfp_key)
+        check_stage_folders(window, lab6_key)
+        check_one_d_product_background(window)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:

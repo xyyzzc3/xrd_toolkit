@@ -28,6 +28,11 @@
 `XRD_STAGE_CACHE` 指到别处（测试隔离用）。界面上的 [清空缓存] 调
 `clear()`。
 
+另外有一份**台账** `outputs/_stage/index.json`（2026-09-25 加）：键是哈希、
+反查不出来，所以"一次 [批量扣背景] = 一批产物"这件事要单独记一笔，界面
+上的"阶段文件夹"（勾一整组去对比/热图）就靠它（见 record_batch /
+list_batches / drop_batch）。
+
 写盘是原子的（tmp + rename）：中途崩了不会留下半截产物被下次误读。
 """
 import hashlib
@@ -147,6 +152,16 @@ def load_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
     return _read_curve(_cache_dir("1d") / f"{key}.npz")
 
 
+def key_of_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None):
+    """这个文件的 1D 产物键；文件不在 / 读不了 → None（查找不该抛）。
+
+    界面建"1D 产物"分组时要用它：分组里的条目就是拿这把键取数（见
+    load_by_key），所以条目得把键带在身上。
+    """
+    return _safe_key(path, config=config, npt=npt, tth_min=tth_min,
+                     tth_max=tth_max)
+
+
 def has_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None) -> bool:
     """这个文件的 1D 产物**在不在**（只看文件在不在，不读内容）。
 
@@ -154,9 +169,30 @@ def has_1d(path, *, config: str, npt: int, tth_min=None, tth_max=None) -> bool:
     要先数清"哪些已经有产物、根本不用再算"，才能把这一批的总数报准
     （总数为 0 的批不该开进度条，也不该永远等不到 n）。
     """
-    key = _safe_key(path, config=config, npt=npt, tth_min=tth_min,
+    key = key_of_1d(path, config=config, npt=npt, tth_min=tth_min,
                     tth_max=tth_max)
-    return key is not None and (_cache_dir("1d") / f"{key}.npz").exists()
+    return has_key("1d", key)
+
+
+def has_key(kind: str, key: str) -> bool:
+    """这个产物键对应的文件还在不在（只看在不在，不读内容）。
+
+    界面刷"阶段文件夹"时逐条核对用：产物被删了（用户手动清过
+    outputs/）的条目就不该再出现在文件栏里。
+    """
+    return bool(key) and (_cache_dir(kind) / f"{key}.npz").exists()
+
+
+def load_by_key(kind: str, key: str):
+    """按产物键直接读（1D / bg 通用）。没有 / 坏了都返回 None。
+
+    界面上的"产物条目"走这条：条目说的是**那一份产物**，与当前设置无关
+    （用户 2026-09-25 定：照旧用，日志说一句）——所以不重算键、不比对
+    设置，键是建分组时就记在条目上的。
+    """
+    if not key:
+        return None
+    return _read_curve(_cache_dir(kind) / f"{key}.npz")
 
 
 def store_1d(path, tth, intensity, *, config: str, npt: int,
@@ -191,19 +227,25 @@ def bg_settings_hash(settings: dict) -> str:
     return hashlib.blake2b(blob.encode("utf-8"), digest_size=8).hexdigest()
 
 
-def _bg_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
-                settings: dict) -> Path:
-    """bg 产物路径：1D 产物的键 + 背景设置哈希。
+def bg_key_of(key_1d: str, settings: dict) -> str:
+    """bg 产物的键 = **1D 产物的键** + 背景设置哈希。
 
     先有 1D 才有扣背景（扣的是那条曲线），所以键里嵌 1D 的键——1D
     产物换代（换几何/换点数/升版本）时 bg 自然跟着作废。
+    单独摘出来是因为"从 1D 产物扣背景"那条路要**用条目钉住的那把键**
+    （而不是按当前设置重算一把），见 store_bg_by_key。
     """
+    return hashlib.blake2b(
+        (str(key_1d) + bg_settings_hash(settings)).encode("utf-8"),
+        digest_size=10).hexdigest()
+
+
+def _bg_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
+                settings: dict) -> Path:
+    """bg 产物路径：按**当前设置**算出的 1D 键 + 背景设置哈希。"""
     base = cache_key(path, config=config, npt=npt, tth_min=tth_min,
                      tth_max=tth_max)
-    key = hashlib.blake2b(
-        (base + bg_settings_hash(settings)).encode("utf-8"),
-        digest_size=10).hexdigest()
-    return _cache_dir("bg") / f"{key}.npz"
+    return _cache_dir("bg") / f"{bg_key_of(base, settings)}.npz"
 
 
 def load_bg(path, *, config: str, npt: int, tth_min=None, tth_max=None,
@@ -231,6 +273,140 @@ def store_bg(path, tth, intensity, *, config: str, npt: int, tth_min=None,
               "settings": settings})
 
 
+# ══ 产物台账（界面上的"阶段文件夹"靠它）══════════════════════
+# 为什么要有这份索引：产物键是**哈希**（文件指纹 + 几何 + 设置），算不回
+# 去——界面上问"这张图有哪些扣背景产物"用键答不出来。而扣背景产物一次
+# 批量产出 200 个，散在 bg/ 目录里，除了键没有任何归属信息。台账把"一次
+# [批量扣背景] = 一批"这件事记下来：批的标签（时间/锚点数/窗口）、用的
+# 几何与设置、批里每张图的源路径与产物键。界面上一个批 = 一个"文件夹"。
+#
+# 写在 `outputs/_stage/index.json`（原子重写）。它是**台账不是产物**：
+# 丢了只是界面上看不到分组（产物还在、还能命中），所以坏文件当空表读，
+# 不删也不报错。整批一次写（不是每张一次）：200 张逐张重写 JSON 既慢又
+# 可能半路留半截。
+def _index_path() -> Path:
+    return CACHE_ROOT / "index.json"
+
+
+def _read_index() -> dict:
+    """读台账；没有 / 坏了 / 不是对象都返回空表。"""
+    p = _index_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:                                    # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_index(data: dict) -> None:
+    """原子写台账（tmp + rename，同 _write_curve）。"""
+    p = _index_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True,
+                              indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
+def record_batch(kind: str, batch: str, *, label: str, items, config: str,
+                 npt: int, tth_min=None, tth_max=None, settings: dict = None,
+                 note: str = "") -> int:
+    """记一批产物（界面上 = 一个新的"阶段文件夹"）。返回记下的条目数。
+
+    items = [(源文件路径, 产物键), ...]；产物键 = 产物 npz 的 stem，界面
+    拿它去 bg/ 目录里核对产物还在不在。同一 batch id 再记一次 = 覆盖
+    （同一套设置在同一个时间戳上下标 → 幂等，不会长出重复的分组）。
+    """
+    data = _read_index()
+    node = data.setdefault(kind, {}).setdefault(batch, {})
+    node.update({
+        "label": label,
+        "created": time.time(),
+        "config": config,
+        "npt": int(npt),
+        "tth_min": None if tth_min is None else round(float(tth_min), 6),
+        "tth_max": None if tth_max is None else round(float(tth_max), 6),
+        "settings": settings or {},
+        "note": note,
+        "items": {str(Path(p).resolve()): {"key": str(k), "source": Path(p).name}
+                  for p, k in items},
+    })
+    _write_index(data)
+    return len(node["items"])
+
+
+def list_batches(kind: str = "bg", prune: bool = False) -> list:
+    """列台账里的批次（新的在前），每项含 id / label / created / 设置 / items。
+
+    prune=True 顺手清掉"产物文件已经不在了"的条目（用户在文件管理器里删了
+    outputs/、或 [清空缓存] 只清了某一类）——返回的是清过的表，但**不写盘**；
+    要把清理落盘，调用方拿返回值再调 `write_batches(kind, batches)`。
+    产物不存在不是脏数据，是"这一条已经没用了"，界面上不该再显示。
+    """
+    out = []
+    for bid, node in (_read_index().get(kind) or {}).items():
+        node = dict(node)
+        items = dict(node.get("items") or {})
+        if prune:
+            items = {p: meta for p, meta in items.items()
+                     if (_cache_dir(kind) / f"{meta.get('key')}.npz").exists()}
+        node["items"] = items
+        node["id"] = bid
+        out.append(node)
+    out.sort(key=lambda n: n.get("created") or 0, reverse=True)
+    return out
+
+
+def write_batches(kind: str, batches) -> None:
+    """把 list_batches(prune=True) 的结果落盘（只改这个 kind 的表）。"""
+    data = _read_index()
+    if not batches:
+        data.pop(kind, None)
+    else:
+        data[kind] = {n["id"]: {k: v for k, v in n.items() if k != "id"}
+                      for n in batches}
+    _write_index(data)
+
+
+def drop_batch(kind: str, batch: str) -> int:
+    """删掉一批产物（台账 + 盘上的 npz）。返回删掉的产物文件数。
+
+    界面上的"删除这一组"：一次 [批量扣背景] 的结果整组作废（比一张一张
+    猜哪个是这一批的产物可靠）。同一张图若被别的批引用（同文件另一套
+    设置），那是**另一个键、另一个文件**，不受影响。
+    """
+    data = _read_index()
+    node = (data.get(kind) or {}).pop(batch, None) or {}
+    if data.get(kind) == {}:
+        data.pop(kind, None)
+    _write_index(data)
+    n = 0
+    for meta in (node.get("items") or {}).values():
+        target = _cache_dir(kind) / f"{meta.get('key')}.npz"
+        if target.exists():
+            target.unlink()
+            n += 1
+    return n
+
+
+def store_bg_by_key(key_1d: str, tth, intensity, *, settings: dict,
+                    source: str = "") -> Path:
+    """按**已有的 1D 产物键**存一份扣背景产物（原子）。
+
+    给"1D 产物条目也能扣背景"这条路用（用户 2026-09-25 问起）：条目钉住的
+    是**那一份** 1D 曲线，扣背景就该挂在那一份的键下面——不按当前设置重算
+    键，否则"勾的那条"与"扣的那条"可能是两个设置下的曲线（设置变了以后
+    尤其明显）。理由与 load_by_key 相同：产物条目说的是"那一份"。
+    """
+    target = _cache_dir("bg") / f"{bg_key_of(key_1d, settings)}.npz"
+    return _write_curve(target, tth, intensity,
+                        {"source": source or f"1d:{key_1d}", "kind": "bg",
+                         "engine": INTEGRATION_VERSION, "created": time.time(),
+                         "base_key": str(key_1d), "settings": settings})
+
+
 def describe() -> dict:
     """缓存概况（[清空缓存] 的提示与日志用）：文件数 + 字节数。"""
     total = files = 0
@@ -247,10 +423,17 @@ def clear(kind: str = None) -> int:
     """删缓存（默认全删，给 kind 只删那一类）。返回删掉的文件数。
 
     只动 CACHE_ROOT 里的东西；目录不存在时静默返回 0（幂等）。
+    台账跟着清：整清 = 连 index.json 一起没；只清一类 = 摘掉那类的
+    批次（别的类的分组不受影响）。index.json 自己不算进返回的个数
+    （数的是产物文件）。
     """
     root = CACHE_ROOT if kind is None else _cache_dir(kind)
-    if not root.is_dir():
-        return 0
-    n = sum(1 for p in root.rglob("*") if p.is_file())
+    n = sum(1 for p in root.rglob("*") if p.is_file()) if root.is_dir() else 0
     shutil.rmtree(root, ignore_errors=True)
+    if kind is None:
+        _index_path().unlink(missing_ok=True)
+    else:
+        data = _read_index()
+        if data.pop(kind, None) is not None:
+            _write_index(data)
     return n

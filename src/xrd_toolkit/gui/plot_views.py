@@ -49,6 +49,7 @@ from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _bg_curve,
     _bg_params, _bg_settings, _collect_geometry, _content, _curve_color,
     _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
@@ -508,6 +509,10 @@ def _batch_step(window: QMainWindow, key: str, name: str = ""):
             _log(window, f"{batch['view']} 批完成：{total} 张"
                          f"（用时 {dt:.1f} s{extra}）")
         del window._batch   # 批走完：清账，之后零散任务回到无计数
+        # 1D 批走完 → 文件栏的「1D 产物」分组该长出来了（这次算的这批
+        # 现在有产物了）；别的视图没有产物，刷了也没变化
+        if batch["view"] == "1D":
+            window.refresh_groups()
     return suffix, quiet
 
 
@@ -704,6 +709,11 @@ def _bg_batch_apply(window: QMainWindow) -> None:
     扣完存进分阶段产物（kind=bg）：对比 / 热图下次直接读它，跨会话秒开。
     每个目标面板的参数快照也写成同一套设置——这样"面板上看到的曲线"与
     "对比里用的曲线"是同一条（否则两处数字对不上，最容易让人怀疑自己）。
+
+    可扣的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，只是
+    钉在某一份缓存上，见 _open_product_panel 的说明）；**扣背景产物**跳过
+    ——它已经是扣完的结果，再扣一遍是二次相减（用户 2026-09-25 问起才发
+    现原先一刀切把 1D 产物也跳过了）。
     """
     dock = window.plot_docks.get(window.focus_panel)
     focus_path = _bg_path_of(dock) if dock is not None else None
@@ -720,12 +730,19 @@ def _bg_batch_apply(window: QMainWindow) -> None:
         _log(window, "先在图上点几个锚点（背景扣除模式 = 手动锚点），"
                      "再点 [批量扣背景]")
         return
-    targets = [Path(window.file_list.item(i).data(Qt.UserRole))
-               for i in range(window.file_list.count())
-               if window.file_list.item(i).checkState() == Qt.Checked]
+    # 可扣的是原始数据 + 1D 产物；扣背景产物本身跳过（见 docstring）
+    picked = gui_sources.checked_sources(window)
+    targets = [s for s in picked
+               if s.kind in (gui_sources.RAW, gui_sources.ONED)]
+    already = [s for s in picked if s.kind == gui_sources.BG]
     if not targets:
-        _log(window, "没有选中的文件")
+        _log(window, "没有选中的文件"
+                     "（扣背景产物已经是扣完的结果，不用再扣一遍）"
+                     if already else "没有选中的文件")
         return
+    if already:
+        _log(window, f"跳过 {len(already)} 个扣背景产物条目："
+                     "它们已经是扣完背景的结果（幂等，不再扣一遍）")
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
@@ -734,9 +751,23 @@ def _bg_batch_apply(window: QMainWindow) -> None:
     blank_curve = ((blank["tth"], blank["intensity"])
                    if settings["mode"] == "blank" and blank is not None
                    else None)
-    done = skipped = 0
-    for i, path in enumerate(targets):
-        tth, intensity = _curve_source(window, path, kw)
+    done = skipped = from_product = 0
+    records = []    # [(源文件, 产物键)]：整批完了写一次台账（不是每张一次）
+    seen = set()    # 同一文件只扣一份（勾了它的原始条目又勾了它的 1D 产物）
+    for i, source in enumerate(targets):
+        path = Path(source.path)
+        if str(path) in seen:
+            skipped += 1
+            _log(window, f"跳过 {source.display}：同一文件在批里只扣一份"
+                         "（另一条已经算过了）")
+            continue
+        seen.add(str(path))
+        if source.kind == gui_sources.RAW:
+            tth, intensity = _curve_source(window, path, kw)
+        else:
+            # 1D 产物：读那一份（钉住的键），不按当前设置重算
+            got = gui_sources.load_product(source)
+            tth, intensity = got if got is not None else (None, None)
         if tth is None:
             skipped += 1
             continue
@@ -750,8 +781,17 @@ def _bg_batch_apply(window: QMainWindow) -> None:
             continue
         sub = subtract_background(intensity, base,
                                   clip_negative=settings["clip"])
-        stage_cache.store_bg(path, tth, sub, **kw,
-                            settings={**settings, "anchors": per_file})
+        bg_settings = {**settings, "anchors": per_file}
+        if source.kind == gui_sources.RAW:
+            produced = stage_cache.store_bg(path, tth, sub, **kw,
+                                            settings=bg_settings)
+        else:
+            # 挂在**那份 1D 产物**的键下面：勾的是哪一条，扣的就是哪一条
+            produced = stage_cache.store_bg_by_key(
+                source.key, tth, sub, settings=bg_settings,
+                source=path.name)
+            from_product += 1
+        records.append((path, Path(produced).stem))
         if getattr(window, "bg_anchors", None) is None:
             window.bg_anchors = {}
         window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
@@ -767,9 +807,47 @@ def _bg_batch_apply(window: QMainWindow) -> None:
             _log(window, f"批量扣背景：{i + 1}/{len(targets)}…")
     tail = (f"，跳过 {skipped} 个（还没有 1D 结果，先点 [1D] 出图）"
             if skipped else "")
+    via = f"，其中 {from_product} 条来自 1D 产物" if from_product else ""
     _log(window, f"批量扣背景完成：{done}/{len(targets)} 个文件（"
                  + (f"锚点 {len(xs)} 个，" if xs else "")
-                 + f"窗口 {settings['window_deg']:g}°）{tail}")
+                 + f"窗口 {settings['window_deg']:g}°）{tail}{via}")
+    # 记台账：这一批 = 文件坞里的一个"扣背景"分组（用户 2026-09-25 定：
+    # 每次 [批量扣背景] 一组）。整批写一次，中途不留半截台账。跳过的
+    # 文件不进台账（它们没有产物，进组了也是空壳）
+    if records:
+        label, batch = _bg_batch_label(settings)
+        stage_cache.record_batch(
+            "bg", batch, label=label, items=records,
+            config=window.config_name, npt=npt,
+            tth_min=kw.get("tth_min"), tth_max=kw.get("tth_max"),
+            settings={k: v for k, v in settings.items() if k != "anchors"},
+            note=f"{len(records)} 个文件")
+        _log(window, f"产物分组：{label}（{len(records)} 个文件，"
+                     f"文件栏里可整组勾选去 [对比]/[热图]）")
+        window.refresh_groups()   # 文件栏里立刻长出这一组
+
+
+def _bg_batch_label(settings: dict) -> tuple:
+    """这一批扣背景的标签与批次号。
+
+    标签给人看（进文件坞的分组名 + 日志）：时间 + 模式 + 窗口 + 锚点数
+    ——一个分组为什么是这样，一眼看得出来（用户要看的是"哪一套参数的
+    结果"）。批次号给程序用 = 时间戳 + 设置哈希前 6 位：同一套设置在同
+    一个时间戳上下标 → 同号（幂等，重复点不会长出重复分组），换了设置
+    就是另一批（两套参数的结果并存，正是拿来对比的用法）。
+    """
+    mode = settings.get("mode")
+    if mode == "anchor":
+        how = f"锚点 {len(settings.get('anchors') or [])} 个"
+    elif mode == "blank":
+        how = "空扫相减"
+    else:
+        how = "自动基线"
+    label = (f"扣背景 {time.strftime('%m-%d %H:%M')}"
+             f"（{how}，窗口 {float(settings.get('window_deg') or 0):g}°）")
+    batch = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
+             f"{stage_cache.bg_settings_hash(settings)[:6]}")
+    return label, batch
 
 
 def _refresh_bg(window: QMainWindow) -> None:
@@ -1123,8 +1201,8 @@ def _pending_products(window: QMainWindow, name: str, rest: list) -> list:
     kw = dict(config=window.config_name, npt=npt,
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
     todo = []
-    for item in rest:
-        path = Path(item.data(Qt.UserRole))
+    for source in rest:                       # rest = 来源对象（已按原始数据过滤）
+        path = Path(source.path)
         if not stage_cache.has_1d(path, **kw):
             todo.append(path)
     return todo
@@ -1149,6 +1227,49 @@ def _spawn_headless(window: QMainWindow, name: str, path: Path) -> None:
     _spawn(window, path, geom, npt, key, on_done=_on_headless_done)
 
 
+def _open_product_panel(window: QMainWindow, source) -> str:
+    """产物条目出一张 1D 面板：直接读产物画线（不重算）。
+
+    用户 2026-09-25 定："照旧用，日志说一句"——勾的就是那一份产物，所以
+    不比对当前设置、不重新积分，读到什么画什么（读不到就记日志说清楚）。
+
+    两类产物在这一步的待遇不同：
+      - **扣背景产物**：快照里的背景扣除置「不扣」——它本身已经是扣完的，
+        再扣一遍就是二次相减（图上会往下掉一截，看着还挺像"扣得更干净"）；
+      - **1D 产物**：就是那条原始积分曲线（只是钉在某一份缓存上），快照
+        照常走默认，**锚点/自动基线一样能用**、也能被 [批量扣背景] 扣
+        （用户 2026-09-25 问起才把这条掰正：原先一刀切当成了"已完成"）。
+    """
+    key = f"1D|{gui_sources.source_id(source)}"
+    got = gui_sources.load_product(source)
+    if got is None:
+        _log(window, f"{source.display}：产物读不到了（被删了？）"
+                     "——重算一次，或右键分组删掉这一条")
+        return key
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        title = f"1D_{source.display}"
+        dock = _open_plot_panel(window, "1D", key, title)
+        dock.panel_display = title
+        dock.figure_saved = False
+        snap = _data_snapshot(window)
+        if source.kind == gui_sources.BG:
+            snap["背景扣除模式"] = "off"     # 已经扣过，别再扣（见上）
+        dock.params_snapshot = snap
+        _log(window, f"打开1D面板：{source.display}"
+                     f"（{gui_sources.describe_source(source)}，直接读盘不重算"
+                     + ("；面板背景扣除已置「不扣」）"
+                        if source.kind == gui_sources.BG else "）"))
+    dock.setVisible(True)
+    dock.panel_file = Path(source.path)   # 锚点/另存名用的源文件
+    dock.panel_source = source            # 面板记住自己的产物来源
+    tth, intensity = got
+    dock.last_tth, dock.last_intensity = tth, intensity
+    _set_focus(window, key, dock.windowTitle())
+    _draw_1d(window, dock, tth, intensity)
+    return key
+
+
 def _plot_view(window: QMainWindow, name: str) -> None:
     """工具栏作图按钮的动作：对每个对号文件开面板（或复用）并计算。
 
@@ -1165,14 +1286,20 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     这两条出口，不静默少画一半。进度记账的总数 = 这一批真画的张数，
     否则 k/n 永远到不了 n、批也不清账。
     """
-    checked = [window.file_list.item(i)
-               for i in range(window.file_list.count())
-               if window.file_list.item(i).checkState() == Qt.Checked]
+    checked = gui_sources.checked_sources(window)
     if not checked:
         _log(window, "没有选中的文件")
         return
-    targets = checked[:MAX_PANELS_PER_BATCH]
-    rest = checked[len(targets):]
+    # 产物条目（"1D"/"扣背景"）是现成的 1D 曲线，没有"从原始图算"这一步：
+    # 只有 1D 视图能出，其余视图点名跳过（不静默少画）
+    raw = [s for s in checked if s.kind == gui_sources.RAW]
+    products = [s for s in checked if s.kind != gui_sources.RAW]
+    if products and name != "1D":
+        _log(window, f"跳过 {len(products)} 个产物条目：{name} 要从原始图像"
+                     "算（产物是 1D 曲线，只能出 1D 图 / 对比 / 热图）")
+        products = []
+    targets = raw[:MAX_PANELS_PER_BATCH]
+    rest = raw[len(targets):]
     # 超出的文件**照样算完入库**（只算不画）：1D 有产物可留，之后单独
     # 点开就是复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
     # 其余视图（2D/剖面/瀑布）是显示阶段、没有产物可留，就只记日志。
@@ -1180,7 +1307,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     if rest:
         tail = (f"其余 {len(rest)} 张后台算完入库、点开即看"
                 if name == "1D" else "要看全部：[热图] / [对比] 一张图看完整批")
-        _log(window, f"这批 {len(checked)} 张里先画前 {len(targets)} 张"
+        _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
                      "（按文件列表顺序，一次最多画 "
                      f"{MAX_PANELS_PER_BATCH} 张：每张 ≈15 MB、越开越慢）；"
                      f"{tail}")
@@ -1193,10 +1320,13 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         _progress_show(window, total_tasks)
     opened = []          # 新开的面板显示名（大批量时合并成一行）
     merged = total_tasks > BATCH_LOG_MERGE_AFTER
-    for i, item in enumerate(targets):
-        path = Path(item.data(Qt.UserRole))
-        display = item.text()
-        key, dock = _resolve_dock(window, name, item)
+    # 产物条目先画：读盘画线（毫秒级）不需要排队等积分，也不进进度条
+    for source in products:
+        _open_product_panel(window, source)
+    for i, source in enumerate(targets):
+        path = Path(source.path)
+        display = source.display
+        key, dock = _resolve_dock(window, name, source.item)
         if dock is None:
             if i and i % 8 == 0:
                 # 开面板是主线程上的活（每块 130~290 ms）：每 8 块报一次
@@ -1209,7 +1339,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
             dock = _open_plot_panel(window, name, key, title)
             dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）
-            dock.panel_item = item   # 面板绑定自己的列表条目（重名条目各自成图）
+            dock.panel_item = source.item   # 面板绑定自己的列表条目（重名条目各自成图）
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步

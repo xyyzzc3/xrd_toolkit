@@ -103,15 +103,23 @@ def tile(window, orient: str = "横排") -> None:
     settle(600)
 
 
-def add_all(window, paths) -> None:
-    window.add_files(list(paths))
+def add_all(window, paths, entrance: str = None) -> None:
+    """导入文件（全勾上）并可选地点一个入口。
+
+    入口要**点**：参数坞开局是收起的（用户 2026-09-25 定"开界面时上面
+    什么都不选、右边参数栏是隐藏的"），图注里写了"parameter dock on the
+    right"的那些场景不点它就会拍到一张没有参数坞的图。
+    """
+    window.add_files(list(paths), select=True)
+    if entrance:
+        window.entrance_buttons[entrance].click()
     settle(200)
 
 
 # ══ 各场景 ══════════════════════════════════════════════════════
 def shot_main(window) -> None:
     """主窗口：LaB₆ 积到 1D，右侧参数坞停在 1D 页。"""
-    add_all(window, [LAB6])
+    add_all(window, [LAB6], entrance="1D")
     window.view_buttons["1D"].click()
     wait_for(lambda: "1D|" + LAB6 in window.plot_docks
              and len(content_of(window, "1D|" + LAB6).axes_1d.lines) > 0)
@@ -120,7 +128,7 @@ def shot_main(window) -> None:
 
 def shot_compare(window) -> None:
     """对比：两张 LMFP 叠图（带图例）。"""
-    add_all(window, LMFP[:2])
+    add_all(window, LMFP[:2], entrance="对比")
     window.compare_btn.click()
     wait_for(lambda: any(k.startswith("对比|")
                          and len(content_of(window, k).axes_1d.lines) >= 2
@@ -137,7 +145,7 @@ def shot_customize(window) -> None:
     from xrd_toolkit.gui.customize import _build_customize_dialog
     # 用**对比面板**：只有它多出"曲线颜色"一节（README 图注写了
     # "per-curve colors (Compare panels)"，旧图也是这么拍的）
-    add_all(window, LMFP[:2])
+    add_all(window, LMFP[:2], entrance="对比")
     window.compare_btn.click()
     wait_for(lambda: any(k.startswith("对比|")
                          and len(content_of(window, k).axes_1d.lines) >= 2
@@ -180,7 +188,7 @@ def shot_views(window) -> None:
 def shot_batch(window) -> None:
     """批量：导文件夹 → 积分（日志 k/n）→ 导出 txt + CSV 总表。"""
     from xrd_toolkit.gui import plot_export as gui_export
-    add_all(window, LMFP)
+    add_all(window, LMFP, entrance="1D")
     window.view_buttons["1D"].click()
     wait_for(lambda: sum(1 for p in LMFP
                          if "1D|" + p in window.plot_docks
@@ -200,7 +208,7 @@ def shot_batch(window) -> None:
 
 def shot_heatmap(window) -> None:
     """热图：三个数据集 + 旁边一条 1D（README 图注就是这么写的）。"""
-    add_all(window, LMFP)
+    add_all(window, LMFP, entrance="对比")
     window.heat_btn.click()
     wait_for(lambda: any(k.startswith("热图|") for k in window.plot_docks),
              timeout_s=240)
@@ -221,7 +229,7 @@ def shot_background(window) -> None:
     """背景扣除：真 LMFP 上四个手动锚点（原始/基线/结果三线同在）。"""
     from xrd_toolkit.gui import plot_compare as gui_compare
     path = LMFP[0]
-    add_all(window, [path])
+    add_all(window, [path], entrance="扣背景")
     window.view_buttons["1D"].click()
     key = "1D|" + path
     wait_for(lambda: key in window.plot_docks

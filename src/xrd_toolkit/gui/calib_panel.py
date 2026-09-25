@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QMdiSubWindow, QVBoxLayout, QWidget
 
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
     CP_COLOR, PANEL_SCALE, RING_COLOR, SNAP_TOL_DEG,
     _calib_state, _geom_px_keys, _result_by_name)
@@ -50,14 +51,15 @@ def _load_image(path):
 
 
 def _calib_standard_path(window: QMainWindow):
-    """标样 = 文件列表勾选的第一个文件（列表顺序第一个对号条目）。
+    """标样 = 勾选的第一个**原始数据**文件（列表顺序第一个对号条目）。
 
-    返回 Path 或 None（一个都没勾）。
+    产物条目跳过：校准要的是原始图像（要读像素、找环心），产物是 1D
+    曲线——勾了产物不算数（用户 2026-09-25 起文件栏里有这种条目）。
+    返回 Path 或 None（没有可用的）。
     """
-    for i in range(window.file_list.count()):
-        item = window.file_list.item(i)
-        if item.checkState() == Qt.Checked:
-            return Path(item.data(Qt.UserRole))
+    for src in gui_sources.checked_sources(window):
+        if src.kind == gui_sources.RAW:
+            return Path(src.path)
     return None
 
 
