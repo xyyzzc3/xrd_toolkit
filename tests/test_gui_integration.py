@@ -1603,6 +1603,10 @@ class TestProductGroups(unittest.TestCase):
     产物（不重算、不再扣背景）；原始数据的对号语义一点没变。
     """
 
+    def setUp(self):
+        # 台账是模块级共享的临时缓存根：每个用例自己清一份，断言才数得准
+        stage_cache.write_batches("bg", [])
+
     def test_group_check_propagates_both_ways(self):
         """勾组 → 组里全勾；取消一个 → 组变半勾；全取消 → 组回到不勾。"""
         w = create_window()
@@ -1760,7 +1764,7 @@ class TestProductGroups(unittest.TestCase):
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 1,
                              "产物条目不是「原始数据」，删除不该动它")
-            self.assertIn("没有选中要删除的文件（产物条目要从分组上右键删）",
+            self.assertIn("没有选中要删除的文件（产物条目请右键删除）",
                           w.log_text.toPlainText())
             self.assertEqual(len(w.file_list.groups()), 1, "产物分组还在")
             # 原始数据与产物一起勾上时：删文件、留产物，并说明几个没动
@@ -1788,7 +1792,7 @@ class TestProductGroups(unittest.TestCase):
             self.assertIsNotNone(group)
             # 没显示的窗口不弹模态菜单（会等不到人点，卡死套件）——这一步
             # 单独守；删除本身走 drop_product_group（菜单确认后调同一个）
-            gui_file_dock._group_menu(w, group)
+            gui_file_dock._product_menu(w, group)
             self.assertEqual(w.file_list.groups()[-1].text(0),
                              group.text(0), "无头环境不弹菜单，也不该删掉什么")
             gui_file_dock.drop_product_group(w, group)
@@ -1796,6 +1800,92 @@ class TestProductGroups(unittest.TestCase):
             self.assertIsNone(_group_by_text(w, "扣背景 09-25 09:00"))
             self.assertIn("已删除产物分组", w.log_text.toPlainText())
             self.assertFalse(stage_cache.has_key("bg", key), "盘上的产物也删了")
+        finally:
+            w.close()
+
+    def test_delete_one_d_group_removes_its_products(self):
+        """右键「1D 产物」组 → 那一组退出盘（成员文件 + 分组一起消失）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files])
+            keys = [_store_product(w, p) for p in files]
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group)
+            npz = [stage_cache.CACHE_ROOT / "1d" / f"{k}.npz" for k in keys]
+            self.assertTrue(all(p.exists() for p in npz))
+            n = gui_file_dock.drop_product_group(w, group)
+            self.assertEqual(n, 2)
+            self.assertTrue(all(not p.exists() for p in npz), "盘上的产物删掉了")
+            self.assertIsNone(_group_by_text(w, "1D 产物"), "分组也没了")
+            self.assertIn("已删除产物分组", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_delete_single_product_item(self):
+        """右键单条产物 → 只删这一条，同组别的条目还在。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files])
+            keys = [_store_product(w, p) for p in files]
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            victim, survivor = group.child(0), group.child(1)
+            n = gui_file_dock.drop_product_item(w, victim)
+            self.assertEqual(n, 1)
+            self.assertFalse((stage_cache.CACHE_ROOT / "1d"
+                              / f"{keys[0]}.npz").exists())
+            self.assertTrue((stage_cache.CACHE_ROOT / "1d"
+                             / f"{keys[1]}.npz").exists())
+            after = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(after, "还有一条产物，分组要留着")
+            self.assertEqual(after.childCount(), 1)
+            self.assertIn(survivor.text(0), after.child(0).text(0))
+            self.assertIn("已删除产物", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_delete_single_bg_item_prunes_ledger(self):
+        """删 bg 的单条 → 产物与台账条目一起没；那一批空了就整条消失。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files])
+            keys = [_store_product(w, p, kind="bg") for p in files]
+            stage_cache.record_batch(
+                "bg", "two-items", label="扣背景 09-25 06:00（空扫相减）",
+                items=[(files[0], keys[0]), (files[1], keys[1])], **_kw_of(w),
+                settings={"mode": "blank"})
+            w.refresh_groups()
+            group = _group_by_text(w, "扣背景 09-25 06:00")
+            self.assertEqual(group.childCount(), 2)
+            self.assertEqual(gui_file_dock.drop_product_item(w, group.child(0)), 1)
+            batch = stage_cache.list_batches("bg")[0]
+            self.assertEqual(len(batch["items"]), 1, "台账里也摘掉了一条")
+            # 删掉剩下那条 → 这一批空了，整条从台账消失
+            left = _group_by_text(w, "扣背景 09-25 06:00")
+            self.assertEqual(left.childCount(), 1)
+            gui_file_dock.drop_product_item(w, left.child(0))
+            self.assertEqual(stage_cache.list_batches("bg"), [])
+            self.assertIsNone(_group_by_text(w, "扣背景 09-25 06:00"))
+        finally:
+            w.close()
+
+    def test_product_menu_ignores_raw_items(self):
+        """右键原始数据（组或条目）不弹产物菜单：它们的删除入口是 [删除]。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            add_checked(w, [str(p) for p in files])
+            # 无头环境本来就不弹菜单；这里守的是"原始数据不进这条路"
+            self.assertEqual(gui_file_dock.drop_product_group(
+                w, w.file_list.raw_group), 0)
+            self.assertEqual(gui_file_dock.drop_product_item(
+                w, w.file_list.item(0)), 0)
+            gui_file_dock._product_menu(w, w.file_list.item(0))   # 不炸即可
+            self.assertEqual(w.file_list.count(), 1)
         finally:
             w.close()
 

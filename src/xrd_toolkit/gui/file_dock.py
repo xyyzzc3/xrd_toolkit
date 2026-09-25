@@ -323,7 +323,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     window.file_list.itemClicked.connect(on_item_clicked)
     window.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
     window.file_list.customContextMenuRequested.connect(
-        lambda pos: _group_menu(window, window.file_list.itemAt(pos)))
+        lambda pos: _product_menu(window, window.file_list.itemAt(pos)))
     # 记录鼠标按下时命中的条目与对号状态（区分方块点击/行体点击）
     window.file_list.viewport().installEventFilter(
         _PressRecorder(window, window.file_list))
@@ -375,12 +375,16 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             apply_selection(window, spec)
 
     def delete_selected():
-        """[删除]：移除勾选的**原始数据**条目（产物条目不给删——一组结果
-        要么整组留着、要么右键分组一起删，见 on_context_menu）。"""
+        """[删除]：移除勾选的**原始数据**条目。
+
+        产物条目不走这个按钮：它们**右键就能删**（单条或整组，见
+        _product_menu）——[删除] 的口径是"勾选 = 要处理的对象"，产物
+        不是"要处理的对象"而是"处理的结果"，两件事分开更好理解。
+        """
         checked = checked_raw_items(window)
         if not checked:
             _log(window, "没有选中要删除的文件"
-                         "（产物条目要从分组上右键删）")
+                         "（产物条目请右键删除）")
             return
         skipped = len([s for s in gui_sources.checked_sources(window)
                        if s.kind != gui_sources.RAW])
@@ -399,7 +403,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         for dock in window.plot_docks.values():
             if getattr(dock, "panel_item", None) in checked:
                 dock.panel_item = None
-        tail = f"，另有 {skipped} 个产物条目没动（要删请右键分组）" if skipped else ""
+        tail = f"，另有 {skipped} 个产物条目没动（要删请右键）" if skipped else ""
         _log(window, f"已删除 {len(checked)} 个文件{tail}")
         refresh_product_groups(window)    # 文件没了，它的产物分组也跟着收
 
@@ -585,42 +589,94 @@ def _refresh_file_label(window: QMainWindow) -> None:
         window.file_label.setText(f"已选 {len(checked)} 个文件{tail}")
 
 
-def drop_product_group(window: QMainWindow, item) -> int:
-    """删掉一组产物（台账条目 + 盘上的产物一起没），返回删掉的产物数。
+def _keys_of(item, kind: str = None) -> list:
+    """组/条目身上挂着的产物键（组 = 组里全部子项的键）。"""
+    if is_group(item):
+        out = []
+        for i in range(item.childCount()):
+            src = gui_sources.source_of(item.child(i))
+            if src is not None and src.key and (kind is None or src.kind == kind):
+                out.append((src.kind, src.key))
+        return out
+    src = gui_sources.source_of(item)
+    if src is None or not src.key:
+        return []
+    return [(src.kind, src.key)]
 
-    菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在 PySide6 里
-    打不了补丁，弹菜单那一步没法在无头环境里走——所以把"删"这一步单独
-    摘出来，能测的就是它）。
+
+def drop_product_group(window: QMainWindow, item) -> int:
+    """删掉**一组**产物（盘上的产物 + 对应的台账条目），返回删掉的份数。
+
+    两种组：扣背景批次（一整批，`drop_batch`）与「1D 产物」（当前设置下算好
+    的那些，逐键删）。菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在
+    PySide6 里打不了补丁，弹菜单那一步没法在无头环境里走——所以把"删"这一
+    步单独摘出来，能测的就是它）。
     """
-    batch = item.data(0, GROUP_ROLE + 1) if item is not None else None
-    if not batch:
+    if item is None or not is_group(item) or item is window.file_list.raw_group:
         return 0
-    n = stage_cache.drop_batch("bg", batch)
-    _log(window, f"已删除产物分组「{item.text(0)}」："
-                 f"{n} 份产物（台账一并清掉）")
+    batch = item.data(0, GROUP_ROLE + 1)
+    if batch:
+        n = stage_cache.drop_batch("bg", batch)
+        tail = "（台账一并清掉）"
+    else:
+        n = 0
+        for kind, keys in _group_keys_by_kind(item).items():
+            n += stage_cache.drop_keys(kind, keys)
+        tail = ""
+    _log(window, f"已删除产物分组「{item.text(0)}」：{n} 份产物{tail}")
     refresh_product_groups(window)
     return n
 
 
-def _group_menu(window: QMainWindow, item) -> None:
-    """右键产物分组 → 弹菜单 →「删除这一组产物」。
+def _group_keys_by_kind(item) -> dict:
+    """组里子项的产物键，按阶段归类：{阶段: [键, ...]}。"""
+    out = {}
+    for kind, key in _keys_of(item):
+        out.setdefault(kind, []).append(key)
+    return out
 
-    产物条目本身不给删（[删除] 也只删原始数据）：删了就是"这一组的结果
-    不要了"，一组一起删才说得清（用户 2026-09-25 的分组语义）。原始数据
-    组没有这个菜单（它不是一个"产物批次"）。
+
+def drop_product_item(window: QMainWindow, item) -> int:
+    """删掉**一条**产物（单个条目，用户 2026-09-25 定：所有产物都能删）。"""
+    if item is None or is_group(item):
+        return 0
+    src = gui_sources.source_of(item)
+    if src is None or not src.key:
+        return 0    # 原始数据条目：那走 [删除] 按钮，不走这里
+    n = stage_cache.drop_keys(src.kind, [src.key])
+    _log(window, f"已删除产物：{src.display}（{n} 份文件）")
+    refresh_product_groups(window)
+    return n
+
+
+def _product_menu(window: QMainWindow, item) -> None:
+    """右键产物分组 / 产物条目 → 弹菜单删掉它（组 = 整组，条目 = 这一条）。
+
+    原始数据组与原始数据条目不进这个菜单：它们的删除入口是 [删除] 按钮
+    （勾选 = 要处理的对象，语义不同，别混在一起）。
     """
-    if item is None or not is_group(item) or item is window.file_list.raw_group:
+    if item is None or item is window.file_list.raw_group:
         return
-    if not item.data(0, GROUP_ROLE + 1):
-        return
+    if is_group(item):
+        if not item.childCount():
+            return
+        what = f"删除这一组产物（{item.childCount()} 个）"
+    else:
+        src = gui_sources.source_of(item)
+        if src is None or src.kind == gui_sources.RAW or not src.key:
+            return
+        what = f"删除这一条产物（{src.display}）"
     if not window.isVisible():
         return   # 窗口没显示（测试/无头）不弹模态菜单：会永远等不到人点
     menu = QMenu(window)
-    act = menu.addAction(f"删除这一组产物（{item.childCount()} 个）")
+    act = menu.addAction(what)
     pos = window.file_list.viewport().mapToGlobal(QPoint(0, 0))
     if menu.exec(pos) is not act:
         return
-    drop_product_group(window, item)
+    if is_group(item):
+        drop_product_group(window, item)
+    else:
+        drop_product_item(window, item)
 
 
 def refresh_product_groups(window: QMainWindow) -> None:

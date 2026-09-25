@@ -407,6 +407,41 @@ def store_bg_by_key(key_1d: str, tth, intensity, *, settings: dict,
                          "base_key": str(key_1d), "settings": settings})
 
 
+def drop_keys(kind: str, keys) -> int:
+    """删掉指定的若干份产物（界面上"删这一条 / 删这一组"），返回删掉的文件数。
+
+    1D 产物与 bg 产物通用。bg 那边**台账条目一并摘掉**（引用这些键的那几条）
+    ——不摘的话批次里会留着"产物已不在"的空条目：界面靠 refresh 时的 prune
+    才看不见它，可一旦那一批只剩空条目，它就该整条消失，而不是留个空壳。
+    """
+    keys = {str(k) for k in keys if k}
+    if not keys:
+        return 0
+    n = 0
+    for key in keys:
+        target = _cache_dir(kind) / f"{key}.npz"
+        if target.exists():
+            target.unlink()
+            n += 1
+    if kind == "bg":
+        data = _read_index()
+        changed = False
+        for bid, node in list((data.get("bg") or {}).items()):
+            items = {p: meta for p, meta in (node.get("items") or {}).items()
+                     if str(meta.get("key")) not in keys}
+            if len(items) != len(node.get("items") or {}):
+                changed = True
+                if items:
+                    node["items"] = items
+                else:
+                    data["bg"].pop(bid, None)   # 这一批空了 → 整条摘掉
+        if changed:
+            if not data.get("bg"):
+                data.pop("bg", None)
+            _write_index(data)
+    return n
+
+
 def describe() -> dict:
     """缓存概况（[清空缓存] 的提示与日志用）：文件数 + 字节数。"""
     total = files = 0

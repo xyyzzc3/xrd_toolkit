@@ -406,6 +406,53 @@ def check_one_d_product_background(window) -> None:
                window.file_list.groups()), "文件栏里出现新的扣背景分组")
 
 
+def check_product_delete(window) -> None:
+    """G. 文件栏里删产物（用户 2026-09-25 定："所有产物都能在文件那边删除"）。
+
+    单条（右键一条）与整组（右键组名）两条路都走一遍：盘上的 npz 真少、
+    分组真跟着变、台账不留空壳。
+    """
+    print("\nG. 删除产物（真数据）")
+    from xrd_toolkit.gui import file_dock as gui_file_dock
+    from xrd_toolkit.gui import sources as gui_sources
+    from xrd_toolkit.services import stage_cache
+    group = next((g for g in window.file_list.groups()
+                  if g.text(0).startswith("1D 产物")), None)
+    report(group is not None, "有「1D 产物」组可删")
+    if group is None or group.childCount() < 2:
+        report(False, '组里至少两条（只有 1 条没法验"删一条留一条"）',
+               group.childCount() if group is not None else 0)
+        return
+    # ① 删一条
+    before = group.childCount()
+    victim = gui_sources.source_of(group.child(0))
+    npz = stage_cache.CACHE_ROOT / victim.kind / f"{victim.key}.npz"
+    report(npz.exists(), "这一条的产物文件在盘上")
+    n = gui_file_dock.drop_product_item(window, group.child(0))
+    report(n == 1 and not npz.exists(), "删一条：只在盘上少了这一个文件", n)
+    after = next((g for g in window.file_list.groups()
+                  if g.text(0).startswith("1D 产物")), None)
+    report(after is not None and after.childCount() == before - 1,
+           "分组还在、少了一条", f"{before} → "
+           f"{after.childCount() if after is not None else '无'}")
+    # ② 删整组
+    keys = [gui_sources.source_of(after.child(i)) for i in range(after.childCount())]
+    n = gui_file_dock.drop_product_group(window, after)
+    report(n == len(keys), "删整组：份数与组里条目数一致", f"{n}/{len(keys)}")
+    report(all(not (stage_cache.CACHE_ROOT / k.kind / f"{k.key}.npz").exists()
+               for k in keys), "整组的产物文件都没了")
+    report(not any(g.text(0).startswith("1D 产物")
+                   for g in window.file_list.groups()), "分组消失")
+    # ③ 扣背景那边同理（台账不留空壳）
+    bg = next((g for g in window.file_list.groups()
+               if g.text(0).startswith("扣背景")), None)
+    if bg is not None:
+        n = gui_file_dock.drop_product_group(window, bg)
+        report(n == 0 or n > 0, "扣背景分组整组删除跑通", f"{n} 份")
+        report(not any(g.text(0) == bg.text(0)
+                       for g in window.file_list.groups()), "那一组也没了")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="GUI 真数据探针（跑完给出退出码）")
@@ -440,6 +487,7 @@ def main() -> int:
         check_batch_background(window, lab6_key, lmfp_key)
         check_stage_folders(window, lab6_key)
         check_one_d_product_background(window)
+        check_product_delete(window)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:
