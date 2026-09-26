@@ -566,9 +566,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 能改会让人以为改了就换了校准的几何。悬停文案与置灰状态都由
     # _sync_geom_row 一处写（翻页、_apply_config 换条目两条路都调它）。
     window.param_stack.currentChanged.connect(
-        lambda _i: _sync_geom_row(window))
+        lambda _i: (_sync_geom_row(window), _sync_data_row(window)))
     window._geom_row_sync = lambda: _sync_geom_row(window)
     _sync_geom_row(window)
+    _sync_data_row(window)
 
     def add_caption(form, text):
         """全宽灰色小节标题（布局行横跨标签/字段两列）。"""
@@ -1493,6 +1494,20 @@ def _sync_geom_row(window: QMainWindow) -> None:
                 "分析/积分用的条目）")
     combo.setToolTip(tip)
     window.geom_row.setToolTip(tip)
+
+
+def _sync_data_row(window: QMainWindow) -> None:
+    """坞顶"数据参数"那一行（2θ 范围 + 点数）随页显隐：**校准页不显示**。
+
+    这一行管的是 1D 积分区间（1D / 处理 / 对比 / 热图都用它），与校准无关
+    ——校准在原始图上定几何，全程不读 2θ 区间（`ring_metrics` 只吃几何）。
+    用户 2026-09-27："校准页参数放 2theta 范围干嘛"。
+    几何配置那一行相反，校准页要留着：它是借用起点，也是 [加载参数] /
+    [保存参数] / [删除] 三个按钮的作用对象。
+    """
+    calibrating = (window.param_stack.currentIndex()
+                   == window.PARAM_PAGES["校准"])
+    window.data_row.setVisible(not calibrating)
 
 
 def _switch_entrance(window: QMainWindow, name: str) -> None:

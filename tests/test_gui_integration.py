@@ -3469,20 +3469,29 @@ class TestParamDockSplitLayout(unittest.TestCase):
             w.close()
 
     def test_data_params_row_visible_on_every_page(self):
-        """2θ 范围 / 点数固定在坞顶第三行：五个入口页都看得见、都能改。
+        """2θ 范围 / 点数固定在坞顶第三行：**四个分析页**都看得见、都能改；
+        校准页不显示（它管的是 1D 积分区间，校准全程不读它）。
 
         用户 2026-09-27："1d 画图时能选范围，后面处理时没法选范围，比如
-        对比时，参数里加上"——原先这两项只在 1D 页，切到别的页就改不了。
+        对比时，参数里加上"，随后又指出"校准页参数放 2theta 范围干嘛"。
+        几何配置那一行相反：校准页要留着（借用起点 + 那三个按钮的对象）。
         """
         w = create_window()
         try:
             w.show()
-            for page in ("校准", "1D", "处理", "对比", "绘图"):
+            for page in ("1D", "处理", "对比", "绘图"):
                 w.entrance_buttons[page].click()
                 QApplication.processEvents()
                 for name in ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"):
                     self.assertTrue(w.params[name].isVisible(),
                                     f"{page} 页上该看得见 {name}")
+            w.entrance_buttons["校准"].click()
+            QApplication.processEvents()
+            self.assertFalse(w.data_row.isVisible(), "校准页上它不该出现")
+            self.assertTrue(w.geom_row.isVisible(), "几何配置行校准页要留着")
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertTrue(w.data_row.isVisible(), "回到分析页该回来")
             # 改一下照样进几何（数据参数照旧参与计算）
             w.params["2θ 下限 (°)"].setValue(2.5)
             self.assertAlmostEqual(
