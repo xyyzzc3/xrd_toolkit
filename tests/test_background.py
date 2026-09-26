@@ -184,6 +184,32 @@ class TestSlidingBaseline(unittest.TestCase):
                         "过大窗口应扣不足，而不是过扣")
         self.assertLess(float(wide[i]), float(narrow[i]), "仍应比小窗口低")
 
+    def test_auto_with_anchors_lands_on_them(self):
+        """自动 + 锚点校正：基线在锚点处**等于**点到的值，形状仍是自动那份。
+
+        用户 2026-09-27："背景扣除采取自动加手动矫正"。锚点少（2 个）也
+        要稳：只有 1 个锚点退化成常数平移。
+        """
+        tth = np.linspace(1.0, 8.0, 800)
+        bg = 300.0 + 900.0 * np.exp(-(tth - 1.0) / 1.5)
+        y = bg + 700.0 * np.exp(-0.5 * ((tth - 3.0) / 0.08) ** 2)
+        # 用户故意点得比真背景高一点（模拟"手给的尺度"）
+        anchors = [(1.2, float(np.interp(1.2, tth, bg)) + 60.0),
+                   (7.0, float(np.interp(7.0, tth, bg)) + 40.0)]
+        base = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3,
+                                         "anchors": anchors})
+        for x, v in anchors:
+            self.assertAlmostEqual(float(np.interp(x, tth, base)), v,
+                                   delta=1e-6, msg=f"锚点 {x}° 上该严格过点")
+        plain = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3})
+        self.assertFalse(np.allclose(base, plain), "校正真的动了基线")
+        # 一个锚点 = 常数平移
+        one = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3,
+                                        "anchors": anchors[:1]})
+        self.assertAlmostEqual(
+            float(np.interp(1.2, tth, one)),
+            anchors[0][1], delta=1e-6)
+
     def test_steep_decay_low_angle_is_not_over_subtracted(self):
         """陡降背景（低角空气散射）上，基线的低角端不再系统性偏低。
 

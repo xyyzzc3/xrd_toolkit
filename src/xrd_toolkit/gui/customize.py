@@ -121,6 +121,22 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     scale_form.addRow("刻度", scale)
     root.addWidget(scale_box)
 
+    # 2D 色图（只对 2D 面板出现）：用户 2026-09-27"二维图颜色，customize里"
+    cmap = None
+    if dock.panel_key.split("|", 1)[0] == "2D":
+        cmap_box = QGroupBox("颜色")
+        cmap_form = QFormLayout(cmap_box)
+        cmap_form.setLabelAlignment(label_align)
+        cmap_form.setFormAlignment(form_align)
+        cmap = QComboBox()
+        for data in ("magma", "viridis", "plasma", "inferno", "gray"):
+            cmap.addItem(data, data)
+        cur = _panel_param(window, dock, "2D 色图", "magma")
+        idx = cmap.findData(cur)
+        cmap.setCurrentIndex(idx if idx >= 0 else 0)
+        cmap_form.addRow("色图", cmap)
+        root.addWidget(cmap_box)
+
     margin_box = QGroupBox("图边距")
     margin_form = QFormLayout(margin_box)
     margin_form.setLabelAlignment(label_align)
@@ -218,6 +234,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
 
     dlg._fields = {"title": title, "xlabel": xlabel, "ylabel": ylabel,
                    "scale": scale, **fields}
+    if cmap is not None:
+        dlg._fields["cmap"] = cmap
     return dlg
 
 
@@ -256,6 +274,16 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
     fig.set_layout_engine(None)   # 边距由用户接管：tight layout 退场
     fig.subplots_adjust(left=f["left"].value(), bottom=f["bottom"].value(),
                         right=f["right"].value(), top=f["top"].value())
+    cmap = f.get("cmap")
+    if cmap is not None and cmap.currentData() != _panel_param(
+            window, dock, "2D 色图", "magma"):
+        # 2D 色图：写进**面板快照**（每张图各记各的）再整幅重画。
+        # 惰性导入防模块环（plot_views 反向 import 本模块）
+        dock.params_snapshot["2D 色图"] = cmap.currentData()
+        from xrd_toolkit.gui.plot_views import _draw_2d
+        image = getattr(dock, "last_image", None)
+        if image is not None:
+            _draw_2d(window, dock, image)
     picks = getattr(dlg, "_color_picks", None)
     if picks is not None:
         # 逐条自定义色：点 [应用] 才真正写回 dock，随后按新色重画

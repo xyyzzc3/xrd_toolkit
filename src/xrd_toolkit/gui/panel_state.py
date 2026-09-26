@@ -89,6 +89,8 @@ _DISPLAY_DEFAULTS = {
     "对比度下限": 1.0,
     "对比度上限": 100000.0,
     "剖面角度 (°)": 0.0,
+    # 2D 面板的色图（Customize 里改；与 CLI view_diffraction 的默认一致）
+    "2D 色图": "magma",
     "对数纵轴": False,
     "纵轴自动": True,
     "纵轴下限": 1.0,
@@ -120,7 +122,7 @@ _DISPLAY_DEFAULTS = {
     # auto 自动基线 / anchor 手动锚点；锚点列表与空扫曲线不是参数，
     # 放窗级属性（window.bg_anchors / window.bg_blank）
     "背景扣除模式": "off",
-    "背景窗口 (°)": 0.5,
+    "背景窗口 (°)": 0.3,
     "空扫归一化": 1.0,
     # 锚点之间的拟合：保单调平滑（pchip，过点、不过冲）。新面板的显示
     # 参数从这份默认起步、再回放进控件——所以这里不跟着改的话，界面
@@ -203,7 +205,26 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
             snap[name] = base[name]
         else:
             snap[name] = value
+    # 没有控件的键从旧快照原样带过来：视图 2θ 范围这两个键现在就是这样
+    # （用户 2026-09-27 撤了那对输入框，"显示范围用户自己放大就行了"——
+    # 但缩放/平移仍在写它们）。上面那圈按控件重建，带不过来的话 [应用]
+    # 一次就把显式视图范围丢掉、悄悄退回"跟随积分范围"。
+    for name, value in base.items():
+        snap.setdefault(name, value)
     return snap
+
+
+def _param_box_set(window: QMainWindow, name: str, value) -> None:
+    """给参数坞里的控件赋值（控件不在了就跳过）。
+
+    2026-09-27：用户要求撤掉「显示 2θ 范围」那一行（"显示范围用户自己
+    放大就行了"）。但视图范围这两个键仍然活着——缩放/平移写回它们、[恢复
+    默认] 复位它们；写回时**快照才是权威**，控件只是顺带刷新的只读展示，
+    没有控件就静默跳过。
+    """
+    box = window.params.get(name)
+    if box is not None:
+        box.setValue(value)
 
 
 def _panel_param(window: QMainWindow, dock, name: str,

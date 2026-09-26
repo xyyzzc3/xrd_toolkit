@@ -48,7 +48,8 @@ from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
-    _data_snapshot, _display_snapshot, _log, _panel_param, _set_focus)
+    _data_snapshot, _display_snapshot, _log, _panel_param, _param_box_set,
+    _set_focus)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.plot_panels import (
@@ -698,6 +699,54 @@ def _curve_for(window, path):
     return None
 
 
+def _proc_recipe(settings: dict, params0: dict, source: str = None) -> dict:
+    """一条**文件级**处理配方：模式 / 窗口 / 平滑 / 裁剪（+ 锚点来处）。
+
+    用户 2026-09-27："给 a 扣完，然后应用到其余批量选图上，在双击查看这些
+    选图时，在扣背景的参数栏可以显示这个图是以 a 的锚点为基准进行扣除的。
+    **按文件**。"——锚点本来就按文件存（window.bg_anchors），模式/窗口原先
+    却只写进"当时开着"的面板快照：批量扣完再点开别的文件，它显示"不扣"。
+    现在这两个键一起进 window.proc_recipes[path]，开面板时按它回填。
+    source = 锚点来自哪个文件（手点的记 None，界面上说"本图手点"）。
+    """
+    cuts = settings.get("cut_ranges") or []
+    return {"背景扣除模式": settings["mode"],
+            "背景窗口 (°)": settings["window_deg"],
+            "锚点拟合方式": settings["anchor_method"],
+            "负值截断为 0": settings["clip"],
+            "背景显示原始": True,
+            "平滑曲线": bool(params0.get("smooth_deg")),
+            "平滑窗口 (°)": settings.get("smooth_deg") or 0.10,
+            "裁剪区间": list(cuts) if cuts else False,
+            "平滑方法": settings.get("smooth_method") or "boxcar",
+            "平滑阶数": int(settings.get("smooth_order") or 3),
+            "anchor_source": source}
+
+
+def seed_proc_recipe(window: QMainWindow, path, dock) -> None:
+    """开面板时按该文件的配方回填快照：点开就是一个"已经扣过"的样子。
+
+    没有配方（这文件还没处理过）就什么都不做——新图仍从默认起步。
+    """
+    recipes = getattr(window, "proc_recipes", None)
+    if not recipes or dock is None:
+        return
+    recipe = recipes.get(str(path))
+    if not recipe:
+        return
+    snap = getattr(dock, "params_snapshot", None)
+    if isinstance(snap, dict):
+        snap.update({k: v for k, v in recipe.items()
+                     if k != "anchor_source"})
+
+
+def note_proc_recipe(window: QMainWindow, path, recipe: dict) -> None:
+    """把配方记到该文件名下（批量处理与手调都走这里）。"""
+    if getattr(window, "proc_recipes", None) is None:
+        window.proc_recipes = {}
+    window.proc_recipes[str(path)] = dict(recipe)
+
+
 def _proc_batch_apply(window: QMainWindow) -> None:
     """[批量处理]：把「处理」页当前这套链用到勾选文件，各生成一份处理产物。
 
@@ -725,6 +774,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         return
     settings = _proc_settings(window, dock, focus_path)
     params0 = _proc_params(window, dock, focus_path)
+    focus_display = getattr(dock, "panel_display", None) or Path(focus_path).name
     chain = process.chain_parts(settings)
     if settings["mode"] == "off" and not chain:
         _log(window, "「处理」页里三项都关着（背景扣除 / 平滑 / 裁剪）——"
@@ -799,19 +849,15 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         if getattr(window, "bg_anchors", None) is None:
             window.bg_anchors = {}
         window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
+        # 配方**按文件**记下来（不只写给开着的面板——那正是"再点其余图
+        # 不显示已经扣了"的根因）：之后点开任何一条都按它回填
+        recipe = _proc_recipe(settings, params0, source=focus_display)
+        note_proc_recipe(window, path, recipe)
         panel = window.plot_docks.get("1D|" + str(path))
         snap = getattr(panel, "params_snapshot", None)
-        if isinstance(snap, dict):                # 开着的面板：设置也写成同一套
-            snap["背景扣除模式"] = "anchor"
-            snap["背景窗口 (°)"] = settings["window_deg"]
-            snap["锚点拟合方式"] = settings["anchor_method"]
-            snap["负值截断为 0"] = settings["clip"]
-            snap["平滑曲线"] = bool(params0["smooth_deg"] > 0)
-            snap["平滑窗口 (°)"] = settings.get("smooth_deg") or 0.10
-            cuts = settings.get("cut_ranges") or []
-            snap["裁剪区间"] = list(cuts) if cuts else False
-            snap["平滑方法"] = settings.get("smooth_method") or "boxcar"
-            snap["平滑阶数"] = int(settings.get("smooth_order") or 3)
+        if isinstance(snap, dict):                # 开着的面板：立刻跟着换
+            snap.update({k: v for k, v in recipe.items()
+                         if k != "anchor_source"})
         done += 1
         if (i + 1) % 20 == 0:
             _log(window, f"批量处理：{i + 1}/{len(targets)}…")
@@ -885,6 +931,14 @@ def _refresh_proc(window: QMainWindow) -> None:
         if snap.get("裁剪区间"):
             snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
         dock.params_snapshot = snap
+    tick_path = _bg_path_of(dock) if dock is not None else None
+    if tick_path is not None:
+        # 手调也算这个文件的配方（来处 = None = 本图手点）：下次点开它
+        # 还是这套设置，而不是回到默认
+        note_proc_recipe(window, tick_path,
+                         _proc_recipe(_proc_settings(window, dock, tick_path),
+                                      _proc_params(window, dock, tick_path),
+                                      source=None))
     _update_smooth_points(window, dock)
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]
@@ -967,8 +1021,8 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
             ax.set_xlim(lo, hi)
         # 视图范围框显示"正在看的窗口"——只有画的正是焦点面板才填
         if window.plot_docks.get(window.focus_panel) is dock:
-            window.params["视图 2θ 下限 (°)"].setValue(lo)
-            window.params["视图 2θ 上限 (°)"].setValue(hi)
+            _param_box_set(window, "视图 2θ 下限 (°)", lo)
+            _param_box_set(window, "视图 2θ 上限 (°)", hi)
         # 对数纵轴：弱峰"抬起来"（XRD 行规，主峰与弱峰强度差几个数量级）。
         # 刻度以 Customize 用户改动为准时（_settle_scale），纵轴范围也
         # 按生效的刻度算（eff_log），避免对数轴拿到线性分位画不出来
@@ -1056,7 +1110,9 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
             vmin = max(vmin, 1e-12)
             if vmax <= vmin:
                 vmax = vmin * 10.0   # 手填区间不合法时兜底（防 LogNorm 报错）
-        im = ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
+        # 色图按面板快照（Customize 里改；缺省 magma——与 CLI 一致）
+        im = ax.imshow(image, cmap=_panel_param(window, dock, "2D 色图", "magma"),
+                       norm=LogNorm(vmin=vmin, vmax=vmax),
                        origin="lower")
         ax.set_aspect("equal")
         # 颜色条（作业规格"带颜色条"）：ax.clear() 不清 colorbar（它是
@@ -1326,6 +1382,7 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
         dock.panel_display = source.display
         dock.figure_saved = False
         dock.params_snapshot = _data_snapshot(window)
+        seed_proc_recipe(window, path, dock)   # 处理过的文件：点开就是扣过的样子
         _log(window, f"打开{name}面板：{source.display}")
     dock.setVisible(True)
     dock.raise_()          # 从文件栏点开的图，摆到最前面
@@ -1479,6 +1536,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步
+            seed_proc_recipe(window, path, dock)   # 处理过的文件：按配方回填
             if merged:
                 opened.append(display)      # 大批量：攒着，循环后一行写完
             else:

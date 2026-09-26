@@ -31,13 +31,15 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 
 # --- 自动基线的默认参数 -------------------------------------------------
 # 自动基线默认窗口宽度（度）：多宽的一段算"背景"而不是"峰"。
-# 0.5° 的来历（2026-09-26 晚按真数据实测改，原为 1.0°）：窗口取峰宽的
-# 3~10 倍（LMFP/lab6 峰半高宽 0.1~0.3°）时窗内多数点是背景；但 1.0° 会把
-# **宽非晶鼓包**（1.6~2.6° 那个包，正是样品自身的漫散射 = 背景）留在扣后
-# 曲线里——实测残留中位 34、最大 527。改 0.5° 后残留中位 −1、最大 322，
-# 而巨峰扣后高度几乎不变（2510 → 2516），基线在峰下只抬高 142（0.1° 会
-# 抬到 211，峰宽接近窗口的样品有啃峰风险，故取 0.5 而不是更小）。
-AUTO_WINDOW_DEG = 0.5
+# 0.3° 的来历（2026-09-26 晚 1.0° → 0.5°，2026-09-27 用户："自动的可以
+# 默认 0.3 比如" → 0.3°）：窗口取峰宽的 3~10 倍（LMFP/lab6 峰半高宽
+# 0.1~0.3°）时窗内多数点是背景；1.0° 会把**宽非晶鼓包**（1.6~2.6° 那个包，
+# 正是样品自身的漫散射 = 背景）留在扣后曲线里（残留中位 34、最大 527）。
+# 0.5° 残留中位 −1、最大 322，0.3° 残留 9/471、基线在峰下只抬高 149——
+# 两者接近；取更小的窗口是为了配合"自动 + 锚点校正"（见
+# _correct_with_anchors）：形状由自动给、尺度由锚点定，窗口小一点、
+# 让自动少留一点鼓包更划算。
+AUTO_WINDOW_DEG = 0.3
 # 阶段 1 用的低分位：给一个**不会被峰抬高**的局部下限（可以偏低）。
 AUTO_FLOOR_PERCENTILE = 20.0
 # 阶段 2 迭代次数与噪声带宽度 k（掩掉"高于局部下限 + kσ"的峰点）。
@@ -372,6 +374,43 @@ def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
     return np.clip(base, 0.0, None)
 
 
+def _correct_with_anchors(tth, intensity, base, anchors) -> np.ndarray:
+    """把自动基线**校正**到用户点的锚点上（自动 + 手动矫正）。
+
+    在锚点处量"实测 − 自动基线"这点差，用保单调插值（pchip，不过冲）把
+    它摊到整条曲线再加回去：锚点处基线严格落在实测值上，锚点之间保持自动
+    那份形状。两端线性外推（与 fit_anchor_baseline 同口径）；只有一个锚点
+    时退化成常数平移。结果夹到 ≥0（背景是强度量）。
+    """
+    if not len(anchors):
+        return base
+    t = np.asarray(tth, dtype=float)
+    xs = np.asarray([float(a[0]) for a in anchors], dtype=float)
+    ys = np.asarray([float(a[1]) for a in anchors], dtype=float)
+    order = np.argsort(xs)
+    xs, ys = xs[order], ys[order]
+    keep = np.concatenate([[True], np.diff(xs) > 0])   # 同一 2θ 取后一个
+    xs, ys = xs[keep], ys[keep]
+    if xs.size == 0:
+        return base
+    resid = ys - np.interp(xs, t, base)
+    if xs.size == 1:
+        corr = np.full(t.size, float(resid[0]))
+    else:
+        p = PchipInterpolator(xs, resid, extrapolate=False)
+        corr = np.asarray(p(t), dtype=float)
+        left, right = t < xs[0], t > xs[-1]
+        if left.any():
+            slope = (resid[1] - resid[0]) / (xs[1] - xs[0])
+            corr[left] = resid[0] + slope * (t[left] - xs[0])
+        if right.any():
+            slope = (resid[-1] - resid[-2]) / (xs[-1] - xs[-2])
+            corr[right] = resid[-1] + slope * (t[right] - xs[-1])
+        bad = ~np.isfinite(corr)
+        corr[bad] = 0.0
+    return np.clip(np.asarray(base, dtype=float) + corr, 0.0, None)
+
+
 def subtract_background(intensity, baseline, *,
                         clip_negative: bool = False) -> np.ndarray:
     """
@@ -418,9 +457,13 @@ def compute_baseline(tth, intensity, params, *, blank_curve=None):
         scale = float((params or {}).get("blank_scale", 1.0) or 1.0)
         return scale * interp_onto_grid(b_tth, b_i, tth)
     if mode == "auto":
-        return estimate_baseline_sliding(
+        base = estimate_baseline_sliding(
             tth, intensity,
             (params or {}).get("window_deg", AUTO_WINDOW_DEG))
+        # 自动 + 锚点校正（用户 2026-09-27："背景扣除采取自动加手动矫正"）：
+        # 有锚点就把基线整体挪到用户点的"纯背景"上，形状仍是自动那份
+        return _correct_with_anchors(tth, intensity, base,
+                                     (params or {}).get("anchors") or [])
     if mode == "snip":                      # 未在 GUI 启用，保留供对照
         return estimate_baseline_snip(
             tth, intensity,

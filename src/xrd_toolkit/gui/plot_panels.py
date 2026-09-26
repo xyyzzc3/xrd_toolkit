@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
                                QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
-from xrd_toolkit.gui.panel_state import _AUX_GID_PREFIX, _content, _log
+from xrd_toolkit.gui.panel_state import (_AUX_GID_PREFIX, _content,
+                                            _log, _param_box_set)
 from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _close_panel, _install_resize_grip,
                                     _PanelBarFilter, _PanelResizeFilter,
@@ -678,8 +679,8 @@ def _on_xlim_changed(window: QMainWindow, key: str, ax) -> None:
     snap["视图 2θ 下限 (°)"] = float(xlo)
     snap["视图 2θ 上限 (°)"] = float(xhi)
     if window.plot_docks.get(window.focus_panel) is dock:
-        window.params["视图 2θ 下限 (°)"].setValue(xlo)
-        window.params["视图 2θ 上限 (°)"].setValue(xhi)
+        _param_box_set(window, "视图 2θ 下限 (°)", xlo)
+        _param_box_set(window, "视图 2θ 上限 (°)", xhi)
 
 
 def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:

@@ -908,18 +908,26 @@ class TestFileCheckSelection(unittest.TestCase):
         w.add_files([f"data/s{i + 1}.tif" for i in range(n)])
 
     def test_select_all_and_none_buttons(self):
-        """[全选] 全勾上；[全不选] 全部取消（各只记一行日志）。"""
+        """全选/全不选是**一个**切换按钮：按第一次全勾、再按全取消。
+
+        用户 2026-09-27："全选全部不选合一"——标签跟着状态走（全勾上时
+        显示"全不选"），按下去做哪件事由状态决定。
+        """
         w = create_window()
         try:
             w.add_files([f"data/s{i + 1}.tif" for i in range(5)])
-            w.findChild(QPushButton, "select_all_btn").click()
+            btn = w.findChild(QPushButton, "select_all_btn")
+            self.assertEqual(btn.text(), "全选", "初始（没勾）该显示 全选")
+            btn.click()
             self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Checked
                                 for i in range(5)))
+            self.assertEqual(btn.text(), "全不选", "全勾上后标签该翻过来")
             self.assertEqual(w.file_label.text(), "已选 5 个文件")
             self.assertIn("全选：5 个文件", w.log_text.toPlainText())
-            w.findChild(QPushButton, "select_none_btn").click()
+            btn.click()                     # 同一个按钮：这次是"全不选"
             self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Unchecked
                                 for i in range(5)))
+            self.assertEqual(btn.text(), "全选")
             self.assertEqual(w.file_label.text(), "未打开文件")
             self.assertIn("全不选：5 个条目的对号已取消",
                           w.log_text.toPlainText())
@@ -2238,6 +2246,64 @@ class TestBackgroundFromProduct(unittest.TestCase):
             self.refresh_ok = _wait_until(
                 lambda: _group_by_text(w, "处理") is not None)
             self.assertTrue(self.refresh_ok, "扣完要出现扣背景分组")
+        finally:
+            w.close()
+
+    def test_batch_writes_a_per_file_recipe_and_later_panels_show_it(self):
+        """批量扣完，之后点开**没开过**的文件也是"扣过"的样子 + 写出来处。
+
+        用户 2026-09-27："给 a 扣完，然后应用到其余批量选图上，在双击查看
+        这些选图时，在扣背景的参数栏可以显示这个图是以 a 的锚点为基准进行
+        扣除的。按文件。"——原先设置只写进"当时开着"的面板快照，别的文件
+        之后再点开显示的是"不扣"。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(3)
+            w.add_files([str(p) for p in files])       # 导入默认不勾
+            for f in files:
+                _store_product(w, f)                   # 三份 1D 缓存
+            w.refresh_groups()
+            # 只勾 A、开 A 的面板（焦点 = A，批量的锚点基准就是它）
+            raw = w.file_list.raw_group
+            raw.child(0).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            _open_view(w, "1D")
+            QApplication.processEvents()
+            dockA = w.plot_docks.get(f"1D|{files[0]}")
+            self.assertIsNotNone(dockA, "A 的面板该开出来")
+            tth = np.asarray(dockA.last_tth, dtype=float)
+            self._anchors_on(w, dockA, files[0], [float(tth[0]), float(tth[-1])])
+            # 三张全勾上 → [批量处理]
+            for i in range(raw.childCount()):
+                raw.child(i).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            w.proc_batch_btn.click()
+            QApplication.processEvents()
+            self.assertIn("批量处理完成：3/3", w.log_text.toPlainText())
+            recipes = getattr(w, "proc_recipes", {})
+            for f in files:
+                recipe = recipes.get(str(f))
+                self.assertIsNotNone(recipe, f"{f.name} 该有配方")
+                self.assertEqual(recipe["背景扣除模式"], "anchor")
+                self.assertEqual(recipe["anchor_source"],
+                                 getattr(dockA, "panel_display", None),
+                                 "来处 = 焦点文件（A）")
+                self.assertTrue(w.bg_anchors.get(str(f)), "锚点也按文件存了")
+            # 双击从没开过的 B：面板按配方回填（模式/窗口都是扣过的那套）
+            item = next(raw.child(i) for i in range(raw.childCount())
+                        if files[1].name in raw.child(i).text(0))
+            w.file_list.itemDoubleClicked.emit(item, 0)
+            keyB = f"1D|{files[1]}"
+            self.assertTrue(_wait_until(lambda: keyB in w.plot_docks))
+            QApplication.processEvents()
+            dockB = w.plot_docks[keyB]
+            self.assertEqual((dockB.params_snapshot or {}).get("背景扣除模式"),
+                             "anchor", "点开就该是扣过的样子")
+            self.assertEqual(w.params["背景扣除模式"].currentText(),
+                             "手动锚点", "参数栏跟着显示这套设置")
+            self.assertIn(getattr(dockA, "panel_display", "").split(".")[0],
+                          w.bg_prov_lbl.text(), "来处写清楚（以 A 的锚点为基准）")
         finally:
             w.close()
 
@@ -4932,8 +4998,10 @@ class TestHomeView(unittest.TestCase):
             dock = self._open_1d(w)
             content = gui_panel_state._content(dock)
             ax = content.axes_1d
-            w.params["视图 2θ 下限 (°)"].setValue(2.0)
-            w.params["视图 2θ 上限 (°)"].setValue(5.0)
+            # 视图范围现在没有输入框了（用户 2026-09-27："显示范围用户
+            # 自己放大就行了"）→ 直接写快照，与缩放/平移写回的是同一处
+            dock.params_snapshot["视图 2θ 下限 (°)"] = 2.0
+            dock.params_snapshot["视图 2θ 上限 (°)"] = 5.0
             gui_views._apply_image_params(w)
             QApplication.processEvents()
             self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
@@ -5928,6 +5996,50 @@ class TestCustomizeDialog(unittest.TestCase):
             w.hide()
             w.close()
 
+    def test_2d_colormap_in_customize(self):
+        """2D 色图在 Customize 里改：只出现在 2D 面板，改完立刻重画。
+
+        用户 2026-09-27："二维图颜色，customize里"——原来 `_draw_2d` 写死
+        magma，改不了；现在按面板快照读（每张图各记各的）。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.ones((32, 32)) * 100):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "2D")
+                key = next(k for k in w.plot_docks if k.startswith("2D|"))
+                dock = w.plot_docks[key]
+                ax = gui_panel_state._content(dock).axes_2d
+                self.assertTrue(_wait_until(lambda: len(ax.images) > 0))
+                self.assertEqual(ax.images[0].get_cmap().name, "magma")
+                dlg = gui_customize._build_customize_dialog(
+                    w, dock, ax, gui_panel_state._content(dock).figure)
+                self.assertIn("cmap", dlg._fields, "2D 面板该有色图下拉")
+                dlg._fields["cmap"].setCurrentIndex(
+                    dlg._fields["cmap"].findData("viridis"))
+                gui_customize._apply_customize(
+                    w, dock, ax, gui_panel_state._content(dock).figure, dlg)
+                QApplication.processEvents()
+                self.assertEqual(ax.images[0].get_cmap().name, "viridis",
+                                 "改完该立刻重画")
+                self.assertEqual(dock.params_snapshot["2D 色图"], "viridis",
+                                 "色图该记进这张面板的快照")
+            # 1D 面板没有这个下拉（它的"颜色"是曲线色，另一套）
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif"])
+                _open_view(w, "1D")
+                d1 = _dock(w, "1D", "data/fake_a.tif")
+                self.assertTrue(_wait_until(
+                    lambda: len(gui_panel_state._content(d1).axes_1d.lines) > 0))
+                dlg1 = gui_customize._build_customize_dialog(
+                    w, d1, gui_panel_state._content(d1).axes_1d,
+                    gui_panel_state._content(d1).figure)
+                self.assertNotIn("cmap", dlg1._fields)
+        finally:
+            w.close()
+
     def test_custom_edits_survive_redraw(self):
         w = create_window()
         try:
@@ -6224,8 +6336,8 @@ class TestViewLimitSync(unittest.TestCase):
             self.assertAlmostEqual(snap["视图 2θ 下限 (°)"], 2.0, places=4)
             self.assertAlmostEqual(snap["视图 2θ 上限 (°)"], 3.0, places=4)
             # 焦点面板 → 参数坞视图范围框同步显示
-            self.assertAlmostEqual(
-                w.params["视图 2θ 下限 (°)"].value(), 2.0, places=4)
+            # 控件已撤（显示范围不再摆输入框）→ 只查快照
+            self.assertNotIn("视图 2θ 下限 (°)", w.params)
             # 纯 x 缩放没动纵轴 → 自动仍开着
             self.assertTrue(snap["纵轴自动"])
         finally:
@@ -6258,8 +6370,10 @@ class TestViewLimitSync(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
-            w.params["视图 2θ 下限 (°)"].setValue(1.0)
-            w.params["视图 2θ 上限 (°)"].setValue(5.0)
+            # 视图范围没有输入框了（用户 2026-09-27："显示范围用户自己
+            # 放大就行了"）→ 直接写快照，与缩放/平移写回的是同一处
+            dock.params_snapshot["视图 2θ 下限 (°)"] = 1.0
+            dock.params_snapshot["视图 2θ 上限 (°)"] = 5.0
             w.findChild(QPushButton, "apply_image_btn").click()
             QApplication.processEvents()
             xlo, xhi = ax.get_xlim()
@@ -6282,10 +6396,14 @@ class TestViewLimitSync(unittest.TestCase):
             self.assertIsNone(snap.get("视图 2θ 下限 (°)"),
                               "恢复默认后应回到跟随积分范围")
             self.assertIsNone(snap.get("视图 2θ 上限 (°)"))
-            # 输入框显示回数据组的积分范围
+            # 输入框已撤（显示范围不再摆控件）→ 查快照 + 下一次重画的实际窗口
+            self.assertNotIn("视图 2θ 下限 (°)", w.params)
+            # [恢复默认] 本身只复位参数、不重画（设计如此）→ 点 [应用] 看效果
+            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertAlmostEqual(
-                w.params["视图 2θ 下限 (°)"].value(),
-                w.params["2θ 下限 (°)"].value(), places=4)
+                ax.get_xlim()[0], w.params["2θ 下限 (°)"].value(), delta=0.05,
+                msg="恢复默认后重画该回到跟随积分范围")
         finally:
             w.close()
 
@@ -9180,7 +9298,7 @@ class TestFolderImport(unittest.TestCase):
         try:
             with mock.patch.object(QFileDialog, "getExistingDirectory",
                                    return_value=folder):
-                w.findChild(QPushButton, "folder_btn").click()
+                w.open_folder_action.trigger()
             names = [w.file_list.item(i).text()
                      for i in range(w.file_list.count())]
             self.assertEqual(names, ["a.tif", "b.edf", "c.TIF", "e.cbf"])
@@ -9188,7 +9306,7 @@ class TestFolderImport(unittest.TestCase):
             # 整目录重导：全部重复 → 逐个跳过不弹窗，列表不长
             with mock.patch.object(QFileDialog, "getExistingDirectory",
                                    return_value=folder):
-                w.findChild(QPushButton, "folder_btn").click()
+                w.open_folder_action.trigger()
             self.assertEqual(w.file_list.count(), 4)
             self.assertIn("已跳过重复文件",
                           w.log_text.toPlainText())
@@ -9201,7 +9319,7 @@ class TestFolderImport(unittest.TestCase):
         try:
             with mock.patch.object(QFileDialog, "getExistingDirectory",
                                    return_value=folder):
-                w.findChild(QPushButton, "folder_btn").click()
+                w.open_folder_action.trigger()
             self.assertIn("文件夹里没有支持的数据文件",
                           w.log_text.toPlainText())
             self.assertEqual(w.file_list.count(), 0)
@@ -9213,7 +9331,7 @@ class TestFolderImport(unittest.TestCase):
         try:
             with mock.patch.object(QFileDialog, "getExistingDirectory",
                                    return_value=""):
-                w.findChild(QPushButton, "folder_btn").click()
+                w.open_folder_action.trigger()
             self.assertEqual(w.file_list.count(), 0)
         finally:
             w.close()
@@ -10770,8 +10888,10 @@ class TestBackgroundSubtraction(unittest.TestCase):
             for mode in ("off", "blank", "auto", "anchor"):
                 self._set_mode(w, mode)
                 vis = [n for n, r in w.bg_rows.items() if not r.isHidden()]
-                self.assertEqual(len(vis), 0 if mode == "off" else 1,
-                                 f"{mode} 只该放出一行，实际 {vis}")
+                # auto 放两行：窗口 + 锚点（自动 + 锚点校正要用锚点那行）
+                want = 0 if mode == "off" else (2 if mode == "auto" else 1)
+                self.assertEqual(len(vis), want,
+                                 f"{mode} 放出的行数不对，实际 {vis}")
                 self.assertLess(w.param_dock.minimumWidth(), 320)
         finally:
             w.close()
@@ -10786,7 +10906,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.findChild(QPushButton, "reset_image_btn").click()
             self.assertEqual(w.params["背景扣除模式"].currentData(), "off")
             # 窗口默认 0.5°（2026-09-26 从 1.0° 改，见 background.AUTO_WINDOW_DEG）
-            self.assertEqual(w.params["背景窗口 (°)"].value(), 0.5)
+            # 窗口默认 0.3°（2026-09-27 用户定的，见 background.AUTO_WINDOW_DEG）
+            self.assertEqual(w.params["背景窗口 (°)"].value(), 0.3)
             ax = _axes(w, "1D", self.PATH)
             self.assertEqual(_bg_lines(ax)[1], [])
             self.assertIsNotNone(getattr(dock, "last_tth", None))

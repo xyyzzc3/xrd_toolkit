@@ -99,7 +99,7 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
-    _reload_config_combo, _set_focus)
+    _param_box_set, _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_heat)
@@ -281,15 +281,33 @@ def _sync_bg_rows(window: QMainWindow) -> None:
     if not rows:
         return
     mode = window.params["背景扣除模式"].currentData()
+    # 锚点行在 auto 下也露出来：自动 + 锚点校正（2026-09-27）就是靠它点
+    # 锚点把自动基线校准到"纯背景"上
     for name, row in rows.items():
-        row.setVisible(name == mode)
+        row.setVisible(name == mode
+                       or (name == "anchor" and mode == "auto"))
+    # 来处说明：这个文件是按谁的锚点扣的（没有配方 = 还没处理过）
+    lbl = getattr(window, "bg_prov_lbl", None)
+    if lbl is not None:
+        # 配方按 str(path) 存；面板自己记着它的文件（panel_file）
+        dock_ = window.plot_docks.get(window.focus_panel)
+        path_ = getattr(dock_, "panel_file", None)
+        recipe = (getattr(window, "proc_recipes", None)
+                  or {}).get(str(path_))
+        if not recipe:
+            lbl.setText("本图还没处理过（本页参数只作用于当前这张图）")
+        else:
+            src = recipe.get("anchor_source")
+            lbl.setText(f"本图已扣过：{'锚点基准 — ' + src if src else '锚点本图手点'}"
+                        "（批量处理过的文件各自记着，点开就是扣过的样子）")
     # "显示原始曲线对比"只在真的在扣的时候才有意义
     window.params["背景显示原始"].setEnabled(mode != "off")
     window.params["负值截断为 0"].setEnabled(mode != "off")
     if hasattr(window, "bg_pick_btn"):
-        window.bg_pick_btn.setEnabled(mode == "anchor")
-        window.bg_clear_btn.setEnabled(mode == "anchor")
-        if mode != "anchor" and window.bg_pick_btn.isChecked():
+        pickable = mode in ("anchor", "auto")   # auto = 自动 + 锚点校正
+        window.bg_pick_btn.setEnabled(pickable)
+        window.bg_clear_btn.setEnabled(pickable)
+        if not pickable and window.bg_pick_btn.isChecked():
             window.bg_pick_btn.setChecked(False)   # 离开锚点模式即停止拾取
     _update_bg_count(window)
 
@@ -644,6 +662,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # 积分设置（2θ 范围 + 输出点数）搬去坞顶第三行：所有分析页共用，
     # 见 _build_param_dock 里 data_row 的说明（用户 2026-09-27）
+    # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
+    # 我按自己的想法收尾）：整页空白看着像没做完
+    page_hint = QLabel(
+        "本页只管出图：2θ 范围与点数在坞顶，显示参数（对数纵轴 / "
+        "纵轴范围）在 [绘图] 页。勾选超过 24 张时不再弹面板——"
+        "结果进文件栏「1D 产物」，双击看一张、右键整组打开。")
+    page_hint.setWordWrap(True)
+    page_hint.setStyleSheet("color: gray;")
+    form_1d.addRow(page_hint)
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
@@ -730,15 +757,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 手填；自动模式输入框置灰 = 只读展示正在用的区间
     add_caption(form_draw, "1D 显示")
 
-    # 视图 2θ 范围：只看图不参与计算的显示窗口。初始跟随数据组的
-    # 积分 2θ 范围；在图里缩放/平移（滚轮/拖拽/Home/自定义对话框）
-    # 会实时写回这里，[应用] 再用这里重画。与数据组的 2θ 范围完全
-    # 分开——改这里不会影响积分的区间
-    add_range(form_1d, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
-              0.0, 90.0, 1.0, 8.0,
-              label="视图 2θ 范围", suffix=" °", max_width=88,
-              tooltip="看图的窗口：缩放/平移实时写回；[应用] 用这里重画。"
-                      "恢复默认 = 回到跟随积分范围")
+    # "显示 2θ 范围"那一行**撤了**（用户 2026-09-27："显示范围用户自己
+    # 放大就行了"）：在图上滚轮/拖框缩放、[Home] 复位就够用，不必再摆一对
+    # 输入框。两个参数键（视图 2θ 下限/上限）**仍在**——缩放/平移照样写回
+    # 它们（写进面板快照，那才是权威），[恢复默认] 也照样让它们回到"跟随
+    # 积分范围"；只是没有控件显示它们了（_param_box_set 见不到控件就跳过）。
+    # 区别仍在：积分范围（坞顶那行）改了要重积分，视图范围只换窗口。
 
     log_y = QCheckBox("对数纵轴")
     log_y.setToolTip("对数刻度：强弱峰差几个数量级时弱峰也看得清")
@@ -924,6 +948,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         bg_row((bg_fit_combo, 1)),
     ])
     form_bg.addRow(anchor_row)
+
+    # 处理来处（用户 2026-09-27："在双击查看这些选图时，在扣背景的参数栏
+    # 可以显示这个图是以 a 的锚点为基准进行扣除的。按文件。"）
+    bg_prov_lbl = QLabel("")
+    bg_prov_lbl.setStyleSheet("color: gray;")
+    bg_prov_lbl.setWordWrap(True)
+    window.bg_prov_lbl = bg_prov_lbl
+    form_bg.addRow(bg_prov_lbl)
 
     bg_show_raw = QCheckBox("显示原始曲线对比")
     bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"
@@ -1182,7 +1214,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "热图下限": 1.0,
         "热图上限": 100000.0,
         "背景扣除模式": "off",
-        "背景窗口 (°)": 0.5,
+        "背景窗口 (°)": 0.3,
         "空扫归一化": 1.0,
         "锚点拟合方式": "pchip",
         "背景显示原始": True,
@@ -1228,15 +1260,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["背景显示原始"].setChecked(img_defaults["背景显示原始"])
         window.params["负值截断为 0"].setChecked(img_defaults["负值截断为 0"])
         _sync_bg_rows(window)
-        # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉
-        # 显式视图值（None = 跟随），输入框显示回积分范围
+        # 视图 2θ 范围回到"跟随积分范围"：从焦点面板快照里删掉显式视图值
+        # （None = 跟随）。那两个键的输入框已撤（用户 2026-09-27："显示范围
+        # 用户自己放大就行了"）→ 控件那一份用 _param_box_set 刷，没有就跳过
+        # （踩过：直接下标会 KeyError，而 Qt 槽里的异常只打 stderr、这一行
+        # 之后的复位会被静默跳过）
         dock = window.plot_docks.get(window.focus_panel)
         if dock is not None and getattr(dock, "params_snapshot", None):
             for name in ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)"):
                 dock.params_snapshot.pop(name, None)
         for name, base in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
                            ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
-            window.params[name].setValue(window.params[base].value())
+            _param_box_set(window, name, window.params[base].value())
         _log(window, "图像参数已恢复默认")
 
     btn_reset_img.clicked.connect(reset_image)

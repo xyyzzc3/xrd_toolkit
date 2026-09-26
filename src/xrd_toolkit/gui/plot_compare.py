@@ -19,7 +19,8 @@ from xrd_toolkit.gui.panel_state import (
     _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
-    _display_snapshot, _heat_shown, _log, _panel_param, _proc_params,
+    _display_snapshot, _heat_shown, _log, _panel_param,
+    _param_box_set, _proc_params,
     _set_focus)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
@@ -173,8 +174,8 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         if xlo < xhi:
             ax.set_xlim(xlo, xhi)
         if window.plot_docks.get(window.focus_panel) is dock:
-            window.params["视图 2θ 下限 (°)"].setValue(xlo)
-            window.params["视图 2θ 上限 (°)"].setValue(xhi)
+            _param_box_set(window, "视图 2θ 下限 (°)", xlo)
+            _param_box_set(window, "视图 2θ 上限 (°)", xhi)
         if not stack:
             # 堆叠模式下纵轴由行偏移决定，对数/范围参数不适用（同瀑布）
             log_y = _panel_param(window, dock, "对数纵轴", False)

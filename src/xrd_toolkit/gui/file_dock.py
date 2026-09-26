@@ -218,27 +218,32 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     content = QWidget()
     lay = QVBoxLayout(content)
-    # 按钮两排：[打开文件][打开文件夹] 各占一半；[保存][删除]
-    # [导出数据] 各占 1/3。第二排三个按钮把文件列最小宽度锁在
-    # ≈ 3×80+间距（270），与参数列一致——排布改了，这个锁宽
-    # 约束不变（别把第二排砍成两个按钮，文件列会收得比参数列窄）
-    btn_open = QPushButton("打开文件")
+    # 按钮：[打开…]（文件 / 文件夹收进一个下拉——用户 2026-09-27：
+    # "打开文件文件夹合一"）+ [保存][删除][导出数据] 一排。后三个按钮把
+    # 文件列最小宽度锁在 ≈ 3×80+间距（270），与参数列一致——别把它们
+    # 砍成两个，文件列会收得比参数列窄
+    btn_open = QPushButton("打开…")
     btn_save = QPushButton("保存")
     btn_delete = QPushButton("删除")
-    btn_folder = QPushButton("打开文件夹")
     btn_export = QPushButton("导出数据")
+    btn_open.setObjectName("open_btn")
     btn_save.setObjectName("save_btn")
     btn_delete.setObjectName("delete_btn")
-    btn_folder.setObjectName("folder_btn")
     btn_export.setObjectName("export_btn")
-    btn_open.setToolTip("选择一个或多个衍射图像加入列表")
-    btn_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表"
-                          "（拖文件夹进窗口同样生效）")
+    btn_open.setToolTip("打开文件（可多选）或整个文件夹")
     btn_export.setToolTip("把勾选文件的 1D 结果批量存成两列 txt/chi，"
                           "可顺带生成 CSV 总表")
+    open_menu = QMenu(btn_open)
+    act_files = open_menu.addAction("打开文件…")
+    act_files.setToolTip("选择一个或多个衍射图像加入列表")
+    act_folder = open_menu.addAction("打开文件夹…")
+    act_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表"
+                          "（拖文件夹进窗口同样生效）")
+    btn_open.setMenu(open_menu)
+    window.open_files_action = act_files
+    window.open_folder_action = act_folder
     row1 = QHBoxLayout()
     row1.addWidget(btn_open, 1)
-    row1.addWidget(btn_folder, 1)
     lay.addLayout(row1)
     row2 = QHBoxLayout()
     row2.addWidget(btn_save, 1)
@@ -250,21 +255,21 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     # 得有一组顺手的按钮——全选 / 全不选 / 按条件选（区间·间隔·名字）。
     # 三条件走弹窗而不是常驻一行控件：文件列本来就窄（≈270 px 的下限
     # 由第二排三个按钮锁住），常驻一行会把列撑宽。
+    # 全选 / 全不选合成一个（用户 2026-09-27："全选全部不选合一"）：
+    # 标签跟着状态走——全勾上时按它就是"全不选"，否则是"全选"
     btn_all = QPushButton("全选")
-    btn_none = QPushButton("全不选")
     btn_pick = QPushButton("按条件选…")
-    btn_all.setObjectName("select_all_btn")
-    btn_none.setObjectName("select_none_btn")
+    btn_all.setObjectName("select_all_btn")   # 老名字沿用（测试/别名）
     btn_pick.setObjectName("select_pick_btn")
-    btn_all.setToolTip("勾上「原始数据」里的全部文件"
+    btn_all.setToolTip("全勾上时按 = 全不选（含各产物分组）；"
+                       "否则 = 勾上「原始数据」里的全部文件"
                        "（各产物分组请点组名自己勾）")
-    btn_none.setToolTip("取消全部对号（含各产物分组）")
+    window.select_all_btn = btn_all
     btn_pick.setToolTip("按区间（第几个到第几个）、间隔（每 N 个选 1 个）"
                         "或名字包含来勾选，可叠加，可追加；"
                         "只作用在「原始数据」上")
     row3 = QHBoxLayout()
     row3.addWidget(btn_all, 1)
-    row3.addWidget(btn_none, 1)
     row3.addWidget(btn_pick, 1)
     lay.addLayout(row3)
 
@@ -303,6 +308,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             window._check_syncing = False
         _sync_current_to_checks(window)
         _refresh_file_label(window)
+        _sync_select_label(window)
 
     def on_item_clicked(item, column=0):
         """手势区分：
@@ -349,28 +355,34 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         if folder:
             _scan_folder(window, folder)
 
-    btn_folder.clicked.connect(open_folder)
+    act_files.triggered.connect(lambda _checked=False: open_dialog())
+    act_folder.triggered.connect(lambda _checked=False: open_folder())
     btn_export.clicked.connect(lambda: _run_export(window))
 
     def select_all():
-        # [全选]：勾上「原始数据」整组（产物分组不自动勾——那要自己挑）
+        # 全选 / 全不选共用这一个入口，按当前状态决定做哪件事
         total = window.file_list.count()
         if not total:
             _log(window, "文件列表是空的")
             return
+        n = len(gui_sources.checked_sources(window))
+        if _all_raw_checked() and n:
+            # 已经全勾上 → 取消全部对号（含各产物分组）
+            leaves = [s.item for s in gui_sources.all_sources(window)]
+            _set_checks(window, [(it, False) for it in leaves])
+            _log(window, f"全不选：{n} 个条目的对号已取消")
+            return
+        # [全选]：勾上「原始数据」整组（产物分组不自动勾——那要自己挑）
         _set_checks(window, [(window.file_list.item(i), True)
                              for i in range(total)])
         _log(window, f"全选：{total} 个文件（「原始数据」整组）")
 
-    def select_none():
-        # [全不选]：取消全部对号（含各产物分组）
-        leaves = [s.item for s in gui_sources.all_sources(window)]
-        n = len(gui_sources.checked_sources(window))
-        if not n:
-            _log(window, "当前没有勾选的条目")
-            return
-        _set_checks(window, [(it, False) for it in leaves])
-        _log(window, f"全不选：{n} 个条目的对号已取消")
+    def _all_raw_checked() -> bool:
+        """「原始数据」里是不是每一条都勾上了（切换按钮据此决定做哪件事）。"""
+        raw = window.file_list.raw_group
+        n = raw.childCount()
+        return bool(n) and all(
+            raw.child(i).checkState(0) == Qt.Checked for i in range(n))
 
     def select_by_condition():
         total = window.file_list.count()
@@ -403,11 +415,10 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             _log(window, f"已删除 {len(products)} 条产物（{n} 份文件）")
             refresh_product_groups(window)
 
-    btn_open.clicked.connect(open_dialog)
+    # [打开…] 的点击由下拉菜单的两个动作负责（btn_open 自己只弹菜单）
     btn_save.clicked.connect(lambda: _save_figures(window))
     btn_delete.clicked.connect(delete_selected)
-    btn_all.clicked.connect(select_all)
-    btn_none.clicked.connect(select_none)
+    btn_all.clicked.connect(select_all)      # 全选/全不选同一个入口
     btn_pick.clicked.connect(select_by_condition)
 
     dock.setWidget(content)
@@ -550,6 +561,7 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
     _sync_group_states(window)   # 批量加是屏蔽信号做的：组态在这里补
     _sync_current_to_checks(window)
     _refresh_file_label(window)
+    _sync_select_label(window)    # 新条目默认不勾 → 标签可能要从"全不选"翻回"全选"
     # 新来的文件可能有产物（同一次实验重开会话）→ 刷新各产物分组
     refresh_product_groups(window)
 
@@ -929,6 +941,22 @@ def _sync_group_states(window: QMainWindow) -> None:
             node.child(i).checkState(0) for i in range(node.childCount())))
 
 
+def _sync_select_label(window: QMainWindow) -> None:
+    """全选/全不选切换按钮的标签：全勾上 → "全不选"，否则 → "全选"。
+
+    按钮是 2026-09-27 合出来的（用户："全选全部不选合一"）——它做哪件事
+    由当前状态决定，所以标签必须跟着状态走，否则按下去会发生什么全靠猜。
+    """
+    btn = getattr(window, "select_all_btn", None)
+    if btn is None:
+        return
+    raw = window.file_list.raw_group
+    n = raw.childCount()
+    checked = sum(1 for i in range(n)
+                  if raw.child(i).checkState(0) == Qt.Checked)
+    btn.setText("全不选" if n and checked == n else "全选")
+
+
 def _set_checks(window: QMainWindow, wanted: list) -> int:
     """一次性改一批对号，返回改动条数。
 
@@ -952,6 +980,7 @@ def _set_checks(window: QMainWindow, wanted: list) -> int:
     if changed:
         _sync_current_to_checks(window)
         _refresh_file_label(window)
+    _sync_select_label(window)
     return changed
 
 
