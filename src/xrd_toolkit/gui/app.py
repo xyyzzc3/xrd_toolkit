@@ -385,22 +385,24 @@ def _on_choose_blank(window: QMainWindow) -> None:
 
 
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
-    """参数坞：顶部固定"编辑对象"名，下面上下对半分两块（QGroupBox）
-    ——数据参数（上）/ 图像参数（下），中间分隔条可拖。
+    """参数坞：顶部两行固定件（"编辑对象"名 / "几何配置"条目）+ 五个
+    入口页（校准 / 1D / 处理 / 对比 / 绘图），翻页由工具栏那五个入口
+    按钮负责。
 
-    数据参数 = 参与计算的（几何配置 + 积分区间 + 点数），改它们
-    会改变积分/校准的结果；图像参数 = 只看图不参与计算的，组内
-    分两个区：2D/剖面视图（对比度 + 剖面线角度）+"1D 显示" 小节
-    （对数纵轴 + 纵轴范围，随 [应用] 重画曲线）。
-    两块各自独立滚动（内容放不下时自动出滚动条），[恢复默认]
-    在左、[应用] 在右并排（通栏宽一分为二），固定在各区最下方，
+    固定件不随页面滚动：
+      - 编辑对象：视图 [应用] 作用在它身上；
+      - 几何配置：分析/积分/出图一律用这条条目（_collect_geometry 取
+        window.config）。一行只放下拉框，像素/波长/距离的读数走悬停
+        提示（_sync_geom_row 填）；校准页上它置灰（那里用的是「当前
+        配置」那份几何），并让 [返回分析模式] 现身 —— 本模式的显式
+        出口，钉在这里永远可见。
+    各页自己套滚动区，页底按钮（产出按钮 / [恢复默认][应用]）固定
     不随滚动走。
-    排版约定（为窄排版）：单位放在输入框后缀里（标签不带括号单
-    位）；成对的上下限并排一行（中间 ~ 连接，转盘限宽到数值能
-    完整显示的底限）；小节用全宽灰色小标题（"1D 显示"不套子分组
-    框，省嵌套边距）；每项悬停有人话提示。坞有尺寸下限（拖动边
-    框时不会把控件裁掉）：左右 = 最宽一行完整显示的宽度，上下 =
-    固定件不被遮没的高度。
+    排版约定（为窄排版）：单位放输入框后缀里（标签不带括号单位）；
+    成对上下限并排一行（中间 ~ 连接，转盘限宽到数值能完整显示的
+    底限）；小节用全宽灰色小标题；每项悬停有人话提示。坞有尺寸下限
+    （拖动边框时不会把控件裁掉）：左右 = 最宽一行完整显示的宽度与
+    坞顶两行的宽度取大，上下 = 固定件不被遮没的高度。
     对照 CLI：数据参数来自 integrate/calibrate 脚本，图像参数来自
     view_diffraction 的 --vmin/--vmax/--angle。
     """
@@ -415,14 +417,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = 一行"编辑对象" + **五个入口页**（校准 / 1D / 处理 /
-    # 对比 / 绘图）。工具栏那五个入口按钮翻页（位置 A = 窗口顶部，见
-    # _build_toolbar / _switch_entrance）——用户 2026-09-24 定稿：
-    # "最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
-    # 页 0 = 校准（几何一节 + 校准表单，calib.py 建）；其余四页放本阶段
-    # 的参数，底部各带一个"产出"按钮（1D：[出 1D 图]；处理：
-    # [重画]；对比：[出对比][出热图]；绘图：[出图][只重画当前]
-    # [导出图片]）。
+    # 参数坞 = 两行固定件（编辑对象 / 几何配置）+ **五个入口页**（校准 /
+    # 1D / 处理 / 对比 / 绘图）。工具栏那五个入口按钮翻页（位置 A =
+    # 窗口顶部，见 _build_toolbar / _switch_entrance）——用户 2026-09-24
+    # 定稿："最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
+    # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
+    # 底部各带一个"产出"按钮（1D：[出 1D 图]；处理：[重画]；对比：
+    # [出对比][出热图]；绘图：[出图][只重画当前][导出图片]）。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
@@ -438,6 +439,53 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                                      Qt.ElideMiddle)
     window.focus_label.setStyleSheet("color: gray;")
     lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
+
+    # 几何配置：五个入口共用的第二行，同样固定在坞顶（不随页面滚动）。
+    # 分析/积分/出图一律用这条条目（_collect_geometry 取 window.config），
+    # 所以它得在做分析的每一页都看得见——2026-09-26 之前它住在校准页
+    # 顶部，还被挤进一个 88 px 高的内嵌滚动区（视口 88 / 内容 130），
+    # 波长和距离都看不全（用户："位置看不清"）。
+    # 一行三件：标签 + 下拉框（只放短 key）+ [返回分析模式]；
+    # 像素/波长/距离这些只读值改走悬停提示（文案在 _sync_geom_row 里
+    # 拼），不再占三行灰色字段。提示挂在**整行容器**上：下拉框在校准页
+    # 要置灰（"显示但不能改"），而置灰的控件收不到鼠标事件、自己的提示
+    # 弹不出来，事件冒到容器上才弹得出来。
+    window.geom_row = QWidget()
+    geom_lay = QHBoxLayout(window.geom_row)
+    geom_lay.setContentsMargins(0, 0, 0, 0)
+    geom_lay.setSpacing(4)
+    geom_lay.addWidget(QLabel("几何配置"))
+    # 下拉框只显示短 key（如 lmfp1_lab6），完整批次备注挂在**条目**的
+    # 悬停提示上（下拉列表里逐条看）；key 藏在 itemData 里给程序用。
+    # 完整条目（含 beam_center）挂在 window.config，2D/剖面视图直接取用。
+    # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没建好，
+    # 信号此刻触发会去写一个还不存在的控件；默认值改由 create_window
+    # 收尾时显式调用 _apply_config 应用。
+    window.config_combo = QComboBox()
+    for name, entry in CONFIGS.items():
+        window.config_combo.addItem(name, name)
+        window.config_combo.setItemData(
+            window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
+    window.config_combo.setCurrentIndex(
+        window.config_combo.findData(DEFAULT_CONFIG))
+    window.config_combo.currentIndexChanged.connect(
+        lambda i: (_apply_config(window, i),
+                   _sync_del_config_btn(window)))
+    geom_lay.addWidget(window.config_combo, 1)
+    # 校准页的显式出口：固定在坞顶、永远可见。以前它在校准表单的最
+    # 底部（窗口 1000 高时按钮落在内容 y=1236，要往下滚 434 px），
+    # 用户 2026-09-26 报"没有退出校准的按钮了"。按下的效果与工具栏
+    # [校准] 弹起同源（那条 toggled → _on_mode(False)）。
+    btn_exit = QPushButton("返回分析模式")
+    btn_exit.setObjectName("exit_calib_btn")
+    btn_exit.setToolTip("退出校准工作台，回到分析模式"
+                        "（选点与结果清零——关闭即遗忘）")
+    btn_exit.clicked.connect(lambda: window.calib_btn.setChecked(False))
+    btn_exit.setVisible(False)      # 只在校准模式显示（_enter/_exit_calib）
+    geom_lay.addWidget(btn_exit)
+    window.calib_exit_btn = btn_exit
+    lay.addWidget(window.geom_row)        # 固定第二行，不随页面滚动
+
     lay.addWidget(window.param_stack)     # 下面才是五个入口页
 
     def make_page():
@@ -464,17 +512,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     page_bg, form_bg, btns_bg = make_page()
     page_cmp, form_cmp, btns_cmp = make_page()
     page_draw, form_draw, btns_draw = make_page()
-    geom_page, form_calib, _ = make_page()
 
-    # 校准页 = 几何一节（本文件建）+ 校准表单（calib.py；见其 docstring）
-    page_calib = QWidget()
-    calib_lay = QVBoxLayout(page_calib)
-    calib_lay.setContentsMargins(0, 0, 0, 0)
-    calib_lay.setSpacing(0)
-    calib_lay.addWidget(geom_page)
-    calib_lay.addWidget(_build_calib_form(window), 1)
-
-    window.param_stack.addWidget(page_calib)   # 0 校准
+    # 校准页 = 校准表单（calib.py；见其 docstring）。原先压在这一页顶部的
+    # "几何配置 + 标定几何（只读）"整块撤掉了：几何配置挪进坞顶公共行、
+    # 只读值改悬停（用户 2026-09-26 定）——顺带消掉了那块被压成 88 px 的
+    # 内嵌滚动区（"波长/距离看不见"的根因）
+    window.param_stack.addWidget(_build_calib_form(window))   # 0 校准
     window.param_stack.addWidget(page_1d)      # 1 1D
     window.param_stack.addWidget(page_bg)      # 2 处理
     window.param_stack.addWidget(page_cmp)     # 3 对比
@@ -483,31 +526,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     page_draw.layout().insertWidget(0, _build_plot_type_row(window))
     window._plot_type = "1D"   # [出图] 用哪个类型（点类型按钮时更新）
 
-
-    # 几何配置选择器：下拉框只显示短 key（如 lmfp1_lab6），完整
-    # 批次备注走悬停提示（鼠标长放显示，不单独占一行——与用户
-    # 讨论定稿）。key 藏在 itemData 里给程序用。
-    # 选中即把该条目的标定几何填进下方三个输入框；完整条目（含
-    # beam_center）挂在 window.config，2D/剖面视图直接取用。
-    # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没
-    # 建好，信号此刻触发会去写一个还不存在的控件；默认值改由
-    # create_window 收尾时显式调用 _apply_config 应用。
-    window.config_combo = QComboBox()
-    for name, entry in CONFIGS.items():
-        window.config_combo.addItem(name, name)
-        # 悬停提示：完整批次备注（下拉框里只放短 key）
-        window.config_combo.setItemData(
-            window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
-
-    window.config_combo.setCurrentIndex(
-        window.config_combo.findData(DEFAULT_CONFIG))
-    window.config_combo.currentIndexChanged.connect(
-        lambda i: (_apply_config(window, i),
-                   _sync_del_config_btn(window)))
-    # 分析页只读：这里只留下拉框选条目；几何值下面以只读摘要显示。
-    # [加载参数][保存参数][删除] 三个按钮在校准页（配置的增删改查归
-    # 校准页，分析页不提供修改入口——见 calib._build_calib_form）。
-    form_calib.addRow("几何配置", window.config_combo)
+    # 几何配置行跟着页走：校准页上它只是显示（置灰）——校准用的是
+    # 「当前配置」那份几何，这里的条目只决定分析侧用哪条，在校准页
+    # 能改会让人以为改了就换了校准的几何。悬停文案与置灰状态都由
+    # _sync_geom_row 一处写（翻页、_apply_config 换条目两条路都调它）。
+    window.param_stack.currentChanged.connect(
+        lambda _i: _sync_geom_row(window))
+    window._geom_row_sync = lambda: _sync_geom_row(window)
+    _sync_geom_row(window)
 
     window.params = {}
     def add_caption(form, text):
@@ -575,23 +601,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         form.addRow(label, field)
         return lo_box, hi_box
 
-    add_caption(form_calib, "标定几何（只读：由几何配置决定）")
-    add_float(form_calib, "像素尺寸 (µm)", 0.0, 10000.0, 200.0,
-              decimals=1,
-              label="像素尺寸", suffix=" µm", readonly=True,
-              tooltip="探测器单个像素的边长；来自所选几何配置条目"
-                      "（分析页只读，改几何请去校准页）")
-    add_float(form_calib, "波长 (Å)", 0.0, 10.0, 0.1223, decimals=4,
-              label="波长", suffix=" Å", readonly=True,
-              tooltip="X 射线波长；来自所选几何配置条目（分析页只读）")
-    # 参数键仍是 "初始距离 (mm)"（_collect_geometry / 快照回放按它取控件，
-    # 改名会牵动一大片），但显示名随语义改成"分析用距离"：它是**分析用**
-    # 的几何（来自所选配置条目），校准的初值另在校准页设。
-    add_float(form_calib, "初始距离 (mm)", 0.0, 10000.0, 1600.0,
-              decimals=1,
-              label="分析用距离", suffix=" mm", readonly=True,
-              tooltip="分析用的样品-探测器距离；来自所选几何配置条目。"
-                      "校准的初值在校准页单独设（③ 二次精修取当前使用）")
+    # 标定几何那三行只读字段（像素尺寸/波长/分析用距离）撤了：它们的
+    # 值改在坞顶"几何配置"那一行的悬停提示里看（用户 2026-09-26 定：
+    # "只留能选的那一行，下面的灰色的变成鼠标长放显示"）。控件撤掉后
+    # window.params 里不再有这三个键，快照也就不会再记它们——几何随
+    # 快照回放一直是走 "config" 那条（见 _snapshot_params/_restore）。
 
     add_caption(form_1d, "积分设置")
     add_range(form_1d, "2θ 下限 (°)", "2θ 上限 (°)", 0.0, 90.0, 1.0, 8.0,
@@ -1236,9 +1250,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 自己的滚动条接管。用表单 minimumSizeHint 而不是 content 的
     # sizeHint：转盘限宽后 sizeHint 低估了成对行的最小宽度（实测
     # 会横向裁掉近 20px）
-    forms = (form_calib, form_1d, form_bg, form_cmp, form_draw)
+    forms = (form_1d, form_bg, form_cmp, form_draw)
     form_min = max(f.parentWidget().minimumSizeHint().width()
                    for f in forms)   # 量装表单的部件，不是布局
+    # 坞顶那两行固定件也要放得下（编辑对象名 / 几何配置行）。几何行里
+    # 的 [返回分析模式] 平时是隐藏的，而隐藏件不计入 minimumSize ——
+    # 量出来会偏小，一到校准模式按钮现身就被裁，所以显式补上它的宽
+    head_min = (max(window.focus_label.minimumSizeHint().width(),
+                    window.geom_row.minimumSize().width()
+                    + window.calib_exit_btn.sizeHint().width() + 8))
+    form_min = max(form_min, head_min)
     # 壳：一页的滚动条宽度 + 那一页表单的左右边距（各页相同）
     # 壳 = 滚动条宽 + 表单左右边距 + 8（原来 QGroupBox 那圈 4 px 内边距，
     # 页面化以后由页面自己的布局接管——漏算它会让校准页最宽的那行
@@ -1249,12 +1270,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
               + form_1d.contentsMargins().right() + 8)
     dock.setMinimumWidth(form_min + chrome + 2)
     content.setMinimumWidth(form_min + chrome + 2)   # 双保险：坞本身也算上
-    # 坞的最小高度：编辑对象名 + 一页的固定件（滚动区最低 110 = 露出
-    # 标题 + 几个控件；按钮行 ~40）。翻页栈的最小尺寸只报当前页，且
-    # 嵌套后布局 minimumSize 不再含子件 minimumSizeHint（探针验证），
-    # 靠布局算会把下限塌成一行标签的高度
+    # 坞的最小高度：编辑对象名 + 几何配置行 + 一页的固定件（滚动区最低
+    # 110 = 露出标题 + 几个控件；按钮行 ~40）。翻页栈的最小尺寸只报当前
+    # 页，且嵌套后布局 minimumSize 不再含子件 minimumSizeHint（探针
+    # 验证），靠布局算会把下限塌成一行标签的高度
     dock.setMinimumHeight(
-        window.focus_label.minimumSizeHint().height() + 110 + 40)
+        window.focus_label.minimumSizeHint().height()
+        + window.geom_row.minimumSize().height() + 6 + 110 + 40)
 
     _sync_cut_label(window)      # 裁剪清单标签：空
     _sync_smooth_rows(window)    # 平滑阶数只在 SG 下可编辑
@@ -1399,6 +1421,39 @@ def _clear_entrance(window: QMainWindow) -> None:
     window.param_dock.setVisible(False)
 
 
+def _sync_geom_row(window: QMainWindow) -> None:
+    """坞顶"几何配置"那一行随页刷新：置灰与否 + 悬停读数。
+
+    - 校准页：置灰（只显示不能改）。校准的几何是校准页里那份「当前
+      配置」；这里选的是**分析侧**用哪条条目，在校准页放着手会误导。
+      置灰的控件收不到鼠标事件，所以悬停提示挂在整行容器上（见
+      _build_param_dock）——提示里补一句为什么是灰的。
+    - 其余四页：可选。选它就换分析用的几何（currentIndexChanged →
+      _apply_config → 再回调本函数刷新读数）。
+
+    读数（像素/波长/距离）来自 window.config（完整条目，_apply_config
+    里挂上）；建坞阶段它还没设，此时只留条目名、提示留空。
+    """
+    combo = window.config_combo
+    calibrating = (window.param_stack.currentIndex()
+                   == window.PARAM_PAGES["校准"])
+    combo.setEnabled(not calibrating)
+    cfg = getattr(window, "config", None)
+    if cfg is None:
+        tip = ""
+    else:
+        g = cfg["geometry"]
+        tip = (f"{window.config_name}：{cfg['label']}\n"
+               f"像素尺寸 {g['pixel_size_m'] * 1e6:.1f} µm\n"
+               f"波长 {g['wavelength_m'] * 1e10:.4f} Å\n"
+               f"距离 {g['dist_m'] * 1e3:.2f} mm")
+    if calibrating:
+        tip += ("\n（校准页里只显示、不能改：校准用的是下面「当前配置」"
+                "那份几何，用 [编辑当前配置…] 或跑一轮校准去动它）")
+    combo.setToolTip(tip)
+    window.geom_row.setToolTip(tip)
+
+
 def _switch_entrance(window: QMainWindow, name: str) -> None:
     """切到某个入口：参数坞翻页 + 五个按钮高亮。
 
@@ -1408,15 +1463,23 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
 
     点入口先让参数坞露出来：开局它是收起的（_clear_entrance），
     "选到谁才放谁的参数"；[校准] 的拉宽要量坞的宽度，所以必须先可见。
+
+    再点已亮着的 [校准] = 退出（Qt 先弹起勾选，那一刻 toggled 已经把
+    _on_mode(False) 跑完了）。这里要**认出来并就此打住**：否则 clicked
+    又把勾按回去，退出 + 重进在同一个点击里跑完，看着像"点了没反应"，
+    还会把选到一半的选点清空（2026-09-26 用户报"没有退出校准的按钮"，
+    实为这个陷阱；面板的关闭即遗忘把选点也带走了）。
     """
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
+    if name == "校准" and not window.calib_btn.isChecked():
+        return                      # 这一次点击是"退出"，已由 toggled 处理
     window.param_dock.setVisible(True)
     if name != "校准":
         window._last_entrance = name
     if name == "校准":
-        window.calib_btn.setChecked(True)    # → toggled → _on_mode(True)
+        window.calib_btn.setChecked(True)    # 幂等；进入走 toggled
     else:
         if window.calib_btn.isChecked():
             window.calib_btn.setChecked(False)   # → toggled → _on_mode(False)
@@ -1597,8 +1660,9 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
 
     2026-09-24 起入口是**五个页签式按钮**（[校准][1D][处理]
     [对比][绘图]，见 _build_toolbar / _switch_entrance）：不再翻转
-    开关文字——"退出校准"就是点另一个入口，校准页底部仍留着
-    [返回分析模式] 这个显式出口（calib.py 走的就是这里的 setChecked）。
+    开关文字——"退出校准"可以点另一个入口、可以再点一次已亮着的
+    [校准]（见 _switch_entrance 的早退），也可以按坞顶那行常驻的
+    [返回分析模式]（三条路都汇到这里的 setChecked(False)）。
     """
     if calibrating:
         window.mode_label.setText("校准模式")
@@ -1608,7 +1672,7 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     else:
         window.mode_label.setText("分析模式")
         # 翻回最近用过的分析入口；一个都没选过（开局直接进校准、
-        # 或点了校准页的 [返回分析模式]）→ 回到"什么都没选"：
+        # 或点了坞顶的 [返回分析模式]）→ 回到"什么都没选"：
         # 入口不点亮、参数坞收起（用户 2026-09-25 定）
         last = getattr(window, "_last_entrance", None)
         # 页号总归要翻回分析侧的默认页（坞是收起的，看不见；但用户手动
@@ -1618,6 +1682,11 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
         _exit_calib(window)     # 先还原坞宽（收起后量不到）
         if last is None:
             _clear_entrance(window)
+        else:
+            # 高亮跟着回来：再点一次已亮着的 [校准] 退出时，走的是这条路
+            # （没有别的入口在替它高亮——以前靠 _switch_entrance 补，
+            # 现在那条路在校准分支上直接返回了）
+            _highlight_entrance(window, last)
         _log(window, "回到分析模式")
 
 # ══ 保存：勾选已输出的图 → 选分辨率/格式 → 逐个选文件名存图 ══

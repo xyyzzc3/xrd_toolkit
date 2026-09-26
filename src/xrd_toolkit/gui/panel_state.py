@@ -812,20 +812,23 @@ def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
 def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:
     """把下拉框选中的配置条目应用到参数面板。
 
-    几何值来自 config.py 注册表（标定值，不是占位默认值）。只同步
-    参数坞里已有的三个输入框（像素/波长/距离）；PONI、倾斜角等其余
-    几何键随完整条目一起挂在 window.config 上，留给后续图面板接线。
+    几何值来自 config.py 注册表（标定值，不是占位默认值）：完整条目
+    （label / geometry / beam_center）挂在 window.config 上，_collect_
+    geometry、2D/剖面视图、校准页的借用起点都从它取。
+    面板这边只两件事：记住选中的 key，并把这条几何的读数写进"几何配置"
+    那一行的悬停提示（像素/波长/距离——原先它们各占一行灰色只读字段，
+    2026-09-26 用户定：只留下拉框这一行，读数改悬停）。
     silent = 快照回放时的静默切换（用户没动手，不记日志）。
     """
     key = window.config_combo.itemData(index)
     cfg = CONFIGS[key]
-    geom = cfg["geometry"]
     window.config_name = key
     window.config = cfg   # 完整条目（label / geometry / beam_center）
-    # （几何配置完整备注现在只走下拉框的悬停提示，不再单独写说明行）
-    window.params["像素尺寸 (µm)"].setValue(geom["pixel_size_m"] * 1e6)
-    window.params["波长 (Å)"].setValue(geom["wavelength_m"] * 1e10)
-    window.params["初始距离 (mm)"].setValue(geom["dist_m"] * 1e3)
+    # 坞顶那一行的悬停读数（像素/波长/距离）与置灰状态都由 app 的
+    # _sync_geom_row 一处写：这里是换了条目，叫它重画一遍
+    sync = getattr(window, "_geom_row_sync", None)
+    if sync is not None:
+        sync()
     if not silent:
         _log(window, f"已加载几何配置 {key}（{cfg['label']}）")
 

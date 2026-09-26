@@ -49,19 +49,19 @@ class TestConfigSelector(unittest.TestCase):
             w.close()
 
     def test_startup_applies_default_geometry(self):
+        """启动即应用默认条目：window.config = 该条目的完整几何。
+
+        2026-09-26 起参数坞里那三行只读字段（像素/波长/距离）撤了，
+        读数改走坞顶"几何配置"那一行的悬停提示——测试跟着看提示文本。
+        """
         w = create_window()
         try:
             geom = CONFIGS[DEFAULT_CONFIG]["geometry"]
-            # 启动即应用：参数坞初值 = 注册表标定值（距离 1595.8 mm）
-            self.assertAlmostEqual(
-                w.params["初始距离 (mm)"].value(), geom["dist_m"] * 1e3,
-                places=3)
-            self.assertAlmostEqual(
-                w.params["波长 (Å)"].value(), geom["wavelength_m"] * 1e10,
-                places=4)
-            self.assertAlmostEqual(
-                w.params["像素尺寸 (µm)"].value(),
-                geom["pixel_size_m"] * 1e6, places=3)
+            self.assertEqual(w.config, CONFIGS[DEFAULT_CONFIG])
+            tip = w.geom_row.toolTip()
+            self.assertIn(f"{geom['dist_m'] * 1e3:.2f} mm", tip)
+            self.assertIn(f"{geom['wavelength_m'] * 1e10:.4f}", tip)
+            self.assertIn(f"{geom['pixel_size_m'] * 1e6:.1f}", tip)
         finally:
             w.close()
 
@@ -99,12 +99,13 @@ class TestConfigSwitch(unittest.TestCase):
                                        Qt.ToolTipRole)
             w.config_combo.setCurrentIndex(w.config_combo.count() - 1)
             self.assertEqual(w.config_name, self.FAKE_KEY)
-            self.assertAlmostEqual(
-                w.params["初始距离 (mm)"].value(), 1200.0, places=3)
-            self.assertAlmostEqual(
-                w.params["波长 (Å)"].value(), 0.15, places=4)
-            self.assertAlmostEqual(
-                w.params["像素尺寸 (µm)"].value(), 150.0, places=3)
+            # 几何随条目换：window.config = 新条目的完整几何，坞顶那一行
+            # 的悬停提示跟着换成新读数
+            self.assertEqual(w.config, CONFIGS[self.FAKE_KEY])
+            tip = w.geom_row.toolTip()
+            self.assertIn("1200.00 mm", tip)
+            self.assertIn("0.1500", tip)
+            self.assertIn("150.0", tip)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
             # 下拉框只放短 key，完整备注挂在条目的悬停提示上（说明行
             # 已删除——与用户讨论定稿，见 test_gui_integration 的
@@ -158,17 +159,16 @@ class TestResetButtons(unittest.TestCase):
         w = create_window()
         try:
             cfg = w.config["geometry"]
-            w.params["初始距离 (mm)"].setValue(1700.0)
             w.params["2θ 下限 (°)"].setValue(5.0)
             w.params["输出点数"].setValue(5000)
             w.findChild(QPushButton, "reset_data_btn").click()
-            # 几何回到当前配置条目，区间/点数回到初值
-            self.assertAlmostEqual(
-                w.params["初始距离 (mm)"].value(), cfg["dist_m"] * 1e3,
-                places=3)
+            # 区间/点数回到初值；几何仍 = 当前配置条目（[恢复默认] 走的
+            # 是 _apply_config，几何字段本身已不在面板上，读数看提示行）
             self.assertEqual(w.params["2θ 下限 (°)"].value(), 1.0)
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 8.0)
             self.assertEqual(w.params["输出点数"].value(), 3000)
+            self.assertIn(f"{cfg['dist_m'] * 1e3:.2f} mm",
+                          w.geom_row.toolTip())
             self.assertIn("数据参数已恢复默认", w.log_text.toPlainText())
         finally:
             w.close()

@@ -354,19 +354,25 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
 # ══ 中央校准图面板 ═══════════════════════════════════════════
 
 
-# ══ 参数坞第 2 页：校准表单 ═══════════════════════════════════
+# ══ 参数坞第 0 页：校准表单 ═══════════════════════════════════
 def _build_calib_form(window: QMainWindow) -> QWidget:
-    """参数坞第 2 页：校准功能。
+    """参数坞第 0 页：校准功能。
 
     布局（自上而下）：
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
-              配置还能借条目或手输，只是不在这个下拉里表达）+ 8 行数值
-              + 2 行 Δ（相对"对比基准"）+ 基准下拉 + 结论行 + ⚠ 说明
-      操作区  [编辑…] [导入][保存] / [删除][存为配置] + 像素尺寸确认
+              配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
+              一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对"对比基准"）
+              + 基准下拉 + 结论行 + ⚠ 说明
+      操作区  [编辑…] [导入][保存] / [删除][存为配置]
       自动    定位环心并精修 / 在当前配置上再精修
       手动    选点计数 + 撤销/清空 + 用选点精修
-      出口    返回分析模式
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
+
+    出口 [返回分析模式] 与几何配置一行不在这里：两者都固定在参数坞顶部
+    （app._build_param_dock 建，window.calib_exit_btn）——出口原先钉在本页
+    最底部，窗口不高时要滚好几百像素才看得见（用户 2026-09-26 报"没有
+    退出校准的按钮了"）。像素确认也搬上来挨着"当前配置"那行（它确认的
+    就是那行末尾写的像素值），原先夹在「操作」组的按钮堆里。
     """
     page = QWidget()
     lay = QVBoxLayout(page)
@@ -398,6 +404,24 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
         head.addWidget(combo, 1 if slot == "current" else 1)
         window.calib_slot_combo[slot] = combo
     tb.addLayout(head)
+
+    # 当前配置一行 + 像素尺寸确认：紧挨着三个槽下拉框放（表格上方）——
+    # 这两件事是"往下看对比表之前必须先看见的"：用的是哪份几何、它的
+    # 像素这个尺度锚点确认没有。像素确认原先挤在「操作」组的按钮堆里，
+    # 实测正好卡在参数坞可见区最下沿（窗口 1000 高、勾选框在 y≈794），
+    # 用户 2026-09-26 报"像素尺寸的位置容易被忽视"
+    cur_lbl = QLabel("当前配置：—")
+    cur_lbl.setWordWrap(True)
+    tb.addWidget(cur_lbl)
+    window.calib_current_lbl = cur_lbl
+    chk_pix = QCheckBox("像素尺寸已确认")
+    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
+                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
+                       "是错的。只在像素值变了时才要求重新确认。")
+    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
+                                        _calib_sync(window)))
+    tb.addWidget(chk_pix)
+    window.calib_pixel_chk = chk_pix
 
     grid = QGridLayout()
     grid.setHorizontalSpacing(6)
@@ -444,15 +468,11 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     hint.setWordWrap(True)
     hint.setStyleSheet("color: gray;")
     tb.addWidget(hint)
-    cur_lbl = QLabel("当前配置：—")
-    cur_lbl.setWordWrap(True)
-    tb.addWidget(cur_lbl)
     lay.addWidget(table_box)
     window.calib_verdict = verdict
-    window.calib_current_lbl = cur_lbl
     window.calib_base_combo = combo_base
 
-    # ── 操作区：编辑 / 配置条目进出 / 保存 / 像素确认 ────────
+    # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
     ops_box = QGroupBox("操作")
     ops = QVBoxLayout(ops_box)
     btn_edit = QPushButton("编辑当前配置…")
@@ -493,15 +513,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     row2.addWidget(btn_save_cfg, 1)
     ops.addLayout(row1)
     ops.addLayout(row2)
-    chk_pix = QCheckBox("像素尺寸已确认")
-    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
-                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
-                       "是错的。只在像素值变了时才要求重新确认。")
-    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
-                                        _calib_sync(window)))
-    ops.addWidget(chk_pix)
     lay.addWidget(ops_box)
-    window.calib_pixel_chk = chk_pix
 
     key_edit = QLineEdit()
     key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
@@ -564,12 +576,10 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_clear.clicked.connect(lambda: _clear_calib_points(window))
     btn_manual.clicked.connect(lambda: _start_manual_calib(window))
 
-    # 出口：本页唯一的返回路径（与工具栏 [校准] 开关同源）
-    btn_exit = QPushButton("返回分析模式")
-    btn_exit.setObjectName("exit_calib_btn")
-    btn_exit.clicked.connect(lambda: window.calib_btn.setChecked(False))
-    lay.addWidget(btn_exit)
-    window.calib_exit_btn = btn_exit
+    # 出口按钮不在这儿：原来放在本页最底部，窗口 1000 高时它落在内容
+    # y=1236（要往下滚 434 px 才看得见，用户 2026-09-26 报"没有退出校准
+    # 的按钮了"）。现在固定在参数坞顶部那一行（app._build_param_dock 建，
+    # window.calib_exit_btn），永远可见。
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -908,6 +918,14 @@ def _enter_calib(window: QMainWindow) -> None:
     也能开面板。宽度只在够得着时拉：给绘图区留 CALIB_PANEL_RESERVE_PX
     （点环选点是在图上做的，坞太宽就没法点了）。
     """
+    # 先让参数坞露出来再量宽：开局它是收起的（_clear_entrance），
+    # 隐藏时量到的是旧值/默认值 → 拉宽和"退出还原"都会拿假数字
+    # （[校准] 的 toggled 先于 clicked 触发，所以不能指望入口那边先
+    # 露坞——2026-09-26 实测：以前量出来 327 px，远没到该有的宽度）
+    window.param_dock.setVisible(True)
+    # 出口按钮（坞顶那一行）：本模式的显式退出口，进来就亮出来。
+    # 放在"没勾文件"的提前返回之前——没文件也要能退出去
+    window.calib_exit_btn.setVisible(True)
     path = _calib_standard_path(window)
     if path is None:
         _log(window, "请先在文件列表勾选标样文件")
@@ -918,6 +936,7 @@ def _enter_calib(window: QMainWindow) -> None:
 
 def _exit_calib(window: QMainWindow) -> None:
     """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
+    window.calib_exit_btn.setVisible(False)
     _close_calib_panel(window)
     _restore_dock_width(window)
 

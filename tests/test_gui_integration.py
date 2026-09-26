@@ -2601,10 +2601,11 @@ class TestCollectGeometry(unittest.TestCase):
     """参数面板 → 积分几何：输入覆盖配置值，PONI/倾斜取配置条目。"""
 
     def test_geometry_comes_from_the_selected_config(self):
-        """几何一律取配置条目：面板字段是只读显示，改它不改几何。
+        """几何一律取配置条目，面板上没有能改它的控件。
 
         （换条目才是改几何的入口——分析页只读后没有"面板覆盖配置"
-        这条隐藏通路了。）
+        这条隐藏通路了。2026-09-26 起那三行只读字段也撤了：读数只在
+        坞顶"几何配置"行的悬停提示里显示，压根没有可写的几何控件。）
         """
         w = create_window()
         try:
@@ -2616,13 +2617,9 @@ class TestCollectGeometry(unittest.TestCase):
             self.assertAlmostEqual(geom["wavelength_m"], cfg["wavelength_m"])
             self.assertEqual(geom["poni1_m"], cfg["poni1_m"])
             self.assertEqual(geom["rot1_deg"], cfg["rot1_deg"])
-            # 只读：控件收不到用户输入，且程序改它也不该影响几何
-            self.assertTrue(w.params["初始距离 (mm)"].isReadOnly())
-            self.assertTrue(w.params["像素尺寸 (µm)"].isReadOnly())
-            self.assertTrue(w.params["波长 (Å)"].isReadOnly())
-            w.params["初始距离 (mm)"].setValue(1700.0)
-            self.assertAlmostEqual(
-                gui_panel_state._collect_geometry(w)["dist_m"], cfg["dist_m"])
+            # 读数只在提示里，参数坞里没有几何输入控件
+            for gone in ("初始距离 (mm)", "像素尺寸 (µm)", "波长 (Å)"):
+                self.assertNotIn(gone, w.params)
             # 2θ 上下限 = 积分设置，仍随面板走（改了就进 geom）
             self.assertAlmostEqual(geom["tth_min_deg"], 1.0)
             self.assertAlmostEqual(geom["tth_max_deg"], 8.0)
@@ -2831,30 +2828,34 @@ class TestParamSnapshot(unittest.TestCase):
         return f"1D|{file}"
 
     def test_switch_focus_shows_each_panels_params(self):
-        """点 A 显示 A 的参数，点 B 显示 B 的参数（不是只能改不能看）。"""
+        """点 A 显示 A 的参数，点 B 显示 B 的参数（不是只能改不能看）。
+
+        拿 2θ 下限当"每张面板各记各的"的记号（原来用测距那格，2026-09-26
+        撤了那三个只读字段，快照里也没有它了）。
+        """
         w = create_window()
         try:
             key_a = self._plot_fake(
                 w, "data/fake_a.tif",
-                {"初始距离 (mm)": 1700.0, "2θ 上限 (°)": 7.0,
+                {"2θ 下限 (°)": 1.5, "2θ 上限 (°)": 7.0,
                  "输出点数": 2500})
             self.assertEqual(w.focus_panel, key_a)
             # 完成时焦点 = A → 参数坞已回放 A 的快照
-            self.assertEqual(w.params["初始距离 (mm)"].value(), 1700.0)
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 1.5)
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 7.0)
             self.assertEqual(w.params["输出点数"].value(), 2500)
             # 打开 B（参数不同）→ 焦点切 B，参数显示 B 的值
             key_b = self._plot_fake(
                 w, "data/fake_b.tif",
-                {"初始距离 (mm)": 1800.0, "2θ 上限 (°)": 8.0})
+                {"2θ 下限 (°)": 2.5, "2θ 上限 (°)": 8.0})
             self.assertEqual(w.focus_panel, key_b)
-            self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 2.5)
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 8.0)
             # 点回 A → 参数显示 A 的值（能看）
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, key_a)
-            self.assertEqual(w.params["初始距离 (mm)"].value(), 1700.0)
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 1.5)
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 7.0)
             self.assertEqual(w.params["输出点数"].value(), 2500)
             # 配置条目也回放（注册表只有一条，至少不串台）
@@ -2867,8 +2868,8 @@ class TestParamSnapshot(unittest.TestCase):
         w = create_window()
         try:
             self._plot_fake(w, "data/fake_a.tif",
-                            {"初始距离 (mm)": 1700.0})
-            w.params["初始距离 (mm)"].setValue(1800.0)
+                            {"2θ 下限 (°)": 1.5})
+            w.params["2θ 下限 (°)"].setValue(2.5)
             done_before = w.log_text.toPlainText().count("积分完成")
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
@@ -2879,13 +2880,13 @@ class TestParamSnapshot(unittest.TestCase):
             # 快照已随 [应用] 同步刷新
             self.assertEqual(
                 _dock(w, "1D", "data/fake_a.tif").params_snapshot
-                ["初始距离 (mm)"], 1800.0)
-            # 切到 B 再切回 A → 显示新值 1800
+                ["2θ 下限 (°)"], 2.5)
+            # 切到 B 再切回 A → 显示新值 2.5
             self._plot_fake(w, "data/fake_b.tif",
-                            {"初始距离 (mm)": 1900.0})
+                            {"2θ 下限 (°)": 4.0})
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
-            self.assertEqual(w.params["初始距离 (mm)"].value(), 1800.0)
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 2.5)
         finally:
             w.close()
 
@@ -2894,12 +2895,12 @@ class TestParamSnapshot(unittest.TestCase):
         w = create_window()
         try:
             key = self._plot_fake(w, "data/fake_a.tif",
-                                  {"初始距离 (mm)": 1700.0})
-            w.params["初始距离 (mm)"].setValue(1750.0)   # 未应用的编辑
+                                  {"2θ 下限 (°)": 1.5})
+            w.params["2θ 下限 (°)"].setValue(3.5)   # 未应用的编辑
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             self.assertEqual(w.focus_panel, key)
-            self.assertEqual(w.params["初始距离 (mm)"].value(), 1750.0)
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 3.5)
         finally:
             w.close()
 
@@ -2910,11 +2911,11 @@ class TestParamSnapshot(unittest.TestCase):
         try:
             # A 作图时自动对比度勾着（默认）
             self._plot_fake(w, "data/fake_a.tif",
-                            {"初始距离 (mm)": 1700.0})
+                            {"2θ 下限 (°)": 1.5})
             # B 新开（默认自动开）；对 B 关自动、改值并图像 [应用]
             # → B 的快照 = 手动模式 + 这组值
             self._plot_fake(w, "data/fake_b.tif",
-                            {"初始距离 (mm)": 1800.0})
+                            {"2θ 下限 (°)": 2.5})
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(123.0)
             w.params["对比度上限"].setValue(456.0)
@@ -3152,11 +3153,13 @@ class TestParamDockSplitLayout(unittest.TestCase):
     下方——在滚动区之外，滚动时按钮不跟着走。"""
 
     def test_pages_structure(self):
-        """参数坞 = 一行编辑对象 + 五个入口页（校准/1D/扣背景/对比/绘图）。
+        """参数坞 = 两行固定件（编辑对象 / 几何配置）+ 五个入口页
+        （校准/1D/扣背景/对比/绘图）。
 
         2026-09-24 用户定稿：工具栏从 7 项收到 5 个入口，六个作图类型
         按钮搬进「绘图」页（属性名不变：view_buttons / compare_btn /
-        heat_btn）。
+        heat_btn）。2026-09-26 又加了一行固定件：几何配置（下拉框 +
+        校准模式下的 [返回分析模式]）——它得在每一页都看得见。
         """
         w = create_window()
         try:
@@ -3166,7 +3169,9 @@ class TestParamDockSplitLayout(unittest.TestCase):
             lay = content.layout()
             self.assertIs(lay.itemAt(0).widget(), w.focus_label,
                           "编辑对象名固定最上方")
-            self.assertIs(lay.itemAt(1).widget(), w.param_stack)
+            self.assertIs(lay.itemAt(1).widget(), w.geom_row,
+                          "几何配置行固定在第二行")
+            self.assertIs(lay.itemAt(2).widget(), w.param_stack)
             self.assertEqual(w.param_stack.count(), 5)
             self.assertEqual(w.PARAM_PAGES,
                              {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
@@ -3291,9 +3296,8 @@ class TestParamDockSplitLayout(unittest.TestCase):
     def test_units_in_spinbox_suffix(self):
         w = create_window()
         try:
-            self.assertEqual(w.params["像素尺寸 (µm)"].suffix(), " µm")
-            self.assertEqual(w.params["波长 (Å)"].suffix(), " Å")
-            self.assertEqual(w.params["初始距离 (mm)"].suffix(), " mm")
+            # 几何三件（像素/波长/距离）的控件已撤（读数走悬停提示），
+            # 剩下的输入框单位仍走 suffix
             self.assertEqual(w.params["剖面角度 (°)"].suffix(), " °")
             for name in ("2θ 下限 (°)", "2θ 上限 (°)"):
                 self.assertEqual(w.params[name].suffix(), " °")
@@ -3323,8 +3327,11 @@ class TestParamDockSplitLayout(unittest.TestCase):
         w = create_window()
         try:
             captions = {lb.text() for lb in w.param_dock.findChildren(QLabel)}
-            # 几何段标题带"只读"提示（分析页改不了几何，去校准页改）
-            self.assertIn("标定几何（只读：由几何配置决定）", captions)
+            # 几何这一节只剩坞顶那一行的标签（像素/波长/距离三行只读
+            # 字段与它们的"标定几何（只读…）"标题 2026-09-26 撤了，
+            # 读数改走那一行的悬停提示）
+            self.assertIn("几何配置", captions)
+            self.assertNotIn("标定几何（只读：由几何配置决定）", captions)
             self.assertIn("积分设置", captions)
             self.assertIn("2D/剖面视图", captions)
             # 归一化四选一下拉框（键仍是"对比归一化"，快照回放认 data
@@ -6996,6 +7003,80 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_reclick_calib_exits_instead_of_reentering(self):
+        """再点一次已亮着的 [校准] = 退出，不是"退出后立刻重进"。
+
+        2026-09-26 用户报"没有退出校准的按钮了"：那条路其实一直在，只是
+        Qt 先弹起勾选（toggled → _on_mode(False) 退出），紧接着 clicked
+        又把它勾回去（重进）——净效果是闪一下，选点还被清空。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                gen = w.calib_gen
+                w.calib_btn.click()          # 再点一次 = 退出
+            self.assertFalse(w.calib_btn.isChecked())
+            self.assertIsNone(w.calib_dock)
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["1D"])
+            self.assertFalse(w.param_dock.isVisible())   # 没选过入口 → 收回
+            self.assertEqual(w.calib_gen, gen + 1)       # 只关一次（重进会是 +2）
+            logs = self._logs(w)
+            self.assertEqual(logs.count("进入校准模式"), 1)
+            self.assertEqual(logs.count("回到分析模式"), 1)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_exit_button_sits_in_dock_header_not_page_bottom(self):
+        """[返回分析模式] 钉在坞顶那一行、只在校准模式显示。
+
+        以前它在校准表单最底部（窗口 1000 高时落在内容 y=1236，要滚
+        434 px 才看得见），用户以为"没有退出按钮"。
+        """
+        w = create_window()
+        try:
+            w.show()
+            self.assertFalse(w.calib_exit_btn.isVisible())   # 分析模式不显示
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            self.assertTrue(w.calib_exit_btn.isVisible())
+            self.assertIs(w.calib_exit_btn.parentWidget(), w.geom_row)
+            self.assertFalse(w.calib_scroll.isAncestorOf(w.calib_exit_btn))
+            w.calib_exit_btn.click()
+            self.assertFalse(w.calib_btn.isChecked())
+            self.assertFalse(w.calib_exit_btn.isVisible())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_geom_row_selectable_in_analysis_readonly_in_calib(self):
+        """几何配置行：分析页可选；校准页置灰（只显示不能改），读数看悬停。"""
+        w = create_window()
+        try:
+            w.show()
+            w.entrance_buttons["1D"].click()
+            self.assertTrue(w.config_combo.isEnabled())
+            self.assertIn("1595.80 mm", w.geom_row.toolTip())
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            self.assertFalse(w.config_combo.isEnabled())
+            self.assertIn("1595.80 mm", w.geom_row.toolTip())
+            self.assertIn("只显示", w.geom_row.toolTip())
+            w.entrance_buttons["1D"].click()
+            self.assertTrue(w.config_combo.isEnabled())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_enter_mode_without_file_logs_hint(self):
         w = create_window()
         try:
@@ -7418,7 +7499,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                             for r in w.calib_state["results"]), 8000))
 
     def test_save_adds_to_combo_and_selects(self):
-        """保存 → 下拉框出现新条目并自动选中（几何填进参数坞 + 落盘）。"""
+        """保存 → 下拉框出现新条目并自动选中（读数跟到几何行 + 落盘）。"""
         w = create_window()
         try:
             w.show()
@@ -7431,9 +7512,8 @@ class TestSaveCalibConfig(unittest.TestCase):
             self.assertGreaterEqual(idx, 0)
             self.assertEqual(w.config_combo.currentIndex(), idx)
             self.assertEqual(w.config_name, "lmfp2_lab6")
-            # 几何填进参数坞：距离 = 校准结果（1595.80，不是初值 1600）
-            self.assertAlmostEqual(w.params["初始距离 (mm)"].value(),
-                                   1595.8, places=1)
+            # 几何跟到坞顶：悬停读数 = 校准结果（1595.80，不是初值 1600）
+            self.assertIn("1595.80 mm", w.geom_row.toolTip())
             # 条目内容：结果几何 + 参数坞像素/波长 + 新拟合束心 B
             cfg = w.config
             self.assertEqual(cfg["label"], "lmfp 第 2 批（LaB₆ 标样标定）")
@@ -7473,6 +7553,31 @@ class TestSaveCalibConfig(unittest.TestCase):
             w.calib_save_btn.click()
             self.assertIn("请先填写批次备注", w.log_text.toPlainText())
             self.assertFalse(self._path.exists())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_save_refused_without_pixel_confirmation(self):
+        """没确认像素尺寸 → 不落盘、只提示。
+
+        与开始校准同一道门（calib._initial_ready）：条目会被别的批次和
+        CLI 脚本原样拿去用，而像素填错时拟合会把距离同比例凑回来——
+        不确认就存，等于把一份"看着正常、距离存疑"的几何发出去。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()          # 没勾"像素尺寸已确认"
+            w.calib_key_edit.setText("lmfp9_lab6")
+            w.calib_label_edit.setText("第 9 批")
+            w.calib_save_btn.click()
+            self.assertNotIn("lmfp9_lab6", config_mod.USER_CONFIGS)
+            self.assertFalse(self._path.exists())
+            self.assertIn("请先确认", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -8398,6 +8503,7 @@ class TestCalibFlow(unittest.TestCase):
                  mock.patch.object(gui_config_ops, "_reload_config_combo"):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
+                w.calib_pixel_chk.setChecked(True)   # 保存前置：确认像素尺寸
                 w.calib_key_edit.setText("lmfp9_lab6")
                 w.calib_label_edit.setText("第 9 批")
                 w.calib_save_btn.click()

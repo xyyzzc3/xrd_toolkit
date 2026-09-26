@@ -98,13 +98,13 @@ Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geomet
 - **File bar** — a tree: the raw files at the top, then one group per stage product (1D 产物, and one group per batch background run, named with its time and recipe). Checking a group checks everything in it, so a batch of background-subtracted curves goes to a comparison plot in two clicks. One right-click handles both verbs: **delete** (raw entries leave the list only — the files on disk are never touched; products are really deleted, one entry or a whole group, ledger included) and **export** (a product entry or group goes straight to txt / chi / CSV without checking anything first), plus **delete all cache** with a confirmation. Imports start unchecked — select with [全选] / [全不选] / [按条件选…] (range, stride, name filter, with a live count).
 - **Live parameter dock** — data and display parameters per panel, tooltips throughout, per-panel snapshots; zoom and pan write the view range back in real time.
 - **Panel chrome and gestures** — one self-drawn row per panel (Home / magnifier / Customize / save, plus pop-out and close), left-drag to pan, box zoom when the magnifier is lit, hover readout in the status bar, resize grips on every edge.
-- **Calibration workbench** — a three-column table (current geometry + slots A / B) over auto and manual calibration; every result accumulates under its own name and the engine metrics decide which one wins. Details, including what the metrics can *not* catch, are in [docs/NOTES.md](docs/NOTES.md#calibration).
+- **Calibration workbench** — a three-column table (current geometry + slots A / B) over auto and manual calibration; every result accumulates under its own name and the engine metrics decide which one wins. Two rows pinned above every page carry the global controls: the edit target, and the geometry entry in force (hover it for pixel size / wavelength / distance) — greyed while calibrating, where it also offers [返回分析模式], the way out. Details, including what the metrics can *not* catch, are in [docs/NOTES.md](docs/NOTES.md#calibration).
 - **Save / load .poni** — export the current geometry as a standard pyFAI `.poni` file, or import one as a named config entry that survives restarts and is usable from the CLI via `--config`.
 
 ## Tests
 
 ```bash
-python scripts/run_tests.py     # 528 tests, behind a watchdog
+python scripts/run_tests.py     # 571 tests, behind a watchdog
 ```
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`): arc-coverage failure criterion across beam placements, geometric failure-point values, the off-centre integration fallback, background estimators characterised against known synthetic backgrounds, and the GUI wiring — including live preview, per-file anchors and the raw/baseline overlay lines.

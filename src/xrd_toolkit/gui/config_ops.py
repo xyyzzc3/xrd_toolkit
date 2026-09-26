@@ -230,11 +230,19 @@ def _save_calib_config(window: QMainWindow) -> None:
     血缘一并写入：method = 这份几何是哪个动作产出的（raw/auto/manual/
     refined/custom）、derived_from = 这一批的起点借自哪条、created =
     保存时间。
+
+    保存前查**像素尺寸确认**那道门（与开始校准同一道，见 calib.
+    _initial_ready）：条目会被别的批次、CLI 脚本原样拿去用，而像素
+    填错时拟合会把距离同比例凑回来——不确认就存，等于把一份"看着
+    正常、距离存疑"的几何发出去。
     """
+    from xrd_toolkit.gui.calib import _initial_ready   # 破循环：见模块说明
     state = _calib_state(window)
     if state.get("current_geom") is None:
         _log(window, "还没有可保存的几何（先选一条配置或用 [编辑…] 填）")
         return
+    if not _initial_ready(window):
+        return   # 只提示、不保存（消息由 _initial_ready 记进日志）
     key = window.calib_key_edit.text().strip()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
         _log(window, "key 无效：只允许字母/数字/下划线，且以字母或"
