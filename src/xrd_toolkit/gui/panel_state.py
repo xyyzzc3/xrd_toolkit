@@ -653,7 +653,7 @@ def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
 
 
 def _compare_shown_curves(window: QMainWindow, dock) -> list:
-    """对比面板实际画上去的曲线：[(tth, shown, display, i), ...]。
+    """对比面板实际画上去的曲线：[(tth, shown, display, i, ref), ...]。
 
     shown = 按该面板自己的"对比归一化"设置处理后的显示数据（归一化
     是显示层，原始结果原样保留在 compare_data）；i = 在 compare_files
@@ -661,6 +661,13 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     纵轴（_apply_auto_ylim）共用这一份数据——两边口径一致，置灰框
     显示的区间才跟图对得上。热图联动隐藏的样品（dock.compare_hidden
     里的显示名）不参与：画图、图例、自动纵轴同时少掉这条曲线。
+
+    ref = **纵轴范围该看的那份**（2026-09-26 晚加，用户："对比面板的
+    纵轴自己在变"）：同一条曲线，但**不跑背景/平滑**——调背景时框就
+    不动、只有曲线在框里往下走（与 1D 面板同一招）。两件事例外，必须
+    留在 ref 里：**归一化**（它本来就改强度比例，不留就框不住画出来
+    的曲线）与**裁剪区间**（剪掉巨峰就该让纵轴放开，那是裁剪的本意）。
+    产物条目本身就是处理好的、没有"未处理"版本 → 它的 ref = shown。
 
     归一化三模式：
       global 全图最强峰：所有曲线除以全部曲线里最高的峰
@@ -681,6 +688,7 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     # 不进图例、不占颜色槽——其他曲线的颜色序号不变（颜色跟着文件
     # 走的承诺在隐藏/恢复来回切时也不破）
     hidden = set(getattr(dock, "compare_hidden", None) or ())
+    cuts = (_proc_params(window, dock, None) or {}).get("cut_ranges") or []
     raw_curves = []
     for i, src in enumerate(dock.compare_files):
         display = src.display
@@ -689,32 +697,40 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
         if display not in dock.compare_data:
             continue   # 这条还没算成（本函数只在全部到齐后调用）
         tth, raw = dock.compare_data[display]
+        raw = np.asarray(raw, dtype=float)
         # 背景扣除在归一化**之前**：先扣掉不含结构信息的加性背景，
         # 再谈"相对强度"才有意义（归一化会把这个尺度信息抹掉）。
         # 处理产物条目（"· 处理后"）本身已经是处理完的：再来一遍就是二次处理
+        ref = raw          # 纵轴范围的参考：只挖裁剪区间、不跑背景/平滑
         if src.kind == gui_sources.RAW:
-            _, raw, _ = _proc_curve(window, dock, src.path, tth,
-                                    np.asarray(raw, dtype=float))
-        raw_curves.append((tth, np.asarray(raw, dtype=float), display,
-                           i, src.path))
+            if cuts:
+                ref = np.asarray(process.cut_ranges(tth, ref, cuts),
+                                 dtype=float)
+            _, raw, _ = _proc_curve(window, dock, src.path, tth, raw)
+        raw_curves.append((tth, raw, display, i, src.path, ref))
     divisor = 1.0
     if mode == "global":
-        divisor = max((float(np.nanmax(r)) if r.size else 0.0
-                       for _, r, _, _, _ in raw_curves), default=0.0)
+        divisor = max((float(np.nanmax(c[1])) if c[1].size else 0.0
+                       for c in raw_curves), default=0.0)
     elif mode == "file":
         # 按路径找目标文件的最强峰（快照记字符串路径）；找不到
         # （快照过期防御）= 除数保持 1.0 = 不归一化
-        for _, r, _, _, p in raw_curves:
-            if str(p) == str(target_path):
-                divisor = float(np.nanmax(r)) if r.size else 0.0
+        for _tth, shown_src, _display, _i, path, _ref in raw_curves:
+            if str(path) == str(target_path):
+                divisor = float(np.nanmax(shown_src)) \
+                    if shown_src.size else 0.0
                 break
     if divisor <= 0:
         divisor = 1.0
     curves = []
-    for tth, raw, display, i, _ in raw_curves:
-        # global/file 共享同一个除数（不是各除各的）；off 原样
-        shown = raw / divisor if mode != "off" else raw
-        curves.append((tth, shown, display, i))
+    for tth, shown_src, display, i, _path, ref in raw_curves:
+        # global/file 共享同一个除数（不是各除各的）；off 原样。
+        # ref 用**同一个除数**（否则框的刻度和画出来的曲线对不上）
+        if mode != "off":
+            curves.append((tth, shown_src / divisor, display, i,
+                           ref / divisor))
+        else:
+            curves.append((tth, shown_src, display, i, ref))
     return curves
 
 
@@ -765,9 +781,10 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
                 ylo, yhi = _auto_y_range(shown, log_y)
                 loaded = True
             elif view == "对比" and getattr(dock, "compare_data", None):
-                shown = [s for _, s, _, _ in _compare_shown_curves(window, dock)]
-                if shown:
-                    ylo, yhi = _auto_y_range(np.concatenate(shown), log_y)
+                # 用 ref（不跑背景/平滑的那份）定范围：调背景时框不动
+                refs = [c[4] for c in _compare_shown_curves(window, dock)]
+                if refs:
+                    ylo, yhi = _auto_y_range(np.concatenate(refs), log_y)
                     loaded = True
             elif view == "剖面" and getattr(dock, "last_profile_t",
                                             None) is not None:

@@ -16,9 +16,11 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (
-    _auto_y_range, _AUX_GID_PREFIX, _proc_curve, _collect_geometry,
+    _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
+    _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
-    _heat_shown, _log, _panel_param, _set_focus)
+    _display_snapshot, _heat_shown, _log, _panel_param, _proc_params,
+    _set_focus)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
@@ -145,19 +147,19 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
             # 比（用户 2026-09-26："不要按照各自的最高峰归一化，所有的
             # 图"）。归一化先做（每条显示数据再叠），堆叠下纵轴范围/
             # 对数不适用（行偏移由数据决定，同瀑布）
-            peaks = [float(np.nanmax(s)) for _, s, _, _ in curves
-                     if len(s) and np.isfinite(s).any()]
+            peaks = [float(np.nanmax(c[1])) for c in curves
+                     if len(c[1]) and np.isfinite(c[1]).any()]
             peak = max(peaks) if peaks else 0.0
             step = peak * 0.7 if peak > 0 else 1.0
             offsets = [i * step for i in range(len(curves))]
-            for (tth, shown, display, i), off in zip(curves, offsets):
+            for (tth, shown, display, i, _ref), off in zip(curves, offsets):
                 color = overrides.get(display) or _curve_color(palette, i)
                 ax.plot(tth, shown + off, color=color, lw=0.8,
                         label=display)
             ax.set_yticks(offsets)
-            ax.set_yticklabels([d for _, _, d, _ in curves], fontsize=6)
+            ax.set_yticklabels([c[2] for c in curves], fontsize=6)
         else:
-            for tth, shown, display, i in curves:
+            for tth, shown, display, i, _ref in curves:
                 color = overrides.get(display) or _curve_color(palette, i)
                 ax.plot(tth, shown, color=color, lw=0.8, label=display)
         # 颜色不套旧快照（配色参数/自定义色在画图时已定），其余样式
@@ -184,8 +186,20 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
             ylo = yhi = None
             if auto_y:
                 if curves:
+                    # 纵轴范围看 ref（不跑背景/平滑的那份，见
+                    # _compare_shown_curves）：调背景时框不动、只有曲线
+                    # 在框里往下走
                     ylo, yhi = _auto_y_range(
-                        np.concatenate([s for _, s, _, _ in curves]), eff_log)
+                        np.concatenate([c[4] for c in curves]), eff_log)
+                    # 但又得给"扣完的那份"留地方：扣了背景/平滑/裁剪时
+                    # 下界兜到 0 附近（留 2% 框高），否则曲线的基线贴在
+                    # 框底外面（同 1D 面板的兜法）；对数轴画不出 ≤0，不兜
+                    ch = _proc_params(window, dock, None) or {}
+                    active = (str(ch.get("mode", "off")) != "off"
+                              or float(ch.get("smooth_deg") or 0.0) > 0
+                              or bool(ch.get("cut_ranges")))
+                    if active and not eff_log:
+                        ylo = min(ylo, -0.02 * abs(yhi))
                     if ylo < yhi:
                         ax.set_ylim(ylo, yhi)
                 else:
@@ -813,6 +827,32 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
             spawn_one()
     else:
         _finish_heatmap(window, key)
+
+
+def _refresh_heat(window: QMainWindow) -> None:
+    """热图显示参数（色图/归一化/对数/范围）改了 → **所有**热图面板就地重画。
+
+    用户 2026-09-27："热图一画出来就改不了颜色什么的，没法调整"——原先
+    这几个控件谁都没接：改完只有再点一次 [出热图] 才可能生效，而那个按钮
+    走的是"复用已有面板"的路，快照没刷新就还是旧颜色。
+    做法与背景扣除的实时预览同源：先把控件里的**显示参数**写进各面板快照
+    （_display_snapshot：数据参数沿用各自的旧值），再用已有数据重画。
+    热图通常只有一张，直接作用于所有热图面板最符合"改的是一张图的颜色"
+    这个直觉；数据不受影响（重画不重算）。
+    """
+    touched = 0
+    for key, dock in list(window.plot_docks.items()):
+        if not key.startswith("热图|"):
+            continue
+        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+        data = _heat_data(window, dock)
+        if data is None:
+            continue
+        dock.heat_data = data            # 与画的同源（同 _apply_image_params）
+        _draw_heatmap(window, dock, data[0], data[1], data[2])
+        touched += 1
+    if touched:
+        _apply_auto_heatlim(window)      # 对数/自动范围改了 → 置灰框跟着更新
 
 
 def _plot_heatmap(window: QMainWindow) -> None:

@@ -83,6 +83,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from matplotlib.backend_bases import MouseEvent
+from matplotlib.colors import LogNorm
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
 from PySide6.QtTest import QTest
@@ -1581,9 +1582,12 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock = w.plot_docks[key]
             dock.compare_hidden = {"fake_a.tif"}
             curves = gui_state._compare_shown_curves(w, dock)
-            self.assertEqual([d for _, _, d, _ in curves], ["fake_b.tif"])
-            self.assertEqual([i for _, _, _, i in curves], [1],
+            # 每条 = (tth, shown, display, i, ref)，ref = 纵轴范围看的那份
+            self.assertEqual([c[2] for c in curves], ["fake_b.tif"])
+            self.assertEqual([c[3] for c in curves], [1],
                              "颜色序号跟文件走（隐藏第一条，第二条仍是 1 号）")
+            self.assertEqual([len(c[4]) for c in curves],
+                             [len(c[1]) for c in curves], "ref 与 shown 等长")
         finally:
             w.close()
 
@@ -3326,7 +3330,9 @@ class TestParamDockSplitLayout(unittest.TestCase):
                           "编辑对象名固定最上方")
             self.assertIs(lay.itemAt(1).widget(), w.geom_row,
                           "几何配置行固定在第二行")
-            self.assertIs(lay.itemAt(2).widget(), w.param_stack)
+            self.assertIs(lay.itemAt(2).widget(), w.data_row,
+                          "数据参数行（2θ 范围/点数）固定在第三行")
+            self.assertIs(lay.itemAt(3).widget(), w.param_stack)
             self.assertEqual(w.param_stack.count(), 5)
             self.assertEqual(w.PARAM_PAGES,
                              {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
@@ -3462,19 +3468,51 @@ class TestParamDockSplitLayout(unittest.TestCase):
         finally:
             w.close()
 
-    def test_range_pairs_share_one_row(self):
+    def test_data_params_row_visible_on_every_page(self):
+        """2θ 范围 / 点数固定在坞顶第三行：五个入口页都看得见、都能改。
+
+        用户 2026-09-27："1d 画图时能选范围，后面处理时没法选范围，比如
+        对比时，参数里加上"——原先这两项只在 1D 页，切到别的页就改不了。
+        """
         w = create_window()
         try:
-            # 成对的下限/上限并排一行：同父（同一行字段容器），
-            # 中间隔着 "~" 标签；2θ/对比度/纵轴三对都是这个结构
-            for lo_name, hi_name in (("2θ 下限 (°)", "2θ 上限 (°)"),
-                                     ("对比度下限", "对比度上限"),
-                                     ("纵轴下限", "纵轴上限")):
+            w.show()
+            for page in ("校准", "1D", "处理", "对比", "绘图"):
+                w.entrance_buttons[page].click()
+                QApplication.processEvents()
+                for name in ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"):
+                    self.assertTrue(w.params[name].isVisible(),
+                                    f"{page} 页上该看得见 {name}")
+            # 改一下照样进几何（数据参数照旧参与计算）
+            w.params["2θ 下限 (°)"].setValue(2.5)
+            self.assertAlmostEqual(
+                gui_panel_state._collect_geometry(w)["tth_min_deg"], 2.5)
+        finally:
+            w.close()
+
+    def test_range_pairs_share_one_row(self):
+        """成对的下限/上限并排一行：同父、中间隔着 "~"。
+
+        2θ 那一对 2026-09-27 搬到了坞顶第三行、和"点数"同住一行
+        （所有分析页共用，用户："后面处理时没法选范围"），所以那一行不止
+        三件——对它只查"两框同父、中间是 ~"；另两对仍各占一行，维持原判。
+        """
+        w = create_window()
+        try:
+            for lo_name, hi_name, alone in (
+                    ("2θ 下限 (°)", "2θ 上限 (°)", False),
+                    ("对比度下限", "对比度上限", True),
+                    ("纵轴下限", "纵轴上限", True)):
                 lo, hi = w.params[lo_name], w.params[hi_name]
-                self.assertIs(lo.parent(), hi.parent())
+                self.assertIs(lo.parent(), hi.parent(),
+                              f"{lo_name} 与上限该住同一行")
                 row = lo.parent().layout()
-                self.assertEqual(row.count(), 3)
-                self.assertEqual(row.itemAt(1).widget().text(), "~")
+                i_lo, i_hi = row.indexOf(lo), row.indexOf(hi)
+                self.assertGreaterEqual(i_lo, 0)
+                self.assertLess(i_lo, i_hi, "下限在左、上限在右")
+                self.assertEqual(row.itemAt(i_lo + 1).widget().text(), "~")
+                if alone:
+                    self.assertEqual(row.count(), 3)
         finally:
             w.close()
 
@@ -3487,7 +3525,8 @@ class TestParamDockSplitLayout(unittest.TestCase):
             # 读数改走那一行的悬停提示）
             self.assertIn("几何配置", captions)
             self.assertNotIn("标定几何（只读：由几何配置决定）", captions)
-            self.assertIn("积分设置", captions)
+            # 积分设置搬去坞顶第三行（所有分析页共用），不再是 1D 页的小标题
+            self.assertNotIn("积分设置", captions)
             self.assertIn("2D/剖面视图", captions)
             # 归一化三选一下拉框（键仍是"对比归一化"，快照回放认 data
             # 不认字面）：全图最强峰 / 指定数据… / 不归一化。
@@ -4058,6 +4097,46 @@ class TestCompare(unittest.TestCase):
             # 只重画不重算
             self.assertEqual(w.log_text.toPlainText().count("开始对比"),
                              done_before)
+        finally:
+            w.close()
+
+    def test_compare_axis_holds_still_while_tuning_background(self):
+        """调背景时对比面板的纵轴**不动**；裁剪仍然放开纵轴。
+
+        用户 2026-09-26："对比面板的纵轴自己在变"——和 1D 面板同一个毛病
+        （那次修的是 1D）。纵轴范围改看 ref（不跑背景/平滑的那份，见
+        _compare_shown_curves），但**保留归一化与裁剪**：调背景 → 框不动、
+        只有曲线在框里往下走；剪掉巨峰 → 框跟着缩（那是裁剪的本意）。
+        """
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            top0 = float(ax.get_ylim()[1])
+            mode = w.params["背景扣除模式"]
+            # 开处理只允许动一次下界（给扣完的曲线腾出 0 附近的地方，
+            # 见 _draw_compare 里的兜底），上界一动不动
+            mode.setCurrentIndex(mode.findData("auto"))
+            QApplication.processEvents()
+            low1, top1 = (float(v) for v in ax.get_ylim())  # (下, 上)
+            self.assertAlmostEqual(top1, top0, places=6,
+                                   msg="切到自动基线不该动上界")
+            for win in (0.3, 3.0):
+                w.params["背景窗口 (°)"].setValue(win)
+                QApplication.processEvents()
+                np.testing.assert_allclose(
+                    ax.get_ylim(), (low1, top1),
+                    err_msg=f"窗口 {win}° 不该动框")
+            mode.setCurrentIndex(mode.findData("anchor"))
+            QApplication.processEvents()
+            np.testing.assert_allclose(ax.get_ylim(), (low1, top1),
+                                       err_msg="切到手动锚点不该动框")
+            # 剪掉最强的那条峰（fake_b 在 8.5° 处 30）→ 框该跟着缩
+            w.params["裁剪起点 (°)"].setValue(8.0)
+            w.params["裁剪终点 (°)"].setValue(9.0)
+            w.findChild(QPushButton, "cut_add_btn").click()
+            QApplication.processEvents()
+            self.assertLess(ax.get_ylim()[1], top0,
+                            "剪掉巨峰后纵轴该放开（裁剪的本意）")
         finally:
             w.close()
 
@@ -9742,6 +9821,37 @@ class TestHeatmap(unittest.TestCase):
         # "每行各自最强峰"（each）已删：认不出的模式一律当 off（原样）
         for stale in ("each", True, None, "nonsense"):
             np.testing.assert_array_equal(gui_state._heat_shown(m, stale), m)
+
+    def test_heatmap_display_params_redraw_live(self):
+        """热图色图/对数/归一化改了就重画（原先这些控件谁都没接）。
+
+        用户 2026-09-27："热图一单画出来就改不了颜色什么的，没法调整"。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
+            self.assertEqual(ax.images[0].get_cmap().name, "magma")
+            combo = w.params["热图色图"]
+            combo.setCurrentIndex(combo.findData("viridis"))
+            QApplication.processEvents()
+            self.assertEqual(ax.images[0].get_cmap().name, "viridis",
+                             "换色图该立刻重画")
+            w.params["热图对数"].setChecked(True)
+            QApplication.processEvents()
+            self.assertIsInstance(ax.images[0].norm, LogNorm,
+                                  "开对数强度该立刻重画")
+            norm = w.params["热图归一化"]
+            norm.setCurrentIndex(norm.findData("global"))
+            QApplication.processEvents()
+            self.assertAlmostEqual(float(ax.images[0].get_array().max()), 1.0,
+                                   places=6, msg="全图归一化该立刻重画")
+        finally:
+            w.close()
 
     def test_heatmap_uses_cached_1d_and_draws(self):
         """1D 已算好 → [热图] 零后台任务直接出图（复用面板缓存）。"""

@@ -101,7 +101,8 @@ from xrd_toolkit.gui.panel_state import (
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
-from xrd_toolkit.gui.plot_compare import _plot_compare, _plot_heatmap
+from xrd_toolkit.gui.plot_compare import (
+    _plot_compare, _plot_heatmap, _refresh_heat)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
@@ -449,6 +450,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 像素/波长/距离这些只读值改走悬停提示（文案在 _sync_geom_row 里
     # 拼），不再占三行灰色字段。提示同时挂在**整行容器**上：这样悬停
     # "几何配置"这个标签也能看到读数（下拉框自己的提示只有悬停它才出）。
+    # 控件登记表：坞顶这几行（几何配置 / 数据参数）里的控件也要登记进来，
+    # 所以先建表再建行（下面页面那段不再重复建）
+    window.params = {}
     window.geom_row = QWidget()
     geom_lay = QHBoxLayout(window.geom_row)
     geom_lay.setContentsMargins(0, 0, 0, 0)
@@ -484,6 +488,38 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     geom_lay.addWidget(btn_exit)
     window.calib_exit_btn = btn_exit
     lay.addWidget(window.geom_row)        # 固定第二行，不随页面滚动
+
+    # 数据参数（2θ 积分范围 + 输出点数）：**所有分析页共用**，固定在坞顶
+    # 第三行。用户 2026-09-27："1d 画图时能选范围，后面处理时没法选范围，
+    # 比如对比时，参数里加上"——原先这两项只在 1D 页，切到对比/处理页就
+    # 改不了（它们是"参与计算的数据参数"，与几何配置同一类，所以并排住）
+    data_row = QWidget()
+    dlay = QHBoxLayout(data_row)
+    dlay.setContentsMargins(0, 0, 0, 0)
+    dlay.setSpacing(2)
+    dlay.addWidget(QLabel("2θ"))
+    for key, value in (("2θ 下限 (°)", 1.0), ("2θ 上限 (°)", 8.0)):
+        box = QDoubleSpinBox()
+        box.setRange(0.0, 90.0)
+        box.setValue(value)
+        box.setDecimals(1)
+        box.setSuffix(" °")
+        box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
+        box.setToolTip("参与积分的衍射角区间（所有分析页共用；改了要重出图）")
+        window.params[key] = box
+    dlay.addWidget(window.params["2θ 下限 (°)"], 1)
+    dlay.addWidget(QLabel("~"))
+    dlay.addWidget(window.params["2θ 上限 (°)"], 1)
+    npt = QSpinBox()
+    npt.setRange(100, 100000)
+    npt.setValue(3000)
+    npt.setMaximumWidth(72)
+    npt.setToolTip("2θ 区间内的采样点数（所有分析页共用）")
+    window.params["输出点数"] = npt
+    dlay.addWidget(QLabel("点"))
+    dlay.addWidget(npt, 1)
+    lay.addWidget(data_row)               # 固定第三行，不随页面滚动
+    window.data_row = data_row
 
     lay.addWidget(window.param_stack)     # 下面才是五个入口页
 
@@ -534,7 +570,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window._geom_row_sync = lambda: _sync_geom_row(window)
     _sync_geom_row(window)
 
-    window.params = {}
     def add_caption(form, text):
         """全宽灰色小节标题（布局行横跨标签/字段两列）。"""
         cap = QLabel(text)
@@ -606,17 +641,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # window.params 里不再有这三个键，快照也就不会再记它们——几何随
     # 快照回放一直是走 "config" 那条（见 _snapshot_params/_restore）。
 
-    add_caption(form_1d, "积分设置")
-    add_range(form_1d, "2θ 下限 (°)", "2θ 上限 (°)", 0.0, 90.0, 1.0, 8.0,
-              label="2θ 范围", suffix=" °", max_width=88,
-              tooltip="参与积分的衍射角区间")
-
-    npt = QSpinBox()
-    npt.setRange(100, 100000)
-    npt.setValue(3000)
-    npt.setToolTip("2θ 区间内取多少个采样点，越大曲线越细、计算越慢")
-    window.params["输出点数"] = npt
-    form_1d.addRow("输出点数", npt)
+    # 积分设置（2θ 范围 + 输出点数）搬去坞顶第三行：所有分析页共用，
+    # 见 _build_param_dock 里 data_row 的说明（用户 2026-09-27）
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
@@ -1073,8 +1099,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        ("plasma", "plasma"), ("inferno", "inferno"),
                        ("gray", "gray")):
         heat_cmap.addItem(text, data)
-    heat_cmap.setToolTip("热图颜色映射（颜色 = 强度）")
+    heat_cmap.setToolTip("热图颜色映射（颜色 = 强度）；改完立刻重画")
     window.params["热图色图"] = heat_cmap
+    heat_cmap.currentIndexChanged.connect(lambda _i: _refresh_heat(window))
     form_cmp.addRow(heat_cmap)
 
     heat_norm = QComboBox()
@@ -1085,11 +1112,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     heat_norm.setToolTip("热图归一化：全图最强峰（整批同一个比例）"
                          "/ 不归一化（原样画原始强度）")
     window.params["热图归一化"] = heat_norm
+    heat_norm.currentIndexChanged.connect(lambda _i: _refresh_heat(window))
     form_cmp.addRow(heat_norm)
 
     heat_log = QCheckBox("对数强度")
     heat_log.setToolTip("颜色按对数强度：弱峰抬起来（XRD 行规）")
     window.params["热图对数"] = heat_log
+    heat_log.toggled.connect(lambda _on: _refresh_heat(window))
     form_cmp.addRow(heat_log)
 
     auto_heat = QCheckBox("热图自动范围")
@@ -1266,7 +1295,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 量出来会偏小，一到校准模式按钮现身就被裁，所以显式补上它的宽
     head_min = (max(window.focus_label.minimumSizeHint().width(),
                     window.geom_row.minimumSize().width()
-                    + window.calib_exit_btn.sizeHint().width() + 8))
+                    + window.calib_exit_btn.sizeHint().width() + 8,
+                    window.data_row.minimumSize().width() + 8))
     form_min = max(form_min, head_min)
     # 壳：一页的滚动条宽度 + 那一页表单的左右边距（各页相同）
     # 壳 = 滚动条宽 + 表单左右边距 + 8（原来 QGroupBox 那圈 4 px 内边距，
@@ -1284,7 +1314,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 验证），靠布局算会把下限塌成一行标签的高度
     dock.setMinimumHeight(
         window.focus_label.minimumSizeHint().height()
-        + window.geom_row.minimumSize().height() + 6 + 110 + 40)
+        + window.geom_row.minimumSize().height()
+        + window.data_row.minimumSize().height() + 12 + 110 + 40)
 
     _sync_cut_label(window)      # 裁剪清单标签：空
     _sync_smooth_rows(window)    # 平滑阶数只在 SG 下可编辑
