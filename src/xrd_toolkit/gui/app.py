@@ -393,9 +393,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
       - 编辑对象：视图 [应用] 作用在它身上；
       - 几何配置：分析/积分/出图一律用这条条目（_collect_geometry 取
         window.config）。一行只放下拉框，像素/波长/距离的读数走悬停
-        提示（_sync_geom_row 填）；校准页上它置灰（那里用的是「当前
-        配置」那份几何），并让 [返回分析模式] 现身 —— 本模式的显式
-        出口，钉在这里永远可见。
+        提示（_sync_geom_row 填）；校准模式下同一行还多一个
+        [返回分析模式] —— 本模式的显式出口，钉在这里永远可见。
     各页自己套滚动区，页底按钮（产出按钮 / [恢复默认][应用]）固定
     不随滚动走。
     排版约定（为窄排版）：单位放输入框后缀里（标签不带括号单位）；
@@ -445,11 +444,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 所以它得在做分析的每一页都看得见——2026-09-26 之前它住在校准页
     # 顶部，还被挤进一个 88 px 高的内嵌滚动区（视口 88 / 内容 130），
     # 波长和距离都看不全（用户："位置看不清"）。
-    # 一行三件：标签 + 下拉框（只放短 key）+ [返回分析模式]；
+    # 一行三件：标签 + 下拉框（只放短 key）+ [返回分析模式（校准模式才显示）]；
     # 像素/波长/距离这些只读值改走悬停提示（文案在 _sync_geom_row 里
-    # 拼），不再占三行灰色字段。提示挂在**整行容器**上：下拉框在校准页
-    # 要置灰（"显示但不能改"），而置灰的控件收不到鼠标事件、自己的提示
-    # 弹不出来，事件冒到容器上才弹得出来。
+    # 拼），不再占三行灰色字段。提示同时挂在**整行容器**上：这样悬停
+    # "几何配置"这个标签也能看到读数（下拉框自己的提示只有悬停它才出）。
     window.geom_row = QWidget()
     geom_lay = QHBoxLayout(window.geom_row)
     geom_lay.setContentsMargins(0, 0, 0, 0)
@@ -729,20 +727,22 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
               label="纵轴范围", decimals=1,
               tooltip="取消自动后手填的纵轴区间（下限 ~ 上限）")
 
-    # 对比归一化（与用户讨论定稿：下拉框四选一）——叠图时强度差
-    # 很大的文件不归一会被强者压扁。四种模式：
-    #   each   各自最强峰：每条曲线除以自己的最强峰
+    # 对比归一化（下拉框三选一）——叠图时强度差很大的文件不归一会被
+    # 强者压扁。三种模式（**都是全场统一的比例**）：
     #   global 全图最强峰：所有曲线除以全部曲线里最高的峰
     #   file   指定数据：所有曲线除以旁边下拉框选的文件的最强峰
     #   off    不归一化（默认：原样画原始强度）
+    # "各自最强峰"（每条除以自己的峰）已删：它把每条曲线都缩到同一
+    # 高度，样品之间的强弱差就看不出来了（用户 2026-09-26 定的规矩——
+    # "不要按照各自的最高峰归一化，所有的图"）。
     # 归一化只动显示层，原始结果原样保留在 compare_data。
     cmp_norm = QComboBox()
-    for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
+    for text, data in (("全图最强峰", "global"),
                        ("指定数据…", "file"), ("不归一化", "off")):
         cmp_norm.addItem(text, data)
     cmp_norm.setCurrentIndex(cmp_norm.findData("off"))   # 默认 = 不归一化
-    cmp_norm.setToolTip("叠图归一化：各自最强峰 / 全图最强峰 / "
-                        "指定数据的最强峰 / 不归一化")
+    cmp_norm.setToolTip("叠图归一化（都用全场统一的比例）："
+                        "全图最强峰 / 指定数据的最强峰 / 不归一化")
     window.params["对比归一化"] = cmp_norm
     norm_target = QComboBox()
     norm_target.setToolTip("以哪个文件的最强峰归一化（列表 = 对比面板的文件）")
@@ -1070,12 +1070,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     form_cmp.addRow(heat_cmap)
 
     heat_norm = QComboBox()
-    for text, data in (("各自最强峰", "each"), ("全图最强峰", "global"),
-                       ("不归一化", "off")):
+    # "每行各自最强峰"已删（同对比面板：用户 2026-09-26 的规矩）
+    for text, data in (("全图最强峰", "global"), ("不归一化", "off")):
         heat_norm.addItem(text, data)
     heat_norm.setCurrentIndex(heat_norm.findData("off"))
-    heat_norm.setToolTip("热图归一化：每行各自最强峰（抹平样品间绝对强度差，"
-                         "看峰形/峰位随样品的变化）/ 全图最强峰 / 不归一化")
+    heat_norm.setToolTip("热图归一化：全图最强峰（整批同一个比例）"
+                         "/ 不归一化（原样画原始强度）")
     window.params["热图归一化"] = heat_norm
     form_cmp.addRow(heat_norm)
 
@@ -1422,22 +1422,24 @@ def _clear_entrance(window: QMainWindow) -> None:
 
 
 def _sync_geom_row(window: QMainWindow) -> None:
-    """坞顶"几何配置"那一行随页刷新：置灰与否 + 悬停读数。
+    """坞顶"几何配置"那一行的悬停读数（换条目 / 翻页时刷新）。
 
-    - 校准页：置灰（只显示不能改）。校准的几何是校准页里那份「当前
-      配置」；这里选的是**分析侧**用哪条条目，在校准页放着手会误导。
-      置灰的控件收不到鼠标事件，所以悬停提示挂在整行容器上（见
-      _build_param_dock）——提示里补一句为什么是灰的。
-    - 其余四页：可选。选它就换分析用的几何（currentIndexChanged →
-      _apply_config → 再回调本函数刷新读数）。
+    一行管一件事：分析/积分用哪条几何条目（_collect_geometry 取
+    window.config）。五个入口页共用一个下拉框，选它就换分析用的几何
+    （currentIndexChanged → _apply_config → 再回调本函数刷新读数）。
+
+    校准页上**照样能换**：校准用的是那一页自己的「当前配置」（借用 /
+    手改 / 校准结果），换这里的条目不会动它——提示里写明这层区别。
+    2026-09-26 晚订正：先前把这一行在校准页做成置灰（"只显示不能改"），
+    结果 [删除] 正好住在校准页、却在校准页换不了选中项，删条目要
+    "去分析页选中 → 回校准页点删除"跨两页（用户问"现在几何配置怎么
+    删除"）。用户原话"只留能选的那一行，不能改"指的是几何**数值**不
+    能改，不是不能换条目，遂放开置灰。
 
     读数（像素/波长/距离）来自 window.config（完整条目，_apply_config
     里挂上）；建坞阶段它还没设，此时只留条目名、提示留空。
     """
     combo = window.config_combo
-    calibrating = (window.param_stack.currentIndex()
-                   == window.PARAM_PAGES["校准"])
-    combo.setEnabled(not calibrating)
     cfg = getattr(window, "config", None)
     if cfg is None:
         tip = ""
@@ -1447,9 +1449,9 @@ def _sync_geom_row(window: QMainWindow) -> None:
                f"像素尺寸 {g['pixel_size_m'] * 1e6:.1f} µm\n"
                f"波长 {g['wavelength_m'] * 1e10:.4f} Å\n"
                f"距离 {g['dist_m'] * 1e3:.2f} mm")
-    if calibrating:
-        tip += ("\n（校准页里只显示、不能改：校准用的是下面「当前配置」"
-                "那份几何，用 [编辑当前配置…] 或跑一轮校准去动它）")
+    if window.param_stack.currentIndex() == window.PARAM_PAGES["校准"]:
+        tip += ("\n（校准用的是本页「当前配置」那份几何；这里换的是"
+                "分析/积分用的条目）")
     combo.setToolTip(tip)
     window.geom_row.setToolTip(tip)
 

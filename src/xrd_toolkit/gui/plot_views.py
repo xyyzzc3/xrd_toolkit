@@ -1108,13 +1108,39 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
     dock.figure_saved = False
 
 
-def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
-    """在指定的瀑布面板画出 36 扇区堆叠瀑布（对齐 CLI 画法）。
+def _chi_tick_labels(ax, chi) -> list:
+    """瀑布图的 y 刻度标签：36 个 χ 值挤在矮面板上会叠成一团，按高度抽稀。
 
-    与 CLI sector_waterfall 同一画法：原强度（不取根号）沿 Y 轴
-    错开堆叠，行间距自适应（行高 = 该行峰值 × 0.7），每条曲线画
-    到自身第一个 0（被探测器切掉的位置）——右端阶梯即截断几何；
-    y 刻度 = 各扇区 χ 基线，曲线名 = 扇区 χ（悬停读数用，无图例）。
+    面板高度按 英寸 × dpi 估（不用渲染器：画的时候窗口还没上屏，取不到
+    真实像素高），每个标签留 ~9 px；放得下就全标（CLI 那张 12×8 英寸的
+    36 个全在），放不下就每隔 k 个标一个——**抽掉的标签留空串**，刻度线
+    还在，读数靠悬停（曲线名仍是各自的 χ）。
+    """
+    n = len(chi)
+    if not n:
+        return []
+    h_px = float(ax.figure.get_size_inches()[1]) * float(ax.figure.dpi)
+    every = max(1, int(np.ceil(n * 9.0 / max(h_px * 0.8, 1.0))))
+    return [f"{float(c):.0f}°" if k % every == 0 else ""
+            for k, c in enumerate(chi)]
+
+
+def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
+    """在指定的瀑布面板画出 36 扇区堆叠瀑布。
+
+    画法（2026-09-26 晚按用户口径定了两处）：
+      - **行距统一**：所有行同一个行高（全场峰值 × 0.7），不再按各扇区
+        自己的峰值定行高——那等于把每行都缩到各自的高度，强弱没法横向
+        比（用户："不要按照各自的最高峰归一化，所有的图"）。
+      - **处理链照跑**：背景用**扇区均值**估一条共同基线、所有扇区减同
+        一条（不逐扇区各估各的——空气散射在方位角上均匀，逐扇区各扣会
+        把"哪个扇区强"这个瀑布图存在的理由抹平）；**平滑与裁剪逐扇区
+        跑**（[处理] 页那两项），于是被裁掉的巨峰在所有行上一起消失、
+        剩下的弱扇区才看得清（用户："瀑布图也是在处理后画，去掉无效的
+        峰就看得清了"）。
+
+    每条曲线画到自身第一个 0（被探测器切掉的位置）——右端阶梯即截断
+    几何；y 刻度 = 各扇区 χ 基线，曲线名 = 扇区 χ（悬停读数用，无图例）。
     纵轴显示参数不适用（行偏移由数据决定），范围写回不连（同 2D）。
     """
     ax = _content(dock).axes_waterfall
@@ -1124,22 +1150,28 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     try:
         ax.clear()
         raw2d = np.asarray(i2d, dtype=float)
-        # 背景扣除：用**扇区均值**估一条共同基线，再给每个扇区减同一条。
-        # 不逐扇区各估各的——空气散射这类背景在方位角上是均匀的，逐扇区
-        # 各扣各的会把扇区之间的真实强度差抹平，而"哪个扇区强"正是瀑布图
-        # 存在的意义（择优取向、大晶粒）。
+        # 背景：共同基线，理由见 docstring。
         # 扇区均值自己算而不用 np.nanmean：坏扇区整行 NaN 时 nanmean 返回
         # NaN 并往 stderr 打 RuntimeWarning（本模块的坏扇区 NaN 是预期输入）。
         # 这里逐 2θ 在有效扇区上取均值，全坏的位置取 0 = 该处不扣
+        path = _bg_path_of(dock)
         finite = np.isfinite(raw2d)
         counts = finite.sum(axis=1)
         sums = np.where(finite, raw2d, 0.0).sum(axis=1)
         mean_curve = np.divide(sums, counts, out=np.zeros_like(sums),
                                where=counts > 0)
-        _, _, base = _proc_curve(window, dock, _bg_path_of(dock), tth,
-                               mean_curve)
+        params = _proc_params(window, dock, path)
+        _, _, base = _proc_curve(window, dock, path, tth, mean_curve)
         i2d = raw2d - np.asarray(base, dtype=float)[:, None] \
             if base is not None else raw2d
+        # 平滑 + 裁剪：逐扇区跑链的后半段（背景位关掉：上面已经按共同
+        # 基线扣过，不能 36 个扇区各估各的）。两项都没开就整段跳过
+        sc = dict(params, mode="off")
+        if (float(sc.get("smooth_deg") or 0.0) > 0
+                or sc.get("cut_ranges")):
+            i2d = np.column_stack([
+                process.apply_chain(tth, i2d[:, k], sc)[0]
+                for k in range(i2d.shape[1])])
         n = i2d.shape[1]
         colors = cm.viridis(np.linspace(0, 1, n))
         # 每条曲线画到自身第一个 0（截断几何）；未截断的画到末尾。
@@ -1151,19 +1183,17 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
             dead = ~np.isfinite(raw2d[:, k]) | (raw2d[:, k] == 0)
             end = int(np.argmax(dead)) if dead.any() else len(v)
             curves.append((tth[:end], v[:end], k))
-        # 行间距自适应：行高 = 该行峰值 × 0.7，弱扇区行矮、强扇区
-        # 行高；NaN 兜底成 0（坏扇区压成一条基线，不炸整张图）
+        # 行距统一：所有行同一个行高（等行距 → 各行的强弱能横向比，
+        # y 刻度也均匀分布；裁剪过的巨峰不再撑高自己那一行）
         i_pos = np.clip(i2d, 0.0, None)
         peak = float(np.nanmax(i_pos)) if np.isfinite(i_pos).any() else 0.0
-        heights = np.nan_to_num(np.maximum(i_pos.max(axis=0), 0.05 * peak))
-        offsets = np.zeros(n)
-        for k in range(1, n):
-            offsets[k] = offsets[k - 1] + heights[k - 1] * 0.7
+        step = peak * 0.7 if peak > 0 else 1.0
+        offsets = np.arange(n, dtype=float) * step
         for t_cut, v_cut, k in curves:
             ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],
                     color=colors[k], lw=0.5)
         ax.set_yticks(offsets)
-        ax.set_yticklabels([f"{c:.0f}°" for c in chi], fontsize=6)
+        ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=6)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
         for line, c in zip(_data_lines(ax), chi):

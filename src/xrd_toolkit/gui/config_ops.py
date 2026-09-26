@@ -144,7 +144,12 @@ def _save_poni(window: QMainWindow) -> None:
 
 
 def _sync_del_config_btn(window: QMainWindow) -> None:
-    """[删除] 按钮置灰同步：选中内置条目时不可删（人工登记注册表）。
+    """[删除] 按钮置灰同步 + 提示写明删哪一条。
+
+    删除的对象是**坞顶"几何配置"下拉框当前选中的那条**（用户条目；
+    内置条目是 config.py 人工登记的注册表，不可删）。下拉框住在坞顶、
+    按钮住在校准页——两处隔着半屏，所以提示里直接把条目名写出来，
+    免得点下去才知道删的是谁。
 
     下拉框当前索引变化时由连接调用；_reload_config_combo 重建下拉
     框后索引不变不触发信号，调用方（_delete_config / _calib_sync）
@@ -157,8 +162,13 @@ def _sync_del_config_btn(window: QMainWindow) -> None:
         # 分析页建好后会自己再同步一次
         return
     idx = combo.currentIndex()
-    btn.setEnabled(idx >= 0 and
-                   combo.itemData(idx) not in config.BUILTIN_CONFIGS)
+    key = combo.itemData(idx) if idx >= 0 else None
+    deletable = bool(key) and key not in config.BUILTIN_CONFIGS
+    btn.setEnabled(deletable)
+    btn.setToolTip(f"删除坞顶「几何配置」里当前选中的用户条目「{key}」"
+                   f"（内置条目是人工登记的注册表，不可删）"
+                   if deletable else
+                   f"「{key}」是内置条目（config.py 人工登记），不可删")
 
 
 def _delete_config(window: QMainWindow) -> None:

@@ -63,15 +63,17 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         overrides = getattr(dock, "curve_colors", None) or {}
         stack = _panel_param(window, dock, "对比堆叠", False)
         if stack:
-            # 瀑布式错开叠放：行高 = 该行峰值 × 0.7（对齐 CLI
-            # waterfall 画法），y 刻度 = 各条基线（显示名）。归一化
-            # 先做（每条显示数据再叠），堆叠下纵轴范围/对数不适用
-            # （行偏移由数据决定，同瀑布）
-            peaks = [float(np.nanmax(s)) if len(s) and np.isfinite(s).any()
-                     else 0.0 for _, s, _, _ in curves]
-            offsets = [0.0]
-            for p in peaks[:-1]:
-                offsets.append(offsets[-1] + p * 0.7)
+            # 瀑布式错开叠放，行距统一：所有行同一个行高（全场峰值 ×
+            # 0.7），y 刻度 = 各条基线（显示名）。**不按各自峰值定行高**
+            # ——那等于把每条曲线缩到各自的高度，样品之间的强弱没法横向
+            # 比（用户 2026-09-26："不要按照各自的最高峰归一化，所有的
+            # 图"）。归一化先做（每条显示数据再叠），堆叠下纵轴范围/
+            # 对数不适用（行偏移由数据决定，同瀑布）
+            peaks = [float(np.nanmax(s)) for _, s, _, _ in curves
+                     if len(s) and np.isfinite(s).any()]
+            peak = max(peaks) if peaks else 0.0
+            step = peak * 0.7 if peak > 0 else 1.0
+            offsets = [i * step for i in range(len(curves))]
             for (tth, shown, display, i), off in zip(curves, offsets):
                 color = overrides.get(display) or _curve_color(palette, i)
                 ax.plot(tth, shown + off, color=color, lw=0.8,

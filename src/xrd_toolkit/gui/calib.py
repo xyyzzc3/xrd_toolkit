@@ -23,16 +23,18 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
 [保存为配置] 都取"当前使用"那一份。
 
 界面分工：
-  - 参数坞第 2 页 = _build_calib_form（模式单选 + 自动/手动按钮区 +
-    结果三列区 自动|手动|Δ偏差 + 保存为配置区）。各来源共用同一
-    结果区与保存机制："当前使用"的结果可直接存成命名用户条目
-    （config_user.json，不进 git），保存后分析页"几何配置"下拉框
+  - 参数坞第 0 页 = _build_calib_form（自上而下：配置条目操作区 +
+    结果三列区 自动|手动|Δ偏差 + 自动/手动两个动作区）。各来源共用
+    同一结果区与保存机制："当前使用"的结果可直接存成命名用户条目
+    （config_user.json，不进 git），保存后坞顶"几何配置"下拉框
     立即出现并自动选中（几何填进参数坞）。内置 config.py 注册表
     仍走 CLI 模板人工登记（见 config.py 文件头）。
   - 中央校准图面板 = _CalibSubWindow（MDI 子窗口，imshow + 理论环
-    路径 + 控制点/用户点标记，只接鼠标点击）。理论环由
-    theoretical_ring_paths 精确反解（倾斜时是椭圆、圆心是直射束
-    落点），不用"圆心 + 半径"的正圆近似——后者会整体偏 8~23 px。
+    路径 + 控制点/用户点标记 + 一个 [看环全貌] 视野开关，只接鼠标
+    点击）。理论环由 theoretical_ring_paths 精确反解（倾斜时是椭圆、
+    圆心是直射束落点），不用"圆心 + 半径"的正圆近似——后者会整体偏
+    8~23 px。视野默认锁在图像那一框（图像是唯一不动的参照系，环跑
+    到框外由红字说明），要放大到看得见环得自己勾 [看环全貌]。
     不进 plot_docks：不掺和编辑对象焦点、平铺、总缩放；无手势无
     抓手（v1 从简）。
 
@@ -359,14 +361,18 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     """参数坞第 0 页：校准功能。
 
     布局（自上而下）：
+      操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
               一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对"对比基准"）
               + 基准下拉 + 结论行 + ⚠ 说明
-      操作区  [编辑…] [导入][保存] / [删除][存为配置]
       自动    定位环心并精修 / 在当前配置上再精修
       手动    选点计数 + 撤销/清空 + 用选点精修
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
+
+    操作区排在最上面（用户 2026-09-26 晚定）：里面的 [加载参数][保存参数]
+    [删除] 作用的就是坞顶「几何配置」那一行选中的条目，紧挨着它才看得出
+    "先选条目、再对条目动手"；原先这栏压在 13 行对比表下面，得先滚下去。
 
     出口 [返回分析模式] 与几何配置一行不在这里：两者都固定在参数坞顶部
     （app._build_param_dock 建，window.calib_exit_btn）——出口原先钉在本页
@@ -379,12 +385,73 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.setContentsMargins(4, 4, 4, 4)
     lay.setSpacing(4)
 
+    # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
+    # 本页第一栏，紧跟坞顶「几何配置」那一行（用户 2026-09-26 晚定）：
+    # [加载参数][保存参数][删除] 作用的就是那一行选中的条目，摆在一起
+    # 才看得出"先在上面选条目、再对条目动手"这层关系；原先它们压在
+    # 13 行对比表下面，要滚下去才够得着，而选中项却远在坞顶。
+    ops_box = QGroupBox("操作")
+    ops = QVBoxLayout(ops_box)
+    btn_edit = QPushButton("编辑当前配置…")
+    btn_edit.setObjectName("edit_current_btn")
+    btn_edit.setToolTip("借一条已有条目预填，或直接改像素/波长/距离/"
+                        "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
+    btn_edit.clicked.connect(lambda: _edit_current(window))
+    ops.addWidget(btn_edit)
+    row1 = QHBoxLayout()
+    row1.setSpacing(2)
+    btn_poni = QPushButton("加载参数")
+    btn_poni.setObjectName("poni_btn")    # 保持历史 objectName（测试引用）
+    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成配置"
+                        "条目并自动选中；同时作为当前配置的起点")
+    btn_poni.clicked.connect(lambda: _import_poni(window))
+    btn_save_poni = QPushButton("保存参数")
+    btn_save_poni.setObjectName("save_poni_btn")
+    btn_save_poni.setToolTip("保存 .poni：把坞顶「几何配置」选中条目的几何"
+                             "写成 pyFAI 交换格式文件")
+    btn_save_poni.clicked.connect(lambda: _save_poni(window))
+    btn_del = QPushButton("删除")
+    btn_del.setObjectName("del_config_btn")
+    btn_del.setToolTip("删除分析页当前选中的**用户**配置条目（内置条目不可删）")
+    btn_del.clicked.connect(lambda: _delete_config(window))
+    window.del_config_btn = btn_del
+    row2 = QHBoxLayout()
+    row2.setSpacing(2)
+    btn_save_cfg = QPushButton("保存为配置")
+    btn_save_cfg.setObjectName("save_calib_config")
+    btn_save_cfg.setToolTip("把**当前配置**存成命名配置条目（本地文件，"
+                            "不进 git），保存后分析页下拉框自动选中")
+    btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
+    window.calib_save_btn = btn_save_cfg
+    for btn in (btn_poni, btn_save_poni, btn_del, btn_save_cfg):
+        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距
+    for btn in (btn_poni, btn_save_poni, btn_del):
+        row1.addWidget(btn, 1)
+    row2.addWidget(btn_save_cfg, 1)
+    ops.addLayout(row1)
+    ops.addLayout(row2)
+    lay.addWidget(ops_box)
+
+    key_edit = QLineEdit()
+    key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
+    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
+    label_edit = QLineEdit()
+    label_edit.setPlaceholderText("批次备注（label）")
+    save_hint = QLabel("尚未有校准结果")
+    save_hint.setStyleSheet("color: gray;")
+    save_hint.setWordWrap(True)
+    for w_ in (key_edit, label_edit, save_hint):
+        ops.addWidget(w_)
+    window.calib_key_edit = key_edit
+    window.calib_label_edit = label_edit
+    window.calib_save_hint = save_hint
+
+    # 三列表的说明：讲的是下面那张表，所以跟着表走
     intro = QLabel("校准功能：用标样定几何（束心 / 距离 / 倾斜角）。"
                    "三列 = 当前配置（要用的那份）与 A / B 两个对比位；"
                    "跑完自动/手动后，结果进列表并按环位偏差决定要不要"
                    "替换当前配置。")
     intro.setWordWrap(True)
-    lay.addWidget(intro)
 
     # ── 三列表 ─────────────────────────────────────────────
     table_box = QGroupBox("数据")
@@ -468,66 +535,10 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     hint.setWordWrap(True)
     hint.setStyleSheet("color: gray;")
     tb.addWidget(hint)
+    lay.addWidget(intro)
     lay.addWidget(table_box)
     window.calib_verdict = verdict
     window.calib_base_combo = combo_base
-
-    # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
-    ops_box = QGroupBox("操作")
-    ops = QVBoxLayout(ops_box)
-    btn_edit = QPushButton("编辑当前配置…")
-    btn_edit.setObjectName("edit_current_btn")
-    btn_edit.setToolTip("借一条已有条目预填，或直接改像素/波长/距离/"
-                        "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
-    btn_edit.clicked.connect(lambda: _edit_current(window))
-    ops.addWidget(btn_edit)
-    row1 = QHBoxLayout()
-    row1.setSpacing(2)
-    btn_poni = QPushButton("加载参数")
-    btn_poni.setObjectName("poni_btn")    # 保持历史 objectName（测试引用）
-    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成配置"
-                        "条目并自动选中；同时作为当前配置的起点")
-    btn_poni.clicked.connect(lambda: _import_poni(window))
-    btn_save_poni = QPushButton("保存参数")
-    btn_save_poni.setObjectName("save_poni_btn")
-    btn_save_poni.setToolTip("保存 .poni：把分析页当前选中配置的几何写成"
-                             "pyFAI 交换格式文件")
-    btn_save_poni.clicked.connect(lambda: _save_poni(window))
-    btn_del = QPushButton("删除")
-    btn_del.setObjectName("del_config_btn")
-    btn_del.setToolTip("删除分析页当前选中的**用户**配置条目（内置条目不可删）")
-    btn_del.clicked.connect(lambda: _delete_config(window))
-    window.del_config_btn = btn_del
-    row2 = QHBoxLayout()
-    row2.setSpacing(2)
-    btn_save_cfg = QPushButton("保存为配置")
-    btn_save_cfg.setObjectName("save_calib_config")
-    btn_save_cfg.setToolTip("把**当前配置**存成命名配置条目（本地文件，"
-                            "不进 git），保存后分析页下拉框自动选中")
-    btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
-    window.calib_save_btn = btn_save_cfg
-    for btn in (btn_poni, btn_save_poni, btn_del, btn_save_cfg):
-        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距
-    for btn in (btn_poni, btn_save_poni, btn_del):
-        row1.addWidget(btn, 1)
-    row2.addWidget(btn_save_cfg, 1)
-    ops.addLayout(row1)
-    ops.addLayout(row2)
-    lay.addWidget(ops_box)
-
-    key_edit = QLineEdit()
-    key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
-    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
-    label_edit = QLineEdit()
-    label_edit.setPlaceholderText("批次备注（label）")
-    save_hint = QLabel("尚未有校准结果")
-    save_hint.setStyleSheet("color: gray;")
-    save_hint.setWordWrap(True)
-    for w_ in (key_edit, label_edit, save_hint):
-        ops.addWidget(w_)
-    window.calib_key_edit = key_edit
-    window.calib_label_edit = label_edit
-    window.calib_save_hint = save_hint
 
     # ── 自动 ───────────────────────────────────────────────
     auto_box = QGroupBox("自动")

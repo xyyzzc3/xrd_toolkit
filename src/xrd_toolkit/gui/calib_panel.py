@@ -9,7 +9,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMainWindow, QMdiSubWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
+                               QPushButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
@@ -125,6 +126,23 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     cw, ch = max(200, round(w * scale)), max(200, round(h * scale))
     fig = Figure(figsize=(cw / 100.0, ch / 100.0), dpi=100)
     canvas = FigureCanvasQTAgg(fig)
+    # 视野开关：[看环全貌] 勾上才把视野放大到包住全部理论环。默认关
+    # ——图像是这张图上唯一不动的参照系（见 _draw_calib_image 的视野锁）；
+    # 环跑到图像外时是它主动放大的唯一入口（2026-09-26 晚用户定）。
+    # 新面板新起一轮：开关复位成关（关闭即遗忘，同选点/结果）
+    window.calib_fit_rings = False
+    chk_fit = QPushButton("看环全貌")
+    chk_fit.setObjectName("calib_fit_rings")
+    chk_fit.setCheckable(True)
+    chk_fit.setToolTip("把视野放大到包住全部理论环（默认关：图像始终是"
+                       "那一框、不随几何变；环全跑到图像外时勾上它，"
+                       "才看得到环在哪儿）")
+    chk_fit.toggled.connect(lambda on: _set_fit_rings(window, on))
+    fit_row = QHBoxLayout()
+    fit_row.setContentsMargins(4, 2, 4, 2)
+    fit_row.addWidget(chk_fit)
+    fit_row.addStretch(1)
+    lay.addLayout(fit_row)
     lay.addWidget(canvas)
     sub.setWidget(content)
     sub.setWindowTitle(f"校准_{path.name}")
@@ -172,6 +190,9 @@ def _close_calib_panel(window: QMainWindow) -> None:
     window.calib_dock = None
     window.calib_key = None
     window.calib_gen = getattr(window, "calib_gen", 0) + 1   # 迟到结果作废
+    # 视野开关随面板一起弃：下次开面板回到"锁定图像"（关闭即遗忘）。
+    # 控件跟着子窗口销毁，只清状态位（读悬空控件会 RuntimeError）
+    window.calib_fit_rings = False
     # 选点/结果全清（关闭即遗忘）：删属性让 _calib_state 下次懒重建，
     # 否则重开面板会带出旧点标记和旧结果几何
     if hasattr(window, "calib_state"):
@@ -195,7 +216,9 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     控制点 = 绿点（pyFAI 实际取点，验证精修效果）。
 
     几何把环全推出图像时（距离/像素/波长填错、校准跑出离谱解）不静默
-    画一堆看不见的线，而是放大视野 + 红字说明（_warn_rings_off_image）。
+    画一堆看不见的线，而是红字 + 日志说清楚原因（_warn_rings_off_image）
+    ——**视野不动**：图像是这张图上唯一不动的参照系（要放大到看得见环，
+    得自己勾面板上的 [看环全貌]，见 _set_fit_rings / _fit_view_to_rings）。
     """
     ax = window.calib_ax
     ax.clear()
@@ -239,36 +262,81 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     ax.set_title(f"{window.calib_display}  ·  {span}")
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
+    # 视野（必须在所有画线之后设）：默认锁死 = 图像那一框；面板上勾了
+    # [看环全貌] 才放大到包住环。为什么不默认跟着环走——环画到图像外
+    # 时 matplotlib 的自动缩放会把坐标范围撑大（实测像素填 20 µm：视野
+    # 2048 → 21258 px，图像在画布上只剩 10% 宽），看着像"图动了/图被迫
+    # 变小"（2026-09-26 晚用户报）。图像是这张图上唯一不动的参照系：
+    # 环围着它动，跑到框外就老实被裁掉，由红字说明。
+    # 范围取 imshow（origin="lower"、无 extent）给的那一框。
+    if getattr(window, "calib_fit_rings", False):
+        _fit_view_to_rings(ax, image, paths)
+    else:
+        ax.set_xlim(-0.5, w - 0.5)
+        ax.set_ylim(-0.5, h - 0.5)
     window.calib_canvas.draw_idle()
+
+
+def _set_fit_rings(window: QMainWindow, on: bool) -> None:
+    """[看环全貌] 开关：翻状态 + 重画。
+
+    状态记在 window.calib_fit_rings（布尔）而不是读控件：面板一关，
+    控件就是悬空对象，读它 RuntimeError（同 calib_ax 那个坑）。
+    """
+    window.calib_fit_rings = bool(on)
+    _log(window, "视野：看环全貌" if on else "视野：锁定图像（看环全貌已关）")
+    _redraw_calib_if_open(window)
+
+
+def _fit_view_to_rings(ax, image, paths) -> None:
+    """把视野放大到包住全部环路径（[看环全貌] 勾上时才走这里）。
+
+    环路径全推出图像时这是唯一能看到环在哪的办法（视野比图像大几十倍，
+    图像会缩成画布中央一小块——那是这个开关的本意，不再是自动行为）。
+    视野多留 5% 余量；一个有效点都没有（几何离谱到反解不出解）就不动。
+    """
+    h, w = image.shape
+    xy = np.vstack([p for _, p in paths["rings"]])
+    fin = np.isfinite(xy).all(axis=1)
+    if not fin.any():
+        return
+    x0, x1 = float(xy[fin, 0].min()), float(xy[fin, 0].max())
+    y0, y1 = float(xy[fin, 1].min()), float(xy[fin, 1].max())
+    pad_x = 0.05 * max(x1 - x0, w)
+    pad_y = 0.05 * max(y1 - y0, h)
+    ax.set_xlim(min(0.0, x0) - pad_x, max(w, x1) + pad_x)
+    ax.set_ylim(min(0.0, y0) - pad_y, max(h, y1) + pad_y)
 
 
 def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
                           geometry) -> None:
-    """守卫：几何把理论环全推出图像时，明说 + 放大视野让人看见它们。
+    """守卫：几何把理论环全推出图像时，红字 + 日志说清楚（**不动视野**）。
 
-    静默画一圈看不见的青线是最坏的失败方式（用户只会觉得"校准没
-    反应"）。视野扩到包住环路径、左上角红字标注原因；日志按几何指纹
-    去重（撤销/清空选点的重画不重复刷屏）。
+    静默什么都不显示是最坏的失败方式（用户只会觉得"校准没反应"），
+    所以要在图上明说；但**不把视野放大到包住环**——2026-09-26 晚用户
+    报"青环变得很大时图会被迫变小"：环跑到图像外时视野被撑到 11 倍宽
+    （实测像素填 20 µm：视野 2048 → 22249 px），图像在画布上缩成一小块，
+    看上去像"图动了/图变小了"，而真正发生变化的是青环。图像是这张图上
+    唯一不动的参照系，编辑几何不该把它挪走；环跑到外面这件事，红字里
+    连半径范围一起报出来（一眼看得出差几倍）就够了。
+    日志按几何指纹去重（撤销/清空选点的重画不重复刷屏）。
     """
     h, w = image.shape
-    note = (f"当前几何下 {len(paths['rings'])} 条环全部落在图像外"
-            f"（环半径 {paths['r_min_px']:.0f}~{paths['r_max_px']:.0f} px，"
-            f"图像 {w}×{h}）：请核对像素尺寸/波长/距离")
-    xy = np.vstack([p for _, p in paths["rings"]])
-    fin = np.isfinite(xy).all(axis=1)
-    if fin.any():
-        x0, x1 = float(xy[fin, 0].min()), float(xy[fin, 0].max())
-        y0, y1 = float(xy[fin, 1].min()), float(xy[fin, 1].max())
-        pad_x = 0.05 * max(x1 - x0, w)
-        pad_y = 0.05 * max(y1 - y0, h)
-        ax.set_xlim(min(0.0, x0) - pad_x, max(w, x1) + pad_x)
-        ax.set_ylim(min(0.0, y0) - pad_y, max(h, y1) + pad_y)
-    ax.text(0.02, 0.98, "⚠ " + note, transform=ax.transAxes, color="#ff6666",
-            fontsize=8, va="top", ha="left")
+    head = (f"当前几何下 {len(paths['rings'])} 条环全部落在图像外"
+            f"（环半径 {paths['r_min_px']:.0f}~{paths['r_max_px']:.0f} px）")
+    if getattr(window, "calib_fit_rings", False):
+        how = "视野已按 [看环全貌] 放大到看得见它们"
+    else:
+        how = "图上不会出现青线（想看环在哪：勾上面的 [看环全貌]）"
+    tail = f"图像 {w}×{h} —— 请核对像素尺寸 / 波长 / 距离"
+    # 折行写：默认视野锁在图像那一框（不放大），一行写不下会被右边缘裁掉
+    ax.text(0.02, 0.98, "\n".join([f"⚠ {head}", how, tail]),
+            transform=ax.transAxes, color="#ff6666", fontsize=8,
+            va="top", ha="left")
     key = tuple(round(float(geometry[k]), 6) for k in sorted(geometry))
     if getattr(window, "_calib_span_warned", None) != key:
         window._calib_span_warned = key
-        _log(window, note)
+        _log(window, f"{head}，{how}，{tail}")
 
 
 def _add_calib_marker(window: QMainWindow, x, y, ring: int) -> None:

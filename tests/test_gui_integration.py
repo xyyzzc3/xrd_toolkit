@@ -552,6 +552,64 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
+    def test_waterfall_uniform_rows_and_processing_chain(self):
+        """瀑布：行距统一（全场峰值 ×0.7）+ 处理链逐扇区跑（裁剪/平滑）。
+
+        用户 2026-09-26："不要按照各自的最高峰归一化，所有的图" +
+        "瀑布图也是在处理后画，去掉无效的峰就看得清了"。
+        4 个扇区、共同基线 10：0 号有巨峰 100，1/2 号只有弱峰 11/12 ——
+        旧规则下行高按各自的峰值算（弱扇区的行被压得只剩一点点）；新规则
+        所有行同高（按全场 100），裁掉巨峰后行高改由剩下的最大峰 12 决定
+        → 弱扇区的特征相对放大 8 倍多。
+        """
+        w = create_window()
+        try:
+            tth = np.linspace(1.0, 8.0, 60)
+            i2d = np.full((60, 4), 10.0)          # 基线（真实曲线不是 0）
+            i2d[(tth >= 1.0) & (tth <= 2.0), 0] = 100.0   # 0 号：巨峰
+            i2d[(tth >= 5.0) & (tth <= 5.2), 1] = 11.0    # 1 号：弱峰
+            i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0    # 2 号：稍强
+            chi = np.linspace(-175.0, 175.0, 4)
+            i_mid = int(np.argmin(np.abs(tth - 4.0)))     # 两峰之间：全是基线
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "integrate_sectors",
+                                   return_value=(tth, i2d, chi)):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "瀑布")
+                dock = _dock(w, "瀑布", "data/fake_b.tif")
+                ax = gui_panel_state._content(dock).axes_waterfall
+                self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
+
+                def bases():
+                    """各行的 y 基线（中段全是背景，值 = 偏移 + 10）"""
+                    return [float(np.asarray(l.get_ydata())[i_mid])
+                            for l in ax.lines]
+
+                step = 100.0 * 0.7          # 全场峰值（扇区 0 的巨峰）× 0.7
+                for k, b in enumerate(bases()):
+                    self.assertAlmostEqual(b - 10.0, k * step,
+                                           delta=step * 0.05)
+                # 裁掉巨峰所在区间——走真实路径：填起止 + [添加]
+                # （清单是窗口级的，[添加] 会把它拷进各面板快照并实时重画）
+                w.params["裁剪起点 (°)"].setValue(0.9)
+                w.params["裁剪终点 (°)"].setValue(2.1)
+                w.findChild(QPushButton, "cut_add_btn").click()
+                QApplication.processEvents()
+            # 裁掉巨峰后行高改由剩下的最大峰（12）决定 → 每行放大了
+            step2 = 12.0 * 0.7
+            self.assertLess(step2, step, "裁掉巨峰 → 行高应显著变小")
+            for k, b in enumerate(bases()):
+                self.assertAlmostEqual(b - 10.0, k * step2,
+                                       delta=step2 * 0.05)
+            # 裁掉的区间在所有行上都空着（逐扇区跑了裁剪）
+            for line in ax.lines:
+                y = np.asarray(line.get_ydata())
+                seg = y[(tth >= 1.0) & (tth <= 2.0)]
+                self.assertTrue(np.isnan(seg).all(), "裁剪区间应被挖空")
+        finally:
+            w.close()
+
     def test_waterfall_apply_redraws_without_recompute(self):
         """瀑布面板图像 [应用]：只重画已有结果，不重新扇形积分。"""
         w = create_window()
@@ -1306,8 +1364,13 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         return ev
 
     def test_stack_offsets_curves_like_waterfall(self):
-        """堆叠：第 2 条按第 1 条峰值 ×0.7 抬行，y 刻度 = 样品名，
-        无图例；取消堆叠回到平铺 + 图例回来。"""
+        """堆叠：行距统一 = **全场**峰值 ×0.7（不按各条自己的峰值），
+        y 刻度 = 样品名，无图例；取消堆叠回到平铺 + 图例回来。
+
+        用户 2026-09-26："不要按照各自的最高峰归一化，所有的图"——
+        假数据 fake_a 峰值 3、fake_b 峰值 30：两条都按全场峰值 30 抬行
+        （旧规则按各自的 3 / 30 抬，等于把每条都缩到自己的高度）。
+        """
         w = create_window()
         try:
             key, ax = self._plot_compare(w)
@@ -1316,9 +1379,14 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock.params_snapshot["对比堆叠"] = True
             gui_plot_compare._redraw_compare(w, key)
             y_stack = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
-            peak0 = np.nanmax(y_flat[0])   # fake_a 最强峰 = 3
+            peak_all = max(float(np.nanmax(y)) for y in y_flat)   # = 30
             np.testing.assert_allclose(y_stack[0], y_flat[0])   # 第一条不动
-            np.testing.assert_allclose(y_stack[1], y_flat[1] + peak0 * 0.7)
+            np.testing.assert_allclose(y_stack[1], y_flat[1] + peak_all * 0.7)
+            # 两条行基线 = 0 与 全场峰值×0.7（行距统一，不按各自的峰）
+            self.assertAlmostEqual(float(y_stack[0][0]),
+                                   float(y_flat[0][0]))
+            self.assertAlmostEqual(float(y_stack[1][0]) - float(y_flat[1][0]),
+                                   peak_all * 0.7)
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a.tif", "fake_b.tif"])
             self.assertIsNone(ax.get_legend(), "堆叠下 y 刻度即样品名，无图例")
@@ -3334,15 +3402,17 @@ class TestParamDockSplitLayout(unittest.TestCase):
             self.assertNotIn("标定几何（只读：由几何配置决定）", captions)
             self.assertIn("积分设置", captions)
             self.assertIn("2D/剖面视图", captions)
-            # 归一化四选一下拉框（键仍是"对比归一化"，快照回放认 data
-            # 不认字面）：各自最强峰 / 全图最强峰 / 指定数据… / 不归一化
+            # 归一化三选一下拉框（键仍是"对比归一化"，快照回放认 data
+            # 不认字面）：全图最强峰 / 指定数据… / 不归一化。
+            # "各自最强峰"已删（用户 2026-09-26 的规矩：不许按各自最高
+            # 峰归一化——那样样品之间的强弱差就看不出来了）
             combo = w.params["对比归一化"]
             self.assertEqual(
                 [combo.itemText(i) for i in range(combo.count())],
-                ["各自最强峰", "全图最强峰", "指定数据…", "不归一化"])
+                ["全图最强峰", "指定数据…", "不归一化"])
             self.assertEqual(
                 [combo.itemData(i) for i in range(combo.count())],
-                ["each", "global", "file", "off"])
+                ["global", "file", "off"])
             self.assertEqual(combo.currentData(), "off", "默认 = 不归一化")
             # "指定数据" 未选中时，旁边的目标文件下拉框置灰
             self.assertFalse(w.params["归一化目标"].isEnabled())
@@ -3795,18 +3865,41 @@ class TestCompare(unittest.TestCase):
 
     def test_normalize_off_by_default(self):
         """默认 = 不归一化 → 曲线按原始强度画（fake_b 最强峰 30）；
-        切到各自最强峰 → 每条曲线最强峰都是 1.0（each 分支覆盖）。"""
+        切到全图最强峰 → 两条都除以全场峰值 30（fake_a 变 3/30 之一）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
             self.assertEqual(w.params["对比归一化"].currentData(), "off")
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
-            self._set_norm_mode(w, "each")
+            self._set_norm_mode(w, "global")
             w.findChild(QPushButton, "apply_image_btn").click()
-            for line in ax.lines:
+            # 同一个除数（全场峰值 30）：fake_b → 1.0，fake_a → 3/30
+            for line, want in zip(ax.lines, (3.0 / 30.0, 1.0)):
                 self.assertAlmostEqual(float(np.max(line.get_ydata())),
-                                       1.0, places=4)
+                                       want, places=4)
+        finally:
+            w.close()
+
+    def test_retired_each_mode_falls_back_to_off(self):
+        """旧快照里残留的"各自最强峰"（each）不再生效，按不归一化画。
+
+        用户 2026-09-26 定的规矩：不许按各自最高峰归一化。模式值认不出
+        时一律当 off——不做归一化是安全的那一侧（每个样品都缩到自己的
+        高度，比"没归一化"更容易误导人）。
+        """
+        w = create_window()
+        try:
+            ax = self._plot_compare(w)
+            dock = [d for k, d in w.plot_docks.items()
+                    if k.startswith("对比|")][0]
+            for stale in ("each", True, None, "nonsense"):
+                dock.params_snapshot["对比归一化"] = stale
+                gui_plot_compare._redraw_compare(w, dock.panel_key)
+                ymax = max(float(np.max(line.get_ydata()))
+                           for line in ax.lines)
+                self.assertAlmostEqual(ymax, 30.0, places=4,
+                                       msg=f"{stale!r} 应退回不归一化")
         finally:
             w.close()
 
@@ -7056,8 +7149,12 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_geom_row_selectable_in_analysis_readonly_in_calib(self):
-        """几何配置行：分析页可选；校准页置灰（只显示不能改），读数看悬停。"""
+    def test_geom_row_stays_selectable_on_every_page(self):
+        """几何配置行：五页都能换条目，读数看悬停；校准页的提示补一句区别。
+
+        （2026-09-26 晚订正：先前在校准页把它置灰，结果 [删除] 正好住在
+        校准页、却在校准页换不了选中项——删条目得跨两页。）
+        """
         w = create_window()
         try:
             w.show()
@@ -7067,11 +7164,12 @@ class TestCalibration(unittest.TestCase):
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
-            self.assertFalse(w.config_combo.isEnabled())
+            self.assertTrue(w.config_combo.isEnabled())   # 校准页也能换
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
-            self.assertIn("只显示", w.geom_row.toolTip())
+            self.assertIn("当前配置", w.geom_row.toolTip())  # 写明区别
             w.entrance_buttons["1D"].click()
             self.assertTrue(w.config_combo.isEnabled())
+            self.assertNotIn("当前配置", w.geom_row.toolTip())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -7129,25 +7227,70 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_rings_off_image_guard_expands_view_and_logs_once(self):
-        """守卫：几何把理论环全推出图像时，明说 + 视野放大到看得见
-        （静默画一圈看不见的青线是最坏的失败方式）。"""
+    def test_rings_off_image_guard_warns_but_keeps_the_view(self):
+        """守卫：几何把理论环全推出图像时，红字 + 日志说清楚，**视野不动**。
+
+        （静默什么都不显示是最坏的失败方式；但也不能把视野放大到包住环
+        ——2026-09-26 晚用户报"青环变得很大时图会被迫变小"：视野被撑到
+        11 倍宽后图像在画布上缩成一小块，看着像"图动了"。图像是这张图上
+        唯一不动的参照系。）
+        """
         w = create_window()
         try:
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
+                view_before = (w.calib_ax.get_xlim(), w.calib_ax.get_ylim())
                 # 几何只认当前配置（分析页字段是只读显示）→ 直接把距离
                 # 改大 1000 倍（16 条环全被推出图像）
                 w.calib_state["current_geom"]["dist_m"] *= 1000.0
                 gui_calib_panel._redraw_calib(w)
             self.assertIn("全部落在图像外", self._logs(w))
-            self.assertGreater(w.calib_ax.get_xlim()[1], 256.0)
+            # 图上红字在（说清楚为什么不画线），视野还是图像那一框
+            self.assertTrue(any("全部落在图像外" in t.get_text()
+                                for t in w.calib_ax.texts))
+            self.assertEqual((w.calib_ax.get_xlim(), w.calib_ax.get_ylim()),
+                             view_before)
             # 同一几何重画（撤销/清空选点）不重复刷屏
             n = self._logs(w).count("全部落在图像外")
             gui_calib_panel._redraw_calib(w)
             self.assertEqual(self._logs(w).count("全部落在图像外"), n)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_fit_rings_toggle_expands_view_on_demand(self):
+        """[看环全貌] 是视野放大的唯一入口：默认锁图像，勾上才包住环。
+
+        （2026-09-26 晚用户定：视野不许自动跟着环跑——环跑到图像外时
+        自动放大会把图像挤成画布上的一小块，看着像"图动了/图被迫变小"。）
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                chk = w.findChild(QPushButton, "calib_fit_rings")
+                self.assertIsNotNone(chk, "校准图面板上应有 [看环全貌]")
+                self.assertFalse(chk.isChecked())        # 默认：锁图像
+                # 几何离谱 → 环全跑图像外：默认视野仍锁在图像那一框
+                w.calib_state["current_geom"]["dist_m"] *= 1000.0
+                gui_calib_panel._redraw_calib(w)
+                locked = w.calib_ax.get_xlim()
+                # 图上红字把出口指出来
+                self.assertTrue(any("看环全貌" in t.get_text()
+                                    for t in w.calib_ax.texts))
+                # 勾上 → 视野放大到包住环
+                chk.setChecked(True)
+                grown = w.calib_ax.get_xlim()
+                self.assertGreater(grown[1] - grown[0],
+                                   (locked[1] - locked[0]) * 1.5)
+                # 取消 → 回到图像那一框
+                chk.setChecked(False)
+                self.assertEqual(w.calib_ax.get_xlim(), locked)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -9228,6 +9371,32 @@ class TestDeleteConfig(unittest.TestCase):
         finally:
             self._close(w)
 
+    def test_delete_works_from_the_calibration_page(self):
+        """校准页上就地选条目、就地删（[删除] 就住在那页，不用跨页）。
+
+        2026-09-26 晚：这条是被用户问出来的——先前坞顶下拉框在校准页
+        被置灰，删条目得"去分析页选中 → 回校准页点删除"，两页来回。
+        """
+        config_mod.save_user_config("tmp_del", dict(self.ENTRY))
+        w = create_window()
+        try:
+            w.show()
+            w.calib_btn.click()              # 进校准页（不勾文件也行）
+            self.assertEqual(w.param_stack.currentIndex(),
+                             w.PARAM_PAGES["校准"])
+            self.assertTrue(w.config_combo.isEnabled())   # 校准页也能选
+            idx = w.config_combo.findData("tmp_del")
+            w.config_combo.setCurrentIndex(idx)
+            self.assertTrue(w.del_config_btn.isEnabled())
+            self.assertIn("tmp_del", w.del_config_btn.toolTip())   # 删哪条写明
+            with mock.patch.object(gui_app.QMessageBox, "question",
+                                   return_value=QMessageBox.Yes):
+                w.del_config_btn.click()
+            self.assertNotIn("tmp_del", config_mod.USER_CONFIGS)
+            self.assertIn("已删除配置条目 tmp_del", w.log_text.toPlainText())
+        finally:
+            self._close(w)
+
     def test_builtin_selected_button_disabled_and_handler_refuses(self):
         """内置条目选中：按钮置灰；直调处理函数也不弹框、注册表不动。"""
         w = create_window()
@@ -9360,10 +9529,11 @@ class TestHeatmap(unittest.TestCase):
     def test_heat_shown_modes(self):
         m = np.array([[1.0, 2.0], [3.0, 4.0]])
         np.testing.assert_array_equal(gui_state._heat_shown(m, "off"), m)
-        np.testing.assert_allclose(gui_state._heat_shown(m, "each"),
-                                   [[0.5, 1.0], [0.75, 1.0]])
         np.testing.assert_allclose(gui_state._heat_shown(m, "global"),
                                    m / 4.0)
+        # "每行各自最强峰"（each）已删：认不出的模式一律当 off（原样）
+        for stale in ("each", True, None, "nonsense"):
+            np.testing.assert_array_equal(gui_state._heat_shown(m, stale), m)
 
     def test_heatmap_uses_cached_1d_and_draws(self):
         """1D 已算好 → [热图] 零后台任务直接出图（复用面板缓存）。"""

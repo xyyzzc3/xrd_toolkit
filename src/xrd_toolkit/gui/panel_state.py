@@ -93,8 +93,9 @@ _DISPLAY_DEFAULTS = {
     "纵轴自动": True,
     "纵轴下限": 1.0,
     "纵轴上限": 100000.0,
-    # 对比归一化 = 模式（each 各自最强峰 / global 全图最强峰 /
-    # file 指定数据 / off 不归一化，默认 off = 原样画原始强度），
+    # 对比归一化 = 模式（global 全图最强峰 / file 指定数据 /
+    # off 不归一化，默认 off = 原样画原始强度；"各自最强峰"已删，
+    # 见 _compare_shown_curves 的说明），
     # "归一化目标" = file 模式用哪个文件
     "对比归一化": "off",
     "归一化目标": "",
@@ -658,16 +659,18 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
     显示的区间才跟图对得上。热图联动隐藏的样品（dock.compare_hidden
     里的显示名）不参与：画图、图例、自动纵轴同时少掉这条曲线。
 
-    归一化四模式（与用户讨论定稿）：
-      each   各自最强峰：每条曲线除以自己的最强峰
+    归一化三模式：
       global 全图最强峰：所有曲线除以全部曲线里最高的峰
       file   指定数据：所有曲线除以"归一化目标"那个文件的最强峰
       off    不归一化（默认：原样画原始强度）
-    旧快照里的 True/False 兼容（True = each、False = off）。
+    **"各自最强峰"（每条除以自己的峰）已删**（用户 2026-09-26 定的
+    规矩："不要按照各自的最高峰归一化，所有的图"）：它把每条曲线都缩到
+    同一高度，样品之间的强弱差就没法看了。认不出的模式（旧快照里的
+    布尔 True/False 等）一律当 off——不做归一化是安全的那一侧。
     """
     mode = _panel_param(window, dock, "对比归一化", "off")
-    if isinstance(mode, bool):   # 旧快照兼容：True = 各自最强峰
-        mode = "each" if mode else "off"
+    if mode not in ("global", "file"):
+        mode = "off"
     target_path = _panel_param(window, dock, "归一化目标", "") \
         if mode == "file" else ""
     # 先把原始数据全收起来：global/file 的除数要等所有曲线到齐才算。
@@ -706,13 +709,8 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
         divisor = 1.0
     curves = []
     for tth, raw, display, i, _ in raw_curves:
-        shown = raw
-        if mode == "each":
-            peak = float(np.nanmax(raw)) if raw.size else 0.0
-            if peak > 0:
-                shown = raw / peak
-        elif mode != "off":
-            shown = raw / divisor   # global/file 共享同一个除数
+        # global/file 共享同一个除数（不是各除各的）；off 原样
+        shown = raw / divisor if mode != "off" else raw
         curves.append((tth, shown, display, i))
     return curves
 
@@ -720,20 +718,17 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
 def _heat_shown(matrix, mode):
     """热图实际画上去的强度矩阵（归一化是显示层，原始结果原样保留）。
 
-    mode 三选（与对比归一化同款语义，热图没有"指定文件"）：
-      each   每行最强峰：每个样品除以自己的最强峰（观察峰形/峰位
-             随样品的变化，绝对强度差异抹平——原位实验最常用）
+    mode 两选（与对比归一化同款语义，热图没有"指定文件"）：
       global 全图最强峰：全体除以最强样品的最强峰
       off    不归一化（默认：原样画原始强度）
+    "每行各自最强峰"已删（同对比面板：用户 2026-09-26 的规矩——按各自
+    最高峰归一化会把样品之间的强弱差抹平，而那正是一张图要看的东西）。
+    认不出的模式一律当 off。
     画图（_draw_heatmap）与自动强度范围（_apply_auto_heatlim）共用
     这一份口径，置灰框显示的区间才跟图对得上。
     """
     shown = np.asarray(matrix, dtype=float)
-    if mode == "each":
-        peaks = np.nanmax(shown, axis=1)
-        peaks = np.where(np.isfinite(peaks) & (peaks > 0), peaks, 1.0)
-        shown = shown / peaks[:, None]
-    elif mode == "global":
+    if mode == "global":
         peak = float(np.nanmax(shown)) if np.isfinite(shown).any() else 0.0
         if peak > 0:
             shown = shown / peak

@@ -201,15 +201,14 @@ def main() -> None:
 
         # ---- 瀑布图：36 条原强度曲线沿 Y 轴错开堆叠 ----
         # 每条曲线画到自身首个零强度点，使用原强度（不取根号）。
-        # 行间距自适应：每行高度 = 该行峰值 × 0.7（偏移系数），
-        # 弱扇区行矮、强扇区行高，各行峰形不会被压扁；相邻行允许
-        # 峰顶部分探入上一行。每行基线标 χ 值，曲线可对应回各自的
-        # 10° 扇区。
+        # 行距统一：所有行同一个行高 = 全场峰值 × 0.7（不按各扇区自己
+        # 的峰值——那等于把每行缩到各自高度，扇区之间的强弱没法横向比；
+        # 2026-09-26 与 GUI 同口径改）。相邻行允许峰顶部分探入上一行。
+        # 每行基线标 χ 值，曲线可对应回各自的 10° 扇区。
         I_pos = np.clip(I2d_plot, 0.0, None)
-        heights = np.maximum(I_pos.max(axis=0), 0.05 * np.nanmax(I_pos))
-        offsets = np.zeros(n)
-        for k in range(1, n):
-            offsets[k] = offsets[k - 1] + heights[k - 1] * 0.7
+        peak_all = float(np.nanmax(I_pos)) if np.isfinite(I_pos).any() else 0.0
+        step = peak_all * 0.7 if peak_all > 0 else 1.0
+        offsets = np.arange(n, dtype=float) * step
 
         fig, ax = plt.subplots(figsize=(12, 8))
         for t_cut, v_cut, k in curves:
