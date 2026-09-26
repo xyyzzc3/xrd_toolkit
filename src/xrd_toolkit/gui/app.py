@@ -877,12 +877,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_count_lbl = QLabel("")
     bg_count_lbl.setStyleSheet("color: gray;")
     bg_fit_combo = QComboBox()
-    for text, data in (("折线（直线连锚点）", "linear"),
-                       ("样条（平滑过渡）", "spline")):
+    # 默认 = 保单调平滑：三种都严格过锚点，差别在锚点之间——弯背景上
+    # 折线偏高（实测中段 +29）、自然样条会过冲（扣过头），pchip 既平滑
+    # 又不过冲，合成真值上平均绝对偏差 6.1（折线 28.8、样条 16.4）
+    for text, data in (("保单调平滑（默认）", "pchip"),
+                       ("折线（直线连锚点）", "linear"),
+                       ("样条（可能过冲）", "spline")):
         bg_fit_combo.addItem(text, data)
-    bg_fit_combo.setToolTip("折线 = 相邻锚点直线相连（实验室惯例、最透明）；"
-                            "样条 = 自然三次样条过点（更平滑，至少 3 个锚点，"
-                            "不足时自动退回折线）")
+    bg_fit_combo.setToolTip("三种都严格过锚点，差别在锚点之间："
+                            "保单调平滑 = 光滑但不过冲（推荐）；"
+                            "折线 = 相邻锚点直线相连（实验室惯例、最透明，"
+                            "弯背景上会扣不干净）；样条 = 自然三次样条"
+                            "（更平滑，但可能在锚点之间冲到真值以下 = 扣过头）。"
+                            "后两种至少 3 个锚点，不足时自动退回折线")
     window.params["锚点拟合方式"] = bg_fit_combo
     anchor_row = bg_group([
         bg_row((bg_pick_btn, 1), (bg_clear_btn, 1), (bg_count_lbl, 0)),
@@ -1146,7 +1153,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "背景扣除模式": "off",
         "背景窗口 (°)": 1.0,
         "空扫归一化": 1.0,
-        "锚点拟合方式": "linear",
+        "锚点拟合方式": "pchip",
         "背景显示原始": True,
         "负值截断为 0": False,
     }

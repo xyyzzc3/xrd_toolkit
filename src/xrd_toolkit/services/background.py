@@ -27,7 +27,7 @@
 # 曲线层路径，空扫只需积分一次，且全部支持实时预览。
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 # --- 自动基线的默认参数 -------------------------------------------------
 # 自动基线默认窗口宽度（度）：多宽的一段算"背景"而不是"峰"。
@@ -198,26 +198,28 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
     阶段 1：每个位置取窗口内的低分位（AUTO_FLOOR_PERCENTILE）——一个
     **不会被峰抬高**的局部下限，允许偏低。
 
-    阶段 2：把"高于局部下限 + kσ"的点判为峰点掩掉，对剩下的点取**均值**
-    ——均值才是背景水平（阶段 1 的分位是"下限"不是"水平"）。迭代两次
-    让下限收敛到水平。
+    阶段 2：把"高于局部下限 + kσ"的点判为峰点掩掉，剩下的点在窗口内做
+    **最小二乘直线拟合、取窗口中心处的值**——直线才是背景水平（阶段 1
+    的分位是"下限"不是"水平"；用窗口内直线而不是均值，是因为陡降段上
+    掩峰会掩掉窗口高的一侧、均值因此落到真值以下，见下）。迭代两次让
+    下限收敛到水平。
 
     为什么不能只用一阶段（实测标定，见 tests）：
       - 只用中位数：峰在窗内占比高时中位数被峰抬高。σ=0.3° 的宽峰在
         3° 窗口下中位数仍达真背景的 1.8 倍；窗口越小越糟（0.3° 窗口
         达 9.9 倍——基线整个骑在峰上）。
       - 只用低分位：贴到噪声下沿，把噪声本身也当背景扣掉。
-    两阶段各取所长：分位不被峰抬高、均值是水平、掩膜去掉峰。
+    两阶段各取所长：分位不被峰抬高、局部线性给水平、掩膜去掉峰。
 
     为什么是"滑动"而不是"分箱"：分箱只在每箱中心给一个点，箱数一多就
     丢分辨率、一少就跟不上低角陡升；滑动窗口给的是整条曲线上的局部水平
     估计，分辨率只受窗口宽度限制，与采样点数无关。
 
-    已知偏差（方向是故意选的）：背景在窗内是下降的（低角陡升段正是
-    如此），窗口水平估计会略高于窗口中心处的真背景 → 偏向**扣除不足**，
-    残留一条可见的斜坡。反过来，过度扣除会静默压低峰高、看起来还"更
-    干净"，是更危险的错误方向。所以宁可偏高一点，让用户看得见、用
-    锚点去修。
+    已知偏差（方向是故意选的）：窗口内的背景是**弯的**（低角陡降段正是
+    如此），拿一段直线去代表它，估计会略高于窗口中心处的真背景 → 偏向
+    **扣除不足**，残留一条可见的斜坡（实测中段 +15~+72，窗口越大越明显）。
+    反过来，过度扣除会静默压低峰高、看起来还"更干净"，是更危险的错误
+    方向。所以宁可偏高一点，让用户看得见、用锚点去修。
 
     参数：
         tth : np.ndarray
@@ -257,15 +259,42 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
         sigma = 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
         if not np.isfinite(sigma) or sigma <= 0:
             break
-        # 局部参考：窗口内每个点跟**它自己位置**上的下限比，而不是跟窗口
-        # 中心比——下降背景的左半边会整体高于中心值，用中心值当参考会
-        # 把整片背景误判成峰掩掉
-        level = np.empty(idx.size)
-        for j, i in enumerate(idx):
-            lo, hi = max(0, i - half), min(n, i + half + 1)
-            seg_y, seg_floor = y[lo:hi], base[lo:hi]
-            keep = seg_y <= seg_floor + noise_k * sigma
-            level[j] = float(seg_y[keep].mean()) if keep.any() else base[i]
+        # 掩膜是**逐点**判据（每个点跟**它自己位置**上的下限比，而不是跟
+        # 窗口中心比——下降背景的左半边整体高于中心值，用中心值当参考会
+        # 把整片背景误判成峰掩掉），所以能一次算好，再用前缀和给每个窗口
+        # 做最小二乘。
+        keep = y <= base + noise_k * sigma
+        # 窗口内**直线拟合**、取窗口中心处的值（不是掩峰后取均值）。
+        # 为什么：陡降段上掩峰会掩掉窗口高的一侧（那里的点都超过各自
+        # 偏低的下限），均值因此落到真值以下——合成真值实测低角端偏
+        # −139（1° 窗）/ −163（2°）/ −533（3°），而局部线性没有这个
+        # 偏差（同口径回到 +3.7 / +1.0 / −9.3），平均绝对偏差也全线变好
+        # （42→35、63→46、94→67）。这正是"局部常数 vs 局部线性"的经典
+        # 差别，陡背景（低角空气散射）上最明显。
+        # 向量化 = 五个前缀和数组各取一次差分 → 窗口内 Σ1、Σt、Σt²、Σy、
+        # Σty → 解二元正规方程；10 万点 21 ms（逐窗 polyfit 的循环写法
+        # 结果逐位相同，但点数一大就慢一个量级）
+        k = keep.astype(float)
+        c0 = np.concatenate([[0.0], np.cumsum(k)])
+        ct = np.concatenate([[0.0], np.cumsum(tth * k)])
+        ct2 = np.concatenate([[0.0], np.cumsum(tth * tth * k)])
+        cy = np.concatenate([[0.0], np.cumsum(y * k)])
+        cty = np.concatenate([[0.0], np.cumsum(tth * y * k)])
+        lo = np.clip(idx - half, 0, n)
+        hi = np.clip(idx + half + 1, 0, n)
+        cnt = c0[hi] - c0[lo]
+        st, st2 = ct[hi] - ct[lo], ct2[hi] - ct2[lo]
+        sy, sty = cy[hi] - cy[lo], cty[hi] - cty[lo]
+        enough = cnt >= 3
+        safe = np.where(enough, cnt, 1.0)
+        t_mean = st / safe
+        den = st2 - st * t_mean            # Σt² − (Σt)²/n
+        slope = np.where(enough & (den > 0),
+                         (sty - sy * t_mean) / np.where(den > 0, den, 1.0),
+                         0.0)
+        level = np.where(enough,
+                         (sy - slope * st) / safe + slope * tth[idx],
+                         np.where(cnt > 0, sy / safe, base[idx]))
         base = np.interp(tth, tth[idx], level)
     return np.clip(base, 0.0, None)
 
@@ -285,9 +314,14 @@ def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
             锚点 (2θ, 强度)，顺序不限；同一 2θ 上的重复锚点取**后一个**
             （merge 成一个点，不会留下垂直台阶，也不会让样条抛异常）
         method : str
-            "linear"（默认，折线，实验室惯例、最透明）或 "spline"
-            （自然三次样条，更平滑）。spline 至少需要 3 个锚点，
-            不足时自动退回 linear——纯函数不做日志/弹窗，静默降级
+            "linear"（折线，实验室惯例、最透明）/"pchip"（保单调的三次
+            插值，界面默认）/"spline"（自然三次样条）。三种都严格过锚点；
+            差别在锚点之间：折线是直线段（弯背景上会明显偏高，实测中段
+            偏 +29）、自然样条更平滑但会过冲（可能压到真值以下 = 扣过头）、
+            **pchip 既平滑又不过冲**——合成真值上平均绝对偏差 6.1
+            （折线 28.8、样条 16.4），只有 3 个锚点时 50 vs 118 / 99。
+            pchip/spline 至少需要 3 个锚点，不足时自动退回 linear——
+            纯函数不做日志/弹窗，静默降级
 
     返回：
         np.ndarray
@@ -317,8 +351,15 @@ def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
     right = tth > xs[-1]
     base[left] = ys[0] + lo_slope * (tth[left] - xs[0])
     base[right] = ys[-1] + hi_slope * (tth[right] - xs[-1])
-    # 样条只在两端锚点之间生效（外推一律走上面的线性尾巴，口径与 linear 一致）
-    if method == "spline" and a.shape[0] >= 3 and xs[-1] > xs[0]:
+    # 曲线拟合只在两端锚点之间生效（外推一律走上面的线性尾巴，
+    # 口径与 linear 一致）
+    if method == "pchip" and a.shape[0] >= 3 and xs[-1] > xs[0]:
+        inner = (~left) & (~right)
+        if inner.any():
+            # 保单调 PCHIP：过点、光滑、**不**过冲——样条会在锚点之间
+            # 冲到真值以下（扣过头），折线则是直线段跟不上背景的弯
+            base[inner] = PchipInterpolator(xs, ys)(tth[inner])
+    elif method == "spline" and a.shape[0] >= 3 and xs[-1] > xs[0]:
         inner = (~left) & (~right)
         if inner.any():
             spl = CubicSpline(xs, ys, bc_type="natural", extrapolate=False)

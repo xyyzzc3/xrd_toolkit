@@ -982,7 +982,27 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         # 区间填进置灰输入框（只读展示"程序正在用的区间"）——只有画的
         # 正是焦点面板才填：否则会覆盖用户正在看的别面板参数
         if _panel_param(window, dock, "纵轴自动", True):
-            ylo, yhi = _auto_y_range(intensity, eff_log)
+            # 纵轴范围按**未扣背景的原始曲线**定（扣后曲线只补上界），
+            # 但**裁剪区间要从里面挖掉**——于是：调背景（锚点/窗口）时框
+            # 不动、只有曲线在框里往下走；裁掉巨峰时框跟着缩（裁剪的本意
+            # 就是"剪掉它，剩下的才看得见"）。
+            # 按扣后曲线算下界的话，每加一个锚点整张图都重定一次比例，
+            # 看着像"图在动"（用户 2026-09-26："主要是图会动来动去"；
+            # 实测锚点 1 个时 297~3050 一跳跳到 -1252~1500）。
+            # 下界兜到 0 附近（留 2% 框高）：扣完的曲线落在 0 上下，
+            # 得看得见它，轻微过扣（负值）也露得出来；对数轴画不出 ≤0，
+            # 不兜
+            ref = np.asarray(raw, dtype=float)
+            cut = _proc_params(window, dock, path).get("cut_ranges")
+            if cut:
+                ref = process.cut_ranges(tth, ref, cut)
+            ylo, yhi = _auto_y_range(ref, eff_log)
+            if base is not None:
+                _, hi_proc = _auto_y_range(np.asarray(intensity, dtype=float),
+                                           eff_log)
+                yhi = max(yhi, hi_proc)
+                if not eff_log:
+                    ylo = min(ylo, -0.02 * abs(yhi))
             if window.plot_docks.get(window.focus_panel) is dock:
                 window.params["纵轴下限"].setValue(ylo)
                 window.params["纵轴上限"].setValue(yhi)

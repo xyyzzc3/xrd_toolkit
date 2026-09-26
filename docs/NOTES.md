@@ -155,8 +155,14 @@ The parameter dock's 背景扣除 section removes what carries no structural inf
 Three modes, every one previewed live (parameters change the drawing only — the cached raw curve is never touched, so nothing re-integrates):
 
 - **empty-scan subtraction** — subtract a blank measurement, with a normalization factor for differing exposure/beam current;
-- **auto baseline** — rolling-window level estimate; set the window to 3–10× the widest peak's width;
-- **manual anchors** — click points that are background only; the baseline joins them and is extrapolated linearly past the first/last anchor.
+- **auto baseline** — rolling-window level estimate; set the window to 3–10× the widest peak's width (the local-linear stage below widened the usable range from "around 1°" to 0.5–3°);
+- **manual anchors** — click points that are background only; the baseline joins them and is extrapolated linearly past the first/last anchor. Between anchors it defaults to a **monotone-preserving smooth** (pchip: exact through the anchors, smooth, no overshoot); a polyline (the lab convention) and a natural cubic spline (can overshoot) are also available.
+
+**The auto baseline's two stages, and why stage 2 is now a line fit.** Stage 1 takes a low percentile inside the window — a floor that peaks cannot lift, deliberately on the low side. Stage 2 turns that floor into a *level at the window centre*, and on 2026-09-26 that changed from "mean of the un-masked points" to "**least-squares line through them, evaluated at the centre**": on a steeply decaying background the mask throws away the window's high side, so the mean lands below the truth and the low-angle end is systematically over-subtracted (measured against a synthetic truth: −139/−163/−533 for windows of 1°/2°/3°), while a local line has no such bias (+3.7/+1.0/−9.3, mean absolute error 42→35, 63→46, 94→67). The implementation is vectorized — the mask is a per-point criterion, so prefix sums plus a 2×2 normal-equation solve do all windows at once (100 000 points in 21 ms).
+
+**The y axis does not follow the background.** While subtracting, the 1D panel's automatic y range is computed from the *un-subtracted* curve (the subtracted one only raises the upper bound), so each anchor or window change leaves the frame alone and only the curve moves down inside it. Computing the range from the subtracted curve made the whole plot rescale on every click — it reads as "the picture is jumping around".
+
+**Anchor fits, measured** (synthetic truth: steep decay + 6 peaks + σ=12 noise, 5 anchors): monotone-preserving smooth 6.1 mean absolute error, natural spline 16.4, polyline 28.8 (with only 3 anchors: 50 / 99 / 118) — hence the new default.
 
 While subtracting, the 1D panel overlays the raw curve (dashed) and the baseline (dotted) on the subtracted one, so before/after is visible as you tune. Anchors are stored per file; Compare / Waterfall / Heatmap apply the same settings (the waterfall subtracts one common sector-mean baseline so sector-to-sector intensity differences survive), and [导出数据] can write the subtracted curves. Negative values after subtraction are kept by default — the noise floor is real, and clipping it at 0 biases the mean up by ~1σ — with an opt-in checkbox to clip.
 

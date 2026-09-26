@@ -160,11 +160,15 @@ class TestSlidingBaseline(unittest.TestCase):
     def test_window_must_be_a_few_times_the_peak_width(self):
         """窗口参数的语义：应取最宽峰宽的 3~10 倍（σ=0.06° → FWHM 0.14°）。
 
-        实测标定（2θ=3° 处 σ=0.06° 的峰，真背景 546）：
+        实测标定（2θ=3° 处 σ=0.06° 的峰，真背景 546；阶段 2 于
+        2026-09-26 改成"窗口内直线拟合"后重测）：
             窗口 0.1°(≈峰宽) → 4541（8.3 倍，基线骑在峰上）
-            窗口 1.0°(7×峰宽) →  629（1.15 倍，略偏"扣除不足"）
-            窗口 3.0°(21×峰宽)→  398（0.73 倍，转向过度扣除）
-        取小了峰被当背景留下，取大了跟不上背景自身的起伏——两头都不好。
+            窗口 1.0°(7×峰宽) →  555（1.02 倍）
+            窗口 3.0°(21×峰宽)→  589（1.08 倍，落在"扣不足"一侧）
+        取小了峰被当背景留下；取大了跟不上背景自身的起伏——但改成局部
+        线性以后"取大"的代价小得多（旧版 3° 窗口掉到 0.73 倍 = 扣过头，
+        现在只偏 +8% = 安全的那一侧），可用窗口从"1° 附近"放宽到
+        0.5~3°（全曲线平均相对偏差 ≤6%）。
         """
         bg = _ramp_background()
         y = _with_peaks(bg)                      # σ=0.06°
@@ -175,10 +179,45 @@ class TestSlidingBaseline(unittest.TestCase):
         self.assertGreater(float(narrow[i]), 3.0 * bg[i], "小窗口骑在峰上")
         self.assertTrue(0.6 * bg[i] < float(sweet[i]) < 1.6 * bg[i],
                         "合适窗口应落在真背景附近")
-        self.assertLess(float(wide[i]), 0.85 * bg[i], "过大窗口过度扣除")
+        # 过大窗口只该"扣不足"（安全方向），不该掉到真值以下
+        self.assertTrue(0.85 * bg[i] < float(wide[i]) < 1.5 * bg[i],
+                        "过大窗口应扣不足，而不是过扣")
+        self.assertLess(float(wide[i]), float(narrow[i]), "仍应比小窗口低")
+
+    def test_steep_decay_low_angle_is_not_over_subtracted(self):
+        """陡降背景（低角空气散射）上，基线的低角端不再系统性偏低。
+
+        阶段 2 的旧写法（掩峰后取均值）在陡降段会掩掉窗口高的一侧、
+        均值落到真值以下 → 低角扣过头：合成真值（背景 1420→300、峰高
+        最大 2600、噪声 σ=12）实测低角端偏 −139（1° 窗）/ −163（2°）/
+        −533（3°）。改成窗口内直线拟合后回到 +3.7 / +1.0 / −9.3，
+        平均绝对偏差也从 42/63/94 降到 35/46/67。
+        """
+        tth = np.linspace(1.0, 8.0, 3000)
+        true_bg = 260.0 + 1160.0 * np.exp(-(tth - 1.0) / 1.35)
+
+        def peak(c, h, s):
+            return h * np.exp(-0.5 * ((tth - c) / s) ** 2)
+
+        rng = np.random.default_rng(7)
+        y = (true_bg + peak(1.85, 1500.0, 0.09) + peak(2.98, 2600.0, 0.117)
+             + peak(4.20, 700.0, 0.108) + peak(5.55, 500.0, 0.099)
+             + peak(3.75, 900.0, 0.09) + peak(6.60, 380.0, 0.126)
+             + rng.normal(0.0, 12.0, tth.size))
+        edge = slice(0, tth.size // 20)          # 最低角 5%
+        for w in (1.0, 2.0, 3.0):
+            base = estimate_baseline_sliding(tth, y, w)
+            bias = float(np.mean((base - true_bg)[edge]))
+            rel = abs(bias) / float(np.mean(true_bg[edge]))
+            self.assertLess(rel, 0.05,
+                            f"窗口 {w}°：低角端偏差 {bias:+.1f}（{rel:.1%}）"
+                            f"——不该再有百分之几以上的系统性过扣")
+            err = float(np.mean(np.abs(base - true_bg)))
+            self.assertLess(err, 0.15 * float(np.mean(true_bg)),
+                            f"窗口 {w}°：平均绝对偏差 {err:.0f}")
 
     def test_two_stage_beats_floor_only(self):
-        """标定：阶段 1 的低分位（下限）本身偏低，阶段 2 的"掩峰后取均值"
+        """标定：阶段 1 的低分位（下限）本身偏低，阶段 2 的"窗口内直线拟合"
         才把基线抬到背景水平上——两阶段不是装饰。"""
         bg = _shaped_background(TTH)
         y = _with_peaks(bg)
@@ -314,6 +353,28 @@ class TestAnchorBaseline(unittest.TestCase):
         """整条外推都为负时不出现负基线。"""
         base = fit_anchor_baseline(TTH, [(1.0, 10.0), (2.0, 5.0)])
         self.assertTrue(np.all(base >= 0.0))
+
+    def test_pchip_passes_through_anchors_and_never_overshoots(self):
+        """保单调平滑（pchip，界面默认）：过点、光滑、**不**过冲。
+
+        与自然样条的差别就在"不过冲"：样条在锚点之间会冲到锚点值域
+        之外（背景上表现为压到真值以下 = 扣过头），pchip 不会——所以
+        它落在锚点值的上下包络之内。合成真值上平均绝对偏差 6.1
+        （折线 28.8、样条 16.4）。
+        """
+        anchors = [(1.0, 900.0), (4.0, 500.0), (7.0, 300.0), (9.0, 260.0)]
+        pch = fit_anchor_baseline(TTH, anchors, method="pchip")
+        for x, yv in anchors:
+            self.assertAlmostEqual(float(np.interp(x, TTH, pch)), yv,
+                                   places=6)
+        lo, hi = min(a[1] for a in anchors), max(a[1] for a in anchors)
+        inner = (TTH >= anchors[0][0]) & (TTH <= anchors[-1][0])
+        self.assertTrue(np.all(pch[inner] >= lo - 1e-6))
+        self.assertTrue(np.all(pch[inner] <= hi + 1e-6))
+        # 只给两个锚点 → 与折线一致（降级路径）
+        np.testing.assert_allclose(
+            fit_anchor_baseline(TTH, anchors[:2], method="pchip"),
+            fit_anchor_baseline(TTH, anchors[:2], method="linear"))
 
 
 class TestInterpOntoGrid(unittest.TestCase):
