@@ -204,8 +204,30 @@ def _apply_panel_chrome(dock, content) -> None:
     dock.setWindowFlags(flags)
 
 
-def _close_panel(window: QMainWindow, key: str) -> None:
+def _close_all_panels(window: QMainWindow) -> None:
+    """[全关]：把所有图面板一次关掉（弹出去的独立窗口也一样）。
+
+    用户 2026-09-26："加一个一键关闭所有图像，就是打开的子窗口全部关闭"。
+    与单个 × 同一条 _close_panel 路径（关闭即遗忘、焦点逐个移交）；不弹
+    确认框——单个 × 也不弹（只有关窗才问存不存盘），批量关不该比单个更
+    啰嗦，但日志里报一句有几张没存过盘，免得关完才想起来。
+    """
+    keys = list(window.plot_docks)
+    unsaved = [k for k, d in window.plot_docks.items()
+               if getattr(_content(d), "figure", None) is not None
+               and not getattr(d, "figure_saved", False)]
+    for key in keys:
+        _close_panel(window, key, quiet=True)
+    if keys:
+        tail = f"（其中 {len(unsaved)} 张没存过盘）" if unsaved else ""
+        _log(window, f"已关闭全部 {len(keys)} 张图{tail}")
+
+
+def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
     """统一关闭面板：从登记表移除（关闭即遗忘）+ 焦点移交 + 销毁容器。
+
+    quiet=True 不写"已关闭面板"那行（[全关] 一次关几十张时不刷屏，
+    汇总行由调用方写）。
 
     幂等：面板已不在登记表里（如收回主窗口后旧壳被删除）直接返回。
     子窗口先从 MDI 摘下再 deleteLater（探针验证 closeEvent 里这组
@@ -224,7 +246,8 @@ def _close_panel(window: QMainWindow, key: str) -> None:
         if dock in window.mdi.subWindowList():
             window.mdi.removeSubWindow(dock)
         dock.deleteLater()
-    _log(window, f"已关闭面板：{dock.windowTitle()}")
+    if not quiet:
+        _log(window, f"已关闭面板：{dock.windowTitle()}")
     if window.focus_panel == key:
         window.focus_panel = None   # 先清空，绕过 _set_focus 的同键早退
         for next_key, next_dock in window.plot_docks.items():
@@ -282,6 +305,16 @@ def _build_center(window: QMainWindow) -> None:
         window.arrange_buttons[name] = btn
         btn.clicked.connect(
             lambda checked=False, n=name: _arrange(window, n))
+    # [全关]：一键关掉所有图面板（用户 2026-09-26："打开的子窗口全部关闭"）
+    btn_close_all = QPushButton("全关")
+    btn_close_all.setObjectName("close_all_panels")
+    btn_close_all.setFlat(True)
+    btn_close_all.setToolTip("关闭所有打开的图面板（弹出的独立窗口也一起关；"
+                             "与单个 × 一样不会问存不存盘，日志里会报几张"
+                             "没存过盘）")
+    btn_close_all.clicked.connect(lambda: _close_all_panels(window))
+    row.addWidget(btn_close_all)
+    window.close_all_btn = btn_close_all
 
     # 总缩放控件（Excel 式 − 100% +）：放在横排/竖排右边
     zoom_box = QWidget()

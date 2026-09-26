@@ -5,6 +5,7 @@
 依赖方向：本模块 → plot_views（背景叠加/重画）与 plot_panels（面板壳），
 反向调用一律函数内延迟导入。
 """
+import os
 import time
 from pathlib import Path
 
@@ -24,6 +25,81 @@ from xrd_toolkit.gui.plot_panels import (
 from xrd_toolkit.gui.plot_views import (
     _batch_step, _bg_path_of, _curve_for, _progress_show, _refresh_proc,
     _spawn)
+
+
+# 对比面板图例最多列几条：再多就不画了（挡住图的是那 81 行名字）。
+# 用户 2026-09-26："对比的图例还是影响看图，太多了"。
+LEGEND_MAX_CURVES = 12
+
+# 剥公共后缀的门槛（".tif" 4 个字符）：够长才剥，且剥完不能空
+MIN_SUFFIX_CHARS = 4
+
+
+def _strip_common(names) -> list:
+    """剥掉一组名字共同的前缀（在最后一个非数字字符处切断）与共同后缀。
+
+    81 个 "LMFP_1_atten0-00029.tif" 里真正有信息的是 "00029"：共同前缀在
+    纵轴上占掉半张图、还糊成一条黑带（用户 2026-09-26 的热图截图）。前缀
+    在**最后一个非数字字符之后**切断，号段位数不丢；后缀（如 ".tif"）整段
+    剥掉。名字不足两个、或剥完会空则原样返回。
+    """
+    if len(names) < 2:
+        return list(names)
+    prefix = os.path.commonprefix(list(names))
+    cut = max((i + 1 for i, ch in enumerate(prefix) if not ch.isdigit()),
+              default=0)
+    prefix = prefix[:cut] if cut else ""
+    # 剥前缀的两个条件：切在分隔符处（"LMFP_1_atten0-" 这样的批次头），
+    # 且剥完每个名字都以**数字**开头——我们要的就是那个号段。于是
+    # "fake_a/fake_b"（剥完是 a/b）不会被剥，反而更好认。
+    out = list(names)
+    if prefix and prefix[-1] in "-_. " and all(
+            n[len(prefix):len(prefix) + 1].isdigit() for n in names):
+        out = [n[len(prefix):] for n in names]
+    suffix = os.path.commonprefix([n[::-1] for n in out])[::-1]
+    if len(suffix) >= MIN_SUFFIX_CHARS and all(len(n) > len(suffix)
+                                               for n in out):
+        out = [n[:-len(suffix)] for n in out]
+    return out
+
+
+def _short_labels(names, ax) -> list:
+    """纵轴标签 = 短名 + 按可用高度抽稀（同瀑布图 χ 刻度那一招）。
+
+    热图一次可能摆 81 个样品：名字糊成黑带之外，整个图还会被标签挤到右边。
+    抽稀按面板高度估（英寸 × dpi），每个标签留 ~11 px；放得下就全标。
+    完整名字仍在面板标题、悬停读数与导出里。
+    """
+    short = _strip_common(list(names))
+    n = len(short)
+    if not n:
+        return []
+    h_px = float(ax.figure.get_size_inches()[1]) * float(ax.figure.dpi)
+    every = max(1, int(np.ceil(n * 11.0 / max(h_px * 0.75, 1.0))))
+    return [s if k % every == 0 else "" for k, s in enumerate(short)]
+
+
+def _draw_compare_legend(window, dock, ax, labels) -> None:
+    """对比面板图例：超过 LEGEND_MAX_CURVES 就不画图例（它挡图）。
+
+    画得下时用**短名**（剥共同前后缀）+ 多列排（每列约 8 条）；条数变了
+    才记一次日志（重画不刷屏）。认曲线不靠图例也行：状态栏悬停读数本来
+    就报曲线名，圆点颜色与曲线一致。
+    """
+    n = len(labels)
+    if n > LEGEND_MAX_CURVES:
+        if getattr(dock, "_legend_off_n", None) != n:
+            dock._legend_off_n = n
+            _log(window, f"对比图例：{n} 条曲线太多、挡住图了，默认不画；"
+                         "点热图某一行可隐藏/显示几条，曲线名看状态栏"
+                         "悬停读数（圆点颜色与曲线一致）")
+        return
+    dock._legend_off_n = None
+    shown = [lb for lb in labels if lb]
+    if not shown:
+        return
+    ax.legend(labels=_strip_common(shown), fontsize=8,
+              ncols=max(1, int(np.ceil(len(shown) / 8.0))))
 
 
 def _compare_title(displays) -> str:
@@ -128,8 +204,10 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         if dock.compare_data and not stack:
             # 堆叠下 y 刻度 = 样品名（曲线就躺在自己名字那行上），
-            # 图例冗余（同瀑布）
-            ax.legend(fontsize=8)
+            # 图例冗余（同瀑布）；平铺时按条数决定画不画（多了挡图）
+            _draw_compare_legend(
+                window, dock, ax,
+                [ln.get_label() for ln in _data_lines(ax)])
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
@@ -561,7 +639,7 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
                        norm=norm, extent=[float(tth[0]), float(tth[-1]),
                                           -0.5, n - 0.5])
         ax.set_yticks(range(n))
-        ax.set_yticklabels(stems, fontsize=7)
+        ax.set_yticklabels(_short_labels(stems, ax), fontsize=7)
         # 颜色条同 2D：只建一次、之后 update_normal 复用（remove+
         # 重建会让坐标轴每次再让 20% 宽度，教训 13）
         cb = getattr(dock, "_heat_colorbar", None)

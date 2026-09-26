@@ -3916,6 +3916,55 @@ class TestCompare(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
 
+    def test_strip_common_shortens_batch_names_only(self):
+        """短名助手：剥批次前缀与扩展名换出号段；短名字不剥（免得只剩 a）。"""
+        strip = gui_plot_compare._strip_common
+        self.assertEqual(
+            strip(["LMFP_1_atten0-00029.tif", "LMFP_1_atten0-00031.tif"]),
+            ["00029", "00031"])
+        self.assertEqual(strip(["scan_001.dat", "scan_002.dat"]),
+                         ["001", "002"])
+        # 前缀剥完只剩一个字母的，不剥（反而更难认）；扩展名照剥
+        self.assertEqual(strip(["fake_a.tif", "fake_b.tif"]),
+                         ["fake_a", "fake_b"])
+        self.assertEqual(strip(["样品A", "样品B"]), ["样品A", "样品B"])
+        self.assertEqual(strip(["只有一个"]), ["只有一个"])
+
+    def test_compare_legend_hidden_when_too_many_curves(self):
+        """曲线超过 LEGEND_MAX_CURVES → 不画图例（它挡图），日志说清怎么办。
+
+        用户 2026-09-26："对比的图例还是影响看图，太多了"。认曲线改看
+        状态栏悬停读数（那里本来就报曲线名）。
+        """
+        w = create_window()
+        files = _tmp_files(gui_plot_compare.LEGEND_MAX_CURVES + 1)
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.add_files([str(p) for p in files], select=True)
+                w.compare_btn.click()
+                ax = self._compare_axes(w)
+                self.assertTrue(_wait_until(
+                    lambda: len(ax.lines) >= len(files)))
+            self.assertIsNone(ax.get_legend(), "条数超限就不该有图例")
+            log = w.log_text.toPlainText()
+            self.assertIn(f"对比图例：{len(files)} 条曲线太多", log)
+            self.assertIn("悬停读数", log)
+            # 少到阈值以内 → 图例回来（用短名）
+            dock = w.plot_docks[[k for k in w.plot_docks
+                                 if k.startswith("对比|")][0]]
+            for key in list(dock.compare_data)[2:]:
+                hidden = set(getattr(dock, "compare_hidden", None) or ())
+                dock.compare_hidden = hidden | {key}
+            gui_plot_compare._redraw_compare(w, dock.panel_key)
+            leg = ax.get_legend()
+            self.assertIsNotNone(leg, "两条曲线的图例该回来")
+            # 名字 = 短名（临时文件叫 s1/s2，扩展名已剥掉）
+            self.assertEqual([t.get_text() for t in leg.get_texts()],
+                             [Path(p).stem for p in files[:2]])
+        finally:
+            w.close()
+
     def test_compare_requires_two_checked_files(self):
         """只勾一个文件点 [对比] → 提示至少两个，不开面板。"""
         w = create_window()
@@ -4233,6 +4282,38 @@ class TestArrangeModeClose(unittest.TestCase):
             self.assertIn("已横排 2 个面板", w.log_text.toPlainText())
             w.arrange_buttons["竖排"].click()
             self.assertIn("已竖排 2 个面板", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_close_all_button_closes_every_panel(self):
+        """[全关]：一键关掉所有图面板，焦点与编辑对象一起复位。
+
+        用户 2026-09-26："加一个一键关闭所有图像，就是打开的子窗口全部
+        关闭"。与单个 × 同一条路径，但**不逐张写日志**（一次关几十张
+        会刷屏），只写一行汇总（含几张没存过盘）。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
+            self.assertEqual(len(w.plot_docks), 2)
+            w.close_all_btn.click()
+            QApplication.processEvents()
+            self.assertEqual(len(w.plot_docks), 0, "该一张不剩")
+            self.assertIsNone(w.focus_panel)
+            self.assertIn("未选中图面板", w.focus_label.text())
+            log = w.log_text.toPlainText()
+            self.assertIn("已关闭全部 2 张图", log)
+            self.assertIn("没存过盘", log)
+            self.assertEqual(log.count("已关闭面板："), 0,
+                             "全关不逐张写日志（那是刷屏）")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -9601,6 +9682,26 @@ class TestHeatmap(unittest.TestCase):
     图像 [应用] 只重画、数据 [应用] 全部重积分。
     """
 
+    def test_heatmap_labels_shorten_and_thin_out(self):
+        """行名 = 号段短名 + 按高度抽稀（81 个长名字会糊成一条黑带）。
+
+        用户 2026-09-26 的热图截图：81 个 "LMFP_1_atten0-000NN" 挤成
+        黑带，还把整张图挤到右边。矮面板抽稀、高面板全标。
+        """
+        from matplotlib.figure import Figure
+        names = [f"LMFP_1_atten0-{i:05d}.tif" for i in range(40)]
+        short = Figure(figsize=(4, 2), dpi=100).add_subplot(111)
+        labels = gui_plot_compare._short_labels(names, short)
+        self.assertEqual(len(labels), 40)
+        shown = [x for x in labels if x]
+        self.assertLess(len(shown), 40, "矮面板上该抽稀")
+        self.assertTrue(shown and all(x.isdigit() for x in shown),
+                        f"该只剩号段：{shown[:3]}")
+        tall = Figure(figsize=(6, 9), dpi=100).add_subplot(111)
+        self.assertEqual(
+            len([x for x in gui_plot_compare._short_labels(names, tall) if x]),
+            40, "9 英寸高的面板放得下 40 个")
+
     def _heat_dock(self, w):
         """找到热图面板（键 = "热图|路径串"）。"""
         return next(d for k, d in w.plot_docks.items()
@@ -10565,7 +10666,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.params["背景窗口 (°)"].setValue(4.0)
             w.findChild(QPushButton, "reset_image_btn").click()
             self.assertEqual(w.params["背景扣除模式"].currentData(), "off")
-            self.assertEqual(w.params["背景窗口 (°)"].value(), 1.0)
+            # 窗口默认 0.5°（2026-09-26 从 1.0° 改，见 background.AUTO_WINDOW_DEG）
+            self.assertEqual(w.params["背景窗口 (°)"].value(), 0.5)
             ax = _axes(w, "1D", self.PATH)
             self.assertEqual(_bg_lines(ax)[1], [])
             self.assertIsNotNone(getattr(dock, "last_tth", None))

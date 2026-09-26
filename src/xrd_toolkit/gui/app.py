@@ -1152,7 +1152,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "热图下限": 1.0,
         "热图上限": 100000.0,
         "背景扣除模式": "off",
-        "背景窗口 (°)": 1.0,
+        "背景窗口 (°)": 0.5,
         "空扫归一化": 1.0,
         "锚点拟合方式": "pchip",
         "背景显示原始": True,

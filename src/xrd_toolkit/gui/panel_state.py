@@ -120,7 +120,7 @@ _DISPLAY_DEFAULTS = {
     # auto 自动基线 / anchor 手动锚点；锚点列表与空扫曲线不是参数，
     # 放窗级属性（window.bg_anchors / window.bg_blank）
     "背景扣除模式": "off",
-    "背景窗口 (°)": 1.0,
+    "背景窗口 (°)": 0.5,
     "空扫归一化": 1.0,
     # 锚点之间的拟合：保单调平滑（pchip，过点、不过冲）。新面板的显示
     # 参数从这份默认起步、再回放进控件——所以这里不跟着改的话，界面
@@ -510,7 +510,7 @@ def _bg_params(window: QMainWindow, dock, path) -> dict:
     """
     return {
         "mode": _panel_param(window, dock, "背景扣除模式", "off"),
-        "window_deg": _panel_param(window, dock, "背景窗口 (°)", 1.0),
+        "window_deg": _panel_param(window, dock, "背景窗口 (°)", 0.5),
         "blank_scale": _panel_param(window, dock, "空扫归一化", 1.0),
         "anchors": (getattr(window, "bg_anchors", None) or {}).get(str(path),
                                                                   []),
