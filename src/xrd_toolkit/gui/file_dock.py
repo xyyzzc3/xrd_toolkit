@@ -7,7 +7,7 @@
 文件栏是一棵树（用户 2026-09-24 提"每次完成一个大功能后在文件栏有一个
 新的子文件夹"）：顶上「原始数据」组，下面是各阶段产物分组（「1D 产物」=
 当前设置算好的；「处理后 …」= 每次 [批量处理] 一组）。勾组 = 整组全选，
-半勾 = 只勾了一部分。**原始数据那部分的接口沿用老列表的写法**（item(i)/
+两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**原始数据那部分的接口沿用老列表的写法**（item(i)/
 count()/addItem，见 FileTree），免得几十处读写全改一遍。
 
 导入**不再自动打勾**（用户 2026-09-25 定）：200 张数据要自己说了算，
@@ -113,13 +113,15 @@ def is_group(item) -> bool:
 
 
 def _group_state(states) -> Qt.CheckState:
-    """一组子项的对号 → 组该显示的态（全勾 / 全不勾 / 半勾）。"""
+    """一组子项的对号 → 组该显示的态。**只有两态**：全勾 = 对号，其余
+    （含只勾了一部分）= 空格。
+
+    用户 2026-09-26 定："现在文件栏有三种状态，对号、横线、空格。横线和
+    空重复了，留空格"——半勾那根横线在列表里跟空格几乎分不出来，索性去掉：
+    勾了一部分 = 组不亮，选了哪几条看条目本身的对号（状态行/日志里也有
+    条数）。"""
     states = set(states)
-    if not states or states == {Qt.Unchecked}:
-        return Qt.Unchecked
-    if states == {Qt.Checked}:
-        return Qt.Checked
-    return Qt.PartiallyChecked
+    return Qt.Checked if states == {Qt.Checked} else Qt.Unchecked
 
 
 class FileTree(QTreeWidget):
@@ -127,7 +129,7 @@ class FileTree(QTreeWidget):
 
     为什么改成树（用户 2026-09-25）："每次完成一个大功能后在文件栏有一个
     新的子文件夹进行区分"——扣完背景的图整组勾上就能去 [对比]/[热图]；
-    勾组 = 勾组里全部（半勾表示只勾了一部分）。
+    勾组 = 勾组里全部。
 
     **保留三个老接口** item(i) / count() / addItem()，它们都指"原始数据"
     组：文件栏的几十处读写（各视图、批量扣背景、导出、探针、测试）都是按
@@ -274,7 +276,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         """对号状态变了 → 组↔子项联动 + 状态行标签 + 背景高亮；勾上记日志。
 
         组节点不是条目而是"整组开关"：勾组 = 勾组里全部子项；子项全勾
-        组自动全勾、勾一部分组显示半勾（三态）。联动期间（_check_syncing）
+        子项全勾组自动亮，否则组不亮（两态，见 _group_state）。联动期间（_check_syncing）
         只同步不记账——勾一个 81 张的组只记一行日志，不是 81 行。
         """
         if window._check_syncing:
@@ -321,6 +323,11 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     window.file_list.itemChanged.connect(on_item_changed)
     window.file_list.itemClicked.connect(on_item_clicked)
+    # 双击条目 = 打开这一张的 1D 图（"点开看一张"最顺手的手势；右键菜单
+    # 里也有同一条，两个都留着——双击的第一次单击会顺手勾上这一条，
+    # 无害；不想动勾选就用右键）
+    window.file_list.itemDoubleClicked.connect(
+        lambda item, _col=0: _open_entry_view(window, item))
     window.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
     window.file_list.customContextMenuRequested.connect(
         lambda pos: _entry_menu(window, window.file_list.itemAt(pos)))
@@ -662,13 +669,21 @@ def _entry_menu(window: QMainWindow, item) -> None:
     elif is_group(item):
         if item.childCount():
             actions[menu.addAction(
+                f"打开整组 1D 图（{item.childCount()} 张）")] = "open_group"
+            menu.addSeparator()
+            actions[menu.addAction(
                 f"删除这一组产物（{item.childCount()} 个）")] = "drop_group"
             actions[menu.addAction("导出这一组（txt / chi / CSV）")] = \
                 "export_group"
     elif src is None or src.kind == gui_sources.RAW:
+        actions[menu.addAction(f"打开 1D 图（{src.display if src else ''}）")] = \
+            "open_item"
+        menu.addSeparator()
         actions[menu.addAction(f"从列表移除 {src.display if src else ''}"
                                f"（硬盘上的文件不动）")] = "remove_raw"
     else:
+        actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
+        menu.addSeparator()
         actions[menu.addAction(f"删除这一条产物（{src.display}）")] = "drop_item"
         actions[menu.addAction("导出这一条（txt / chi / CSV）")] = "export_item"
     if actions:
@@ -679,7 +694,11 @@ def _entry_menu(window: QMainWindow, item) -> None:
     what = actions.get(picked)
     if what is None:
         return
-    if what == "drop_group":
+    if what == "open_item":
+        _open_entry_view(window, item)
+    elif what == "open_group":
+        _open_group_views(window, item)
+    elif what == "drop_group":
         drop_product_group(window, item)
     elif what == "drop_item":
         drop_product_item(window, item)
@@ -693,6 +712,47 @@ def _entry_menu(window: QMainWindow, item) -> None:
         export_sources(window, [src])
     elif what == "clear_cache":
         ask_clear_cache(window)
+
+
+def _open_entry_view(window: QMainWindow, item) -> None:
+    """双击条目 / 右键 [打开 1D 图]：按条目打开一张面板（两处共用）。
+
+    走 window.open_view_source 回调（app 建窗时挂上 plot_views._open_source_view），
+    避免本模块反向 import plot_views。双击时第一次单击已经按老手势处理过
+    （可能顺手把这条勾上了）——不去撤销：勾上无害，撤销反而打乱用户的选择。
+    """
+    opener = getattr(window, "open_view_source", None)
+    if opener is None or item is None or is_group(item):
+        return
+    src = gui_sources.source_of(item)
+    if src is not None:
+        opener(src, "1D")
+
+
+def _open_group_views(window: QMainWindow, item) -> None:
+    """右键 [打开整组 1D 图]：整组逐条打开；张数多时先问一声。
+
+    每张 ≈15 MB（81 张 ≈1.4 GB），超过批量开图的上限（24）先弹确认——
+    整组打开是显式动作，确认一下比默默吃内存好。
+    """
+    from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
+    sources = [gui_sources.source_of(item.child(i))
+               for i in range(item.childCount())]
+    sources = [s for s in sources if s is not None]
+    if not sources:
+        _log(window, "这一组里没有可打开的条目")
+        return
+    if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
+        ans = QMessageBox.question(
+            window, "打开整组 1D 图",
+            f"要打开 {len(sources)} 张 1D 图吗？每张约占 15 MB 内存"
+            f"（合计约 {len(sources) * 15} MB），开完会占满面板区。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ans != QMessageBox.Yes:
+            return
+    opener = getattr(window, "open_view_group", None)
+    if opener is not None:
+        opener(sources, "1D")
 
 
 def export_sources(window: QMainWindow, sources) -> None:
@@ -856,7 +916,7 @@ def checked_raw_items(window: QMainWindow) -> list:
 
 
 def _sync_group_states(window: QMainWindow) -> None:
-    """按子项把每个组的三态重算一遍（组 = 全勾 / 半勾 / 全不勾）。
+    """按子项把每个组的状态重算一遍（组 = 全勾 / 不勾，两态）。
 
     批量改对号（导入、[全选]、[按条件选]、删除）都是**屏蔽信号**做的，
     itemChanged 的联动不会跑，所以这些地方收尾要显式补一次——否则界面上

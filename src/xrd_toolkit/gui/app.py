@@ -108,7 +108,8 @@ from xrd_toolkit.gui.plot_panels import (
     _pan_motion, _pan_press, _pan_release, _sync_bar_active, _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _compute_integration,
-    _draw_1d, _plot_view, _refresh_proc, _spawn_task)
+    _draw_1d, _open_source_group, _open_source_view, _plot_view, _refresh_proc,
+    _spawn_task)
 
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -1786,6 +1787,13 @@ def create_window() -> QMainWindow:
     # 算完 / 清空缓存之后要重建。挂成窗口回调而不是让 plot_views 反向
     # import 文件坞（同 _bg_count_refresh 的老规矩）
     window.refresh_groups = lambda: refresh_product_groups(window)
+    # 文件栏按需开图（双击条目 / 右键 [打开 1D 图] / [打开整组]）：
+    # 勾选超过上限的那批只算不画，看哪张点哪张。挂回调而不是让
+    # file_dock 反向 import plot_views（同 refresh_groups 的老规矩）
+    window.open_view_source = (
+        lambda source, name="1D": _open_source_view(window, name, source))
+    window.open_view_group = (
+        lambda sources, name="1D": _open_source_group(window, name, sources))
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     _build_status(window)

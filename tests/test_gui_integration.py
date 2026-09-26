@@ -354,6 +354,85 @@ class TestViewButtonRuns(unittest.TestCase):
         finally:
             w.close()
 
+    def test_too_many_files_compute_only_and_listed(self):
+        """勾选超过开图上限 → 一张都不画（只算不画），结果进文件栏产物组。
+
+        用户 2026-09-26："如果原始很多，进行 1d 图时全部打开，只会打开
+        二十来张。能不能…不弹框，直接列出在文件区，然后可以点开看"——
+        做法：超过 MAX_PANELS_PER_BATCH 就全走"只算不画"那条老路，
+        批走完刷产物分组（「1D 产物」），看哪张点哪张。
+        """
+        w = create_window()
+        files = _tmp_files(gui_views.MAX_PANELS_PER_BATCH + 1)
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files([str(p) for p in files], select=True)
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: "批完成" in w.log_text.toPlainText(), 60000))
+            self.assertEqual(len(w.plot_docks), 0, "一张面板都不该开")
+            log = w.log_text.toPlainText()
+            self.assertIn("全部只算不画", log)
+            self.assertIn("1D 产物", log)        # 指路：结果在文件栏
+            self.assertIsNotNone(_group_by_text(w, "1D 产物"),
+                                 "产物分组该长出来（有东西可点开）")
+        finally:
+            w.close()
+
+    def test_double_click_opens_one_panel(self):
+        """双击条目 = 打开这一张的 1D 图（不用先勾再按视图按钮）。"""
+        w = create_window()
+        files = _tmp_files(2)
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files([str(p) for p in files], select=False)
+                item = w.file_list.raw_group.child(0)
+                self.assertEqual(item.checkState(0), Qt.Unchecked)
+                w.file_list.itemDoubleClicked.emit(item, 0)
+                key = f"1D|{files[0]}"
+                self.assertTrue(_wait_until(
+                    lambda: key in w.plot_docks
+                    and len(_axes(w, "1D", str(files[0])).lines) > 0, 30000),
+                    "双击后应开出这一张的面板")
+            self.assertEqual(len(w.plot_docks), 1, "只开被双击的那一条")
+        finally:
+            w.close()
+
+    def test_open_group_opens_every_entry(self):
+        """右键 [打开整组 1D 图]：组里每条各开一张（小组不弹确认）。"""
+        w = create_window()
+        files = _tmp_files(3)
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.add_files([str(p) for p in files], select=False)
+                group = w.file_list.raw_group
+                gui_file_dock._open_group_views(w, group)
+                self.assertTrue(_wait_until(
+                    lambda: all(f"1D|{p}" in w.plot_docks for p in files),
+                    60000), "组里三条都该开出来")
+            self.assertIn("打开整组1D图完成：3 张", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_open_group_asks_before_opening_a_huge_group(self):
+        """整组打开超过 24 张：先弹确认；选 No 就一张都不开（防 1.4 GB）。"""
+        w = create_window()
+        files = _tmp_files(gui_views.MAX_PANELS_PER_BATCH + 1)
+        try:
+            w.show()      # 确认框只在窗口显示时弹（无头/测试场景直接放行）
+            w.add_files([str(p) for p in files], select=False)
+            group = w.file_list.raw_group
+            self.assertEqual(group.childCount(), len(files))
+            with mock.patch.object(gui_file_dock.QMessageBox, "question",
+                                   return_value=gui_file_dock.QMessageBox.No):
+                gui_file_dock._open_group_views(w, group)
+            self.assertEqual(len(w.plot_docks), 0, "选 No 就不该开图")
+        finally:
+            w.close()
+
     def test_multi_select_batch_plots_all(self):
         """多选 = 批量：勾两个文件点一次 1D → 两张图都出（旧模型
         会把慢的先算完的当过期丢弃）。"""
@@ -1677,7 +1756,11 @@ class TestProductGroups(unittest.TestCase):
         stage_cache.write_batches("bg", [])
 
     def test_group_check_propagates_both_ways(self):
-        """勾组 → 组里全勾；取消一个 → 组变半勾；全取消 → 组回到不勾。"""
+        """勾组 → 组里全勾；取消一个 → 组**不再亮**（不是半勾）；全取消 → 不勾。
+
+        用户 2026-09-26："文件栏有三种状态，对号、横线、空格。横线和空
+        重复了，留空格"——半勾已从模型里去掉，勾一部分时组就是空格。
+        """
         w = create_window()
         try:
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
@@ -1690,7 +1773,11 @@ class TestProductGroups(unittest.TestCase):
             self.assertIn("已选中整组 原始数据", w.log_text.toPlainText())
             raw.child(0).setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
-            self.assertEqual(raw.checkState(0), Qt.PartiallyChecked)
+            self.assertEqual(raw.checkState(0), Qt.Unchecked,
+                             "只勾一部分 → 组是空格（没有半勾这一态）")
+            raw.child(0).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            self.assertEqual(raw.checkState(0), Qt.Checked, "补齐 → 组亮")
             for i in range(3):
                 raw.child(i).setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
@@ -8739,30 +8826,50 @@ class TestBatchProgress(unittest.TestCase):
             w.close()
 
     def test_batch_cap_opens_only_max_panels(self):
-        """一次批量最多画前 MAX_PANELS_PER_BATCH 张；超限的**只算不画**。"""
+        """勾选超过上限 → 一张都不画（全部只算不画）；没超过照旧全画。
+
+        2026-09-26 用户改的规则（原来 = 画前 N 张、其余只算不画）：
+        "如果原始很多…全部打开只会打开二十来张"，于是超过上限就一张
+        都不画、结果列进文件栏，看哪张点哪张。
+        """
         folder = tempfile.mkdtemp()
         paths = [str(Path(folder, f"c{i}.tif")) for i in range(1, 5)]
         for p in paths:      # 真文件：产物落盘要用到真路径（file 指纹）
             Path(p).touch()
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+            cache_kw = None
+            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 4), \
                     mock.patch.object(gui_views, "_compute_integration",
                                       side_effect=_fake_compute):
+                # ① 4 张 ≤ 上限 4：照旧一张一张全画
                 add_checked(w, paths)
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
                                 "这批判完应清账")
-            opened = sorted(k for k in w.plot_docks if k.startswith("1D|"))
-            self.assertEqual(opened, ["1D|" + p for p in paths[:2]],
-                             "上限 2 张，只该开前两张（按列表顺序）")
-            log = w.log_text.toPlainText()
-            # 少画一半必须说清楚，并指出出口（1D 的出口 = 后台算完入库）
-            self.assertIn("这批 4 张里先画前 2 张", log)
-            self.assertIn("入库、点开即看", log)
-            # 计数含"只算不画"那两张：总数不对的话 k/n 到不了 n、批不清账
-            self.assertIn("（1/4）", log)
-            self.assertNotIn("（2/2）", log)
+                self.assertEqual(
+                    sorted(k for k in w.plot_docks if k.startswith("1D|")),
+                    ["1D|" + p for p in paths], "没超上限应全画")
+            for p in paths:      # 关掉这批面板，下一轮干净
+                dock = w.plot_docks.get("1D|" + p)
+                if dock is not None:
+                    dock.close()
+            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_views, "_compute_integration",
+                                      side_effect=_fake_compute):
+                # ② 4 张 > 上限 2：一张都不画
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(lambda: not hasattr(w, "_batch")),
+                                "这批判完应清账")
+                self.assertEqual(sorted(k for k in w.plot_docks
+                                        if k.startswith("1D|")),
+                                 [], "超上限就该一张都不画")
+                log = w.log_text.toPlainText()
+                self.assertIn("全部只算不画", log)
+                self.assertIn("1D 产物", log)      # 指向文件栏
+                # 计数含全部只算不画那几张：总数不对的话 k/n 到不了 n
+                self.assertIn("（1/4）", log)
+                self.assertNotIn("（2/2）", log)
             # 只算不画的真结果：产物落了盘（下次点开就是复用缓存）
             geom = gui_panel_state._collect_geometry(w)
             kw = dict(config=w.config_name,

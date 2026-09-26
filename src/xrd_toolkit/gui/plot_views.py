@@ -1307,6 +1307,53 @@ def _spawn_headless(window: QMainWindow, name: str, path: Path) -> None:
     _spawn(window, path, geom, npt, key, on_done=_on_headless_done)
 
 
+def _open_source_view(window: QMainWindow, name: str, source) -> str:
+    """按需打开**一条**条目的图面板（文件栏双击 / 右键 [打开 1D 图]）。
+
+    用户 2026-09-26 定："选完原始图，进行 1d 后不弹框，直接列出在文件区，
+    然后可以点开看"——大于上限的批次只算不画，看哪张就点哪张。
+    不碰勾选状态（双击的第一次单击可能顺手改了勾选，但不影响这里）；已有
+    面板就前置，没有就建；数据走同一条 _run_view（1D 命中缓存即秒开）。
+    """
+    if source.kind != gui_sources.RAW:
+        return _open_product_panel(window, source)   # 产物：直接读盘画线
+    path = Path(source.path)
+    key, dock = _resolve_dock(window, name, source.item)
+    if dock is None:
+        dock = _open_plot_panel(window, name, key, f"{name}_{source.display}")
+        dock.panel_file = path
+        dock.panel_item = source.item
+        dock.panel_display = source.display
+        dock.figure_saved = False
+        dock.params_snapshot = _data_snapshot(window)
+        _log(window, f"打开{name}面板：{source.display}")
+    dock.setVisible(True)
+    dock.raise_()          # 从文件栏点开的图，摆到最前面
+    _run_view(window, name, path, key)
+    return key
+
+
+def _open_source_group(window: QMainWindow, name: str, sources) -> int:
+    """整组打开（右键 [打开整组 N 张]）：逐条走 _open_source_view。
+
+    开面板是主线程上的活、而且每张 ≈15 MB，所以每 8 张报一次进度并消化
+    事件（同批量开图的老套路，界面不会闷住）；返回真开了几条。
+    """
+    sources = list(sources)
+    _log(window, f"打开整组{name}图：{len(sources)} 张…")
+    for i, source in enumerate(sources):
+        try:
+            _open_source_view(window, name, source)
+        except Exception as err:                       # 单张失败不拖垮整组
+            _log(window, f"{source.display}：打开失败"
+                         f"（{type(err).__name__}: {err}）")
+        if i and (i + 1) % 8 == 0:
+            _log(window, f"  已开 {i + 1}/{len(sources)}…")
+            _settle(window)
+    _log(window, f"打开整组{name}图完成：{len(sources)} 张")
+    return len(sources)
+
+
 def _open_product_panel(window: QMainWindow, source) -> str:
     """产物条目出一张 1D 面板：直接读产物画线（不重算）。
 
@@ -1380,17 +1427,26 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         products = []
     targets = raw[:MAX_PANELS_PER_BATCH]
     rest = raw[len(targets):]
-    # 超出的文件**照样算完入库**（只算不画）：1D 有产物可留，之后单独
-    # 点开就是复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
+    if name == "1D" and len(raw) > MAX_PANELS_PER_BATCH:
+        # 勾得比上限还多 → **一张都不画**、全部只算不画（用户 2026-09-26
+        # 定："防爆图"）：结果照旧进文件栏「1D 产物」，按需打开一张或整组
+        targets, rest = [], list(raw)
+    # 只算不画的文件**照样算完入库**：1D 有产物可留，之后单独点开就是
+    # 复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
     # 其余视图（2D/剖面/瀑布）是显示阶段、没有产物可留，就只记日志。
     pending = _pending_products(window, name, rest)
     if rest:
-        tail = (f"其余 {len(rest)} 张后台算完入库、点开即看"
-                if name == "1D" else "要看全部：[热图] / [对比] 一张图看完整批")
-        _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
-                     "（按文件列表顺序，一次最多画 "
-                     f"{MAX_PANELS_PER_BATCH} 张：每张 ≈15 MB、越开越慢）；"
-                     f"{tail}")
+        why = (f"这批 {len(raw)} 张超过一次最多画的 {MAX_PANELS_PER_BATCH} 张"
+               "（每张 ≈15 MB、越开越慢）")
+        if not targets and name == "1D":
+            _log(window, f"{why}：**全部只算不画**——结果进文件栏"
+                         "「1D 产物」，双击看一张、右键整组一起打开")
+        else:
+            tail = ("其余 {n} 张后台算完入库、点开即看".format(n=len(rest))
+                    if name == "1D"
+                    else "要看全部：[热图] / [对比] 一张图看完整批")
+            _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
+                         f"（按文件列表顺序）；{tail}")
     total_tasks = len(targets) + len(pending)
     if total_tasks > 1:
         # 批量进度记账：这一批的总数/视图名/起算时刻；每个任务结束回调
