@@ -15,7 +15,7 @@ count()/addItem，见 FileTree），免得几十处读写全改一遍。
 """
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
     QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
@@ -554,7 +554,10 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
         added.append(item)
     window.file_list.blockSignals(False)
     if added:
-        window.file_list.setCurrentItem(added[-1])   # 高亮最后新条目
+        # 高亮最后新条目，但**不许把列表滚过去**：一次导入几十个文件时
+        # Qt 会把当前项滚进视野，列表就停在最后一批（用户 2026-09-27：
+        # "导入数据后，会一下跳到数据中间位置，应该是还在顶端"）
+        _set_current_keeping_scroll(window.file_list, added[-1])
         tail = ("（已全选）" if select
                 else "（未选中：点 [全选] 或 [按条件选…]，再点视图按钮出图）")
         _log(window, f"已添加 {len(added)} 个文件{tail}")
@@ -566,31 +569,38 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
     refresh_product_groups(window)
 
 
+def _set_current_keeping_scroll(tree, item) -> None:
+    """设当前项，但**不许它带着列表滚**。
+
+    Qt 的 `setCurrentItem` 会把目标行滚进视野；文件栏里的"当前项"只是一行
+    高亮，没有理由让列表跟着跑（用户 2026-09-26/27 反复报"一操作就跳"、
+    "导入后跳到数据中间"）。同步放回一次，再延后一帧补一次——Qt 的滚动
+    有时落在下一个事件循环，只同步放回会**偶发**失手（"有概率跳"）。
+    """
+    bar = tree.verticalScrollBar()
+    keep = bar.value()
+    tree.setCurrentItem(item)
+    bar.setValue(keep)
+    QTimer.singleShot(0, lambda: bar.setValue(keep))
+
+
 def _sync_current_to_checks(window: QMainWindow) -> None:
-    """高亮跟随对号：当前项必须是对号条目；没对号就不高亮。
+    """高亮只能落在"勾选着的条目"上；落在别处就**取消高亮**。
 
-    防"看起来选中了其实没勾"的假象——比如点对号方块取消勾选时，
-    Qt 会先把那行设为当前项，不纠正就会留下一行无对号的高亮。
-    组节点不参与高亮（它不是一个"能出图的对象"）。
+    防"看起来选中了其实没勾"的假象——点对号方块取消勾选时 Qt 会先把那行
+    设为当前项，不纠正就留下一行无对号的高亮。
 
-    **高亮不许顺带改滚动位置**：`setCurrentItem` 会让 Qt 把那一行滚进
-    视野，而"第一个勾选条目"往往就是列表最上面那条文件——于是取消勾选、
-    点组节点、[全选] 这些动作全都会把列表弹回最顶端（用户 2026-09-27
-    报的"一操作就跳回最顶端"的一半就是这个）。所以先记下滚动条位置、
-    设完再放回去。
+    旧版这里是"跳到第一个勾选条目"：那个条目通常就是列表最顶上那条文件，
+    于是取消勾选、点组节点、[全选] 都会把列表拽回顶端（用户 2026-09-26
+    起的反复投诉）。改成**直接取消高亮**（`setCurrentItem(None)`）之后
+    没有可跳的目标，也就没有了"同步放回/延后放回"的时序竞态——用户
+    2026-09-27："没打字就跳了"，正是那种偶发。
     """
     current = window.file_list.currentItem()
-    if (current is not None and not is_group(current)
-            and current.checkState(0) == Qt.Checked):
-        return
-    bar = window.file_list.verticalScrollBar()
-    scroll = bar.value()
-    for src in gui_sources.checked_sources(window):
-        window.file_list.setCurrentItem(src.item)
-        break
-    else:
-        window.file_list.setCurrentItem(None)
-    bar.setValue(scroll)
+    if current is None or is_group(current) \
+            or current.checkState(0) == Qt.Checked:
+        return      # 没高亮 / 高亮在组节点上 / 就是勾选着的条目：都不动
+    window.file_list.setCurrentItem(None)
 
 
 def _refresh_file_label(window: QMainWindow) -> None:
@@ -687,7 +697,16 @@ def _entry_menu(window: QMainWindow, item) -> None:
     actions = {}
     src = None if is_group(item) else gui_sources.source_of(item)
     if item is None or item is window.file_list.raw_group:
-        pass                      # 空白处 / 原始数据组：只给"清缓存"
+        # 空白处 / 原始数据组：批量打开勾选的那批 + （整组）+ 清缓存。
+        # 用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮
+        # 在 1D 上超过 24 张一张都不画，所以这里给一条没有上限的入口
+        n_checked = len(gui_sources.checked_sources(window))
+        if n_checked:
+            actions[menu.addAction(
+                f"打开勾选的 {n_checked} 张 1D 图")] = "open_checked"
+        if item is window.file_list.raw_group and item.childCount():
+            actions[menu.addAction(
+                f"打开整组 1D 图（{item.childCount()} 张）")] = "open_group"
     elif is_group(item):
         if item.childCount():
             actions[menu.addAction(
@@ -716,7 +735,9 @@ def _entry_menu(window: QMainWindow, item) -> None:
     what = actions.get(picked)
     if what is None:
         return
-    if what == "open_item":
+    if what == "open_checked":
+        _open_checked_views(window, "1D")
+    elif what == "open_item":
         _open_entry_view(window, item)
     elif what == "open_group":
         _open_group_views(window, item)
@@ -775,6 +796,32 @@ def _open_group_views(window: QMainWindow, item) -> None:
     opener = getattr(window, "open_view_group", None)
     if opener is not None:
         opener(sources, "1D")
+
+
+def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
+    """右键 [打开勾选的 N 张 1D 图]：把勾选的条目逐条打开。
+
+    与视图按钮的唯一区别：**没有 24 张上限**，超过先弹确认（每张 ≈15 MB）。
+    用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮在 1D
+    上超过 24 张是**一张都不画**的（防爆图），所以那批人没有别的入口；这条
+    右键给他们一条明确的、带确认的路。
+    """
+    sources = gui_sources.checked_sources(window)
+    if not sources:
+        _log(window, "还没有勾选任何条目")
+        return
+    from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
+    if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
+        ans = QMessageBox.question(
+            window, f"打开勾选的 {len(sources)} 张图",
+            f"要打开 {len(sources)} 张 {name} 图吗？每张约占 15 MB 内存"
+            f"（合计约 {len(sources) * 15} MB），开完会占满面板区。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ans != QMessageBox.Yes:
+            return
+    opener = getattr(window, "open_view_group", None)
+    if opener is not None:
+        opener(sources, name)
 
 
 def export_sources(window: QMainWindow, sources) -> None:
@@ -902,14 +949,15 @@ def _restore_tree_state(window: QMainWindow, keep: dict) -> None:
             if (src.kind, src.key) in keep["checked"]:
                 src.item.setCheckState(0, Qt.Checked)
         _sync_group_states(window)   # 组态跟着子项走（屏蔽信号时不会自动跑）
+    # 先放滚动位置，再放高亮：放高亮那一步自己会保滚动（见 _set_current_*）
+    tree.verticalScrollBar().setValue(keep["scroll"])
     if keep["current"] is not None:
         for src in gui_sources.all_sources(window):
             same = ((src.kind, src.key) if src.kind != gui_sources.RAW
                     else (src.kind, src.path))
             if same == keep["current"]:
-                tree.setCurrentItem(src.item)
+                _set_current_keeping_scroll(tree, src.item)
                 break
-    tree.verticalScrollBar().setValue(keep["scroll"])
 
 
 def refresh_product_groups(window: QMainWindow) -> None:
@@ -1024,6 +1072,10 @@ def refresh_product_groups(window: QMainWindow) -> None:
         _restore_tree_state(window, keep)
     finally:
         tree.blockSignals(False)
+    # 恢复出来的勾选集合可能和进来时不一样（有产物的条目没了）→ 按钮上的
+    # 数字与状态行跟着刷新（只改文字，不碰树）
+    _refresh_file_label(window)
+    _sync_select_label(window)
 
 
 
@@ -1053,19 +1105,65 @@ def _sync_group_states(window: QMainWindow) -> None:
 
 
 def _sync_select_label(window: QMainWindow) -> None:
-    """全选/全不选切换按钮的标签：全勾上 → "全不选"，否则 → "全选"。
+    """出图按钮与全选/全不选切换按钮的**文字**跟着勾选集合走。
 
-    按钮是 2026-09-27 合出来的（用户："全选全部不选合一"）——它做哪件事
-    由当前状态决定，所以标签必须跟着状态走，否则按下去会发生什么全靠猜。
+    全选按钮（2026-09-27 用户："全选全部不选合一"）做哪件事由当前状态决定，
+    标签必须跟着变，否则按下去会发生什么全靠猜。
+
+    出图按钮上的数字（2026-09-27 用户："选中 81 个图出对比图，结果出了 162
+    个文件的对比图"）：对比没错，是**勾选集比他想的大**——为了出 1D 图勾过
+    81 个原始文件，之后又点了「1D 产物」组行，81+81=162；这些数字原先只写在
+    状态行角落。把它写在按钮上、并在绘图页给一句构成说明，就再也藏不住。
     """
     btn = getattr(window, "select_all_btn", None)
-    if btn is None:
-        return
-    raw = window.file_list.raw_group
-    n = raw.childCount()
-    checked = sum(1 for i in range(n)
-                  if raw.child(i).checkState(0) == Qt.Checked)
-    btn.setText("全不选" if n and checked == n else "全选")
+    if btn is not None:
+        raw = window.file_list.raw_group
+        n = raw.childCount()
+        checked = sum(1 for i in range(n)
+                      if raw.child(i).checkState(0) == Qt.Checked)
+        btn.setText("全不选" if n and checked == n else "全选")
+    _refresh_check_labels(window)
+
+
+def _check_summary(window: QMainWindow) -> str:
+    """勾选集合的一句话说明：条数 + 构成（+ "同一条曲线画两遍"提醒）。"""
+    checked = gui_sources.checked_sources(window)
+    if not checked:
+        return ("勾选 0 条：点条目行 = 勾这一条，点组那一行 = 整组一起勾"
+                "（对号方块可以取消）")
+    kinds = {}
+    for src in checked:
+        kinds[src.kind] = kinds.get(src.kind, 0) + 1
+    parts = [f"{text} {kinds[kind]}" for kind, text in
+             ((gui_sources.RAW, "原始"), (gui_sources.ONED, "1D 产物"),
+              (gui_sources.BG, "处理后")) if kinds.get(kind)]
+    out = f"勾选 {len(checked)} 条：" + " ｜ ".join(parts)
+    dup = _duplicate_raw_paths(checked)
+    if dup:
+        # 同一文件的原始条目与它的 1D 产物是同一条曲线，两个都勾 = 画两遍
+        out += (f"　⚠ 其中 {len(dup)} 个文件同时勾了原始条目和它的 1D 产物"
+                "（同一条曲线，会画两遍）")
+    return out
+
+
+def _duplicate_raw_paths(checked) -> set:
+    """同一文件既勾了原始条目、又勾了它的 1D 产物 → 那些源文件路径。"""
+    raw = {str(s.path) for s in checked if s.kind == gui_sources.RAW}
+    prod = {str(s.path) for s in checked if s.kind == gui_sources.ONED}
+    return raw & prod
+
+
+def _refresh_check_labels(window: QMainWindow) -> None:
+    """把"勾了多少条"写到出图按钮上，并在绘图页刷新那句构成说明。"""
+    n = len(gui_sources.checked_sources(window))
+    text = f"出图（勾选 {n} 个）" if n else "出图（未勾选）"
+    for attr in ("plot_1d_btn", "plot_now_btn"):
+        btn = getattr(window, attr, None)
+        if btn is not None:
+            btn.setText(text)
+    lbl = getattr(window, "check_summary_lbl", None)
+    if lbl is not None:
+        lbl.setText(_check_summary(window))
 
 
 def _set_checks(window: QMainWindow, wanted: list) -> int:

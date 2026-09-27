@@ -240,21 +240,45 @@ def _delta_text(base_res, res, key_: str) -> str:
     return f"{(v - b) * _row_spec(key_)[2]:+.2f}"
 
 
-def _verdict(base_res, res, base_name: str, res_name: str) -> str:
-    """结论行：只按环位偏差判"谁拟合得更好"（门槛 SOURCE_IMPROVE_MIN_PX）。"""
-    b, v = _result_dev(base_res), _result_dev(res)
-    if b is None or v is None:
-        return (f"结论：{res_name} 或 {base_name} 没有可用环位偏差，判不了"
+def _verdict(cur_res, cur_name: str, others) -> str:
+    """结论行：**每个候选都跟"当前配置"比，两边的名字都写全**。
+
+    others = [(名字, 结果), ...]——槽 A / B 里**有内容**的那几个。
+
+    为什么改成这样（用户 2026-09-27："对比基准和结论表述不清，不知道是谁在
+    和谁比"）：旧版只比一对，而且那一对是"基准列 vs A/B 里挑一个"
+    （`other = "A" if base != "A" else "B"`）——基准选 A 时"当前配置"被整个
+    撇开，于是同一屏里 Δ 行讲一对人、结论讲另一对人。现在分成两件事：
+    **Δ 行**相对"对比基准"那一列（表格里看得见是哪一列），**结论**一律以
+    "当前配置"为参照逐个候选报——"这个新结果值不值得采纳"才是这一页要做的
+    决定。数字全部带名字，谁是多少一目了然。
+    """
+    if cur_res is None:
+        return "结论：还没有可比的当前配置"
+    cur_dev = _result_dev(cur_res)
+    if cur_dev is None:
+        return (f"结论：{cur_name} 没有可用环位偏差，判不了"
                 f"（看上面两列的数值自行判断）")
-    diff = v - b
-    if abs(diff) < SOURCE_IMPROVE_MIN_PX:
-        return (f"结论：{res_name} 与 {base_name} 拟合得差不多（环位偏差 "
-                f"{v:.2f} vs {b:.2f} px，差 {abs(diff):.2f} px 小于门槛 "
-                f"{SOURCE_IMPROVE_MIN_PX:.2f}）")
-    better, worse, bd, wd = ((res_name, base_name, v, b) if diff < 0
-                             else (base_name, res_name, b, v))
-    return (f"结论：{better} 拟合得更好（环位偏差 {bd:.2f} vs {wd:.2f} px，"
-            f"差 {abs(diff):.2f} px > 门槛 {SOURCE_IMPROVE_MIN_PX:.2f}）")
+    tell, nums = [], [f"{cur_name} {cur_dev:.2f} px"]
+    for name, res in others:
+        dev = _result_dev(res) if res is not None else None
+        if dev is None:
+            tell.append(f"{name} 没有可用环位偏差，判不了")
+            continue
+        nums.append(f"{name} {dev:.2f} px")
+        diff = dev - cur_dev
+        if abs(diff) < SOURCE_IMPROVE_MIN_PX:
+            tell.append(f"{name} 与 {cur_name} 差不多（差 {abs(diff):.2f} px"
+                        f" < 门槛 {SOURCE_IMPROVE_MIN_PX:.2f}）")
+        elif diff < 0:
+            tell.append(f"{name} 比 {cur_name} 好 {abs(diff):.2f} px")
+        else:
+            tell.append(f"{name} 比 {cur_name} 差 {abs(diff):.2f} px")
+    if not tell:
+        return (f"结论：{cur_name} 还没有可比的候选"
+                f"（把结果放进 A / B 槽，或先跑一次自动校准）")
+    return ("结论：" + "；".join(tell)
+            + "（环位偏差 " + " ｜ ".join(nums) + "）")
 
 
 def _geom_px_keys(g: dict) -> dict:

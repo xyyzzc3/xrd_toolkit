@@ -1795,8 +1795,9 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             self.assertGreaterEqual(bar.maximum(), 5, "内容够长才有得测")
             leaf = group.child(0)               # 产物组里最上面那条
             leaf.setCheckState(0, Qt.Checked)
+            tree.setCurrentItem(leaf)           # 真实点击会顺手把它设为当前项
             QApplication.processEvents()
-            self.assertIs(tree.currentItem(), leaf, "高亮该跟着对号走")
+            self.assertIs(tree.currentItem(), leaf, "勾选着的条目可以带高亮")
             bar.setValue(0)                     # 用户在最上面
             QApplication.processEvents()
             w.refresh_groups()
@@ -1830,11 +1831,95 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
         finally:
             w.close()
 
-    def test_unchecking_does_not_scroll_the_list(self):
-        """取消勾选 → 高亮跳回第一条勾选条目，但列表**不许**跟着滚。
+    def test_import_does_not_scroll_the_list(self):
+        """导入一批文件后，列表还在原处（不许被"最后一条新条目"带着滚走）。
 
-        这是"一操作就跳回最顶端"的另一半：setCurrentItem 会把目标行滚进
-        视野，而第一条勾选条目往往就是最上面那条。
+        用户 2026-09-27："导入数据后，会一下跳到数据中间位置，应该是还在
+        顶端"。原因：导入结尾 `setCurrentItem(added[-1])` 把最后一条新
+        条目设为当前项，Qt 顺手把它滚进视野。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(40)
+            w.add_files([str(p) for p in files[:5]], select=False)
+            w.show()
+            QApplication.processEvents()
+            tree = w.file_list
+            bar = tree.verticalScrollBar()
+            w.add_files([str(p) for p in files[5:]], select=False)
+            QApplication.processEvents()
+            self.assertGreaterEqual(bar.maximum(), 2, "内容够长才有得测")
+            self.assertEqual(bar.value(), 0, "导入不该把列表滚到新条目那儿")
+            self.assertEqual(tree.count(), 40, "40 条都进来了")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_right_click_open_checked_has_no_panel_cap(self):
+        """右键「打开勾选的 N 张 1D 图」：勾选的条目全交出去（>24 也不砍）。
+
+        用户 2026-09-27："没有办法批量打开图，只能一个一个选"。视图按钮在
+        1D 上超过 24 张是**一张都不画**的（防爆图），所以批量开图必须有
+        另一条入口——它带确认框，但不砍张数。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(30)
+            w.add_files([str(p) for p in files], select=False)
+            w.file_list.raw_group.setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            got = {}
+            w.open_view_group = lambda sources, name: got.update(
+                n=len(sources), name=name)
+            gui_file_dock._open_checked_views(w, "1D")   # 窗口没显示 → 不弹确认
+            self.assertEqual(got.get("n"), 30, "30 张全交出去，不砍到 24")
+            self.assertEqual(got.get("name"), "1D")
+        finally:
+            w.close()
+
+    def test_check_summary_shows_composition_and_flags_duplicates(self):
+        """勾选摘要写清"勾了几条、都是什么"，并提醒"同一文件勾了两遍"。
+
+        用户 2026-09-27："选中81个图出对比图，结果出了162个文件的对比图，
+        好像是把1d也加进去了，修正，对比图就是选中的对比"——对比**只画勾选
+        的**，真相是勾选集比他以为的大（为了出 1D 图勾过 81 个原始文件，
+        之后又点了「1D 产物」组行）。所以把数字写到出图按钮上、构成写到
+        摘要里。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(3)
+            w.add_files([str(p) for p in files], select=False)
+            for p in files:
+                _store_product(w, p)
+            w.refresh_groups()
+            tree = w.file_list
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group)
+            tree.raw_group.setCheckState(0, Qt.Checked)     # 勾 3 条原始
+            QApplication.processEvents()
+            self.assertEqual(w.plot_now_btn.text(), "出图（勾选 3 个）")
+            self.assertEqual(w.plot_1d_btn.text(), "出图（勾选 3 个）")
+            self.assertIn("原始 3", w.check_summary_lbl.text())
+            self.assertNotIn("⚠", w.check_summary_lbl.text(), "此时还没有重复")
+            group.setCheckState(0, Qt.Checked)              # 再勾 3 条 1D 产物
+            QApplication.processEvents()
+            self.assertEqual(w.plot_now_btn.text(), "出图（勾选 6 个）")
+            txt = w.check_summary_lbl.text()
+            self.assertIn("原始 3", txt)
+            self.assertIn("1D 产物 3", txt)
+            self.assertIn("画两遍", txt, "同一文件的原始条目与 1D 产物都勾了")
+        finally:
+            w.close()
+
+    def test_unchecking_does_not_scroll_the_list(self):
+        """取消勾选 → 列表纹丝不动，高亮也不许跳到别处。
+
+        旧版这里会把高亮跳到"第一条勾选条目"（通常就是最上面那条文件），
+        于是取消勾选、点组节点、[全选] 都会把列表拽回顶端；而且"放回滚动
+        位置"是同步做的，Qt 的滚动有时下一帧才落地 → **偶发**跳顶
+        （用户 2026-09-27："没打字就跳了"）。现在改成取消高亮，没有可跳的
+        目标，也就没有竞态。
         """
         w = create_window()
         try:
@@ -1850,11 +1935,12 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             QApplication.processEvents()
             bar.setValue(bar.maximum())          # 滚到底
             QApplication.processEvents()
-            leaf.setCheckState(0, Qt.Unchecked)  # 取消它 → 高亮回到最上面那条
+            leaf.setCheckState(0, Qt.Unchecked)  # 取消它
             QApplication.processEvents()
-            self.assertIs(tree.currentItem(), top, "高亮该跟随对号")
             self.assertEqual(bar.value(), bar.maximum(),
-                             "高亮跟随对号不该把列表拽回顶端")
+                             "取消勾选不该动滚动条")
+            self.assertIsNone(tree.currentItem(),
+                              "高亮留在没勾的条目上就是假象 → 直接取消")
         finally:
             w.close()
 
@@ -5216,27 +5302,30 @@ class TestHomeView(unittest.TestCase):
         finally:
             w.close()
 
-    def test_display_apply_sets_the_new_home(self):
-        """亲手把视图范围改成 2~5 再 [应用]（没有手势介入）= 新的"家"：
-        Home 回到这个新视图，而不是开图时那个。"""
+    def test_apply_with_a_view_range_does_not_move_home(self):
+        """快照里带着视图窗口时 [应用]：画面按它画，但"家"不许跟着变。
+
+        视图覆盖 = 用户缩放过的窗口（"显示 2θ 范围"那行输入框 2026-09-27
+        撤掉之后，会写回它的只剩缩放/平移）。Home 要回的是**生成这张图时**
+        的视图——用户 2026-09-27："home 不是重画，只是恢复到最开始的比例"。
+        旧版这条测试断言的正好相反（那时范围能手填，填完 [应用] = 新"家"）。
+        """
         w = create_window()
         try:
             dock = self._open_1d(w)
             content = gui_panel_state._content(dock)
             ax = content.axes_1d
-            # 视图范围现在没有输入框了（用户 2026-09-27："显示范围用户
-            # 自己放大就行了"）→ 直接写快照，与缩放/平移写回的是同一处
+            x0 = tuple(ax.get_xlim())
             dock.params_snapshot["视图 2θ 下限 (°)"] = 2.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 5.0
             gui_views._apply_image_params(w)
             QApplication.processEvents()
             self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
-                                   msg="[应用] 该按新参数画")
+                                   msg="[应用] 该按快照里的窗口画")
             content.toolbar._actions["home"].trigger()
             QApplication.processEvents()
-            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
-                                   msg="Home 回到这次设的视图")
-            self.assertAlmostEqual(ax.get_xlim()[1], 5.0, delta=0.05)
+            self.assertEqual(tuple(ax.get_xlim()), x0,
+                             "Home 仍回到生成这张图时的视图")
         finally:
             w.close()
 
@@ -6805,35 +6894,31 @@ class TestGestures(unittest.TestCase):
         finally:
             w.close()
 
-    def test_home_refreshes_after_program_redraw(self):
-        """程序重画刷新"家"（这里**没有手势介入**）：Home 回新画出来的
-        视图，不回重画前的老视图。
+    def test_home_survives_a_program_redraw(self):
+        """程序重画**不会**把"家"改成重画时那个窗口（这里没有手势介入）。
 
-        注意别在这里先滚轮缩放：手势改的视图不算"家"（见 _refresh_home
-        与 TestHomeView），那是 2026-09-24 用户要的"回到最初的样子"。
+        快照里那个"视图窗口"就是缩放来的（"显示 2θ 范围"输入框 2026-09-27
+        撤掉后，会写回它的只剩缩放/平移），重画只是把它再套一遍，不该成为
+        新"家"——用户 2026-09-27："home 不是重画，只是恢复到最开始的比例"。
+        旧版这条测试断言的正好相反（那时范围能手填，填完重画 = 新"家"）。
         """
         w = create_window()
         try:
             dock = self._open_1d(w)
-            key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
             content = gui_panel_state._content(dock)
-            self._magnifier(w, "data/fake_b.tif", True)
-            # 程序重画（等价：参数面板改视图范围后点 [应用]）
+            home = tuple(ax.get_xlim())
+            # 程序重画（等价：快照里带着一个视图窗口时点 [应用]）
             dock.params_snapshot["视图 2θ 下限 (°)"] = 3.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 6.0
             gui_plot_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
             QApplication.processEvents()
-            self.assertEqual(ax.get_xlim(), (3.0, 6.0))
-            gui_plot_panels._wheel_zoom(w, key, _scroll_event(ax, "up", 4.0, 2.0))
-            self.assertNotEqual(ax.get_xlim(), (3.0, 6.0),
-                                "第二次滚轮缩放应先改范围")
+            self.assertEqual(tuple(ax.get_xlim()), (3.0, 6.0),
+                             "重画该按快照里那个窗口画")
             content.toolbar._actions["home"].trigger()
             QApplication.processEvents()
-            xlo, xhi = ax.get_xlim()
-            self.assertAlmostEqual(xlo, 3.0, places=6,
-                                   msg="Home 应回到重画后的视图，不是开图时")
-            self.assertAlmostEqual(xhi, 6.0, places=6)
+            self.assertEqual(tuple(ax.get_xlim()), home,
+                             "Home 仍回到最初那个视图（重画没顶掉它）")
         finally:
             w.close()
 
@@ -8026,7 +8111,9 @@ class TestCalibration(unittest.TestCase):
                 self.assertIn("新批次的第一条结果",
                               w.log_text.toPlainText())
                 d = w.calib_vals["delta"]
-                self.assertEqual(d["dist"]["current"].text(), "—")   # 基准自身
+                # 基准那一列自己写"基准"（用户 2026-09-27："表述不清"——
+                # 原来那个破折号看着像"这格没数据"）
+                self.assertEqual(d["dist"]["current"].text(), "基准")
                 self.assertEqual(d["dist"]["A"].text(), "+0.00")     # 就是它自己
                 # 再跑自动（环位偏差 0.20 < 手动 0.50）→ 轮换填 B 并采纳
                 w.calib_start_auto.click()
@@ -8042,7 +8129,7 @@ class TestCalibration(unittest.TestCase):
                 w.calib_base_combo.setCurrentIndex(
                     w.calib_base_combo.findData("A"))
                 self.assertEqual(d["dist"]["B"].text(), "-0.40")
-                self.assertEqual(d["dist"]["A"].text(), "—")
+                self.assertEqual(d["dist"]["A"].text(), "基准")
                 # 保存对象 = 当前配置（此时是被采纳的 自动1）
                 self.assertIn("自动1", w.calib_save_hint.text())
         finally:
@@ -8770,22 +8857,35 @@ class TestCalibModel(unittest.TestCase):
                              gui_calib_model.COMPARE_ROWS))
         self.assertIn("退化方向", gui_calib_model.COMPARE_HINT)
 
-    def test_verdict_by_ring_deviation(self):
-        base, other = self._res(dev=0.52), self._res(dev=0.28)
-        v = gui_calib_model._verdict(base, other, "当前配置", "A")
-        self.assertIn("A 拟合得更好", v)
-        self.assertIn("0.28 vs 0.52 px", v)
-        # 基准自己更好时 → 结论指向基准
-        self.assertIn("当前配置 拟合得更好",
-                      gui_calib_model._verdict(self._res(dev=0.28),
-                                         self._res(dev=0.52),
-                                         "当前配置", "A"))
-        tie = gui_calib_model._verdict(self._res(dev=0.30), self._res(dev=0.28),
-                                 "当前配置", "A")
-        self.assertIn("差不多", tie)
-        self.assertIn("判不了",
-                      gui_calib_model._verdict(self._res(dev=None),
-                                         self._res(dev=0.28), "当前配置", "A"))
+    def test_verdict_names_both_sides(self):
+        """结论必须写清"谁和谁比"：每个候选 vs **当前配置**，数字都带名字。
+
+        用户 2026-09-27："对比基准和结论表述不清，不知道是谁在和谁比"——
+        旧版结论那一对是从 A/B 里挑的（基准选 A 时"当前配置"被撇开），
+        同一屏里 Δ 行和结论讲的不是一对人。
+        """
+        v = gui_calib_model._verdict(self._res(dev=0.52), "当前配置",
+                                     [("A", self._res(dev=0.28))])
+        self.assertIn("A 比 当前配置 好 0.24 px", v)
+        self.assertIn("当前配置 0.52 px", v, "数字要带名字")
+        self.assertIn("A 0.28 px", v)
+        # 候选更差也要明说（旧版只报"谁更好"，看不出谁比谁差）
+        v = gui_calib_model._verdict(self._res(dev=0.28), "当前配置",
+                                     [("A", self._res(dev=0.52))])
+        self.assertIn("A 比 当前配置 差 0.24 px", v)
+        # 两个候选一起报，各自点名
+        v = gui_calib_model._verdict(self._res(dev=0.30), "当前配置",
+                                     [("A", self._res(dev=0.28)),
+                                      ("B", self._res(dev=0.90))])
+        self.assertIn("A 与 当前配置 差不多", v)
+        self.assertIn("B 比 当前配置 差 0.60 px", v)
+        # 判不了的时候也点名（谁缺值说谁）
+        self.assertIn("当前配置 没有可用环位偏差", gui_calib_model._verdict(
+            self._res(dev=None), "当前配置", [("A", self._res(dev=0.28))]))
+        self.assertIn("A 没有可用环位偏差", gui_calib_model._verdict(
+            self._res(dev=0.30), "当前配置", [("A", self._res(dev=None))]))
+        self.assertIn("还没有可比的候选", gui_calib_model._verdict(
+            self._res(dev=0.30), "当前配置", []))
         # 缺值显示 —（不许把 nan 打给用户）
         self.assertEqual(gui_calib_model._fmt_row("dev", float("nan")), "—")
 

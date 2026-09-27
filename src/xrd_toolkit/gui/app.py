@@ -79,8 +79,8 @@ from xrd_toolkit.gui.plot_export import (
 from xrd_toolkit.gui.file_dock import (
     FILE_FILTER, FileTree, _ask_duplicate, _ask_rename, _build_file_dock,
     _dropped_items, _on_file_selected, _refresh_file_label, _scan_folder,
-    _sync_current_to_checks, _unique_display_name, add_files,
-    refresh_product_groups)
+    _sync_current_to_checks, _sync_select_label, _unique_display_name,
+    add_files, refresh_product_groups)
 # 校准相关按职责分了三块（2026-09-23 拆分）：页面与流程在 calib，
 # 中央校准图面板在 calib_panel，配置条目进出在 config_ops。这里全部
 # 再导出（见模块 docstring 的"兼容再导出"），外部照旧经 gui_app 取用。
@@ -456,8 +456,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 窗口顶部，见 _build_toolbar / _switch_entrance）——用户 2026-09-24
     # 定稿："最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
-    # 底部各带一个"产出"按钮（1D：[出 1D 图]；处理：[重画]；对比：
-    # [出对比][出热图]；绘图：[出图][只重画当前][导出图片]）。
+    # 底部各带一个"产出"按钮（1D：[出图（勾选 N 个）]；处理：[重画]；对比：
+    # [出对比][出热图]；绘图：[出图（勾选 N 个）][只重画，不重算][导出图片]）。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
@@ -592,6 +592,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.param_stack.addWidget(page_draw)    # 4 绘图
     # 「绘图」页最上面：六个类型选择（点一个 = 选中并立即出图）
     page_draw.layout().insertWidget(0, _build_plot_type_row(window))
+    # 勾选摘要紧跟在类型行下面：所有出图按钮（六个类型 + [出图]）画的都是
+    # 这一句话描述的那批条目，数字摆在动作旁边
+    page_draw.layout().insertWidget(1, _build_check_summary(window))
     window._plot_type = "1D"   # [出图] 用哪个类型（点类型按钮时更新）
 
     # 几何配置行跟着页走：校准页上它只是显示（置灰）——校准用的是
@@ -696,8 +699,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     }
     btn_reset_data = QPushButton("恢复默认")
     btn_reset_data.setObjectName("reset_data_btn")
-    btn_apply = QPushButton("应用")
+    btn_reset_data.setToolTip("把上面三项数据参数复位成初值（几何回到当前配置"
+                              "条目）——**只复位，不计算**，要算再点右边那个")
+    # 名字按"对谁、算什么"写（用户 2026-09-27："1d 的应用和出图有点歧义"）：
+    # 这个按钮只作用于**编辑对象**那一张（见 _apply_params），与下面那个
+    # 对一批勾选文件出图的按钮是两件事
+    btn_apply = QPushButton("重算这张图")
     btn_apply.setObjectName("apply_btn")
+    btn_apply.setToolTip("按上面的数据参数（2θ 范围 / 点数）重新积分，"
+                         "并重画**编辑对象**那张图（不是一批）")
     btn_apply.clicked.connect(lambda: _apply_params(window))
 
     def reset_data():
@@ -715,8 +725,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_col.addWidget(btn_apply, 1)
     btns_1d.addLayout(btn_col)   # 按钮固定在本页最下方（滚动区之外）
     # 本页产出：对勾选文件出 1D 图（常用循环不用切到「绘图」页）
-    btn_plot_1d = QPushButton("出 1D 图")
+    btn_plot_1d = QPushButton("出图（未勾选）")
     btn_plot_1d.setObjectName("plot_1d_btn")
+    btn_plot_1d.setToolTip("对**文件栏里勾选**的条目出 1D 图（勾了多少个，"
+                           "按钮上就写着多少）：勾原始文件 = 现场积分；"
+                           "勾产物条目 = 直接读那一份，不重算")
     window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
     btn_plot_1d.clicked.connect(lambda: _plot_view(window, "1D"))
     btns_1d.addWidget(btn_plot_1d)
@@ -1293,8 +1306,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # [恢复默认] 左 [应用] 右并排：与数据参数组同款布局。[应用]
     # 把当前图像参数应用到编辑对象（见 _apply_image_params）
-    btn_apply_img = QPushButton("应用")
+    btn_apply_img = QPushButton("应用显示设置")
     btn_apply_img.setObjectName("apply_image_btn")
+    btn_apply_img.setToolTip("把上面的**显示**参数（对数纵轴 / 纵轴范围 / 配色"
+                             "…）用到**编辑对象**那张图上——不重新积分")
     btn_apply_img.clicked.connect(lambda: _apply_image_params(window))
 
     btn_col2 = QHBoxLayout()
@@ -1302,14 +1317,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
     btn_col2.addWidget(btn_reset_img, 1)
     btn_col2.addWidget(btn_apply_img, 1)
-    # 本页三个产出按钮：[出图] 按当前类型对勾选文件出图；[只重画当前]
+    # 本页三个产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图；[只重画，不重算]
     # 用已有数据重画编辑对象（不重算）；[导出图片] 走批量存图流程
-    btn_plot_now = QPushButton("出图（勾选文件）")
+    btn_plot_now = QPushButton("出图（未勾选）")
     btn_plot_now.setObjectName("plot_now_btn")
+    btn_plot_now.setToolTip("按上面选中的类型，对**文件栏里勾选**的条目出图"
+                            "（勾了多少个，按钮上就写着多少）")
     window.plot_now_btn = btn_plot_now
     btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
-    btn_redraw_now = QPushButton("只重画当前")
+    btn_redraw_now = QPushButton("只重画，不重算")
     btn_redraw_now.setObjectName("redraw_now_btn")
+    btn_redraw_now.setToolTip("用**已经算好的数据**把编辑对象那张图重画一遍"
+                              "（改显示参数后看效果用，不动数据、不重新积分）")
     window.redraw_now_btn = btn_redraw_now
     btn_redraw_now.clicked.connect(lambda: _redraw_focus(window))
     btn_export_img = QPushButton("导出图片…")
@@ -1434,7 +1453,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
     `[校准] [1D] [处理] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
     （见 _switch_entrance）；出图动作由各页底部的产出按钮负责
-    （[出 1D 图] / [重画] / [出对比][出热图] / [出图]）。
+    （[出图（勾选 N 个）] / [重画] / [出对比][出热图] / [出图（勾选 N 个）]）。
 
     六个作图类型按钮（2D/剖面/1D/瀑布/对比/热图）都搬进了「绘图」页
     （_build_plot_type_row）：工具栏因此从 7 项收到 5 项，也消掉了
@@ -1694,6 +1713,24 @@ def _build_plot_type_row(window: QMainWindow) -> QWidget:
     return row
 
 
+def _build_check_summary(window: QMainWindow) -> QWidget:
+    """「绘图」页的一句话：**勾了多少条、都是什么**（外加重复勾选提醒）。
+
+    用户 2026-09-27："选中81个图出对比图，结果出了162个文件的对比图"——
+    对比没错，是勾选集比他想的大（为了出 1D 图勾过 81 个原始文件，之后
+    又点了「1D 产物」组行，81+81）。这些数字原先只写在状态行角落，出图
+    按钮上什么都没有，所以看不出来。放在出图按钮正上方，改一次勾选刷一次。
+    """
+    lbl = QLabel("")
+    lbl.setObjectName("check_summary_lbl")
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet("color: gray;")
+    lbl.setToolTip("点条目行 = 勾这一条；点组那一行 = 整组一起勾；"
+                   "对号方块可以取消勾选。出图按钮只画勾选的条目。")
+    window.check_summary_lbl = lbl
+    return lbl
+
+
 def _sync_smooth_rows(window: QMainWindow) -> None:
     """平滑阶数只有 Savitzky–Golay 用得上：别的模式下置灰，别让人白填。"""
     sg = window.params["平滑方法"].currentData() == "savgol"
@@ -1949,6 +1986,10 @@ def create_window() -> QMainWindow:
     # 同步置灰（默认条目是内置的 → 初始不可删）
     _apply_config(window, window.config_combo.currentIndex())
     _sync_del_config_btn(window)
+    # 出图按钮上的"勾选 N 个"与绘图页那句构成说明：开局填一次（此时一条
+    # 都没勾），之后每次勾选变化由 _sync_select_label 刷新。放在最后：
+    # 按钮与那句说明都归参数坞，要等它建好
+    _sync_select_label(window)
 
     window.log("主框架已就绪")
     return window

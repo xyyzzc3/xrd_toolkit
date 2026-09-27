@@ -70,9 +70,13 @@ def _refresh_table(window: QMainWindow) -> None:
         if has_delta:
             for slot in ("current", "A", "B"):
                 window.calib_vals["delta"][key_][slot].setText(
-                    "—" if slot == base_slot
+                    # 基准列自身写"基准"而不是"—"：那个破折号看起来像
+                    # "这格没数据"（用户 2026-09-27："表述不清"）
+                    "基准" if slot == base_slot
                     else _delta_text(base_res, res[slot], key_))
-    other = "A" if base_slot != "A" else "B"
+    # 结论一律以**当前配置**为参照逐个候选报（见 _verdict 的说明）——
+    # 与"对比基准"下拉框解耦，两者各管一件事：Δ 行看基准列，结论看要不要采纳
+    others = [(SLOT_LABELS[slot], res[slot])
+              for slot in ("A", "B") if res[slot] is not None]
     window.calib_verdict.setText(
-        _verdict(base_res, res[other], SLOT_LABELS[base_slot],
-                 SLOT_LABELS[other]))
+        _verdict(res["current"], SLOT_LABELS["current"], others))

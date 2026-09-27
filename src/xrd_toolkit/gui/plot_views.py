@@ -1021,7 +1021,13 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
             _draw_bg_overlay(window, dock, ax, tth, raw, base, path)
         lo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         hi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
-        if lo is None or hi is None or not lo < hi:
+        # 这个窗口是用户缩放的（缩放/平移写回快照）还是按参数算的？
+        # 前者意味着"这次重画只是把用户缩放过的窗口再套一遍"——那就不许
+        # 把它当成"这张图最初的样子"（见 _refresh_home；2026-09-27 的
+        # Home 失灵就是这个：缩放后每点一次锚点重画一次，第二次就把
+        # 缩放窗口写成了"家"）
+        zoomed = lo is not None and hi is not None and lo < hi
+        if not zoomed:
             lo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
             hi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
         if lo < hi:
@@ -1083,6 +1089,10 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
+    if zoomed:
+        # 这次画的是"用户缩放过的窗口"，不是这张图本来的样子 → 别更新家
+        # （Home 要能回到最初的比例；见上面 zoomed 的说明）
+        dock._view_from_gesture = True
     _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
@@ -1504,7 +1514,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                "（每张 ≈15 MB、越开越慢）")
         if not targets and name == "1D":
             _log(window, f"{why}：**全部只算不画**——结果进文件栏"
-                         "「1D 产物」，双击看一张、右键整组一起打开")
+                         "「1D 产物」，双击看一张；想一次全开：右键文件栏"
+                         "（或「原始数据」组）→「打开勾选的 N 张 1D 图」")
         else:
             tail = ("其余 {n} 张后台算完入库、点开即看".format(n=len(rest))
                     if name == "1D"

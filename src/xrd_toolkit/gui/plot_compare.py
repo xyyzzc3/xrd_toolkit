@@ -168,7 +168,9 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         _restore_line_styles(ax, old_lines, restore_color=False)
         xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
-        if xlo is None or xhi is None or not xlo < xhi:
+        # 同 _draw_1d：先分清这次画的是"用户缩放的窗口"还是"按参数算的窗口"
+        zoomed = xlo is not None and xhi is not None and xlo < xhi
+        if not zoomed:
             xlo = _panel_param(window, dock, "2θ 下限 (°)", 1.0)
             xhi = _panel_param(window, dock, "2θ 上限 (°)", 8.0)
         if xlo < xhi:
@@ -228,6 +230,8 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     finally:
         window._setting_limits = False
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
+    if zoomed:
+        dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
     _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 

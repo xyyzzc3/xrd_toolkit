@@ -528,6 +528,14 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     base_row.addWidget(combo_base, 1)
     tb.addLayout(base_row)
 
+    # 两句话把"谁和谁比"钉死（用户 2026-09-27："对比基准和结论表述不清，
+    # 不知道是谁在和谁比"）：Δ 行看基准列，结论看当前配置——下拉框只管前者
+    delta_note = QLabel("Δ = 该列 − 基准列（基准那一列写「基准」）；"
+                        "下面结论一律以「当前配置」为参照，逐个候选报")
+    delta_note.setWordWrap(True)
+    delta_note.setStyleSheet("color: gray;")
+    tb.addWidget(delta_note)
+
     verdict = QLabel("结论：—")
     verdict.setWordWrap(True)
     tb.addWidget(verdict)
