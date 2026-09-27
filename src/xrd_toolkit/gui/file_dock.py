@@ -572,15 +572,25 @@ def _sync_current_to_checks(window: QMainWindow) -> None:
     防"看起来选中了其实没勾"的假象——比如点对号方块取消勾选时，
     Qt 会先把那行设为当前项，不纠正就会留下一行无对号的高亮。
     组节点不参与高亮（它不是一个"能出图的对象"）。
+
+    **高亮不许顺带改滚动位置**：`setCurrentItem` 会让 Qt 把那一行滚进
+    视野，而"第一个勾选条目"往往就是列表最上面那条文件——于是取消勾选、
+    点组节点、[全选] 这些动作全都会把列表弹回最顶端（用户 2026-09-27
+    报的"一操作就跳回最顶端"的一半就是这个）。所以先记下滚动条位置、
+    设完再放回去。
     """
     current = window.file_list.currentItem()
     if (current is not None and not is_group(current)
             and current.checkState(0) == Qt.Checked):
         return
+    bar = window.file_list.verticalScrollBar()
+    scroll = bar.value()
     for src in gui_sources.checked_sources(window):
         window.file_list.setCurrentItem(src.item)
-        return
-    window.file_list.setCurrentItem(None)
+        break
+    else:
+        window.file_list.setCurrentItem(None)
+    bar.setValue(scroll)
 
 
 def _refresh_file_label(window: QMainWindow) -> None:
@@ -825,6 +835,83 @@ def ask_clear_cache(window: QMainWindow) -> None:
     _log(window, f"已删除所有缓存：{cleared} 个产物文件")
 
 
+def _group_key(item, tree):
+    """组节点的稳定身份（重建前后认人用）。
+
+    重建前后组节点是**新对象**，只能靠数据槽认人：处理组用台账批次号
+    （GROUP_ROLE + 1，右键"删除这一组"用的也是它）；原始数据组与 1D
+    产物组没有批次号，各给一个固定名——**不能都退回同一个名字**，否则
+    "收起原始数据"会被误判成"收起 1D 产物"，把好端端展开着的组收起来。
+    """
+    if item is tree.raw_group:
+        return ("raw",)
+    batch = item.data(0, GROUP_ROLE + 1)
+    return ("bg", str(batch)) if batch else ("1d",)
+
+
+def _top_groups(tree) -> list:
+    """全部顶层组节点（含"原始数据"组；tree.groups() 是不含它的）。"""
+    return [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+
+
+def _tree_state(window: QMainWindow) -> dict:
+    """重建前记下"用户在哪儿"：滚动位置 / 收起的组 / 勾着的产物条目。
+
+    为什么非要记：`refresh_product_groups` 是"clear_groups → 重新 add →
+    expandAll"三步，这三样全都会丢，列表被弹回最顶端——用户 2026-09-27：
+    "文件里面选取文字，或者不选时，只要是操作，包括画图现在会自动跳到最
+    顶端"。产物条目的勾选也一起丢（重建的叶子硬编码成不勾），而勾选正是
+    "拿哪几条去 [对比]/[热图]"的表达，中途按一次 [1D] 就没了。
+
+    原始数据组不参与重建（clear_groups 不碰它），所以它的勾选天然还在，
+    这里只管产物条目。
+    """
+    tree = window.file_list
+    out = {
+        "scroll": tree.verticalScrollBar().value(),
+        "collapsed": {_group_key(it, tree) for it in _top_groups(tree)
+                      if not it.isExpanded()},
+        "checked": {(s.kind, s.key) for s in gui_sources.all_sources(window)
+                    if s.kind != gui_sources.RAW
+                    and s.item.checkState(0) == Qt.Checked},
+        "current": None,
+    }
+    cur = tree.currentItem()
+    if cur is not None and not is_group(cur):
+        src = gui_sources.source_of(cur)
+        out["current"] = (src.kind, src.key if src.kind != gui_sources.RAW
+                          else src.path)
+    return out
+
+
+def _restore_tree_state(window: QMainWindow, keep: dict) -> None:
+    """把 `_tree_state` 记下的东西放回去（重建之后调）。
+
+    顺序有讲究：先恢复展开/勾选（都在信号屏蔽期间做，免得每条都触发一次
+    联动 + 一行日志），再恢复当前项与滚动位置——`setCurrentItem` 自己会
+    滚动，所以它必须在最后。
+    """
+    tree = window.file_list
+    for node in _top_groups(tree):
+        if _group_key(node, tree) in keep["collapsed"]:
+            node.setExpanded(False)
+    if keep["checked"]:
+        for src in gui_sources.all_sources(window):
+            if src.kind == gui_sources.RAW:
+                continue        # 原始数据组的勾选从来没被动过
+            if (src.kind, src.key) in keep["checked"]:
+                src.item.setCheckState(0, Qt.Checked)
+        _sync_group_states(window)   # 组态跟着子项走（屏蔽信号时不会自动跑）
+    if keep["current"] is not None:
+        for src in gui_sources.all_sources(window):
+            same = ((src.kind, src.key) if src.kind != gui_sources.RAW
+                    else (src.kind, src.path))
+            if same == keep["current"]:
+                tree.setCurrentItem(src.item)
+                break
+    tree.verticalScrollBar().setValue(keep["scroll"])
+
+
 def refresh_product_groups(window: QMainWindow) -> None:
     """重建文件栏里的产物分组：「1D 产物」+ 各组「处理后 …」。
 
@@ -837,8 +924,12 @@ def refresh_product_groups(window: QMainWindow) -> None:
     只在"有事发生"时调（导入/删除、批量处理、清空缓存）：每次要给列表
     里每个文件算一次指纹（读 64 KiB），200 个文件 ≈ 100 ms，定时刷新是
     白烧 CPU。台账里"产物已经没了"的条目顺手落盘清掉。
+
+    **重建不许动用户在哪儿**：滚动位置、收起的组、勾着的产物条目、当前
+    高亮，重建前后必须一样（见 _tree_state / _restore_tree_state）。
     """
     tree = window.file_list
+    keep = _tree_state(window)     # 重建不许改"用户在哪儿"（见其 docstring）
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""
@@ -890,6 +981,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
         if sum(len(n["items"]) for n in raw_batches) != \
                 sum(len(n["items"]) for n in batches):
             stage_cache.write_batches("bg", batches)   # 产物没了的条目落盘清掉
+        stale = 0
         for node in batches:
             kids = []
             for path, meta in sorted(node["items"].items()):
@@ -897,13 +989,22 @@ def refresh_product_groups(window: QMainWindow) -> None:
                 if raw_item is None or not stage_cache.has_key(
                         "bg", meta.get("key")):
                     continue    # 不在当前文件栏里 / 产物没了 → 不显示
+                if stage_cache.bg_product_stale(meta.get("key")):
+                    stale += 1   # 旧背景算法算的：不露面（见其 docstring）
+                    continue
                 kids.append((raw_item, meta))
             if not kids:
                 continue
+            # 2θ 范围可能没记（老台账、或批处理时没设范围）→ 别让
+            # f-string 拿 None 去格式化：那会**在重建时抛异常**，整个文件栏
+            # 建不起来（测试用最小台账记一批就复现了）
+            span = ("2θ 未记"
+                    if node.get("tth_min") is None
+                    or node.get("tth_max") is None
+                    else f"2θ {node['tth_min']:g}–{node['tth_max']:g}°")
             group = _make_group(
                 f"{node['label']} ({len(kids)})",
-                f"几何 {node.get('config')}、{node.get('npt')} 点、"
-                f"2θ {node.get('tth_min'):g}–{node.get('tth_max'):g}°\n"
+                f"几何 {node.get('config')}、{node.get('npt')} 点、{span}\n"
                 "整组勾上可去 [对比]/[热图]；右键删掉这一组。")
             group.setData(0, GROUP_ROLE + 1, node["id"])   # 右键删这一组用
             for raw_item, meta in kids:
@@ -911,6 +1012,16 @@ def refresh_product_groups(window: QMainWindow) -> None:
                          meta.get("key"), "处理后")
             tree.addTopLevelItem(group)
         tree.expandAll()
+        if stale:
+            # 说清"它们去哪了"、以及怎么收拾：产物文件还在盘上（用户的数据，
+            # 不替他删），只是不再列出来——旧算法算的曲线拿去做对比只会得到
+            # 旧结论。要清掉它们只能走 [清空缓存]（分组已经不露面，右键够不着）
+            _log(window, f"文件栏跳过 {stale} 条**旧算法**算的处理产物"
+                         "（背景算法已升级，那批曲线不再可信）："
+                         "[清空缓存] 可清掉它们，之后重新批量处理即可")
+        # 恢复展开/勾选/当前项/滚动位置：在信号屏蔽期间做（否则每个被恢复
+        # 勾选的条目都要触发一次联动 + 一行日志，200 个条目就是 200 次）
+        _restore_tree_state(window, keep)
     finally:
         tree.blockSignals(False)
 

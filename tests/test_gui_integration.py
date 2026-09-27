@@ -1756,6 +1756,109 @@ def _group_by_text(w, part):
     return None
 
 
+class TestFileBarKeepsItsPlace(unittest.TestCase):
+    """文件栏重建不许改"用户在哪儿"（用户 2026-09-27）。
+
+    触发重建的路径很多，最常撞上的是"画图"：一批 1D 算完 → refresh_groups
+    （plot_views._batch_step）。重建 = clear_groups + 重新 addTopLevelItem +
+    expandAll，滚动位置/收起的组/勾着的产物条目/当前高亮本来都会丢，列表
+    被弹回最顶端。
+    """
+
+    def setUp(self):
+        stage_cache.write_batches("bg", [])
+
+    def _long_list(self, w, n=24):
+        """造一个长到需要滚动的列表：n 个文件 + 各一份 1D 产物。
+
+        **必须 w.show()**：Qt 的 `setCurrentItem` 只在视图可见时才把目标行
+        滚进视野（`QAbstractItemView` 的 shouldScrollToCurrent 判可见性 +
+        焦点）。不 show 的话"滚动位置"根本不会变，断言全成了空话——探针
+        实测：不显示时 setCurrentItem 后 scroll 纹丝不动，显示时 8 → 1。
+        """
+        files = _tmp_files(n)
+        w.show()
+        w.add_files([str(p) for p in files], select=False)
+        for p in files:
+            _store_product(w, p)
+        w.refresh_groups()
+        group = _group_by_text(w, "1D 产物")
+        self.assertIsNotNone(group, "得先有分组可测")
+        return w.file_list, group
+
+    def test_rebuild_keeps_scroll_checks_and_highlight(self):
+        """重建前后：滚动位置、产物条目的对号、当前高亮都一样。"""
+        w = create_window()
+        try:
+            tree, group = self._long_list(w)
+            bar = tree.verticalScrollBar()
+            self.assertGreaterEqual(bar.maximum(), 5, "内容够长才有得测")
+            leaf = group.child(0)               # 产物组里最上面那条
+            leaf.setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            self.assertIs(tree.currentItem(), leaf, "高亮该跟着对号走")
+            bar.setValue(0)                     # 用户在最上面
+            QApplication.processEvents()
+            w.refresh_groups()
+            QApplication.processEvents()    # 滚动位置是下一个事件循环才落地的
+            self.assertEqual(bar.value(), 0, "重建后滚动位置必须原地不动")
+            restored = _group_by_text(w, "1D 产物")
+            self.assertEqual(restored.child(0).checkState(0), Qt.Checked,
+                             "重建后勾着的产物条目还是勾着的")
+            src = gui_sources.source_of(restored.child(0))
+            cur = gui_sources.source_of(tree.currentItem())
+            self.assertEqual((cur.kind, cur.key), (src.kind, src.key),
+                             "当前高亮也该回到那一条")
+        finally:
+            w.close()
+
+    def test_rebuild_keeps_a_collapsed_group_collapsed(self):
+        """用户收起来的组，重建后仍收着（expandAll 不许一刀切）。
+
+        两个没有批次号的组都要管：「原始数据」和「1D 产物」——按身份认人
+        时不能都退回同一个名字，否则"收起原始数据"会被当成"收起 1D 产物"。
+        """
+        w = create_window()
+        try:
+            tree, group = self._long_list(w)
+            group.setExpanded(False)
+            tree.raw_group.setExpanded(False)
+            QApplication.processEvents()
+            w.refresh_groups()
+            self.assertFalse(_group_by_text(w, "1D 产物").isExpanded())
+            self.assertFalse(tree.raw_group.isExpanded(), "原始数据组也该收着")
+        finally:
+            w.close()
+
+    def test_unchecking_does_not_scroll_the_list(self):
+        """取消勾选 → 高亮跳回第一条勾选条目，但列表**不许**跟着滚。
+
+        这是"一操作就跳回最顶端"的另一半：setCurrentItem 会把目标行滚进
+        视野，而第一条勾选条目往往就是最上面那条。
+        """
+        w = create_window()
+        try:
+            tree, group = self._long_list(w)
+            bar = tree.verticalScrollBar()
+            self.assertGreaterEqual(bar.maximum(), 5, "内容够长才有得测")
+            top = tree.raw_group.child(0)        # 列表最上面那条（原始数据）
+            top.setCheckState(0, Qt.Checked)
+            leaf = group.child(3)                # 靠下的产物条目
+            leaf.setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            tree.setCurrentItem(leaf)            # 用户刚点了靠下那条
+            QApplication.processEvents()
+            bar.setValue(bar.maximum())          # 滚到底
+            QApplication.processEvents()
+            leaf.setCheckState(0, Qt.Unchecked)  # 取消它 → 高亮回到最上面那条
+            QApplication.processEvents()
+            self.assertIs(tree.currentItem(), top, "高亮该跟随对号")
+            self.assertEqual(bar.value(), bar.maximum(),
+                             "高亮跟随对号不该把列表拽回顶端")
+        finally:
+            w.close()
+
+
 class TestProductGroups(unittest.TestCase):
     """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量处理] 一组。
 
@@ -1794,6 +1897,39 @@ class TestProductGroups(unittest.TestCase):
                 raw.child(i).setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
             self.assertEqual(raw.checkState(0), Qt.Unchecked)
+        finally:
+            w.close()
+
+    def test_products_from_an_older_algorithm_are_hidden(self):
+        """换过背景算法之后，那一批旧产物**不再在文件栏里露面**（文件还在盘上）。
+
+        2026-09-27：锚点外推失控算了 68 份歪曲线（−3000 量级）。版本进产物
+        键只保证"不再复用"，可盘上的旧产物和台账条目还会把那一组列出来——
+        勾上去做对比，看到的还是旧算法的曲线，用户会以为"改了没用"。
+        判据 = 产物元数据里的 algo 版本（见 stage_cache.bg_product_stale）。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=False)
+            key = _store_product(w, files[0], kind="bg")
+            stage_cache.record_batch(
+                "bg", "20260101-000000-deadbe",
+                label="处理后 01-01 00:00（自动基线）",
+                items=[(files[0], key)], config=w.config_name, npt=1000)
+            w.refresh_groups()
+            self.assertIsNotNone(_group_by_text(w, "处理后 01-01"),
+                                 "前提：当前算法的产物该露面")
+            # 模拟"换了背景算法"：版本号 +1 → 已存的产物立刻变成旧的
+            with mock.patch.object(stage_cache, "BG_ALGO_VERSION",
+                                   stage_cache.BG_ALGO_VERSION + 1):
+                w.refresh_groups()
+                self.assertIsNone(_group_by_text(w, "处理后 01-01"),
+                                  "旧算法算的产物不该在文件栏里露面")
+            self.assertIn("旧算法", w.log_text.toPlainText(),
+                          "要说清它们去哪了")
+            self.assertTrue(stage_cache.has_key("bg", key),
+                            "产物文件不删（删不删用户说了算）")
         finally:
             w.close()
 

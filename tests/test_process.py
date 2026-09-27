@@ -183,6 +183,15 @@ class TestChain(unittest.TestCase):
                     "smooth_deg": 0.15, "cut_ranges": [(2.0, 3.0)]}
         label = process.chain_label(settings)
         self.assertIn("锚点 5 个", label)
+        # 锚点的**覆盖范围**也要写进组名：锚点之外是借自动基线的形状外推的，
+        # 只写"5 个"会让人以为整条曲线都被点过了（2026-09-27 的教训）
+        spread = {**settings, "anchors": [[1.29, 10.0], [2.70, 5.0]]}
+        self.assertIn("覆盖 1.29–2.70°", process.chain_label(spread))
+        auto = {"mode": "auto", "window_deg": 0.3,
+                "anchors": [[1.29, 10.0], [2.70, 5.0]]}
+        self.assertIn("自动基线", process.chain_label(auto))
+        self.assertIn("覆盖 1.29–2.70°", process.chain_label(auto),
+                      "自动 + 锚点校正：锚点真的改了电平，组名里必须有")
         self.assertIn("平滑 0.15°", label)
         self.assertIn("删 2–3°", label)
         desc = process.chain_desc(settings)

@@ -46,6 +46,20 @@ AUTO_FLOOR_PERCENTILE = 20.0
 AUTO_ITER = 2
 AUTO_NOISE_K = 2.0
 
+# 背景**算法**版本号：算法本身（不是设置）改了就必须 +1。
+#
+# 产物键（stage_cache.bg_settings_hash）里原先只有"设置"：模式、窗口、
+# 锚点、截断、空扫指纹。可算法一改，**同一套设置算出来的就是另一条曲线**，
+# 键却不变 —— 界面会把旧算的产物当"已经算好的"读出来，用户看到的是旧
+# 结果，还以为"改了没用"。版本号进键 = 算法换代时旧产物自动作废、重算
+# 一次，这与 integrator.INTEGRATION_VERSION 是同一个道理。
+#
+# 2（2026-09-27）：锚点之外不再直线外推（见 _correct_with_anchors 与
+# fit_anchor_baseline 的"锚点定电平、自动定形状"）。1 → 2 这次作废掉了
+# 一批**真的算错了**的产物：用户 15:35 那批 81 个文件里 68 个被外推失控
+# 压到 −3000（详见 _correct_with_anchors 的 docstring）。
+BG_ALGO_VERSION = 2
+
 
 def _dtth_median(tth) -> float:
     """2θ 网格的典型步长（度）——把"窗口宽度（度）"换算成点数的桥梁。"""
@@ -305,13 +319,24 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
     return np.clip(base, 0.0, None)
 
 
-def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
+def fit_anchor_baseline(tth, anchors, *, method: str = "linear",
+                        shape=None) -> np.ndarray:
     """
     手动锚点基线：把用户点选的"纯背景"锚点连成一条底线。
 
-    锚点两端做线性外推（用首两/末两锚点）而不是常数平铺——低角背景是
-    陡升的，用最近锚点的值水平延伸出去会严重少扣。外推结果再夹到 ≥ 0
-    （背景是强度量，不能为负）。
+    **锚点之间**：按 method 连过去，严格过点。
+    **锚点之外**：形状借 `shape`（自动基线）那份——低角背景是指数衰减，
+    直线外推无论斜率取哪个都是错的，而自动基线抓的正是那个形状。电平由
+    最近的锚点定（"实测 − 自动"在那个锚点上的差，整体平移过去）。
+    shape=None（没给自动基线）时退化成"保持端点值"：低角会少扣一点，但
+    **绝不会失控** —— 少扣是看得见、能用锚点修的方向。
+
+    旧版（≤2026-09-27）两端都用"首两/末两锚点"的斜率做**直线外推**：
+    用户若在同一处附近点了好几下，那两点的 2θ 差只有 0.02°，斜率被放大
+    到几百 counts/度，5° 之外就抬出几千 counts 的假基线（那次事故的完整
+    记录见 _correct_with_anchors）。"低角陡升不能平铺"这个顾虑仍然成立，
+    只是解法换成**借自动基线的形状**，比直线外推既稳又准（实测平均歪幅
+    173 → 4.9 counts）。外推结果照旧夹到 ≥ 0（背景是强度量，不能为负）。
 
     参数：
         tth : np.ndarray
@@ -328,6 +353,9 @@ def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
             （折线 28.8、样条 16.4），只有 3 个锚点时 50 vs 118 / 99。
             pchip/spline 至少需要 3 个锚点，不足时自动退回 linear——
             纯函数不做日志/弹窗，静默降级
+        shape : np.ndarray 或 None
+            锚点之外借用的**形状**（自动基线，与 tth 等长）。长度对不上
+            就当没给（保持端点值）——宁可保守也不能按错网格取数
 
     返回：
         np.ndarray
@@ -349,16 +377,21 @@ def fit_anchor_baseline(tth, anchors, *, method: str = "linear") -> np.ndarray:
         return np.full(tth.size, max(float(a[0, 1]), 0.0))
 
     xs, ys = a[:, 0], a[:, 1]
-    base = np.interp(tth, xs, ys)          # 区间内（两端为 np.interp 的平铺值）
-    # 两端线性外推覆盖 np.interp 的平铺值
-    lo_slope = (ys[1] - ys[0]) / (xs[1] - xs[0]) if xs[1] != xs[0] else 0.0
-    hi_slope = (ys[-1] - ys[-2]) / (xs[-1] - xs[-2]) if xs[-1] != xs[-2] else 0.0
+    base = np.interp(tth, xs, ys)          # 区间内（两端先是 np.interp 的平铺值）
     left = tth < xs[0]
     right = tth > xs[-1]
-    base[left] = ys[0] + lo_slope * (tth[left] - xs[0])
-    base[right] = ys[-1] + hi_slope * (tth[right] - xs[-1])
-    # 曲线拟合只在两端锚点之间生效（外推一律走上面的线性尾巴，
-    # 口径与 linear 一致）
+    # 锚点之外：形状借自动基线那份、电平由最近的锚点定（见 docstring）。
+    # 借不到形状就保持端点值——保守，但不会失控。
+    shape_ok = (shape is not None
+                and np.asarray(shape).shape == np.asarray(tth).shape)
+    if shape_ok:
+        shape = np.asarray(shape, dtype=float)
+        base[left] = shape[left] + float(ys[0] - np.interp(xs[0], tth, shape))
+        base[right] = shape[right] + float(ys[-1] - np.interp(xs[-1], tth, shape))
+    else:
+        base[left] = ys[0]
+        base[right] = ys[-1]
+    # 曲线拟合只在两端锚点之间生效
     if method == "pchip" and a.shape[0] >= 3 and xs[-1] > xs[0]:
         inner = (~left) & (~right)
         if inner.any():
@@ -379,8 +412,20 @@ def _correct_with_anchors(tth, intensity, base, anchors) -> np.ndarray:
 
     在锚点处量"实测 − 自动基线"这点差，用保单调插值（pchip，不过冲）把
     它摊到整条曲线再加回去：锚点处基线严格落在实测值上，锚点之间保持自动
-    那份形状。两端线性外推（与 fit_anchor_baseline 同口径）；只有一个锚点
-    时退化成常数平移。结果夹到 ≥0（背景是强度量）。
+    那份形状；只有一个锚点退化成常数平移。结果夹到 ≥0（背景是强度量）。
+
+    **锚点之外 = 保持端点那一点的差，不再外推**（2026-09-27 修）。锚点没
+    盖到的地方，形状仍旧是自动基线那份（它抓的正是低角指数衰减），只是把
+    电平平移到最近一个锚点的高度上。
+
+    为什么不能外推：外推斜率取"末两个锚点的残差之差 ÷ 它们的 2θ 差"，而
+    用户常常在同一个位置附近点好几下 —— 两点只差 0.02°、残差差十几个
+    counts，除出来就是几百 counts/度，再乘上到数据末端那段长得多的距离
+    （实测 2.70° → 8°，5.3°），基线被凭空抬起 +3235。用户 2026-09-27
+    那批 81 个文件里 68 个就是这样被压到 −3000 的（另 81 个只因为多点了一个
+    3.67° 的锚点、把外推距离砍短了而幸免）——**这不是数据的问题，是除以
+    一个极小的数把噪声放大成了天文数字**。修完实测：|倾斜| 中位 48 → 5.2、
+    最大 3035 → 14.7、超标 68 份 → 0 份。
     """
     if not len(anchors):
         return base
@@ -399,13 +444,9 @@ def _correct_with_anchors(tth, intensity, base, anchors) -> np.ndarray:
     else:
         p = PchipInterpolator(xs, resid, extrapolate=False)
         corr = np.asarray(p(t), dtype=float)
-        left, right = t < xs[0], t > xs[-1]
-        if left.any():
-            slope = (resid[1] - resid[0]) / (xs[1] - xs[0])
-            corr[left] = resid[0] + slope * (t[left] - xs[0])
-        if right.any():
-            slope = (resid[-1] - resid[-2]) / (xs[-1] - xs[-2])
-            corr[right] = resid[-1] + slope * (t[right] - xs[-1])
+        # 两端**保持**端点残差（不外推）：base + resid = 自动形状 + 锚点电平
+        corr[t < xs[0]] = resid[0]
+        corr[t > xs[-1]] = resid[-1]
         bad = ~np.isfinite(corr)
         corr[bad] = 0.0
     return np.clip(np.asarray(base, dtype=float) + corr, 0.0, None)
@@ -472,7 +513,12 @@ def compute_baseline(tth, intensity, params, *, blank_curve=None):
         anchors = (params or {}).get("anchors") or []
         if not anchors:
             return None   # 一个锚点都没点 = 还没有"背景"可言，不扣也不画
+        # 锚点只盖得住一段（实测用户常只点 1.3–2.7°，而数据到 8°）——
+        # 之外那一段得有形状：借自动基线那份（低角指数衰减正是它的强项）。
+        # 锚点定电平、自动定形状，两者各干自己擅长的活。
+        window = float((params or {}).get("window_deg") or AUTO_WINDOW_DEG)
         return fit_anchor_baseline(
             tth, anchors,
-            method=(params or {}).get("anchor_method", "linear"))
+            method=(params or {}).get("anchor_method", "linear"),
+            shape=estimate_baseline_sliding(tth, intensity, window))
     raise ValueError(f"unknown background mode: {mode!r}")

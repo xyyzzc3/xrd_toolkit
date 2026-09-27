@@ -163,6 +163,23 @@ def _cut_text(ranges) -> str:
     return "、".join(f"{float(lo):g}–{float(hi):g}°" for lo, hi in ranges)
 
 
+def _anchor_text(anchors) -> str:
+    """"锚点 21 个（覆盖 1.29–2.70°）"——**带上覆盖范围**。
+
+    为什么非要写范围：锚点只盖住一段，之外是借自动基线的形状外推出来的
+    （见 background.fit_anchor_baseline）。只写"21 个"会让人以为整条曲线
+    都被点过了；用户 2026-09-27 那批锚点全挤在 1.29–2.70°，数据却到 8°，
+    组名上却只写着"锚点 21 个"——看不出问题来。范围写出来，"哪张图是点过
+    的、哪张是猜的"才有得判断。
+    """
+    xs = sorted(float(x) for x, _ in (anchors or []))
+    if not xs:
+        return "锚点 0 个"
+    # 两位小数就够：锚点落在数据网格上（实测 1.70117°），组名要给的是
+    # "盖到哪儿了"，不是那一位小数的精度
+    return f"锚点 {len(xs)} 个（覆盖 {xs[0]:.2f}–{xs[-1]:.2f}°）"
+
+
 def chain_label(settings: dict) -> str:
     """给人看的链描述（产物组名的括号里那一段）："锚点 5 个、窗口 2°、平滑 0.15°、删 2–3°"。
 
@@ -171,14 +188,16 @@ def chain_label(settings: dict) -> str:
     它也绝不能出现在这里（组名必须描述数据本身）。
     """
     mode = settings.get("mode")
+    anchors = settings.get("anchors") or []
     if mode == "anchor":
-        parts = [f"锚点 {len(settings.get('anchors') or [])} 个"]
+        parts = [_anchor_text(anchors)]
     elif mode == "blank":
         parts = ["空扫相减"]
     elif mode == "off":
         parts = []
     else:
-        parts = ["自动基线"]
+        # 自动 + 锚点校正：锚点真的参与了（改了基线的电平），必须写出来
+        parts = ["自动基线"] + ([_anchor_text(anchors)] if anchors else [])
     if mode in ("anchor", "auto"):
         parts.append(f"窗口 {float(settings.get('window_deg') or 0):g}°")
     if settings.get("clip") and mode != "off":

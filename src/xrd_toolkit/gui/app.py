@@ -260,13 +260,26 @@ def _bg_anchor_count(window: QMainWindow) -> int:
 
 
 def _update_bg_count(window: QMainWindow) -> None:
-    """刷新锚点计数标签。"""
+    """刷新锚点计数标签：个数 + **覆盖范围**。
+
+    为什么非写范围（2026-09-27）：锚点之外那几度不是点出来的，是沿自动
+    基线的形状推出来的（见 background.fit_anchor_baseline）。只显示"21 点"
+    会让人以为整条曲线都点过了——用户那批锚点全挤在 1.29–2.70°、数据却到
+    8°，标签上却只有个数，看不出问题来。
+    """
     lbl = getattr(window, "bg_count_lbl", None)
     if lbl is None:
         return
-    n = _bg_anchor_count(window)
-    # 没有可作用的 1D 面板时留空（此时数字对用户没有意义）
-    lbl.setText(f"{n} 点" if _bg_anchor_file(window) is not None else "")
+    path = _bg_anchor_file(window)
+    if path is None:
+        lbl.setText("")          # 没有可作用的 1D 面板：数字对用户没有意义
+        return
+    anchors = (getattr(window, "bg_anchors", None) or {}).get(str(path), [])
+    if not anchors:
+        lbl.setText("0 点")
+        return
+    xs = sorted(float(x) for x, _ in anchors)
+    lbl.setText(f"{len(xs)} 点（覆盖 {xs[0]:.2f}–{xs[-1]:.2f}°）")
 
 
 def _sync_bg_rows(window: QMainWindow) -> None:

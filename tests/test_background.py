@@ -4,7 +4,7 @@
   - SNIP：线性斜坡被精确保持、峰下能还原背景、基线恒不高于信号、
     窗口越大基线越低（min 迭代的单调性）、负值/短输入/非法参数；
   - 迭代包络：多项式型背景被还原、陡升段比 SNIP 更贴真值；
-  - 手动锚点：折线过点、两端线性外推 + 夹到 ≥0、样条降级与平滑；
+  - 手动锚点：折线过点、锚点之外借自动基线的形状 + 夹到 ≥0、样条降级与平滑；
   - 网格重插（未覆盖区间返回 0）、减基线（负值保留 vs 截断）、
     分派器 compute_baseline 的各模式与异常。
 
@@ -199,8 +199,12 @@ class TestSlidingBaseline(unittest.TestCase):
         base = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3,
                                          "anchors": anchors})
         for x, v in anchors:
+            # 容差 0.05 而不是 1e-6：锚点 x 不落在 2θ 网格上，np.interp
+            # 取的是相邻两点的线性插值；而锚点正是"外侧平、内侧按 pchip
+            # 弯"的拐点，线性插值因此差那么一点点（实测 0.014 counts）。
+            # 锚点处的**函数值**仍然严格等于点到的值。
             self.assertAlmostEqual(float(np.interp(x, tth, base)), v,
-                                   delta=1e-6, msg=f"锚点 {x}° 上该严格过点")
+                                   delta=0.05, msg=f"锚点 {x}° 上该严格过点")
         plain = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3})
         self.assertFalse(np.allclose(base, plain), "校正真的动了基线")
         # 一个锚点 = 常数平移
@@ -209,6 +213,33 @@ class TestSlidingBaseline(unittest.TestCase):
         self.assertAlmostEqual(
             float(np.interp(1.2, tth, one)),
             anchors[0][1], delta=1e-6)
+
+    def test_anchors_clustered_in_a_narrow_span_do_not_tilt_the_curve(self):
+        """锚点挤在一小段里时，锚点之外**不许**长出假斜坡（2026-09-27 事故）。
+
+        事故现场：用户 21 个锚点全在 1.29–2.70°（数据到 8°），最后两个
+        只差 0.021°、残差差 12.8 counts → 外推斜率 610 counts/度 → 数据
+        末端被凭空加 +3235 的基线，扣完是 −3235。那批 81 个文件里 68 个
+        中招，另一批只因多点了一个 3.67° 的锚点而幸免。
+
+        判据（这就是"锚点定电平、自动定形状"）：锚点之外，基线与自动基线
+        之差必须是**常数**——不许随距离漂走。
+        """
+        tth = np.linspace(1.0, 8.0, 3000)
+        bg = 300.0 + 900.0 * np.exp(-(tth - 1.0) / 1.5)
+        y = bg + 700.0 * np.exp(-0.5 * ((tth - 3.0) / 0.08) ** 2)
+        y = y + np.random.default_rng(7).normal(0.0, 3.0, tth.size)
+        anchors = [(x, float(np.interp(x, tth, y)))
+                   for x in (1.30, 1.50, 1.90, 2.30, 2.68, 2.70)]
+        base = compute_baseline(tth, y, {"mode": "auto", "window_deg": 0.3,
+                                         "anchors": anchors})
+        auto = estimate_baseline_sliding(tth, y, 0.3)
+        outside = tth > anchors[-1][0]
+        self.assertLess(float(np.ptp(base[outside] - auto[outside])), 1e-6,
+                        "锚点之外只许平移、不许带斜率")
+        # 高角端扣完仍贴着 0（旧实现这里是 −3000 量级）
+        far = outside & (tth > 7.4)
+        self.assertLess(abs(float(np.median(y[far] - base[far]))), 50.0)
 
     def test_steep_decay_low_angle_is_not_over_subtracted(self):
         """陡降背景（低角空气散射）上，基线的低角端不再系统性偏低。
@@ -310,7 +341,7 @@ class TestSlidingBaseline(unittest.TestCase):
 
 
 class TestAnchorBaseline(unittest.TestCase):
-    """手动锚点基线：过点、外推、降级。"""
+    """手动锚点基线：过点、锚点之外借形状/保持端点、降级。"""
 
     def test_linear_passes_through_anchors(self):
         anchors = [(2.0, 400.0), (5.0, 200.0), (8.0, 120.0)]
@@ -324,13 +355,31 @@ class TestAnchorBaseline(unittest.TestCase):
         mid = float(np.interp(4.0, TTH, base))
         self.assertAlmostEqual(mid, 600.0, places=6)
 
-    def test_linear_extrapolates_with_anchor_slope_and_clamps_at_zero(self):
-        """两端按首两/末两锚点的斜率线性外推，且夹到 ≥0。"""
-        base = fit_anchor_baseline(TTH, [(4.0, 400.0), (6.0, 200.0)])
-        # 斜率 -100/度：低角端外推得 400 + (-100)(1-4) = 700
-        self.assertAlmostEqual(float(np.interp(1.0, TTH, base)), 700.0, places=6)
-        # 高角端 200 + (-100)(9-6) = -100 → 夹到 0（不是平铺 200）
-        self.assertAlmostEqual(float(np.interp(9.0, TTH, base)), 0.0, places=6)
+    def test_outside_anchors_holds_endpoint_or_follows_shape(self):
+        """锚点之外：给了形状就跟着形状走，没给就保持端点值；都夹到 ≥0。
+
+        旧版（≤2026-09-27）按"首两/末两锚点"的斜率做直线外推——末两锚点
+        挨得近时斜率被放大成几百 counts/度，整批产物被抬歪（事故记录见
+        background._correct_with_anchors 的 docstring）。
+        """
+        anchors = [(4.0, 400.0), (6.0, 200.0)]
+        base = fit_anchor_baseline(TTH, anchors)
+        self.assertAlmostEqual(float(np.interp(1.0, TTH, base)), 400.0,
+                               places=6, msg="没给形状：低角端保持端点值")
+        self.assertAlmostEqual(float(np.interp(9.0, TTH, base)), 200.0,
+                               places=6, msg="没给形状：高角端保持端点值")
+        # 给形状（自动基线）= 形状 + 端点处的电平差
+        shape = 100.0 + 2000.0 * np.exp(-TTH / 2.0)
+        base = fit_anchor_baseline(TTH, anchors, shape=shape)
+        lo_res = 400.0 - float(np.interp(4.0, TTH, shape))
+        hi_res = 200.0 - float(np.interp(6.0, TTH, shape))
+        self.assertAlmostEqual(float(np.interp(1.0, TTH, base)),
+                               float(np.interp(1.0, TTH, shape)) + lo_res,
+                               places=6)
+        self.assertAlmostEqual(float(np.interp(9.0, TTH, base)),
+                               float(np.interp(9.0, TTH, shape)) + hi_res,
+                               places=6)
+        self.assertTrue(np.all(base >= 0.0))
 
     def test_unsorted_duplicate_free_anchors_are_sorted(self):
         base = fit_anchor_baseline(TTH, [(8.0, 120.0), (2.0, 400.0)])
@@ -375,9 +424,10 @@ class TestAnchorBaseline(unittest.TestCase):
         self.assertNotAlmostEqual(float(spline[i]), float(linear[i]),
                                   places=3)
 
-    def test_all_negative_extrapolation_is_clamped(self):
-        """整条外推都为负时不出现负基线。"""
-        base = fit_anchor_baseline(TTH, [(1.0, 10.0), (2.0, 5.0)])
+    def test_never_returns_negative_baseline(self):
+        """背景是强度量：锚点值很小、形状也压到 0 以下时，基线仍处处 ≥0。"""
+        base = fit_anchor_baseline(TTH, [(1.0, 10.0), (2.0, 5.0)],
+                                   shape=-np.ones_like(TTH))
         self.assertTrue(np.all(base >= 0.0))
 
     def test_pchip_passes_through_anchors_and_never_overshoots(self):
@@ -457,7 +507,11 @@ class TestComputeBaselineDispatch(unittest.TestCase):
         anchors = [(2.0, 300.0), (8.0, 150.0)]
         base = compute_baseline(TTH, self.y, {"mode": "anchor",
                                               "anchors": anchors})
-        np.testing.assert_allclose(base, fit_anchor_baseline(TTH, anchors))
+        # 锚点之外借自动基线的形状：锚点定电平、自动定形状
+        np.testing.assert_allclose(
+            base, fit_anchor_baseline(
+                TTH, anchors,
+                shape=estimate_baseline_sliding(TTH, self.y, 0.3)))
 
     def test_blank_without_curve_returns_none(self):
         self.assertIsNone(compute_baseline(TTH, self.y, {"mode": "blank"}))

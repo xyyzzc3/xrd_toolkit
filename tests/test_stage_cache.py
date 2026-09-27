@@ -3,6 +3,7 @@
 数据用 numpy 造的合成曲线，不碰真数据；缓存根指到临时目录（模块级
 setUpModule），跑完就删——绝不写用户 outputs/_stage 里的真产物。
 """
+import json
 import os
 import tempfile
 import unittest
@@ -149,6 +150,47 @@ class TestChainKeys(unittest.TestCase):
         # 老设置字典里根本没有 smooth_deg / cut_ranges 这两个键也要等价
         self.assertEqual(stage_cache.proc_settings_hash({**self.bg}),
                          stage_cache.bg_settings_hash(self.bg))
+
+    def test_algorithm_version_is_part_of_the_key(self):
+        """背景**算法**换代 → 键必须变。
+
+        2026-09-27 的教训：锚点外推的算法改好了，键却没变，界面会把旧
+        算法算的歪曲线当"已经算好的"读出来 —— 用户会以为"修了没用"。
+        所以 background.BG_ALGO_VERSION 进了哈希（与 integrator 的
+        INTEGRATION_VERSION 同一个道理）。
+        """
+        from xrd_toolkit.services.background import BG_ALGO_VERSION
+        self.assertEqual(stage_cache.BG_ALGO_VERSION, BG_ALGO_VERSION,
+                         "缓存键用的版本号必须就是 background 里那一个")
+        base = stage_cache.bg_settings_hash(self.bg)
+        old = stage_cache.BG_ALGO_VERSION
+        try:
+            stage_cache.BG_ALGO_VERSION = old + 1
+            self.assertNotEqual(base, stage_cache.bg_settings_hash(self.bg),
+                                "算法版本进键：换代必须换键")
+        finally:
+            stage_cache.BG_ALGO_VERSION = old
+
+    def test_products_from_an_older_algorithm_are_flagged_stale(self):
+        """产物一旦不是当前算法算的，就该被判为"旧"（界面据此不列出来）。
+
+        老产物（升级前写的，**没有 algo 字段**）必须也算旧——它们正是那次
+        事故算出来的那批歪曲线（见 background.BG_ALGO_VERSION）。
+        """
+        from xrd_toolkit.services.background import BG_ALGO_VERSION
+        key = Path(stage_cache.store_proc(
+            self.f, self.tth, self.inten, **self.kw,
+            settings=self.bg)).stem
+        self.assertFalse(stage_cache.bg_product_stale(key), "刚算的 = 当前算法")
+        # 手工把 algo 字段去掉 = 模拟升级前写的产物
+        target = Path(stage_cache.CACHE_ROOT) / "bg" / f"{key}.npz"
+        meta = stage_cache.meta_by_key("bg", key)
+        meta.pop("algo", None)
+        np.savez_compressed(target, tth=self.tth, intensity=self.inten,
+                            meta=np.array(json.dumps(meta)))
+        self.assertTrue(stage_cache.bg_product_stale(key),
+                        "没有 algo 字段的老产物 = 旧算法算的")
+        self.assertEqual(BG_ALGO_VERSION, stage_cache.BG_ALGO_VERSION)
 
     def test_extras_change_the_hash(self):
         base = stage_cache.proc_settings_hash(self.bg)

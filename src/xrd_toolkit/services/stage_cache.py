@@ -44,6 +44,7 @@ from pathlib import Path
 
 import numpy as np
 
+from xrd_toolkit.services.background import BG_ALGO_VERSION
 from xrd_toolkit.services.integrator import INTEGRATION_VERSION
 from xrd_toolkit.services.process import chain_desc, chain_parts
 
@@ -216,12 +217,18 @@ PROC_KIND = "bg"
 def bg_settings_hash(settings: dict) -> str:
     """背景设置 → 短哈希（bg 产物键的一半）。
 
-    设置包括：模式 / 窗口宽度 / 锚点拟合方式 / 锚点列表（2θ 与强度都
-    取，四舍五入到 1e-6）/ 负值截断 / 空扫图指纹。**任何一项变了就是
-    另一份产物**——这正是"扣背景既实时可调、又能跨会话复用"的接缝：
-    改参数 → 键变 → 当场重画（毫秒级），设置没变 → 读产物。
+    设置包括：**算法版本** / 模式 / 窗口宽度 / 锚点拟合方式 / 锚点列表
+    （2θ 与强度都取，四舍五入到 1e-6）/ 负值截断 / 空扫图指纹。**任何
+    一项变了就是另一份产物**——这正是"扣背景既实时可调、又能跨会话
+    复用"的接缝：改参数 → 键变 → 当场重画（毫秒级），设置没变 → 读产物。
+
+    算法版本（background.BG_ALGO_VERSION）必须在键里：算法一改，同一套
+    设置算出来的就是另一条曲线，键却不变的话界面会把旧产物当"已经算好
+    的"读出来，用户看到旧结果还以为改了没用（2026-09-27 就撞过一次，
+    见该常量的说明）。
     """
     canon = {
+        "algo": BG_ALGO_VERSION,
         "mode": settings.get("mode"),
         "window_deg": round(float(settings.get("window_deg") or 0.0), 6),
         "anchor_method": settings.get("anchor_method"),
@@ -292,6 +299,7 @@ def store_proc(path, tth, intensity, *, config: str, npt: int, tth_min=None,
         tth, intensity,
         meta={"source": source or str(Path(path).name), "config": config,
               "npt": int(npt), "engine": INTEGRATION_VERSION,
+              "algo": BG_ALGO_VERSION,          # 背景算法版本（见其说明）
               "kind": PROC_KIND, "created": time.time(),
               "chain": chain_desc(settings), "settings": settings})
 
@@ -426,7 +434,9 @@ def store_proc_by_key(key_1d: str, tth, intensity, *, settings: dict,
     target = _cache_dir(PROC_KIND) / f"{proc_key_of(key_1d, settings)}.npz"
     return _write_curve(target, tth, intensity,
                         {"source": source or f"1d:{key_1d}", "kind": PROC_KIND,
-                         "engine": INTEGRATION_VERSION, "created": time.time(),
+                         "engine": INTEGRATION_VERSION,
+                         "algo": BG_ALGO_VERSION,     # 背景算法版本
+                         "created": time.time(),
                          "base_key": str(key_1d),
                          "chain": chain_desc(settings), "settings": settings})
 
@@ -464,6 +474,25 @@ def drop_keys(kind: str, keys) -> int:
                 data.pop("bg", None)
             _write_index(data)
     return n
+
+
+def bg_product_stale(key) -> bool:
+    """这份处理产物是**换背景算法之前**算的吗（该不该继续在文件栏里露面）。
+
+    为什么除了"版本进键"还要有它：版本进了键只保证**不再被复用**（算的时候
+    换一把新键、重算一遍），可**盘上旧的产物文件还在**、台账也还记着它们，
+    界面照旧把那一组列在文件栏里——用户勾上去做对比，看到的还是旧算法算的
+    曲线，会以为"改了没用"。2026-09-27 就撞上这一次：81 个文件里 68 个被
+    锚点外推失控压到 −3000。
+
+    判据是产物元数据里的 algo 版本。**老产物没有这个字段**（按 0 算）→
+    一律当作旧算法，正是想要的默认。
+
+    产物文件本身**不删**：那是用户的数据，删不删他说了算（右键删整组，或
+    [清空缓存]）。这里只决定"要不要在文件栏里露面"。
+    """
+    meta = meta_by_key(PROC_KIND, key)
+    return int(meta.get("algo", 0) or 0) != BG_ALGO_VERSION
 
 
 def meta_by_key(kind: str, key: str) -> dict:
