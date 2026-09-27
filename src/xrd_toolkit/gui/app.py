@@ -112,7 +112,9 @@ from xrd_toolkit.gui.plot_panels import (
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _compute_integration,
     _draw_1d, _open_source_group, _open_source_view, _plot_view, _refresh_proc,
-    _spawn_task)
+    _spawn_task, apply_recipe, chain_label_of, recipe_text)
+from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.services import recipes as recipe_store
 
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -301,7 +303,8 @@ def _sync_bg_rows(window: QMainWindow) -> None:
     for name, row in rows.items():
         row.setVisible(name == mode
                        or (name == "anchor" and mode == "auto"))
-    # 来处说明：这个文件是按谁的锚点扣的（没有配方 = 还没处理过）
+    # 处理来处：这个文件上次是用哪套设置处理的（**只作展示**，不回填面板——
+    # 用户 2026-09-27 晚："原始数据会被改变…应该是原始 tif"）
     lbl = getattr(window, "bg_prov_lbl", None)
     if lbl is not None:
         # 配方按 str(path) 存；面板自己记着它的文件（panel_file）
@@ -309,12 +312,8 @@ def _sync_bg_rows(window: QMainWindow) -> None:
         path_ = getattr(dock_, "panel_file", None)
         recipe = (getattr(window, "proc_recipes", None)
                   or {}).get(str(path_))
-        if not recipe:
-            lbl.setText("本图还没处理过（本页参数只作用于当前这张图）")
-        else:
-            src = recipe.get("anchor_source")
-            lbl.setText(f"本图已扣过：{'锚点基准 — ' + src if src else '锚点本图手点'}"
-                        "（批量处理过的文件各自记着，点开就是扣过的样子）")
+        lbl.setText(recipe_text(recipe))
+    _recipe_combo_fill(window)
     # "显示原始曲线对比"只在真的在扣的时候才有意义
     window.params["背景显示原始"].setEnabled(mode != "off")
     window.params["负值截断为 0"].setEnabled(mode != "off")
@@ -325,6 +324,127 @@ def _sync_bg_rows(window: QMainWindow) -> None:
         if not pickable and window.bg_pick_btn.isChecked():
             window.bg_pick_btn.setChecked(False)   # 离开锚点模式即停止拾取
     _update_bg_count(window)
+
+
+def _recipe_combo_fill(window: QMainWindow) -> None:
+    """配方下拉：本图配方（这个文件上次那套）+ 已保存的命名配方。
+
+    data 用字符串（"local" / "saved|名字"）：`findData` 比的是值，字符串
+    最稳（元组也能比，但不值得赌 PySide 的转换）。
+    """
+    combo = getattr(window, "recipe_combo", None)
+    if combo is None:
+        return
+    dock = window.plot_docks.get(window.focus_panel)
+    path = getattr(dock, "panel_file", None)
+    local = (getattr(window, "proc_recipes", None) or {}).get(str(path))
+    keep = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+    if local:
+        combo.addItem(f"本图配方（{Path(path).name}）", "local")
+    for name in recipe_store.names():
+        combo.addItem(f"已保存：{name}", f"saved|{name}")
+    if combo.count() == 0:
+        combo.addItem("（还没有配方：调好参数后点 [保存为配方…]）", "")
+    idx = combo.findData(keep) if keep else -1
+    combo.setCurrentIndex(max(0, idx))
+    combo.blockSignals(False)
+
+
+def _selected_recipe(window: QMainWindow):
+    """下拉里选中的那份配方 → (配方 dict 或 None, 是不是"本图配方")。"""
+    combo = getattr(window, "recipe_combo", None)
+    data = combo.currentData() if combo is not None else None
+    dock = window.plot_docks.get(window.focus_panel)
+    path = getattr(dock, "panel_file", None)
+    if not data or path is None:
+        return None, False
+    if data == "local":
+        return (getattr(window, "proc_recipes", None) or {}).get(str(path)), True
+    return recipe_store.load_all().get(str(data).split("|", 1)[1]), False
+
+
+def _apply_selected_recipe(window: QMainWindow) -> None:
+    """[套用]：把选中的配方用到**编辑对象**那张图上（显式动作，按了才动）。
+
+    锚点位置照搬、强度按本图曲线重取（跨批次复用的核心）；其余设置填进本页
+    控件并立刻重画。面板打开时**不会**自动套用——见 plot_views._proc_recipe。
+    """
+    recipe, _is_local = _selected_recipe(window)
+    dock = window.plot_docks.get(window.focus_panel)
+    path = getattr(dock, "panel_file", None)
+    if recipe is None:
+        _log(window, "先在下拉里选一份配方，再点 [套用]"
+                     "（还没有就调好参数 [保存为配方…]）")
+        return
+    if dock is None or path is None:
+        _log(window, "先把一张 1D 图设为编辑对象，再套配方")
+        return
+    if (recipe or {}).get("mode") == "blank":
+        # 空扫相减靠的是那张**空扫图**（window.bg_blank，在内存里、不进配方）
+        # ——套上去也只会得到"没有空扫可减"，不如直说
+        _log(window, "这份配方是「空扫相减」：它靠的是那张空扫图，"
+                     "空扫图不在配方里，套不了")
+        return
+    src = getattr(dock, "panel_source", None)
+    if src is not None and src.kind == gui_sources.BG:
+        # 处理产物面板本身已经扣完了（快照被钉成"不扣"）；再套一份配方就是
+        # 二次相减——曲线会往下掉一截，还挺像"扣得更干净"
+        _log(window, "这一条是**处理产物**（已经扣完了）——配方套不上去；"
+                     "想换参数重做，打开它对应的原始条目")
+        return
+    apply_recipe(window, dock, path, recipe)
+
+
+def _save_recipe_dialog(window: QMainWindow) -> None:
+    """[保存为配方…]：把编辑对象这张图当前这套设置存成命名配方。
+
+    存的是**设置本身**（模式/窗口/锚点位置/平滑/裁剪）——强度不参与跨批次
+    复用，锚点的强度只在"本图配方"里作参考（见 services/recipes 的说明）。
+    """
+    dock = window.plot_docks.get(window.focus_panel)
+    path = getattr(dock, "panel_file", None)
+    if dock is None or path is None:
+        _log(window, "先点一张 1D 图（编辑对象），再保存配方")
+        return
+    settings = _proc_settings(window, dock, path)
+    if settings.get("mode") == "off" and not settings.get("smooth_deg") \
+            and not settings.get("cut_ranges"):
+        _log(window, "「处理」页三项都关着，没有可存的配方")
+        return
+    if settings.get("mode") == "blank":
+        _log(window, "「空扫相减」存不了配方：它靠的是那张空扫图，"
+                     "空扫图不在配方里（别的模式都能存）")
+        return
+    default = Path(path).stem
+    name, ok = QInputDialog.getText(window, "保存配方",
+                                    "配方名（例如：LMFP 自动+锚点）：",
+                                    text=f"{default} 配方")
+    if not ok or not str(name).strip():
+        return
+    recipe_store.save(str(name).strip(), settings)
+    _log(window, f"配方已保存：{name}（{chain_label_of(settings)}）"
+                 "——处理页下拉里可以给别的批次套用")
+    _recipe_combo_fill(window)
+
+
+def _delete_selected_recipe(window: QMainWindow) -> None:
+    """[删除]：删掉下拉里选中的**已保存**配方（"本图配方"跟着文件走，删不掉）。"""
+    recipe, is_local = _selected_recipe(window)
+    combo = getattr(window, "recipe_combo", None)
+    data = combo.currentData() if combo is not None else None
+    if not data:
+        _log(window, "先在下拉里选一份配方")
+        return
+    if is_local:
+        _log(window, "「本图配方」删不掉——它跟着这个文件走；"
+                     "只有 [保存为配方…] 存下来的那些能删")
+        return
+    name = str(data).split("|", 1)[1]
+    if recipe_store.delete(name):
+        _log(window, f"配方已删除：{name}")
+    _recipe_combo_fill(window)
 
 
 def _on_bg_mode(window: QMainWindow) -> None:
@@ -984,6 +1104,37 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_prov_lbl.setWordWrap(True)
     window.bg_prov_lbl = bg_prov_lbl
     form_bg.addRow(bg_prov_lbl)
+
+    # ── 配方（小节）：一份设置存下来，别的批次能照用 ──
+    # 用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点
+    # 可行吗"——可行：跨批次沿用锚点的**位置**（那是装置的性质），强度到每张
+    # 图自己的曲线上重取（同 [批量处理] 一贯的口径，见 services/recipes）。
+    # 配方的来源有两个：本图配方（那个文件上次用的）与已保存的命名配方。
+    add_caption(form_bg, "配方")
+    recipe_combo = QComboBox()
+    recipe_combo.setToolTip("选一份配方：本图配方 = 这个文件上次处理用的那套；"
+                            "下面是已保存的命名配方。选好点 [套用] 才生效——"
+                            "打开原始条目永远是原始曲线，不会自动扣。")
+    window.recipe_combo = recipe_combo
+    recipe_apply_btn = QPushButton("套用")
+    recipe_apply_btn.setObjectName("recipe_apply_btn")
+    recipe_apply_btn.setToolTip("把选中的配方用到**编辑对象**这张图上："
+                                "锚点位置照搬、强度按本图曲线重取，"
+                                "其余设置填进本页控件并立刻重画")
+    recipe_apply_btn.clicked.connect(lambda: _apply_selected_recipe(window))
+    recipe_save_btn = QPushButton("保存为配方…")
+    recipe_save_btn.setObjectName("recipe_save_btn")
+    recipe_save_btn.setToolTip("把**本页当前这套设置**存成一个命名配方，"
+                               "以后任何一批都能套用（存 outputs/recipes.json）")
+    recipe_save_btn.clicked.connect(lambda: _save_recipe_dialog(window))
+    recipe_del_btn = QPushButton("删除")
+    recipe_del_btn.setObjectName("recipe_del_btn")
+    recipe_del_btn.setToolTip("删掉下拉里选中的那份**已保存**配方")
+    recipe_del_btn.clicked.connect(lambda: _delete_selected_recipe(window))
+    window.recipe_btns = (recipe_apply_btn, recipe_save_btn, recipe_del_btn)
+    form_bg.addRow(bg_row((recipe_combo, 2)))
+    form_bg.addRow(bg_row((recipe_apply_btn, 1), (recipe_save_btn, 1),
+                          (recipe_del_btn, 0)))
 
     bg_show_raw = QCheckBox("显示原始曲线对比")
     bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"

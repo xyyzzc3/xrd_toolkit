@@ -94,7 +94,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
-from xrd_toolkit.services import process, stage_cache
+from xrd_toolkit.services import process, recipes as recipe_store, stage_cache
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 _gui_app = gui_app
@@ -381,23 +381,32 @@ class TestViewButtonRuns(unittest.TestCase):
         finally:
             w.close()
 
-    def test_double_click_opens_one_panel(self):
-        """双击条目 = 打开这一张的 1D 图（不用先勾再按视图按钮）。"""
+    def test_double_click_on_raw_does_not_open_a_panel(self):
+        """双击**原始条目**不出图，只给一句指路；右键那条（显式）照旧开。
+
+        用户 2026-09-27："原始数据应该双击打不开，因为原始数据可以出各种图"。
+        双击是个"打开"的手势，而原始数据没有唯一的一种图；产物条目天生只有
+        1D 这一种，双击没歧义（另有用例覆盖）。
+        """
         w = create_window()
         files = _tmp_files(2)
         try:
+            w.add_files([str(p) for p in files], select=False)
+            item = w.file_list.raw_group.child(0)
+            w.file_list.itemDoubleClicked.emit(item, 0)
+            QApplication.processEvents()
+            self.assertEqual(len(w.plot_docks), 0, "双击原始条目不该开面板")
+            self.assertIn("原始数据可以出多种图", w.log_text.toPlainText(),
+                          "要说清怎么出图")
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                w.add_files([str(p) for p in files], select=False)
-                item = w.file_list.raw_group.child(0)
-                self.assertEqual(item.checkState(0), Qt.Unchecked)
-                w.file_list.itemDoubleClicked.emit(item, 0)
+                gui_file_dock._open_entry_view(w, item, explicit=True)
                 key = f"1D|{files[0]}"
                 self.assertTrue(_wait_until(
                     lambda: key in w.plot_docks
                     and len(_axes(w, "1D", str(files[0])).lines) > 0, 30000),
-                    "双击后应开出这一张的面板")
-            self.assertEqual(len(w.plot_docks), 1, "只开被双击的那一条")
+                    "右键 [打开 1D 图] 该开出这一张")
+            self.assertEqual(len(w.plot_docks), 1, "只开那一条")
         finally:
             w.close()
 
@@ -1945,6 +1954,145 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             w.close()
 
 
+class TestRecipeReuse(unittest.TestCase):
+    """配方：存下来、给别的文件/批次套用——**锚点位置共用、强度逐文件重取**。
+
+    用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点可行吗"。
+    可行：锚点回答的是"2θ 的哪几个位置是纯背景"，那是装置的性质；背景有多高
+    是每张图自己的事（同 [批量处理] 一贯的口径）。
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xrd_recipe_"))
+        self._old_store = recipe_store.STORE
+        recipe_store.STORE = self.dir / "recipes.json"
+
+    def tearDown(self):
+        recipe_store.STORE = self._old_store
+
+    def test_anchors_outside_the_data_are_dropped(self):
+        """锚点落在数据范围外要**丢掉**（`np.interp` 会静默钳到端点值）。
+
+        钳端点 = 拿边缘那一点的强度当锚点，图上完全看不出来；跨批次复用
+        配方时这条最常见（用户 2026-09-27 讨论时一起定的口径）。
+        """
+        tth = np.linspace(1.0, 8.0, 100)
+        intensity = np.linspace(1000.0, 100.0, 100)
+        keep, dropped = gui_views._anchors_on_curve([0.5, 2.0, 9.9],
+                                                    tth, intensity)
+        self.assertEqual([x for x, _ in keep], [2.0])
+        self.assertEqual(dropped, [0.5, 9.9])
+        self.assertAlmostEqual(keep[0][1],
+                               float(np.interp(2.0, tth, intensity)), places=9)
+
+    def test_save_then_apply_re_samples_the_anchor_heights(self):
+        """存一份配方 → 套到另一个文件：位置照搬，**强度按那张图自己的曲线取**。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+
+            def fake(path_str, geom, npt):
+                tth, y = _fake_compute(path_str, geom, npt)
+                k = 2.0 if files[1].name in str(path_str) else 1.0
+                return tth, np.asarray(y, dtype=float) * k
+
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=fake):
+                w.add_files([str(p) for p in files], select=False)
+                gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(0),
+                                               explicit=True)
+                keyA = f"1D|{files[0]}"
+                self.assertTrue(_wait_until(
+                    lambda: keyA in w.plot_docks
+                    and len(_axes(w, "1D", str(files[0])).lines) > 0))
+                dockA = w.plot_docks[keyA]
+                combo = w.params["背景扣除模式"]
+                combo.setCurrentIndex(combo.findData("auto"))
+                w.bg_anchors[str(files[0])] = [(2.0, 900.0), (6.0, 300.0)]
+                QApplication.processEvents()
+                recipe_store.save("测试配方", gui_panel_state._proc_settings(
+                    w, dockA, files[0]))
+                self.assertIn("测试配方", recipe_store.names())
+
+                # B：打开（曲线是原始的），再套用配方
+                gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(1),
+                                               explicit=True)
+                keyB = f"1D|{files[1]}"
+                self.assertTrue(_wait_until(
+                    lambda: keyB in w.plot_docks
+                    and len(_axes(w, "1D", str(files[1])).lines) > 0))
+                dockB = w.plot_docks[keyB]
+                gui_panel_state._set_focus(w, keyB, dockB.windowTitle())
+                QApplication.processEvents()
+                w.recipe_combo.setCurrentIndex(
+                    w.recipe_combo.findData("saved|测试配方"))
+                gui_app._apply_selected_recipe(w)
+                QApplication.processEvents()
+                anchors_b = w.bg_anchors.get(str(files[1])) or []
+                self.assertEqual([x for x, _ in anchors_b], [2.0, 6.0],
+                                 "锚点位置照搬（跨批次复用）")
+                tth_b = np.asarray(dockB.last_tth, dtype=float)
+                y_b = np.asarray(dockB.last_intensity, dtype=float)
+                self.assertAlmostEqual(
+                    anchors_b[0][1], float(np.interp(2.0, tth_b, y_b)),
+                    places=6, msg="强度要在 B 自己的曲线上重取，不是 A 的 900")
+                self.assertEqual(
+                    (dockB.params_snapshot or {}).get("背景扣除模式"), "auto",
+                    "套用后 B 的模式跟着配方走")
+        finally:
+            w.close()
+
+    def test_recipe_is_refused_on_a_bg_product_panel(self):
+        """处理产物面板上不许套配方：它已经扣完了，再套就是**二次相减**。
+
+        二次相减的曲线往下掉一截，看着还挺像"扣得更干净"——所以这条要挡。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=False)
+            key = _store_product(w, files[0], kind="bg")
+            src = gui_sources.make_source(files[0], kind=gui_sources.BG, key=key)
+            panel_key = gui_views._open_product_panel(w, src)
+            dock = w.plot_docks[panel_key]
+            gui_panel_state._set_focus(w, panel_key, dock.windowTitle())
+            QApplication.processEvents()
+            recipe_store.save("R", {"mode": "auto", "window_deg": 0.3,
+                                    "anchors": [[2.0, 100.0]]})
+            w.recipe_combo.setCurrentIndex(w.recipe_combo.findData("saved|R"))
+            gui_app._apply_selected_recipe(w)
+            self.assertIn("处理产物", w.log_text.toPlainText())
+            self.assertEqual((dock.params_snapshot or {}).get("背景扣除模式"),
+                             "off", "产物面板的模式不许被配方改掉")
+        finally:
+            w.close()
+
+    def test_placeholder_while_computing(self):
+        """数据还没到时面板写着"正在计算…"，不是一块空白。
+
+        用户 2026-09-27："重新打开原始文件…有的是空白的图"——那是还在后台
+        排队算；写一句占位，算完 ax.clear() 自然冲掉。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+
+            def slow(*_a, **_k):
+                time.sleep(2.0)          # 让"计算中"这一态能被看到
+                return _fake_compute("", {}, 0)
+
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=slow):
+                w.add_files([str(p) for p in files], select=False)
+                gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(0),
+                                               explicit=True)
+                QApplication.processEvents()
+                ax = _axes(w, "1D", str(files[0]))
+                self.assertIn("正在计算…", [t.get_text() for t in ax.texts])
+        finally:
+            w.close()
+
+
 class TestProductGroups(unittest.TestCase):
     """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量处理] 一组。
 
@@ -2507,23 +2655,32 @@ class TestBackgroundFromProduct(unittest.TestCase):
             for f in files:
                 recipe = recipes.get(str(f))
                 self.assertIsNotNone(recipe, f"{f.name} 该有配方")
-                self.assertEqual(recipe["背景扣除模式"], "anchor")
+                # 配方存的是**设置那套键**（与 services/recipes 同一形状），
+                # 不再用显示控件的键名——这样"本图配方"与"命名配方"是一回事
+                self.assertEqual(recipe["mode"], "anchor")
+                self.assertIn("chain", recipe, "带一行给人看的摘要")
                 self.assertEqual(recipe["anchor_source"],
                                  getattr(dockA, "panel_display", None),
                                  "来处 = 焦点文件（A）")
                 self.assertTrue(w.bg_anchors.get(str(f)), "锚点也按文件存了")
-            # 双击从没开过的 B：面板按配方回填（模式/窗口都是扣过的那套）
+            # 右键打开从没开过的 B（显式动作）：曲线是**原始**的，配方只写在
+            # 处理页那行字上——用户 2026-09-27 晚："原始数据现在会被改变…
+            # 按理来说原始数据应该打不开的，因为是原始 tif"。旧版这里断言
+            # 的正是"点开就是扣过的样子"。
             item = next(raw.child(i) for i in range(raw.childCount())
                         if files[1].name in raw.child(i).text(0))
-            w.file_list.itemDoubleClicked.emit(item, 0)
+            gui_file_dock._open_entry_view(w, item, explicit=True)
             keyB = f"1D|{files[1]}"
-            self.assertTrue(_wait_until(lambda: keyB in w.plot_docks))
+            self.assertTrue(_wait_until(
+                lambda: keyB in w.plot_docks
+                and len(_axes(w, "1D", str(files[1])).lines) > 0))
             QApplication.processEvents()
             dockB = w.plot_docks[keyB]
             self.assertEqual((dockB.params_snapshot or {}).get("背景扣除模式"),
-                             "anchor", "点开就该是扣过的样子")
-            self.assertEqual(w.params["背景扣除模式"].currentText(),
-                             "手动锚点", "参数栏跟着显示这套设置")
+                             "off", "打开原始条目 = 原始曲线，不套配方")
+            QApplication.processEvents()
+            self.assertIn("本图配方", w.bg_prov_lbl.text(),
+                          "配方只在处理页显示")
             self.assertIn(getattr(dockA, "panel_display", "").split(".")[0],
                           w.bg_prov_lbl.text(), "来处写清楚（以 A 的锚点为基准）")
         finally:
@@ -5444,6 +5601,9 @@ class TestBackgroundBatch(unittest.TestCase):
         try:
             self._open_both(w, files)
             dock_a, key_a = self._focus_a_with_anchors(w, files)
+            # 批量处理**不该**改任何面板显示什么：先记下每块面板的模式
+            before = {f: (_dock(w, "1D", f).params_snapshot or {}).get(
+                "背景扣除模式", "off") for f in files}
             w.proc_batch_btn.click()
             QApplication.processEvents()
             self.assertIn("批量处理完成", w.log_text.toPlainText())
@@ -5454,17 +5614,26 @@ class TestBackgroundBatch(unittest.TestCase):
                              "2θ 位置照搬")
             self.assertAlmostEqual(got_b[0][1], got_a[0][1] * 3, delta=1e-6,
                                    msg="B 的强度取 B 曲线上的值（尺度 ×3）")
-            # 两份 bg 产物都在（键要**一模一样**才命中：几何范围也得带）
+            # 两份 bg 产物都在（键要**一模一样**才命中：几何范围也得带）。
+            # 用**配方**复算键，不用面板快照——批量处理**不再**改开着的面板
+            # （用户 2026-09-27 晚："原始数据会被改变"），面板仍是原始曲线，
+            # "这个文件是按什么扣的"由配方记着（这正是配方存在的意义）。
             geom = gui_panel_state._collect_geometry(w)
             for f in files:
-                dock = _dock(w, "1D", f)
-                st = gui_panel_state._bg_settings(
-                    w, dock, str(gui_views._bg_path_of(dock)))
+                recipe = w.proc_recipes[str(f)]
+                self.assertEqual(recipe["mode"], "anchor")
                 self.assertIsNotNone(stage_cache.load_proc(
                     f, config=w.config_name,
                     npt=int(w.params["输出点数"].value()),
                     tth_min=geom.get("tth_min_deg"),
-                    tth_max=geom.get("tth_max_deg"), settings=st), f)
+                    tth_max=geom.get("tth_max_deg"), settings=recipe),
+                    f"{Path(f).name} 的产物该能按配方命中")
+                # 面板显示的东西一点没变（原始条目 = 原始曲线；A 是编辑对象，
+                # 它本来就是手动锚点模式，所以只比"前后一致"）
+                self.assertEqual(
+                    (_dock(w, "1D", f).params_snapshot or {}).get(
+                        "背景扣除模式", "off"), before[f],
+                    f"{Path(f).name} 的面板不该被批量处理改掉")
         finally:
             w.close()
 

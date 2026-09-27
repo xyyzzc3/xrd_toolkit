@@ -517,11 +517,34 @@ def _batch_step(window: QMainWindow, key: str, name: str = ""):
     return suffix, quiet
 
 
+def show_placeholder(dock, text: str) -> None:
+    """面板还没算出数据时，在画布中间写一句话（别让人对着一块空白发懵）。
+
+    用户 2026-09-27："重新打开原始文件…有的是空白的图"——那其实是**还在后台
+    算**：面板先建出来，积分结果过一会儿才到（单张 ≈0.4–1 s；81 张排队时
+    最后几张要等十几秒）。写一句"正在计算…"，真画上去时 `ax.clear()` 自然
+    把它冲掉；算失败时换成"计算失败——见日志"。
+    """
+    try:
+        from xrd_toolkit.gui.plot_panels import _panel_axes
+        ax = _panel_axes(dock)
+        if ax is None:
+            return
+        ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center",
+                va="center", color="gray", fontsize=11)
+        _content(dock).canvas.draw_idle()
+    except Exception:                                    # noqa: BLE001
+        pass      # 占位提示画不出来不算事，别拖垮出图这条主路
+
+
 def _on_integration_error(window: QMainWindow, path: Path, key: str,
                           msg: str) -> None:
     """积分失败（主线程）：报错进日志区，不崩溃（批内带进度计数）。"""
     suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
     _log(window, f"积分失败：{path.name} — {msg}{suffix}")
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        show_placeholder(dock, "计算失败——见右侧日志")
 
 
 def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
@@ -532,6 +555,9 @@ def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
     文件名 — 原因"；批内带进度计数后缀。
     """
     suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
+    dock = window.plot_docks.get(key)
+    if dock is not None:
+        show_placeholder(dock, f"{what}失败——见右侧日志")
     _log(window, f"{what}失败：{path.name} — {msg}{suffix}")
 
 
@@ -706,45 +732,36 @@ def _curve_for(window, path):
     return None
 
 
-def _proc_recipe(settings: dict, params0: dict, source: str = None) -> dict:
-    """一条**文件级**处理配方：模式 / 窗口 / 平滑 / 裁剪（+ 锚点来处）。
+def _proc_recipe(settings: dict, source: str = None) -> dict:
+    """一条**文件级**处理配方：设置那套（模式/窗口/锚点/平滑/裁剪）+ 来处 + 摘要。
 
     用户 2026-09-27："给 a 扣完，然后应用到其余批量选图上，在双击查看这些
     选图时，在扣背景的参数栏可以显示这个图是以 a 的锚点为基准进行扣除的。
     **按文件**。"——锚点本来就按文件存（window.bg_anchors），模式/窗口原先
     却只写进"当时开着"的面板快照：批量扣完再点开别的文件，它显示"不扣"。
-    现在这两个键一起进 window.proc_recipes[path]，开面板时按它回填。
-    source = 锚点来自哪个文件（手点的记 None，界面上说"本图手点"）。
+    现在一起进 window.proc_recipes[path]。
+
+    **形状就是 `_proc_settings` 那一套**（不是显示控件的键名）：这样
+    "本图配方"与"存下来的命名配方"（services/recipes）是同一个东西，
+    保存与套用都只需一份转换——`chain` 是给人看的那行摘要，`anchor_source`
+    是锚点来处（手点的记 None，界面上说"本图手点"）。
+
+    **只作记录与展示，不回填面板**（用户 2026-09-27 晚："原始数据现在会被
+    改变…按理来说原始数据应该打不开的，因为是原始 tif"）：打开原始条目就
+    该看到原始曲线，想套配方要显式按 [套用]（见 apply_recipe）。
     """
-    cuts = settings.get("cut_ranges") or []
-    return {"背景扣除模式": settings["mode"],
-            "背景窗口 (°)": settings["window_deg"],
-            "锚点拟合方式": settings["anchor_method"],
-            "负值截断为 0": settings["clip"],
-            "背景显示原始": True,
-            "平滑曲线": bool(params0.get("smooth_deg")),
-            "平滑窗口 (°)": settings.get("smooth_deg") or 0.10,
-            "裁剪区间": list(cuts) if cuts else False,
-            "平滑方法": settings.get("smooth_method") or "boxcar",
-            "平滑阶数": int(settings.get("smooth_order") or 3),
+    return {**settings,
+            "chain": process.chain_label(settings),
             "anchor_source": source}
 
 
-def seed_proc_recipe(window: QMainWindow, path, dock) -> None:
-    """开面板时按该文件的配方回填快照：点开就是一个"已经扣过"的样子。
-
-    没有配方（这文件还没处理过）就什么都不做——新图仍从默认起步。
-    """
-    recipes = getattr(window, "proc_recipes", None)
-    if not recipes or dock is None:
-        return
-    recipe = recipes.get(str(path))
+def recipe_text(recipe: dict) -> str:
+    """配方给人看的一行字（处理页那行提示用）。"""
     if not recipe:
-        return
-    snap = getattr(dock, "params_snapshot", None)
-    if isinstance(snap, dict):
-        snap.update({k: v for k, v in recipe.items()
-                     if k != "anchor_source"})
+        return "本图还没处理过（本页参数只作用于当前这张图）"
+    from_src = recipe.get("anchor_source")
+    tail = f"（锚点来处：{from_src}）" if from_src else "（锚点本图手点）"
+    return f"本图配方：{recipe.get('chain') or '—'}{tail}"
 
 
 def note_proc_recipe(window: QMainWindow, path, recipe: dict) -> None:
@@ -752,6 +769,106 @@ def note_proc_recipe(window: QMainWindow, path, recipe: dict) -> None:
     if getattr(window, "proc_recipes", None) is None:
         window.proc_recipes = {}
     window.proc_recipes[str(path)] = dict(recipe)
+
+
+def _anchors_on_curve(xs, tth, intensity):
+    """把锚点**位置**落到某条曲线上：返回 [(x, y), ...] 与被丢掉的 x 列表。
+
+    位置在数据范围之外就**丢掉**（返回在第二项里，调用方记一行日志）——
+    `np.interp` 会静默钳到端点值，等于拿边缘那一点的强度当锚点，图上完全
+    看不出来（用户 2026-09-27 讨论跨批次复用配方时翻出来的隐患）。
+    """
+    tth = np.asarray(tth, dtype=float)
+    keep, dropped = [], []
+    for x in xs:
+        x = float(x)
+        if tth.size and tth[0] <= x <= tth[-1]:
+            keep.append((x, float(np.interp(x, tth, intensity))))
+        else:
+            dropped.append(x)
+    return keep, dropped
+
+
+def apply_recipe(window: QMainWindow, dock, path, recipe: dict) -> None:
+    """把一份配方**显式**套到当前面板这张图上（[套用] 按钮 / 配方下拉）。
+
+    与"打开就自动按配方回填"是两回事（那个已经删掉，见 _proc_recipe 的
+    说明）：这里是用户按下去的动作，按了才动。
+      - 锚点：只用配方里的 **2θ 位置**，强度在本图自己的曲线上重新取
+        （跨批次复用的核心，见 services/recipes 的模块说明）；
+      - 其余（模式 / 窗口 / 拟合 / 平滑 / 裁剪）填进参数坞控件；
+      - 填完调 _refresh_proc 立刻按新设置重画（与手改控件的路径完全同一条）。
+    """
+    if dock is None or not recipe:
+        return
+    tth = getattr(dock, "last_tth", None)
+    intensity = getattr(dock, "last_intensity", None)
+    if tth is None or intensity is None:
+        _log(window, "这张图还没算出来，先出图再套配方")
+        return
+    xs = [float(x) for x, _y in (recipe.get("anchors") or [])]
+    dropped = []
+    if xs:
+        keep, dropped = _anchors_on_curve(xs, tth, intensity)
+        window.bg_anchors = getattr(window, "bg_anchors", None) or {}
+        window.bg_anchors[str(path)] = keep
+    _set_recipe_controls(window, recipe)
+    _refresh_proc(window)
+    if dropped:
+        _log(window, f"配方里有 {len(dropped)} 个锚点落在本图 2θ 范围外，"
+                     f"已跳过（{min(dropped):.2f}–{max(dropped):.2f}°）")
+    _log(window, f"已套用配方：{chain_label_of(recipe)}"
+                 f"（锚点 {len(xs) - len(dropped)} 个）")
+
+
+def chain_label_of(recipe: dict) -> str:
+    """配方 → 一行摘要（归档/日志用）。"""
+    return process.chain_label({
+        "mode": recipe.get("mode"), "window_deg": recipe.get("window_deg"),
+        "anchors": recipe.get("anchors") or [],
+        "clip": recipe.get("clip"), "smooth_deg": recipe.get("smooth_deg"),
+        "smooth_method": recipe.get("smooth_method"),
+        "smooth_order": recipe.get("smooth_order"),
+        "cut_ranges": recipe.get("cut_ranges") or []})
+
+
+def _set_recipe_controls(window: QMainWindow, recipe: dict) -> None:
+    """把配方填进「处理」页的控件（**不**触发重画，调用方统一收尾）。
+
+    在参数坞里按控件类型逐个落值：下拉用 findData、复选框 setChecked、
+    转盘 setValue。控件不在场（还没有参数坞）就静默跳过——与
+    panel_state._param_box_set 一个态度。
+    """
+    def combo(name, data):
+        box = window.params.get(name)
+        if box is not None and data is not None:
+            box.setCurrentIndex(max(0, box.findData(data)))
+
+    def check(name, on):
+        box = window.params.get(name)
+        if box is not None:
+            box.setChecked(bool(on))
+
+    def spin(name, value):
+        box = window.params.get(name)
+        if box is not None and value is not None:
+            box.setValue(float(value))
+
+    combo("背景扣除模式", recipe.get("mode"))
+    spin("背景窗口 (°)", recipe.get("window_deg"))
+    combo("锚点拟合方式", recipe.get("anchor_method"))
+    check("负值截断为 0", recipe.get("clip"))
+    deg = float(recipe.get("smooth_deg") or 0.0)
+    check("平滑曲线", deg > 0)
+    if deg > 0:
+        spin("平滑窗口 (°)", deg)
+        combo("平滑方法", recipe.get("smooth_method"))
+        spin("平滑阶数", recipe.get("smooth_order"))
+    cuts = [tuple(c) for c in (recipe.get("cut_ranges") or [])]
+    window.cut_list = list(cuts)
+    check("裁剪区间", bool(cuts))
+    from xrd_toolkit.gui.app import _sync_cut_label        # 破循环：只取这一个
+    _sync_cut_label(window)                                # 清单标签跟着换
 
 
 def _proc_batch_apply(window: QMainWindow) -> None:
@@ -814,6 +931,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
                    if settings["mode"] == "blank" and blank is not None
                    else None)
     done = skipped = from_product = 0
+    out_of_range = files_with_drop = 0    # 锚点落到数据范围外的统计
     records = []    # [(源文件, 产物键)]：整批完了写一次台账（不是每张一次）
     seen = set()    # 同一文件只扣一份（勾了它的原始条目又勾了它的 1D 产物）
     for i, source in enumerate(targets):
@@ -833,7 +951,13 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         if tth is None:
             skipped += 1
             continue
-        per_file = [(x, float(np.interp(x, tth, intensity))) for x in xs]
+        per_file, dropped_here = _anchors_on_curve(xs, tth, intensity)
+        if dropped_here:
+            # 锚点落在本图数据范围外：**丢掉**（np.interp 会静默钳到端点值，
+            # 等于拿边缘那一点当锚点，图上完全看不出来）。跨批次复用配方时
+            # 这条最常见——用户 2026-09-27 讨论时一起定的口径。
+            out_of_range += len(dropped_here)
+            files_with_drop += 1
         params = {**params0, "anchors": per_file}
         # 整条链一次跑完（背景 → 平滑 → 裁剪）：屏幕上的曲线与写进产物的
         # 这一份是同一个函数的输出，不存在两处实现漂移
@@ -856,15 +980,15 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         if getattr(window, "bg_anchors", None) is None:
             window.bg_anchors = {}
         window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
-        # 配方**按文件**记下来（不只写给开着的面板——那正是"再点其余图
-        # 不显示已经扣了"的根因）：之后点开任何一条都按它回填
-        recipe = _proc_recipe(settings, params0, source=focus_display)
+        # 配方**按文件**记下来（处理页那行"本图配方"读它）。**不写进面板
+        # 快照**：面板显示的曲线只由它自己的快照决定，批量处理不该偷偷改掉
+        # 人家正在看的原始曲线（用户 2026-09-27 晚："原始数据会被改变"）
+        # 配方记**这个文件自己的**锚点（位置与整批共用、强度是它曲线上的），
+        # 两个用处：① 处理页那行"本图配方"说的是这张图真实用的那套；
+        # ② 按配方就能复算出这份产物的键（锚点强度进了键）
+        recipe = _proc_recipe({**settings, "anchors": per_file},
+                              source=focus_display)
         note_proc_recipe(window, path, recipe)
-        panel = window.plot_docks.get("1D|" + str(path))
-        snap = getattr(panel, "params_snapshot", None)
-        if isinstance(snap, dict):                # 开着的面板：立刻跟着换
-            snap.update({k: v for k, v in recipe.items()
-                         if k != "anchor_source"})
         done += 1
         if (i + 1) % 20 == 0:
             _log(window, f"批量处理：{i + 1}/{len(targets)}…")
@@ -873,6 +997,10 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     via = f"，其中 {from_product} 条来自 1D 产物" if from_product else ""
     _log(window, f"批量处理完成：{done}/{len(targets)} 个文件"
                  f"（{process.chain_label(settings)}）{tail}{via}")
+    if out_of_range:
+        _log(window, f"注意：{files_with_drop} 个文件上有 {out_of_range} 个锚点"
+                     f"落在数据 2θ 范围外，已跳过那些锚点"
+                     f"（跨批次复用配方时常见——确认装置/几何没换）")
     # 记台账：这一批 = 文件坞里的一个"扣背景"分组（用户 2026-09-25 定：
     # 每次 [批量扣背景] 一组）。整批写一次，中途不留半截台账。跳过的
     # 文件不进台账（它们没有产物，进组了也是空壳）
@@ -939,13 +1067,19 @@ def _refresh_proc(window: QMainWindow) -> None:
             snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
         dock.params_snapshot = snap
     tick_path = _bg_path_of(dock) if dock is not None else None
-    if tick_path is not None:
-        # 手调也算这个文件的配方（来处 = None = 本图手点）：下次点开它
-        # 还是这套设置，而不是回到默认
+    if tick_path is not None and not getattr(window, "_param_replaying", False):
+        # 手调也算这个文件的配方（来处 = None = 本图手点）：处理页那行
+        # "本图配方"跟着显示，[套用] 时也用它。
+        #
+        # **回放快照期间不许写**（与上面那条同一个旗标）：切焦点时
+        # _load_params_snapshot 会把控件逐个改成新面板的值，那些信号同样
+        # 走到这里——不挡的话，一打开某文件就把它**批量处理时记下的配方**
+        # 覆盖成"本图手点 + 当前默认值"，来处与参数一起丢（2026-09-27 晚
+        # 被测试逮住：B 的配方被打开它的动作抹成了 mode=off）。
         note_proc_recipe(window, tick_path,
-                         _proc_recipe(_proc_settings(window, dock, tick_path),
-                                      _proc_params(window, dock, tick_path),
-                                      source=None))
+                         _proc_recipe(
+                             _proc_settings(window, dock, tick_path),
+                             source=None))
     _update_smooth_points(window, dock)
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]
@@ -1399,7 +1533,8 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
         dock.panel_display = source.display
         dock.figure_saved = False
         dock.params_snapshot = _data_snapshot(window)
-        seed_proc_recipe(window, path, dock)   # 处理过的文件：点开就是扣过的样子
+        # 面板先建、数据后到（后台积分）——中间那段别让人对着一块空白
+        show_placeholder(dock, "正在计算…")
         _log(window, f"打开{name}面板：{source.display}")
     dock.setVisible(True)
     dock.raise_()          # 从文件栏点开的图，摆到最前面
@@ -1551,10 +1686,10 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock = _open_plot_panel(window, name, key, title)
             dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）
             dock.panel_item = source.item   # 面板绑定自己的列表条目（重名条目各自成图）
+            show_placeholder(dock, "正在计算…")   # 同上：算完自然被冲掉
             dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步
-            seed_proc_recipe(window, path, dock)   # 处理过的文件：按配方回填
             if merged:
                 opened.append(display)      # 大批量：攒着，循环后一行写完
             else:

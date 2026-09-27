@@ -738,7 +738,7 @@ def _entry_menu(window: QMainWindow, item) -> None:
     if what == "open_checked":
         _open_checked_views(window, "1D")
     elif what == "open_item":
-        _open_entry_view(window, item)
+        _open_entry_view(window, item, explicit=True)   # 右键：原始条目也照开
     elif what == "open_group":
         _open_group_views(window, item)
     elif what == "drop_group":
@@ -757,19 +757,30 @@ def _entry_menu(window: QMainWindow, item) -> None:
         ask_clear_cache(window)
 
 
-def _open_entry_view(window: QMainWindow, item) -> None:
+def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     """双击条目 / 右键 [打开 1D 图]：按条目打开一张面板（两处共用）。
 
     走 window.open_view_source 回调（app 建窗时挂上 plot_views._open_source_view），
     避免本模块反向 import plot_views。双击时第一次单击已经按老手势处理过
     （可能顺手把这条勾上了）——不去撤销：勾上无害，撤销反而打乱用户的选择。
+
+    **原始条目双击不出图**（用户 2026-09-27："原始数据应该双击打不开，因为
+    原始数据可以出各种图"）：双击只给一句指路——原始数据要哪种图由视图按钮
+    定。右键那条 `explicit=True` 照旧打开（菜单上明写着 1D，不会误解）。
+    产物条目两种手势都直接打开：它们天生只有 1D 这一种。
     """
     opener = getattr(window, "open_view_source", None)
     if opener is None or item is None or is_group(item):
         return
     src = gui_sources.source_of(item)
-    if src is not None:
-        opener(src, "1D")
+    if src is None:
+        return
+    if src.kind == gui_sources.RAW and not explicit:
+        _log(window, f"{src.display}：原始数据可以出多种图——先勾上它，再点 "
+                     f"[2D] / [剖面] / [1D] / [瀑布]；只看 1D 用右键 →"
+                     f"「打开 1D 图」")
+        return
+    opener(src, "1D")
 
 
 def _open_group_views(window: QMainWindow, item) -> None:
