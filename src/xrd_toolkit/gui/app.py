@@ -59,6 +59,7 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 matplotlib.rcParams["font.family"] = [
     "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
 from PySide6.QtCore import QEvent, QObject, Qt, QSize
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
@@ -105,8 +106,9 @@ from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_heat)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
-    _hover_leave, _hover_motion, _magnifier_on, _open_plot_panel,
-    _pan_motion, _pan_press, _pan_release, _sync_bar_active, _wheel_zoom)
+    _home_key_reset, _hover_leave, _hover_motion, _magnifier_on,
+    _open_plot_panel, _pan_motion, _pan_press, _pan_release, _sync_bar_active,
+    _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _compute_integration,
     _draw_1d, _open_source_group, _open_source_view, _plot_view, _refresh_proc,
@@ -1839,6 +1841,20 @@ def create_window() -> QMainWindow:
     # _draw_1d / _on_limits_changed 的注释）
     window._layouting = False          # 程序自己在平铺/布局（不算用户拖动）
     window._setting_limits = False     # 程序自己在画图设范围（不算用户改动）
+    window._hover_panel_key = None     # 鼠标最后停留过的面板（Home 键认它）
+
+    # Home 键 = 复位"你正在看的那张图"（回到生成它时的视图，见
+    # plot_panels._home_key_reset）。三条设计要点：
+    #   ① 绑在**窗口**上、作用域 WindowShortcut——不然鼠标停在文件列表
+    #      上时按 Home 会被 Qt 的树控件吃掉（树的 Home = 跳到第一行），
+    #      那正是用户抱怨的"乱跳"；
+    #   ② 焦点在输入框里时 Home 到不了这里：QLineEdit/QAbstractSpinBox
+    #      会把 Home 认成"光标到行首"，所以在数值框里打字不会被打断；
+    #   ③ 只动视图、不动任何设置（见 _SlimToolbar._reset_view）。
+    home_sc = QShortcut(QKeySequence(Qt.Key_Home), window)
+    home_sc.setContext(Qt.WindowShortcut)
+    home_sc.activated.connect(lambda: _home_key_reset(window))
+    window.home_shortcut = home_sc   # 挂住引用，别被回收
 
     # 后台任务簿：进行中的积分任务挂在这里防垃圾回收（结束回调里
     # 移除）；关窗口时逐一 discard（等待后台函数返回，防线程悬空）

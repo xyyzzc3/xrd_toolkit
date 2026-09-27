@@ -5126,6 +5126,96 @@ class TestHomeView(unittest.TestCase):
         finally:
             w.close()
 
+    def test_home_key_resets_the_hovered_panel(self):
+        """Home **键**（不是按钮）= 复位鼠标最后停留过的那张图。
+
+        认"鼠标停留过的"而不是"高亮的"：高亮是点标题栏定的，常常不是用户
+        正在看的那张（用户 2026-09-27："home键改成一按就回到最初的比例"）。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            content = gui_panel_state._content(dock)
+            ax = content.axes_1d
+            x0, y0 = tuple(ax.get_xlim()), tuple(ax.get_ylim())
+            ax.set_xlim(x0[0] + 1.0, x0[1] - 1.0)     # 前置条件：视图被改过
+            QApplication.processEvents()
+            self.assertNotEqual(tuple(ax.get_xlim()), x0)
+            w._hover_panel_key = f"1D|{self.PATH}"    # 鼠标停在这张图上
+            w.home_shortcut.activated.emit()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), x0, "Home 键该复位这张图")
+            self.assertEqual(tuple(ax.get_ylim()), y0, "纵轴也一起回")
+            self.assertIn("[Home] 已回到最初的样子", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_home_key_reaches_the_shortcut(self):
+        """真按一下 Home（走 Qt 的快捷键派发），不是直接触发信号。
+
+        前面两条测的是"收到复位请求之后做什么"，这条测"按键到底有没有送到
+        ——而且焦点在**文件栏**上时也要送到"：Qt 的树控件自带 Home = 跳到
+        第一行，用户抱怨的"一操作就跳回最顶端"里就有它，窗口级快捷键必须
+        盖过它。（探针实测：Qt 只在控件树里有焦点时才派发快捷键。）
+
+        收尾必须先 hide() 再 close()：窗口显示过、面板又没存盘时，close
+        会弹"要保存吗"的模态框，offscreen 下没人点 → 测试挂死。
+        """
+        from PySide6.QtTest import QTest
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = gui_panel_state._content(dock).axes_1d
+            x0 = tuple(ax.get_xlim())
+            ax.set_xlim(x0[0] + 1.0, x0[1] - 1.0)
+            QApplication.processEvents()
+            w._hover_panel_key = f"1D|{self.PATH}"
+            w.show()
+            w.file_list.setFocus()
+            QApplication.processEvents()
+            QTest.keyClick(w.file_list, Qt.Key_Home)
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), x0,
+                             "焦点在文件栏上时 Home 也该复位图")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_home_key_leaves_the_settings_alone(self):
+        """Home 只动画面、**不动设置**：不许关掉"纵轴自动"。
+
+        旧行为（改之前）：设范围会触发"范围 → 参数"写回，_on_ylim_changed
+        顺手把"纵轴自动"取消勾选、纵轴上下限填成家的值——按一次 Home 就
+        悄悄把面板改成手动纵轴，且不可逆。用户 2026-09-27："home键不动
+        设置，只管理识图"。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            ax = gui_panel_state._content(dock).axes_1d
+            x0 = tuple(ax.get_xlim())
+            self.assertTrue(w.params["纵轴自动"].isChecked(), "开图默认纵轴自动")
+            ax.set_xlim(x0[0] + 1.0, x0[1] - 1.0)
+            QApplication.processEvents()
+            w._hover_panel_key = f"1D|{self.PATH}"
+            w.home_shortcut.activated.emit()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), x0, "画面回得去")
+            self.assertTrue(w.params["纵轴自动"].isChecked(),
+                            "Home 不许动「纵轴自动」开关")
+            self.assertTrue(dock.params_snapshot["纵轴自动"],
+                            "快照里的「纵轴自动」也不许动")
+            # 视图窗口要写回快照：否则下一次重画按快照里那份缩放的窗口画，
+            # Home 等于白按（两处一套真相）
+            self.assertAlmostEqual(
+                float(dock.params_snapshot["视图 2θ 下限 (°)"]), x0[0],
+                places=6, msg="视图窗口该写回快照")
+            self.assertAlmostEqual(
+                float(dock.params_snapshot["视图 2θ 上限 (°)"]), x0[1],
+                places=6)
+        finally:
+            w.close()
+
     def test_display_apply_sets_the_new_home(self):
         """亲手把视图范围改成 2~5 再 [应用]（没有手势介入）= 新的"家"：
         Home 回到这个新视图，而不是开图时那个。"""
@@ -10605,6 +10695,38 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 self.assertAlmostEqual(
                     float(np.interp(ax_, base.get_xdata(), base.get_ydata())),
                     ay_, places=6, msg=f"基线应过锚点 2θ={ax_:.3f}°")
+        finally:
+            w.close()
+
+    def test_auto_mode_also_draws_anchor_markers(self):
+        """自动基线下点锚点 → 也要画小圆圈（用户 2026-09-27："圆圈没了"）。
+
+        335db7b 让自动模式（"自动基线（推荐）"）也能拾取锚点、锚点也真的
+        改基线电平（自动 + 锚点校正），画图那道门槛却还写着"只有手动锚点
+        模式才画"——点下去界面毫无反馈。判据：auto 模式 + 有锚点 →
+        辅助线里必须有 bg:anchor，且圆心正好落在锚点上。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            self._set_mode(w, "auto")
+            w.bg_pick_btn.setChecked(True)
+            ax = _axes(w, "1D", self.PATH)
+            for x in (2.0, 5.0):
+                self._click_anchor(w, ax, x)
+            anchors = self._anchors_of(w, dock)
+            self.assertEqual(len(anchors), 2, "自动模式下锚点也该拾取")
+            self.assertEqual(w.params["背景扣除模式"].currentData(), "auto")
+            _, aux = _bg_lines(ax)
+            marker = next(ln for ln in aux if ln.get_gid() == "bg:anchor")
+            np.testing.assert_allclose(sorted(marker.get_xdata()),
+                                       sorted(a[0] for a in anchors))
+            np.testing.assert_allclose(sorted(marker.get_ydata()),
+                                       sorted(a[1] for a in anchors))
+            # 计数标签要带**覆盖范围**：锚点之外是推出来的，不让用户
+            # 以为整条曲线都点过了
+            self.assertIn("2 点", w.bg_count_lbl.text())
+            self.assertIn("覆盖", w.bg_count_lbl.text())
         finally:
             w.close()
 

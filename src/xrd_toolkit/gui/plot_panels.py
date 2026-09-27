@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
 
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panel_state import (_AUX_GID_PREFIX, _content,
-                                            _log, _param_box_set)
+                                            _log, _param_box_set,
+                                            _panel_param)
 from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _close_panel, _install_resize_grip,
                                     _PanelBarFilter, _PanelResizeFilter,
@@ -243,6 +244,39 @@ def _panel_axes(dock):
     return None
 
 
+def _note_hover(window: QMainWindow, key: str, _event=None) -> None:
+    """记下"鼠标最后停留过的面板"——Home 键认它。
+
+    为什么不认"高亮面板"：用户的眼睛在哪张图上，手指就在哪张图上滚轮，
+    但高亮面板是**点选**定的（点一下标题栏才换），常常不是他正在看的那张。
+    """
+    window._hover_panel_key = key
+
+
+def _home_key_reset(window: QMainWindow) -> None:
+    """Home 键：把"你正在看的这张图"复位到**生成它时**的视图。
+
+    复用的就是面板标题栏那个 [Home]（`_reset_view` → `dock.view_home`），
+    所以"最初的样子"的定义只有一处，键盘与按钮不会各说各话。
+
+    认哪张图：鼠标最后停留过的面板，没有就退回高亮面板。
+    作用范围由 app.create_window 里那个 QShortcut 限定：焦点在输入框里时
+    Home 根本到不了这里（QLineEdit 会把 Home 吃掉变成"光标到行首"），
+    所以在数值框里打字不会突然被复位。
+    """
+    docks = getattr(window, "plot_docks", {}) or {}
+    key = getattr(window, "_hover_panel_key", None)
+    if key not in docks:
+        key = getattr(window, "focus_panel", None)
+    dock = docks.get(key)
+    if dock is None:
+        return
+    toolbar = getattr(_content(dock), "toolbar", None)
+    action = getattr(toolbar, "_actions", {}).get("home")
+    if action is not None:
+        action.trigger()
+
+
 def _refresh_home(dock, ax=None):
     """程序自己重画后：维护这张面板的"家"视图（`dock.view_home`）。
 
@@ -384,6 +418,13 @@ class _SlimToolbar(QWidget):
         平移、改显示参数后 [应用]，都不动它——所以按 Home 就是回到
         "最初的样子"，而不是"上次画的位置"（用户 2026-09-24 的要求）。
         还没算过（没有"家"）就退回"按参数重画一张"（_redraw_panel）。
+
+        **Home 只动画面、不动设置**（用户 2026-09-27："home键不动设置，
+        只管理识图"）：设范围时挂上 `_setting_limits`（"程序自己在画图"
+        同一个旗标）挡住"范围 → 参数"的写回。不挡的话，下面两次 set_*lim
+        会触发 _on_xlim_changed/_on_ylim_changed，把"纵轴自动"取消勾选、
+        把纵轴上下限填成家的值——按一次 Home 就悄悄把面板改成手动纵轴，
+        而且不可逆。
         """
         if self._window is None or self._panel_key is None:
             return
@@ -403,10 +444,21 @@ class _SlimToolbar(QWidget):
                 _log(window, f"[Home] 已回到参数定义的视图：{title}")
             return
         (xlo, xhi), (ylo, yhi), yscale = home
-        ax.set_xlim(xlo, xhi)
-        ax.set_ylim(ylo, yhi)
-        if ax.get_yscale() != yscale:
-            ax.set_yscale(yscale)
+        window._setting_limits = True
+        try:
+            ax.set_xlim(xlo, xhi)
+            ax.set_ylim(ylo, yhi)
+            if ax.get_yscale() != yscale:
+                ax.set_yscale(yscale)
+        finally:
+            window._setting_limits = False
+        # 但"视图窗口"仍要写回快照（缩放/平移写回的也是这一处，快照才是
+        # 权威）：不写的话，下一次重画会按快照里那份缩放的窗口画，Home
+        # 等于白按。纵轴**只在本来就是手动时**跟着写——绝不替用户翻
+        # "纵轴自动"开关（那是用户的选择，不是 Home 的事）。
+        _on_xlim_changed(window, self._panel_key, ax)
+        if not _panel_param(window, dock, "纵轴自动", True):
+            _on_ylim_changed(window, self._panel_key, ax)
         ax.figure.canvas.draw_idle()
         _log(window, f"[Home] 已回到最初的样子：{title}")
 
@@ -941,6 +993,10 @@ def _build_canvas_panel(window: QMainWindow, key: str, ax_attr: str,
                        lambda ev, k=key: _pan_release(window, k, ev))
     canvas.mpl_connect("scroll_event",
                        lambda ev, k=key: _wheel_zoom(window, k, ev))
+    # 鼠标最后停留过的面板（Home 键认它，见 _home_key_reset）。单独挂一条
+    # 而不是塞进 _pan_motion：那个函数没按键时立刻返回，记不到"停留"。
+    canvas.mpl_connect("motion_notify_event",
+                       lambda ev, w=window, k=key: _note_hover(w, k, ev))
     # 范围同步写回：缩放/平移/Home/Customize 对话框改动 x/y 范围
     # → 写回该面板快照 + 焦点时同步参数坞控件（x/y 分开处理：
     # 动 x 只写视图范围，动 y 才关纵轴自动，见两个处理函数）。

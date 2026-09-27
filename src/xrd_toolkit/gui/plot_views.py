@@ -640,6 +640,12 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
     辅助线混进去会让样式回填错位、悬停点乱跳。
     锚点直接从 window.bg_anchors 重建（不存 dock 属性），所以面板
     弹出/收回、参数重画都不会丢。
+
+    锚点圆圈在**手动锚点**与**自动基线（自动 + 锚点校正）**两种模式下
+    都画：后者的锚点同样参与计算（改的是基线的电平，见
+    background._correct_with_anchors），点上去却没有圆圈反馈——用户
+    2026-09-27 报的"小圆圈没了"就是这个门槛漏了 auto 模式（335db7b
+    放宽了拾取与计算，忘了放宽画图）。
     """
     ax.plot(tth, base, linestyle=":", lw=1.0, color="#1baf7a",
             gid=_AUX_GID_PREFIX + "baseline", label="基线")
@@ -647,7 +653,8 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
         ax.plot(tth, intensity, linestyle="--", lw=0.6, color="#999999",
                 gid=_AUX_GID_PREFIX + "raw", label="原始")
     anchors = getattr(window, "bg_anchors", {}).get(str(path), [])
-    if anchors and _panel_param(window, dock, "背景扣除模式", "off") == "anchor":
+    if anchors and _panel_param(window, dock, "背景扣除模式",
+                                "off") in ("anchor", "auto"):
         xs = [p[0] for p in anchors]
         ys = [p[1] for p in anchors]
         ln = ax.plot(xs, ys, "o", ms=6, mfc="none", mec="#e34948", mew=1.4,
