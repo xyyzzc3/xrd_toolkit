@@ -64,6 +64,7 @@
 运行：python -m unittest discover -s tests -v
 """
 import ast
+import itertools
 import json
 import os
 import re
@@ -1354,7 +1355,7 @@ class TestCurveColors(unittest.TestCase):
                                side_effect=_fake_compare_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比|")]
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
             self.assertEqual(len(keys), 1)
             ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
@@ -1444,7 +1445,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
                                side_effect=_fake_compare_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比|")]
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
             self.assertEqual(len(keys), 1)
             ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
@@ -1731,8 +1732,18 @@ def _kw_of(w):
                 tth_max=geom.get("tth_max_deg"))
 
 
-def _tmp_files(n=2, prefix="s"):
-    """临时目录里造 n 个真文件（产物要有真文件才算得出指纹）。"""
+_TMP_SEQ = itertools.count(1)
+
+
+def _tmp_files(n=2, prefix=None):
+    """临时目录里造 n 个真文件（产物要有真文件才算得出指纹）。
+
+    prefix 默认**按调用序号唯一**（f1_、f2_…）：整个测试模块共用同一个缓存
+    目录，而文件栏扫盘认产物时靠"全路径（新产物）/文件名（老产物）"——
+    不同测试若用同名文件（都叫 s1.tif），扫盘会把甲的产物挂到乙名下。
+    要按名字断言的地方显式传 prefix。
+    """
+    prefix = prefix or f"f{next(_TMP_SEQ)}_"
     folder = Path(tempfile.mkdtemp(prefix="xrd_gui_src_"))
     out = []
     for i in range(1, n + 1):
@@ -2134,13 +2145,45 @@ class TestProductGroups(unittest.TestCase):
         finally:
             w.close()
 
-    def test_products_from_an_older_algorithm_are_hidden(self):
-        """换过背景算法之后，那一批旧产物**不再在文件栏里露面**（文件还在盘上）。
+    def test_oned_group_lists_products_from_other_settings(self):
+        """改了 2θ 范围之后，按旧范围算的 1D 产物**照样列着**（名字里标注）。
 
-        2026-09-27：锚点外推失控算了 68 份歪曲线（−3000 量级）。版本进产物
-        键只保证"不再复用"，可盘上的旧产物和台账条目还会把那一组列出来——
-        勾上去做对比，看到的还是旧算法的曲线，用户会以为"改了没用"。
-        判据 = 产物元数据里的 algo 版本（见 stage_cache.bg_product_stale）。
+        用户 2026-09-28："我在处理1d图时，处理后的图把1d图的文件给替换了…
+        删除缓存的文件只能用户自己删"。真相：盘上一份没少，是文件栏那颗
+        「1D 产物」组按**当前设置**正查键，而 2θ 范围是缓存身份的一半——
+        他把上限从 8.0 改成 7.0 之后那一组整个空掉，看起来像被顶掉了。
+        现在改成扫盘：磁盘上有什么就显示什么，不一样的地方写在名字里。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=False)
+            kw = _kw_of(w)
+            # 按"旧范围"（1–7°）存一份产物——与窗口当前的 1–8° 不同
+            keys = [Path(stage_cache.store_1d(
+                f, np.linspace(1.0, 7.0, 5), np.array([1.0, 2.0, 3.0, 2.0, 1.0]),
+                config=kw["config"], npt=kw["npt"],
+                tth_min=1.0, tth_max=7.0)).stem for f in files]
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group, "旧范围的产物也必须列出来")
+            self.assertEqual(group.childCount(), 2)
+            leaf = group.child(0)
+            self.assertIn("2θ", leaf.text(0), "名字里标出它按什么范围算的")
+            self.assertIn("1–7", leaf.text(0).replace("–", "–"))
+            self.assertIn("与当前设置不同", leaf.toolTip(0))
+            src = gui_sources.source_of(leaf)
+            self.assertIn(src.key, keys, "挂着的是那一份产物的键（点开读它）")
+        finally:
+            w.close()
+
+    def test_products_from_an_older_algorithm_are_flagged_not_hidden(self):
+        """换过背景算法之后，旧产物**照样列出来**，只在名字里标"不可信"。
+
+        2026-09-27：锚点外推失控算了 68 份歪曲线（−3000 量级）——那批不能
+        再用来下结论（判据 = 元数据里的 algo 版本）。但**不能因此把它们藏
+        起来**：用户 2026-09-28 定的规矩是"缓存里有什么就显示什么，删不删
+        由我自己决定"（他刚被"东西怎么会不见"咬过一次）。
         """
         w = create_window()
         try:
@@ -2152,16 +2195,18 @@ class TestProductGroups(unittest.TestCase):
                 label="处理后 01-01 00:00（自动基线）",
                 items=[(files[0], key)], config=w.config_name, npt=1000)
             w.refresh_groups()
-            self.assertIsNotNone(_group_by_text(w, "处理后 01-01"),
-                                 "前提：当前算法的产物该露面")
+            group = _group_by_text(w, "处理后 01-01")
+            self.assertIsNotNone(group, "前提：产物该露面")
             # 模拟"换了背景算法"：版本号 +1 → 已存的产物立刻变成旧的
             with mock.patch.object(stage_cache, "BG_ALGO_VERSION",
                                    stage_cache.BG_ALGO_VERSION + 1):
                 w.refresh_groups()
-                self.assertIsNone(_group_by_text(w, "处理后 01-01"),
-                                  "旧算法算的产物不该在文件栏里露面")
-            self.assertIn("旧算法", w.log_text.toPlainText(),
-                          "要说清它们去哪了")
+                group = _group_by_text(w, "处理后 01-01")
+                self.assertIsNotNone(group, "旧产物也要照样列着（不藏）")
+                leaf = group.child(0)
+                self.assertIn("旧算法", leaf.text(0), "名字里要标出来")
+                self.assertIn("不可信", leaf.toolTip(0))
+            self.assertIn("旧算法", w.log_text.toPlainText(), "日志说清怎么回事")
             self.assertTrue(stage_cache.has_key("bg", key),
                             "产物文件不删（删不删用户说了算）")
         finally:
@@ -2279,8 +2324,8 @@ class TestProductGroups(unittest.TestCase):
                 w.compare_btn.click()
                 QApplication.processEvents()
                 self.assertEqual(compute.call_count, 0, "产物不该重新积分")
-            key = "对比|" + ",".join(sorted(f"bg#{k}" for k in keys))
-            ax = _axes(w, "对比", key.split("|", 1)[1])
+            # 单槽：对比面板的键就是 "对比"（不再带文件串），直接取那张
+            ax = gui_panel_state._content(w.plot_docks["对比"]).axes_1d
             self.assertEqual(len(ax.lines), 2)
             labels = [ln.get_label() for ln in ax.lines]
             self.assertTrue(all("处理" in lb for lb in labels), labels)
@@ -4119,7 +4164,7 @@ class TestImageApply(unittest.TestCase):
                 add_checked(w, ["data/fake_b.tif"])   # fake_a 仍勾着
                 w.compare_btn.click()
                 cax = gui_panel_state._content([d for k, d in w.plot_docks.items()
-                                        if k.startswith("对比|")][0]).axes_1d
+                                        if k.startswith("对比")][0]).axes_1d
                 self.assertTrue(_wait_until(lambda: len(cax.lines) >= 2))
             # 焦点此时在对比面板；切到 1D 面板改参数 → 应用 → 只动 1D
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
@@ -4131,7 +4176,7 @@ class TestImageApply(unittest.TestCase):
             self.assertEqual(cax.get_yscale(), "linear")   # 对比没被波及
             # 对比面板自己的快照仍是旧设置（对数关），1D 面板已更新
             cdock = [d for k, d in w.plot_docks.items()
-                     if k.startswith("对比|")][0]
+                     if k.startswith("对比")][0]
             self.assertFalse(cdock.params_snapshot["对数纵轴"])
             self.assertTrue(
                 _dock(w, "1D", "data/fake_a.tif").params_snapshot["对数纵轴"])
@@ -4241,7 +4286,7 @@ class TestImageApply(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])   # fake_b 仍勾着
                 w.compare_btn.click()
                 cdock = [d for k, d in w.plot_docks.items()
-                         if k.startswith("对比|")][0]
+                         if k.startswith("对比")][0]
                 self.assertTrue(_wait_until(
                     lambda: len(gui_panel_state._content(cdock).axes_1d.lines) >= 2))
             snap = cdock.params_snapshot
@@ -4394,8 +4439,8 @@ class TestCompare(unittest.TestCase):
     集合重复点 = 复用面板刷新；"对比归一化到最强峰"只动显示层。"""
 
     def _compare_axes(self, w):
-        """取唯一的对比面板坐标轴（面板键以 "对比|" 开头）。"""
-        keys = [k for k in w.plot_docks if k.startswith("对比|")]
+        """取唯一的对比面板坐标轴（面板键就是 "对比"——单槽）。"""
+        keys = [k for k in w.plot_docks if k.startswith("对比")]
         self.assertEqual(len(keys), 1)
         return gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
 
@@ -4408,6 +4453,62 @@ class TestCompare(unittest.TestCase):
             ax = self._compare_axes(w)
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
+
+    def test_compare_is_a_single_slot_rebuilt_from_the_current_checks(self):
+        """对比只有一张面板，永远按**当前**勾选重建——不留上一次的曲线。
+
+        用户 2026-09-28："对比图还是不对，我选了处理后产物 81 个结果对比图
+        是二百多个的" + "无论什么时候，都是执行当前勾选，不存在以前勾选
+        影响现在的情况"。旧版把面板键做成"对比｜排序后的路径串"：改了勾选
+        再按一次就**另开一张**，旧那张（243 条）还赖在屏幕上——用户看到的
+        是旧画面。现在键固定为 "对比"，就地重建。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
+                                "data/fake_c.tif"])
+                w.compare_btn.click()
+                ax = self._compare_axes(w)
+                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+                # 取消一个 → 再按 [对比]：还是同一张面板，只剩 2 条
+                w.file_list.raw_group.child(2).setCheckState(0, Qt.Unchecked)
+                QApplication.processEvents()
+                w.compare_btn.click()
+                ax2 = self._compare_axes(w)     # 数量断言在助手里面
+                self.assertTrue(_wait_until(lambda: len(ax2.lines) == 2),
+                                "取消勾选的曲线必须消失（没有记忆）")
+                self.assertIn("按当前勾选重建", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_compare_title_shows_the_mix_when_kinds_are_mixed(self):
+        """混类勾选时标题写明构成（"原始 1 ｜ 处理后 1"）——单一类时保持干净。"""
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=False)
+            for f in files:
+                _store_product(w, f)                      # 1D 产物
+            w.refresh_groups()
+            raw = w.file_list.raw_group
+            raw.child(0).setCheckState(0, Qt.Checked)     # 原始 1
+            grp = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(grp)
+            grp.child(0).setCheckState(0, Qt.Checked)     # 产物 1
+            QApplication.processEvents()
+            titles = []
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.compare_btn.click()
+                QApplication.processEvents()
+                dock = next(d for k, d in w.plot_docks.items()
+                            if k.startswith("对比"))
+                titles.append(dock.windowTitle())
+            self.assertIn("｜", titles[0], "混类要写清构成")
+        finally:
+            w.close()
 
     def test_strip_common_shortens_batch_names_only(self):
         """短名助手：剥批次前缀与扩展名换出号段；短名字不剥（免得只剩 a）。"""
@@ -4445,16 +4546,20 @@ class TestCompare(unittest.TestCase):
             self.assertIn("悬停读数", log)
             # 少到阈值以内 → 图例回来（用短名）
             dock = w.plot_docks[[k for k in w.plot_docks
-                                 if k.startswith("对比|")][0]]
+                                 if k.startswith("对比")][0]]
             for key in list(dock.compare_data)[2:]:
                 hidden = set(getattr(dock, "compare_hidden", None) or ())
                 dock.compare_hidden = hidden | {key}
             gui_plot_compare._redraw_compare(w, dock.panel_key)
             leg = ax.get_legend()
             self.assertIsNotNone(leg, "两条曲线的图例该回来")
-            # 名字 = 短名（临时文件叫 s1/s2，扩展名已剥掉）
-            self.assertEqual([t.get_text() for t in leg.get_texts()],
-                             [Path(p).stem for p in files[:2]])
+            # 名字 = **短名**（来自文件名，可能已剥掉公共前缀/扩展名）：
+            # 断言"是文件名的一部分"就够了——具体怎么剥由
+            # test_strip_common_shortens_batch_names_only 管，别在这里写死
+            labels = [t.get_text() for t in leg.get_texts()]
+            self.assertEqual(len(labels), 2)
+            for lbl, p in zip(labels, files[:2]):
+                self.assertIn(lbl, Path(p).stem, "图例名该来自文件名")
         finally:
             w.close()
 
@@ -4466,7 +4571,7 @@ class TestCompare(unittest.TestCase):
             w.compare_btn.click()
             self.assertIn("对比至少勾选两个文件", w.log_text.toPlainText())
             self.assertFalse(
-                [k for k in w.plot_docks if k.startswith("对比|")])
+                [k for k in w.plot_docks if k.startswith("对比")])
         finally:
             w.close()
 
@@ -4480,7 +4585,7 @@ class TestCompare(unittest.TestCase):
                              ["fake_a.tif", "fake_b.tif"])
             self.assertIsNotNone(ax.get_legend())
             # 完成后对比面板成为编辑对象，日志报 2 条曲线
-            self.assertTrue(w.focus_panel.startswith("对比|"))
+            self.assertTrue(w.focus_panel.startswith("对比"))
             self.assertIn("对比完成：2 条曲线", w.log_text.toPlainText())
         finally:
             w.close()
@@ -4521,7 +4626,7 @@ class TestCompare(unittest.TestCase):
         try:
             ax = self._plot_compare(w)
             dock = [d for k, d in w.plot_docks.items()
-                    if k.startswith("对比|")][0]
+                    if k.startswith("对比")][0]
             for stale in ("each", True, None, "nonsense"):
                 dock.params_snapshot["对比归一化"] = stale
                 gui_plot_compare._redraw_compare(w, dock.panel_key)
@@ -4542,7 +4647,7 @@ class TestCompare(unittest.TestCase):
             w.findChild(QPushButton, "apply_image_btn").click()
             # 快照记下关归一化，fake_b 曲线回到原始强度（最强峰 30）
             dock = [d for k, d in w.plot_docks.items()
-                    if k.startswith("对比|")][0]
+                    if k.startswith("对比")][0]
             self.assertEqual(dock.params_snapshot["对比归一化"], "off")
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
@@ -4629,7 +4734,7 @@ class TestCompare(unittest.TestCase):
             target.setCurrentIndex(target.findData("data/fake_a.tif"))
             w.findChild(QPushButton, "apply_image_btn").click()
             dock = [d for k, d in w.plot_docks.items()
-                    if k.startswith("对比|")][0]
+                    if k.startswith("对比")][0]
             self.assertEqual(str(dock.params_snapshot["归一化目标"]),
                              "data/fake_a.tif")
             peaks = sorted(float(np.max(line.get_ydata()))
@@ -4665,14 +4770,14 @@ class TestCompare(unittest.TestCase):
         try:
             ax = self._plot_compare(w)
             dock_before = [d for k, d in w.plot_docks.items()
-                           if k.startswith("对比|")][0]
+                           if k.startswith("对比")][0]
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 self.assertTrue(_wait_until(
                     lambda: w.log_text.toPlainText().count("对比完成") >= 2))
             self.assertEqual(len([k for k in w.plot_docks
-                                  if k.startswith("对比|")]), 1)
+                                  if k.startswith("对比")]), 1)
             self.assertIs(dock_before, w.plot_docks[w.focus_panel])
             self.assertEqual(len(ax.lines), 2)
             self.assertEqual(w.log_text.toPlainText().count("开始对比"),
@@ -5762,6 +5867,192 @@ class TestStageCacheFlow(unittest.TestCase):
             w.close()
 
 
+class TestBoxZoomOnAggregateViews(unittest.TestCase):
+    """框选放大在**对比图 / 热图**上也要留得住（用户 2026-09-28："热图和
+    对比图的画框放大还是有bug"）。
+
+    热图缺的是两块：面板建的时候 `sync=""`（范围**从不写回快照**）+ 画完没
+    重连坐标轴回调（`ax.clear()` 会把回调注册表清空）→ 缩放永远进不了快照，
+    任何一次重画都按数据自动缩放把它顶掉。对比图那条是把"重画按快照摆回
+    视图"的口径补齐后验证没退化。
+    """
+
+    FILES = ["data/fake_a.tif", "data/fake_b.tif"]
+
+    def _open_compare(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            add_checked(w, self.FILES)
+            w.compare_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: "对比完成" in w.log_text.toPlainText()))
+        dock = next(d for k, d in w.plot_docks.items() if k.startswith("对比"))
+        return dock, gui_panel_state._content(dock).axes_1d
+
+    def _open_heatmap(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            add_checked(w, self.FILES)
+            w.heat_btn.click()
+            key = next((k for k in w.plot_docks if k.startswith("热图")), None)
+            self.assertTrue(_wait_until(
+                lambda: key is not None and getattr(w.plot_docks[key],
+                                                    "heat_data", None)
+                is not None), "热图该算完")
+        dock = w.plot_docks[key]
+        return dock, gui_panel_state._content(dock).axes_heat
+
+    def _box_zoom(self, dock, ax):
+        """放大镜点亮 + 拖一个 80×60 像素的框（真事件的形状）。"""
+        content = gui_panel_state._content(dock)
+        content.toolbar._actions["zoom"].trigger()
+        x0, y0 = ax.transData.transform((np.mean(ax.get_xlim()),
+                                         np.mean(ax.get_ylim())))
+        for name, dx, dy, kw in (
+                ("button_press_event", 0, 0, {"button": 1}),
+                ("motion_notify_event", 80, 60,
+                 {"button": 1, "buttons": frozenset({1})}),
+                ("button_release_event", 80, 60, {"button": 1})):
+            content.canvas.callbacks.process(name, MouseEvent(
+                name, content.canvas, x0 + dx, y0 + dy, **kw))
+        QApplication.processEvents()
+
+    def _survives_apply(self, w, dock, ax):
+        before = (ax.get_xlim(), ax.get_ylim())
+        self._box_zoom(dock, ax)
+        zoomed = (ax.get_xlim(), ax.get_ylim())
+        self.assertNotEqual(before, zoomed, "前提：框选真的缩了")
+        gui_panel_state._set_focus(w, dock.panel_key, dock.windowTitle())
+        QApplication.processEvents()
+        gui_views._apply_image_params(w)      # [应用] = 用已有数据重画
+        QApplication.processEvents()
+        for got, want in zip(ax.get_xlim(), zoomed[0]):
+            self.assertAlmostEqual(got, want, delta=0.1,
+                                   msg="[应用] 之后 x 范围该保住")
+        for got, want in zip(ax.get_ylim(), zoomed[1]):
+            self.assertAlmostEqual(got, want, delta=0.1,
+                                   msg="[应用] 之后 y 范围该保住")
+
+    def test_box_zoom_on_the_compare_survives_a_redraw(self):
+        w = create_window()
+        try:
+            dock, ax = self._open_compare(w)
+            self._survives_apply(w, dock, ax)
+        finally:
+            w.close()
+
+    def test_box_zoom_on_the_heatmap_survives_a_redraw(self):
+        w = create_window()
+        try:
+            dock, ax = self._open_heatmap(w)
+            self._survives_apply(w, dock, ax)
+            # 换色图 = 又一次重画，缩放同样要留住
+            zoomed = (ax.get_xlim(), ax.get_ylim())
+            combo = w.params.get("热图色图")
+            combo.setCurrentIndex((combo.currentIndex() + 1) % combo.count())
+            gui_views._apply_image_params(w)
+            QApplication.processEvents()
+            for got, want in zip(ax.get_xlim(), zoomed[0]):
+                self.assertAlmostEqual(got, want, delta=0.1,
+                                       msg="换色图之后 x 范围该保住")
+        finally:
+            w.close()
+
+
+class TestBoxZoomOnPixelViews(unittest.TestCase):
+    """像素轴视图（2D / 剖面 / 瀑布）的框选放大也要留得住。
+
+    用户 2026-09-28："别的图的放大检查一下"。这三张图的轴是**像素/行号**，
+    没有 2θ / 强度那样的语义参数，范围原本**从不写回快照** → 任何一次重画
+    （[应用]、换色图/对比度）都被自动缩放顶掉。现在它们走一对通用键
+    （`视图 x 范围` / `视图 y 范围`，见 plot_views._apply_plain_view）。
+    """
+
+    def _box_zoom(self, dock, ax):
+        content = gui_panel_state._content(dock)
+        content.toolbar._actions["zoom"].trigger()
+        x0, y0 = ax.transData.transform((np.mean(ax.get_xlim()),
+                                         np.mean(ax.get_ylim())))
+        for name, dx, dy, kw in (
+                ("button_press_event", 0, 0, {"button": 1}),
+                ("motion_notify_event", 60, 50,
+                 {"button": 1, "buttons": frozenset({1})}),
+                ("button_release_event", 60, 50, {"button": 1})):
+            content.canvas.callbacks.process(name, MouseEvent(
+                name, content.canvas, x0 + dx, y0 + dy, **kw))
+        QApplication.processEvents()
+
+    def _survives_apply(self, w, dock, ax):
+        before = (ax.get_xlim(), ax.get_ylim())
+        self._box_zoom(dock, ax)
+        zoomed = (ax.get_xlim(), ax.get_ylim())
+        self.assertNotEqual(before, zoomed, "前提：框选真的缩了")
+        gui_panel_state._set_focus(w, dock.panel_key, dock.windowTitle())
+        QApplication.processEvents()
+        gui_views._apply_image_params(w)      # [应用] = 用已有数据重画
+        QApplication.processEvents()
+        for got, want in zip(ax.get_xlim(), zoomed[0]):
+            self.assertAlmostEqual(got, want, delta=0.5,
+                                   msg="[应用] 之后 x 范围该保住")
+        for got, want in zip(ax.get_ylim(), zoomed[1]):
+            self.assertAlmostEqual(got, want, delta=0.5,
+                                   msg="[应用] 之后 y 范围该保住")
+
+    def test_box_zoom_on_the_2d_view_survives_a_redraw(self):
+        w = create_window()
+        try:
+            fake_image = np.arange(400, dtype=float).reshape(20, 20)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=fake_image):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "2D")
+                dock = _dock(w, "2D", "data/fake_b.tif")
+                self.assertTrue(_wait_until(
+                    lambda: len(gui_panel_state._content(
+                        dock).axes_2d.images) > 0))
+            self._survives_apply(
+                w, dock, gui_panel_state._content(dock).axes_2d)
+        finally:
+            w.close()
+
+    def test_box_zoom_on_the_profile_survives_a_redraw(self):
+        w = create_window()
+        try:
+            def fake_profile(image, center, angle_deg=0.0):
+                t = np.linspace(-100.0, 100.0, 41)
+                return t, 10.0 + 5.0 * np.sin(t / 20.0)
+
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "line_profile",
+                                   side_effect=fake_profile):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "剖面")
+                dock = _dock(w, "剖面", "data/fake_b.tif")
+                self.assertTrue(_wait_until(
+                    lambda: len(gui_panel_state._content(
+                        dock).axes_profile.lines) > 0))
+            self._survives_apply(
+                w, dock, gui_panel_state._content(dock).axes_profile)
+        finally:
+            w.close()
+
+    def test_box_zoom_on_the_waterfall_survives_a_redraw(self):
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_waterfall",
+                                   side_effect=_fake_waterfall_compute):
+                add_checked(w, ["data/fake_w.tif"])
+                _open_view(w, "瀑布")
+                dock = _dock(w, "瀑布", "data/fake_w.tif")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(dock, "last_waterfall", None) is not None))
+            self._survives_apply(
+                w, dock, gui_panel_state._content(dock).axes_waterfall)
+        finally:
+            w.close()
+
+
 class TestBoxZoom(unittest.TestCase):
     """放大镜点亮时左键拖 = 框选放大（2026-09-24 用户要求加回来：
     "再加回去放大镜框选放大，注意上次那个bug，不要再出现了"）。
@@ -6020,7 +6311,7 @@ class TestHoverDot(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 key = next(k for k in w.plot_docks
-                           if k.startswith("对比|"))
+                           if k.startswith("对比"))
                 dock = w.plot_docks[key]
                 _wait_until(
                     lambda: len(gui_panel_state._content(dock).axes_1d.lines) >= 2)
@@ -7760,11 +8051,11 @@ class TestPanelClose(unittest.TestCase):
                                    side_effect=slow):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
-                keys = [k for k in w.plot_docks if k.startswith("对比|")]
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
                 self.assertTrue(_wait_until(lambda: keys))
                 gui_panels._close_panel(w, keys[0])   # 旧代任务还在飞
                 w.compare_btn.click()              # 重开新面板（新代）
-                keys = [k for k in w.plot_docks if k.startswith("对比|")]
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
                 self.assertTrue(_wait_until(lambda: keys))
                 ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
                 self.assertTrue(_wait_until(lambda: len(ax.lines) == 2))
@@ -10404,13 +10695,13 @@ class TestHeatmap(unittest.TestCase):
             40, "9 英寸高的面板放得下 40 个")
 
     def _heat_dock(self, w):
-        """找到热图面板（键 = "热图|路径串"）。"""
+        """找到热图面板（键 = "热图"——单槽）。"""
         return next(d for k, d in w.plot_docks.items()
-                    if k.startswith("热图|"))
+                    if k.startswith("热图"))
 
     def _wait_heat(self, w):
         return _wait_until(
-            lambda: any(k.startswith("热图|")
+            lambda: any(k.startswith("热图")
                         and getattr(d, "heat_data", None) is not None
                         for k, d in w.plot_docks.items()))
 
@@ -10502,7 +10793,7 @@ class TestHeatmap(unittest.TestCase):
             self.assertIsNotNone(dock._heat_colorbar)
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a", "fake_b"])
-            self.assertTrue(w.focus_panel.startswith("热图|"))
+            self.assertTrue(w.focus_panel.startswith("热图"))
         finally:
             w.close()
 
@@ -11148,7 +11439,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             try:
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 gui_plot_compare._plot_compare(w)
-                keys = [k for k in w.plot_docks if k.startswith("对比|")]
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
                 self.assertTrue(_wait_until(lambda: len(keys) == 1))
                 key = keys[0]
                 dock = w.plot_docks[key]

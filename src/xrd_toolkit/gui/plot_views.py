@@ -1231,6 +1231,30 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
+def _apply_plain_view(window: QMainWindow, dock, ax) -> bool:
+    """像素轴面板（2D / 剖面 / 瀑布）按快照摆回视图窗口；返回"是不是缩放窗口"。
+
+    1D / 对比 / 热图 走的是**语义键**（视图 2θ 范围 + 纵轴自动/上下限）；
+    这三张图的轴是像素或行号，没有那样的参数，所以用一对通用键
+    （`视图 x 范围` / `视图 y 范围`，由 _on_xlim_changed/_on_ylim_changed 写）。
+
+    用户 2026-09-28："别的图的放大检查一下"——它们原本**从不记**缩放，
+    于是任何一次重画（[应用]、换色图/对比度）都被自动缩放顶掉。
+    """
+    zoomed = False
+    for name, setter in (("视图 x 范围", ax.set_xlim),
+                         ("视图 y 范围", ax.set_ylim)):
+        rng = _panel_param(window, dock, name, None)
+        try:
+            lo, hi = float(rng[0]), float(rng[1])
+        except (TypeError, IndexError, ValueError):
+            continue        # 没有 / 坏了：这一维按数据自动
+        if lo < hi:
+            setter(lo, hi)
+            zoomed = True
+    return zoomed
+
+
 def _draw_2d(window: QMainWindow, dock, image) -> None:
     """在指定的 2D 面板画出衍射图：对数色标 + 颜色条 + 对比度参数 + 束心十字。
 
@@ -1280,10 +1304,14 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         dock._colorbar_2d.ax.tick_params(labelsize=7)
         cy, cx = window.config["beam_center"]
         ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
+        zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _content(dock).draw()
     finally:
         window._setting_limits = False
+    _connect_axis_sync(window, dock.panel_key, ax)   # ax.clear() 清掉了回调
+    if zoomed:
+        dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
     _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
@@ -1321,6 +1349,15 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
                 ylo = max(ylo, 1e-6)
         if ylo < yhi:
             ax.set_ylim(ylo, yhi)
+        # x 是像素距离、没有强度/2θ 那样的语义键 → 只取通用键那一半
+        rng = _panel_param(window, dock, "视图 x 范围", None)
+        try:
+            xlo, xhi = float(rng[0]), float(rng[1])
+        except (TypeError, IndexError, ValueError):
+            xlo = xhi = None
+        zoomed = xlo is not None and xlo < xhi
+        if zoomed:
+            ax.set_xlim(xlo, xhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         # 颜色跟"曲线配色"参数走（参数本身就是用户改色的入口），
         # 线型/线宽/标记照旧保护
@@ -1329,8 +1366,11 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
-    _connect_axis_sync(window, dock.panel_key, ax=ax,
-                       sync_x=False)   # 只写回纵轴（x = 像素距离）
+    # x 也要接（写通用键"视图 x 范围"）：不接的话剖面横向的缩放白做
+    # （用户 2026-09-28："别的图的放大检查一下"；y 一直是接的）
+    _connect_axis_sync(window, dock.panel_key, ax=ax, sync_x=True)
+    if zoomed:
+        dock._view_from_gesture = True   # 缩放的窗口不是"家"
     _refresh_home(dock, ax)
     dock.figure_saved = False
 
@@ -1421,6 +1461,7 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
                     color=colors[k], lw=0.5)
         ax.set_yticks(offsets)
         ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=6)
+        zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
         for line, c in zip(_data_lines(ax), chi):
@@ -1429,6 +1470,9 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
+    _connect_axis_sync(window, dock.panel_key, ax)   # ax.clear() 清掉了回调
+    if zoomed:
+        dock._view_from_gesture = True   # 缩放的窗口不是"家"
     _refresh_home(dock, ax)
     dock.figure_saved = False
 

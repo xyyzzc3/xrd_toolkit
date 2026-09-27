@@ -710,6 +710,15 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
     ax.figure.canvas.draw_idle()
 
 
+# x 轴是 2θ 的视图：范围写进"视图 2θ 范围"两个语义键。
+# 其余视图（2D / 剖面 / 瀑布）的 x 是**像素**，没有 2θ 语义，
+# 走通用键"视图 x 范围"（见下面的两个回调与 _apply_plain_view）。
+_TTH_X_VIEWS = ("1D", "对比", "热图")
+# y 轴是**强度**的视图（剖面也是）：范围写进"纵轴自动/上下限"。
+# 热图的 y 是样品行、2D 与瀑布是像素/行偏移 → 走通用键"视图 y 范围"。
+_INTENSITY_Y_VIEWS = ("1D", "对比", "剖面")
+
+
 def _on_xlim_changed(window: QMainWindow, key: str, ax) -> None:
     """x 范围被改动（缩放/平移/Home/Customize 对话框）→ 写回视图
     2θ 范围（看图的窗口，与数据组的积分 2θ 范围互不干扰）。
@@ -728,11 +737,17 @@ def _on_xlim_changed(window: QMainWindow, key: str, ax) -> None:
     if not snap:
         return
     xlo, xhi = ax.get_xlim()
-    snap["视图 2θ 下限 (°)"] = float(xlo)
-    snap["视图 2θ 上限 (°)"] = float(xhi)
-    if window.plot_docks.get(window.focus_panel) is dock:
-        _param_box_set(window, "视图 2θ 下限 (°)", xlo)
-        _param_box_set(window, "视图 2θ 上限 (°)", xhi)
+    if key.split("|", 1)[0] in _TTH_X_VIEWS:
+        snap["视图 2θ 下限 (°)"] = float(xlo)
+        snap["视图 2θ 上限 (°)"] = float(xhi)
+        if window.plot_docks.get(window.focus_panel) is dock:
+            _param_box_set(window, "视图 2θ 下限 (°)", xlo)
+            _param_box_set(window, "视图 2θ 上限 (°)", xhi)
+    else:
+        # 像素轴（2D / 剖面 / 瀑布）：没有 2θ 语义，但"我缩到哪了"也得留住
+        # ——否则下一次重画按数据自动缩放，缩放白做（用户 2026-09-28：
+        # "别的图的放大检查一下"）
+        snap["视图 x 范围"] = [float(xlo), float(xhi)]
 
 
 def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
@@ -751,14 +766,19 @@ def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
     if not snap:
         return
     ylo, yhi = ax.get_ylim()
-    snap["纵轴自动"] = False
-    snap["纵轴下限"] = float(ylo)
-    snap["纵轴上限"] = float(yhi)
-    if window.plot_docks.get(window.focus_panel) is dock:
-        # setChecked(False) 触发 sync_ylim → 上下限框解除置灰
-        window.params["纵轴自动"].setChecked(False)
-        window.params["纵轴下限"].setValue(ylo)
-        window.params["纵轴上限"].setValue(yhi)
+    if key.split("|", 1)[0] in _INTENSITY_Y_VIEWS:
+        snap["纵轴自动"] = False
+        snap["纵轴下限"] = float(ylo)
+        snap["纵轴上限"] = float(yhi)
+        if window.plot_docks.get(window.focus_panel) is dock:
+            # setChecked(False) 触发 sync_ylim → 上下限框解除置灰
+            window.params["纵轴自动"].setChecked(False)
+            window.params["纵轴下限"].setValue(ylo)
+            window.params["纵轴上限"].setValue(yhi)
+    else:
+        # 画像/行号轴（2D 像素、热图样品行、瀑布行偏移）：同上，走通用键。
+        # 往"纵轴上下限"写会把**强度**的语义（默认 1.0/100000.0）串进来
+        snap["视图 y 范围"] = [float(ylo), float(yhi)]
 
 
 def _connect_axis_sync(window: QMainWindow, key: str, ax=None,
@@ -777,7 +797,11 @@ def _connect_axis_sync(window: QMainWindow, key: str, ax=None,
         dock = window.plot_docks.get(key)
         if dock is None:
             return
-        ax = _content(dock).axes_1d
+        # 按容器上挂着的轴属性找（1D/2D/剖面/瀑布/热图各不相同）——
+        # 写死 axes_1d 会在热图上直接 AttributeError（2026-09-28 踩到）
+        ax = _panel_axes(dock)
+        if ax is None:
+            return
     if sync_x:
         ax.callbacks.connect("xlim_changed",
                              lambda a, k=key: _on_xlim_changed(window, k, a))
@@ -1030,19 +1054,21 @@ def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
 def _build_2d_widget(window: QMainWindow, key: str) -> QWidget:
     """2D 面板内容：同 1D 骨架，无悬停取点、无范围写回（像素轴
     没有 2θ/纵轴参数语义）。"""
-    return _build_canvas_panel(window, key, "axes_2d", hover=False, sync="")
+    # sync="xy"：像素轴没有语义参数，但范围要写回快照（通用键），
+    # 否则重画按数据自动缩放、缩放白做（用户 2026-09-28）
+    return _build_canvas_panel(window, key, "axes_2d", hover=False, sync="xy")
 
 
 def _build_profile_widget(window: QMainWindow, key: str) -> QWidget:
     """剖面面板内容：同 1D 骨架，只写回纵轴（x = 像素距离）。"""
     return _build_canvas_panel(window, key, "axes_profile",
-                               hover=True, sync="y")
+                               hover=True, sync="xy")
 
 
 def _build_waterfall_widget(window: QMainWindow, key: str) -> QWidget:
     """瀑布面板内容：同 1D 骨架，无范围写回（行偏移由数据决定）。"""
     return _build_canvas_panel(window, key, "axes_waterfall",
-                               hover=True, sync="")
+                               hover=True, sync="xy")
 
 
 def _open_plot_panel(window: QMainWindow, name: str, key: str,
@@ -1217,8 +1243,13 @@ def _build_heat_widget(window: QMainWindow, key: str) -> QWidget:
     # 在本模块——模块级导入会成环，函数内延迟导入（同 _build_1d_widget）
     from xrd_toolkit.gui.plot_compare import (_heat_row_press,
                                               _heat_row_release)
+    # sync="xy"：热图的 x 就是 2θ（与 1D/对比同口径），y 是样品行——
+    # 缩放了就得写回快照，否则任何一次重画都会按数据自动缩放、把缩放顶掉。
+    # 用户 2026-09-28："热图和对比图的画框放大还是有bug"，热图这边的原因是
+    # 这里原本 sync=""（范围从不写回）+ _draw_heatmap 里也没有"按快照摆回
+    # 视图"的那几行，两处一起补上。
     widget = _build_canvas_panel(window, key, "axes_heat", hover=False,
-                                 sync="")
+                                 sync="xy")
     canvas = getattr(widget, "canvas", None)
     if canvas is not None:
         canvas.mpl_connect(

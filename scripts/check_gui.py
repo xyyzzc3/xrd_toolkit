@@ -180,12 +180,12 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
     window.add_files([lmfp], select=True)   # 导入默认不勾选：探针要两个都选上
     window.compare_btn.click()
     ok = wait_until(lambda: any(
-        k.startswith("对比|")
+        k.startswith("对比")
         and len(content_of(window, k).axes_1d.lines) >= 2
         for k in window.plot_docks))
     report(ok, "对比面板画出 2 条真曲线")
     ckey = next((k for k in window.plot_docks
-                 if k.startswith("对比|")), None)
+                 if k.startswith("对比")), None)
     if ckey:
         axc = content_of(window, ckey).axes_1d
         report("对比" in window.plot_docks[ckey].windowTitle(),
@@ -197,9 +197,9 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
 
     window.heat_btn.click()
     ok = wait_until(
-        lambda: any(k.startswith("热图|") for k in window.plot_docks))
+        lambda: any(k.startswith("热图") for k in window.plot_docks))
     hkey = next((k for k in window.plot_docks
-                 if k.startswith("热图|")), None)
+                 if k.startswith("热图")), None)
     report(ok and hkey is not None, "热图面板开出来了", hkey)
     if not hkey:
         return
@@ -326,7 +326,7 @@ def check_stage_folders(window, lab6: str) -> None:
     tail = window.log_text.toPlainText()[before:]
     report("处理产物" in tail, "对比读到的是扣背景产物",
            [ln for ln in tail.splitlines() if "对比完成" in ln][:1])
-    ckeys = [k for k in window.plot_docks if k.startswith("对比|")]
+    ckeys = [k for k in window.plot_docks if k.startswith("对比")]
     n_curves = max((len(content_of(window, k).axes_1d.lines) for k in ckeys),
                    default=0)
     report(n_curves >= group.childCount(), "整组都画进去了",

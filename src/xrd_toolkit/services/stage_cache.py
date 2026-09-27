@@ -203,9 +203,15 @@ def store_1d(path, tth, intensity, *, config: str, npt: int,
     target = _cache_dir("1d") / (
         f"{cache_key(path, config=config, npt=npt, tth_min=tth_min, tth_max=tth_max)}.npz")
     return _write_curve(target, tth, intensity,
-                        {"source": str(Path(path).name), "config": config,
+                        # `source` 只放文件名（日志/导出照旧用短名），
+                        # `path` 是全路径——文件栏扫盘时要按它认人：两个
+                        # 目录里同名的文件（s1.tif）光看名字分不开，会把
+                        # 甲的产物挂到乙名下（2026-09-28 加扫盘时踩到）
+                        {"source": str(Path(path).name), "path": str(path),
+                         "config": config,
                          "npt": int(npt), "engine": INTEGRATION_VERSION,
-                         "kind": "1d", "created": time.time()})
+                         "kind": "1d", "created": time.time(),
+                         "tth_min": tth_min, "tth_max": tth_max})
 
 
 # 处理产物在磁盘上的目录名**保持历史名字 "bg"**（第一版只有扣背景时起的）：
@@ -477,7 +483,7 @@ def drop_keys(kind: str, keys) -> int:
 
 
 def bg_product_stale(key) -> bool:
-    """这份处理产物是**换背景算法之前**算的吗（该不该继续在文件栏里露面）。
+    """这份处理产物是**换背景算法之前**算的吗（曲线可不可信）。
 
     为什么除了"版本进键"还要有它：版本进了键只保证**不再被复用**（算的时候
     换一把新键、重算一遍），可**盘上旧的产物文件还在**、台账也还记着它们，
@@ -488,11 +494,41 @@ def bg_product_stale(key) -> bool:
     判据是产物元数据里的 algo 版本。**老产物没有这个字段**（按 0 算）→
     一律当作旧算法，正是想要的默认。
 
-    产物文件本身**不删**：那是用户的数据，删不删他说了算（右键删整组，或
-    [清空缓存]）。这里只决定"要不要在文件栏里露面"。
+    **调用方只该"标注"，不该"隐藏"**：产物文件是用户的数据，文件栏要
+    "缓存里有什么就显示什么，删不删由用户自己定"（2026-09-28 定的规矩，
+    起因是一位用户被"东西怎么会不见"咬了两次）。名字里写"旧算法，不可信"，
+    清理由用户右键删或 [清空缓存]。
     """
     meta = meta_by_key(PROC_KIND, key)
     return int(meta.get("algo", 0) or 0) != BG_ALGO_VERSION
+
+
+def list_products(kind: str) -> list:
+    """磁盘上这一类的**全部**产物：[(键, 元数据, 2θ起点, 2θ终点), ...]。
+
+    与"按当前设置正查键"相反：正查只回答"按**现在这套设置**算好的那份在
+    不在"。用户 2026-09-28 定的规矩是——**缓存里有什么就该在文件栏里看见
+    什么，删不删由我自己决定**：改了 2θ 范围之后，按旧范围算的那批也必须
+    照样列着（名字里标出它是按什么算的），不能凭空消失。
+
+    2θ 范围从**曲线自己**读（`tth[0]/tth[-1]`），不看元数据——元数据里
+    那两项是老产物没记的，而曲线永远知道自己铺到哪儿。
+    """
+    out = []
+    d = _cache_dir(kind)
+    if not d.exists():
+        return out
+    for p in sorted(d.glob("*.npz")):
+        try:
+            with np.load(p) as data:
+                meta = json.loads(str(data["meta"]))
+                tth = data["tth"]
+            lo, hi = float(tth[0]), float(tth[-1])
+        except Exception:                                # noqa: BLE001
+            continue     # 坏了/半截的产物：跳过（文件还在，用户自己删）
+        if isinstance(meta, dict):
+            out.append((p.stem, meta, lo, hi))
+    return out
 
 
 def meta_by_key(kind: str, key: str) -> dict:

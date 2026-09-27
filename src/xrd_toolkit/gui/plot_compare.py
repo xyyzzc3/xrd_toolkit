@@ -26,8 +26,8 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _batch_step, _bg_path_of, _curve_for, _progress_show, _refresh_proc,
-    _spawn)
+    _apply_plain_view, _batch_step, _bg_path_of, _curve_for, _progress_show,
+    _refresh_proc, _spawn)
 
 
 # 对比面板图例最多列几条：再多就不画了（挡住图的是那 81 行名字）。
@@ -105,11 +105,33 @@ def _draw_compare_legend(window, dock, ax, labels) -> None:
               ncols=max(1, int(np.ceil(len(shown) / 8.0))))
 
 
-def _compare_title(displays) -> str:
-    """对比面板标题：两个文件 = A vs B；更多 = A 等 N 个文件。"""
-    if len(displays) == 2:
-        return f"对比_{displays[0]}_vs_{displays[1]}"
-    return f"对比_{displays[0]} 等 {len(displays)} 个文件"
+def _sources_mix(files) -> str:
+    """"原始 2 ｜ 1D 产物 2 ｜ 处理后 2"——这批勾选由什么构成。
+
+    用户 2026-09-27/28 连着两次被"勾选集比想的大"咬到（162 条、243 条）：
+    混着几类勾选时，图上画了多少条、都是什么，必须写在标题与日志里。
+    """
+    kinds = {}
+    for s in files:
+        kinds[s.kind] = kinds.get(s.kind, 0) + 1
+    return " ｜ ".join(f"{text} {kinds[kind]}" for kind, text in
+                      ((gui_sources.RAW, "原始"), (gui_sources.ONED, "1D 产物"),
+                       (gui_sources.BG, "处理后")) if kinds.get(kind))
+
+
+def _compare_title(files) -> str:
+    """对比面板标题：两个文件 = A vs B；更多 = A 等 N 个文件。
+
+    **混着几类时才把构成写进标题**（"（原始 1 ｜ 处理后 1）"）——单一类的
+    那批标题保持干净，也免得另存名被撑长。
+    """
+    displays = [s.display for s in files]
+    if len(files) == 2:
+        base = f"对比_{displays[0]}_vs_{displays[1]}"
+    else:
+        base = f"对比_{displays[0]} 等 {len(files)} 个文件"
+    kinds = len({s.kind for s in files})
+    return f"{base}（{_sources_mix(files)}）" if kinds > 1 else base
 
 
 def _redraw_compare(window: QMainWindow, key: str) -> None:
@@ -251,7 +273,12 @@ def _finish_compare(window: QMainWindow, key: str) -> None:
         n_new = len(dock.compare_data) - sum(tally.values())
         if n_new:
             tally["新算"] = n_new
-        detail = "、".join(f"{k} {v} 条" for k, v in sorted(tally.items()))
+        # 来处的说法要对得上"我勾的是什么"：勾**原始条目**、曲线从 1D 缓存
+        # 读出来的，写成"复用 1D 缓存"而不是"1D 产物"——后者会让人以为
+        # "我没勾 1D 产物啊，怎么冒出来的"（用户 2026-09-27 的原话）
+        label = {"1D 产物": "复用 1D 缓存", "处理产物": "复用处理产物"}
+        detail = "、".join(f"{label.get(k, k)} {v} 条"
+                          for k, v in sorted(tally.items()))
         _log(window, f"对比完成：{len(dock.compare_data)} 条曲线"
                      + (f"（{detail}）" if detail else ""))
     else:
@@ -359,19 +386,23 @@ def _plot_compare(window: QMainWindow) -> None:
 
     只做 1D。勾选 ≥2 个文件，每个文件后台各算各的积分，结果陆续
     画进同一张图（一个文件一条曲线，自动分色 + 图例显示名），
-    全部完成后该面板成为编辑对象。同一勾选集合重复点 = 复用同一
-    张面板刷新；换集合 = 新开一张。面板键 = "对比|排序后的路径串"
-    （与单文件面板 "1D|路径" 并存，互不干扰）。
+    全部完成后该面板成为编辑对象。
+
+    **面板是"单槽"：永远只有一张，每次按 [对比] = 按**当前**勾选重建。**
+    （用户 2026-09-28："对比图就是实现文件区当前实际勾选的图的对比图…
+    不要留以前勾选过的这个记忆"。旧版把键做成"对比｜排序后的路径串"，
+    于是改了勾选再按一次 = 另开一张新面板、**旧那张还赖在屏幕上**——
+    用户看到的是旧画面，还以为新勾选没生效。）
     """
     checked = gui_sources.checked_sources(window)
     if len(checked) < 2:
         _log(window, "对比至少勾选两个文件（勾上的文件叠到一张图）")
         return
     files = list(checked)   # 来源条目：原始文件 + 各组产物混着也能对比
-    key = "对比|" + ",".join(sorted(gui_sources.source_id(s) for s in files))
+    key = "对比"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)
     if dock is None:
-        title = _compare_title([s.display for s in files])
+        title = _compare_title(files)
         # 新面板级联摆放，现有面板原地不动（同 _plot_view）
         dock = _open_plot_panel(window, "1D", key, title)
         dock.panel_display = title   # 标题/日志/默认存盘名用
@@ -379,15 +410,18 @@ def _plot_compare(window: QMainWindow) -> None:
         dock.compare_files = files   # 面板绑定这组来源（重算用）
         dock.compare_gen = 0
         dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
-        _log(window, f"打开对比面板：{len(files)} 条曲线叠一张图")
+        _log(window, f"打开对比面板：{len(files)} 条曲线叠一张图"
+                     f"（{_sources_mix(files)}）")
     else:
-        # 复用面板：文件显示名可能变过（删除重加/改名）→ 绑定刷新，
-        # 标题/图例跟着新名字走
+        # 复用面板：按当前勾选重绑（旧曲线由 _run_compare 清掉重画），
+        # 标题跟着新集合与新名字走
         dock.compare_files = files
-        title = _compare_title([s.display for s in files])
+        title = _compare_title(files)
         if title != dock.panel_display:
             dock.setWindowTitle(title)
             dock.panel_display = title
+        _log(window, f"对比面板按当前勾选重建：{len(files)} 条"
+                     f"（{_sources_mix(files)}）")
     dock.setVisible(True)
     _run_compare(window, key)
 
@@ -595,7 +629,7 @@ def _heat_row_release(window: QMainWindow, key: str, event) -> None:
     display = dock.heat_files[row].display
     targets = []
     for ckey, cdock in window.plot_docks.items():
-        if not ckey.startswith("对比|"):
+        if not ckey.startswith("对比"):
             continue
         if any(s.display == display for s in
                getattr(cdock, "compare_files", ())):
@@ -659,6 +693,20 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
                                           -0.5, n - 0.5])
         ax.set_yticks(range(n))
         ax.set_yticklabels(_short_labels(stems, ax), fontsize=7)
+        # 视图窗口：与 1D/对比同一套口径（缩放/平移写回快照，重画按它摆回去）
+        #
+        # 用户 2026-09-28："热图和对比图的画框放大还是有bug"——热图这里原本
+        # **从不设坐标范围**，只 imshow 一把；而 imshow 会自己 autoscale，
+        # 于是任何一次重画（[应用]、改色图/归一化、重出图）都把缩放顶掉 ✗。
+        xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
+        xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
+        zoomed = xlo is not None and xhi is not None and xlo < xhi
+        if not zoomed:
+            xlo, xhi = float(tth[0]), float(tth[-1])
+        ax.set_xlim(xlo, xhi)
+        # y 是**样品行号**，没有强度语义 → 走通用键"视图 y 范围"
+        # （见 plot_panels._INTENSITY_Y_VIEWS 的说明）；x 是 2θ，走语义键
+        zoomed = _apply_plain_view(window, dock, ax) or zoomed
         # 颜色条同 2D：只建一次、之后 update_normal 复用（remove+
         # 重建会让坐标轴每次再让 20% 宽度，教训 13）
         cb = getattr(dock, "_heat_colorbar", None)
@@ -671,6 +719,12 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         _content(dock).draw()
     finally:
         window._setting_limits = False
+    # ax.clear() 会把坐标轴的回调注册表整个清空（mpl 3.11 起）→ 画完必须
+    # 重连"范围 → 快照"的写回，否则热图上的缩放/平移**永远写不进快照**，
+    # 任何一次重画都按数据自动缩放把它顶掉（1D/对比都重连了，热图漏了）
+    _connect_axis_sync(window, dock.panel_key, ax)
+    if zoomed:
+        dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
     _refresh_home(dock, ax)
     dock.figure_saved = False
 
@@ -847,7 +901,7 @@ def _refresh_heat(window: QMainWindow) -> None:
     """
     touched = 0
     for key, dock in list(window.plot_docks.items()):
-        if not key.startswith("热图|"):
+        if not key.startswith("热图"):
             continue
         dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
         data = _heat_data(window, dock)
@@ -867,15 +921,17 @@ def _plot_heatmap(window: QMainWindow) -> None:
     （文件列表顺序，行标签 = 文件名）、颜色 = 强度——原位实验看
     峰位/强度/峰形随样品（时间/充电状态）的变化。勾选 ≥2 个文件；
     已算好的 1D 结果直接复用，缺的后台补积分（见 _run_heatmap）。
-    同一勾选集合重复点 = 复用同一张面板刷新；换集合 = 新开一张。
-    面板键 = "热图|排序后的路径串"（与单文件面板并存，互不干扰）。
+
+    **与 [对比] 一样是"单槽"**：永远只有一张，每次按 [热图] = 按**当前**
+    勾选重建（用户 2026-09-28："无论什么时候，都是执行当前勾选，不存在
+    以前勾选影响现在的情况。如果别的地方也有这个问题一并改掉"）。
     """
     checked = gui_sources.checked_sources(window)
     if len(checked) < 2:
         _log(window, "热图至少勾选两个文件（多条 1D 曲线拼成一张强度图）")
         return
     files = list(checked)   # 来源条目：原始文件 + 各组产物混着也行
-    key = "热图|" + ",".join(sorted(gui_sources.source_id(s) for s in files))
+    key = "热图"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)
     if dock is None:
         title = f"热图_{len(files)} 个样品"
@@ -888,8 +944,13 @@ def _plot_heatmap(window: QMainWindow) -> None:
         dock.heat_pending = 0
         dock.heat_data = None
         dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
-        _log(window, f"打开热图面板：{len(files)} 个文件拼一张强度图")
+        _log(window, f"打开热图面板：{len(files)} 个样品拼一张强度图"
+                     f"（{_sources_mix(files)}）")
     else:
-        dock.heat_files = files   # 复用面板：绑定刷新（删除重加/改名）
+        # 复用面板：按当前勾选重绑（旧的 heat_data 由 _run_heatmap 清掉重画）
+        dock.heat_files = files
+        dock.heat_data = None
+        _log(window, f"热图面板按当前勾选重建：{len(files)} 个样品"
+                     f"（{_sources_mix(files)}）")
     dock.setVisible(True)
     _run_heatmap(window, key)

@@ -1089,7 +1089,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                             "折线 = 相邻锚点直线相连（实验室惯例、最透明，"
                             "弯背景上会扣不干净）；样条 = 自然三次样条"
                             "（更平滑，但可能在锚点之间冲到真值以下 = 扣过头）。"
-                            "后两种至少 3 个锚点，不足时自动退回折线")
+                            "锚点数：折线 2 个就能画；保单调平滑与样条至少 3 个，"
+                            "不足时自动退回折线")
     window.params["锚点拟合方式"] = bg_fit_combo
     anchor_row = bg_group([
         bg_row((bg_pick_btn, 1), (bg_clear_btn, 1), (bg_count_lbl, 0)),

@@ -131,7 +131,7 @@ def shot_compare(window) -> None:
     """对比：两张 LMFP 叠图（带图例）。"""
     add_all(window, LMFP[:2], entrance="对比")
     window.compare_btn.click()
-    wait_for(lambda: any(k.startswith("对比|")
+    wait_for(lambda: any(k.startswith("对比")
                          and len(content_of(window, k).axes_1d.lines) >= 2
                          for k in window.plot_docks))
     save(window, "gui_compare")
@@ -148,10 +148,10 @@ def shot_customize(window) -> None:
     # "per-curve colors (Compare panels)"，旧图也是这么拍的）
     add_all(window, LMFP[:2], entrance="对比")
     window.compare_btn.click()
-    wait_for(lambda: any(k.startswith("对比|")
+    wait_for(lambda: any(k.startswith("对比")
                          and len(content_of(window, k).axes_1d.lines) >= 2
                          for k in window.plot_docks))
-    key = next(k for k in window.plot_docks if k.startswith("对比|"))
+    key = next(k for k in window.plot_docks if k.startswith("对比"))
     dock = window.plot_docks[key]
     content = content_of(window, key)
     dialog = _build_customize_dialog(window, dock, content.axes_1d,
@@ -211,9 +211,9 @@ def shot_heatmap(window) -> None:
     """热图：三个数据集 + 旁边一条 1D（README 图注就是这么写的）。"""
     add_all(window, LMFP, entrance="对比")
     window.heat_btn.click()
-    wait_for(lambda: any(k.startswith("热图|") for k in window.plot_docks),
+    wait_for(lambda: any(k.startswith("热图") for k in window.plot_docks),
              timeout_s=240)
-    hkey = next((k for k in window.plot_docks if k.startswith("热图|")), None)
+    hkey = next((k for k in window.plot_docks if k.startswith("热图")), None)
     if hkey is not None:
         ax = content_of(window, hkey).axes_heat
         wait_for(lambda: len(ax.images) > 0

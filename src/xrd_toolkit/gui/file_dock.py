@@ -893,6 +893,25 @@ def ask_clear_cache(window: QMainWindow) -> None:
     _log(window, f"已删除所有缓存：{cleared} 个产物文件")
 
 
+def _settings_diff_text(meta, lo, hi, cur) -> str:
+    """"2θ 1–7°、几何 lmfp2_lab6"——这份产物与**当前设置**不一样的地方。
+
+    空串 = 一模一样。用户 2026-09-28 定的规矩：改了设置之后旧产物也得照样
+    列在文件栏里（不许凭空消失），但要一眼看得出它是按什么算的。
+    2θ 那项比的是**曲线实际铺到的范围**（tth 首末点）——元数据里没记范围，
+    而曲线永远知道自己在哪儿。
+    """
+    bits = []
+    if abs(lo - cur["tth_min"]) > 0.01 or abs(hi - cur["tth_max"]) > 0.01:
+        bits.append(f"2θ {lo:.3g}–{hi:.3g}°")
+    if meta.get("config") and cur["config"] and \
+            str(meta["config"]) != str(cur["config"]):
+        bits.append(f"几何 {meta['config']}")
+    if meta.get("npt") and int(meta["npt"]) != int(cur["npt"]):
+        bits.append(f"{int(meta['npt'])} 点")
+    return "，".join(bits)
+
+
 def _group_key(item, tree):
     """组节点的稳定身份（重建前后认人用）。
 
@@ -1012,26 +1031,53 @@ def refresh_product_groups(window: QMainWindow) -> None:
             it = tree.item(i)
             by_path[str(Path(it.data(0, Qt.UserRole)).resolve())] = it
 
-        # ① 1D 产物：当前设置下已经算好的那些
+        # ① 1D 产物：**扫盘**列出（磁盘上有什么就显示什么）
+        #
+        # 旧版按"当前设置"正查键，于是**改了 2θ 范围之后那一组会整个空掉**
+        # （键里含范围）——用户 2026-09-28 报的"处理后的把 1D 的替换了"
+        # 就是这个：其实一份都没少，只是不显示。规矩定成"缓存里有什么就
+        # 显示什么，删不删由我自己决定"，与设置不一致的**在名字里标出来**。
         geom = _collect_geometry(window)
         npt = int(window.params["输出点数"].value())
-        kw = dict(config=window.config_name, npt=npt,
-                  tth_min=geom.get("tth_min_deg"),
-                  tth_max=geom.get("tth_max_deg"))
-        have = []
+        cur = {"tth_min": float(geom.get("tth_min_deg") or 0.0),
+               "tth_max": float(geom.get("tth_max_deg") or 0.0),
+               "config": window.config_name, "npt": npt}
+        # 认人：**全路径优先**（元数据里有 path），老产物只有文件名 →
+        # 退回按名字；两个目录里同名的文件因此不会挂错（2026-09-28 踩到）
+        by_path_name, by_name = {}, {}
         for i in range(tree.count()):
             it = tree.item(i)
-            key = stage_cache.key_of_1d(it.data(0, Qt.UserRole), **kw)
-            if key and stage_cache.has_key("1d", key):
-                have.append((it, key))
+            p = Path(it.data(0, Qt.UserRole))
+            by_path_name.setdefault(str(p), it)
+            by_name.setdefault(p.name, it)
+        by_item = {}
+        for key, meta, lo, hi in stage_cache.list_products("1d"):
+            it = by_path_name.get(str(meta.get("path") or ""))
+            if it is None:
+                it = by_name.get(str(meta.get("source") or ""))
+            if it is None:
+                continue        # 不在当前文件栏里 → 不显示
+            by_item.setdefault(id(it), []).append((it, key, meta, lo, hi))
+        # 按**文件栏的行序**排（同一文件有多份产物时全部列出——比如按 1–8°
+        # 和 1–7° 各算过一次，两份都是你的缓存；名字里各自标着范围）
+        have = []
+        for i in range(tree.count()):
+            have.extend(by_item.get(id(tree.item(i)), ()))
         if have:
             group = _make_group(
                 f"1D 产物 ({len(have)})",
-                f"当前设置下算好的 1D 曲线（几何 {window.config_name}、"
-                f"{npt} 点、2θ {kw['tth_min']:g}–{kw['tth_max']:g}°）。\n"
-                "整组勾上可去 [对比]/[热图]；改设置后这里会跟着变。")
-            for it, key in have:
-                add_leaf(group, it, gui_sources.ONED, key, "1D")
+                "磁盘上的 1D 产物：当前设置算好的、以及按别的 2θ 范围 / 几何"
+                "算的都在（后者名字里标了出来）——缓存里有的就列在这儿，"
+                "删不删由你自己决定。\n整组勾上可去 [对比]/[热图]；"
+                "点开读的就是这一份，不重算。")
+            for it, key, meta, lo, hi in have:
+                diff = _settings_diff_text(meta, lo, hi, cur)
+                tail = f"1D（{diff}）" if diff else "1D"
+                leaf = add_leaf(group, it, gui_sources.ONED, key, tail)
+                if diff and leaf is not None:
+                    leaf.setToolTip(
+                        0, f"{leaf.toolTip(0)}\n这一份是按 {diff} 算的"
+                           f"（与当前设置不同）；点开读的就是它，不重算")
             tree.addTopLevelItem(group)
 
         # ② 处理：一次 [批量处理] = 一组（台账，新的在上）
@@ -1048,10 +1094,14 @@ def refresh_product_groups(window: QMainWindow) -> None:
                 if raw_item is None or not stage_cache.has_key(
                         "bg", meta.get("key")):
                     continue    # 不在当前文件栏里 / 产物没了 → 不显示
-                if stage_cache.bg_product_stale(meta.get("key")):
-                    stale += 1   # 旧背景算法算的：不露面（见其 docstring）
-                    continue
-                kids.append((raw_item, meta))
+                # 旧背景算法算的那批**照样列出来**，只在名字里标"不可信"
+                # ——用户 2026-09-28："缓存里有什么就显示什么，删不删由我
+                # 自己决定"。上一版是直接不显示，与这条规矩冲突（他刚被
+                # "东西怎么会不见"咬过一次）。
+                is_stale = stage_cache.bg_product_stale(meta.get("key"))
+                if is_stale:
+                    stale += 1
+                kids.append((raw_item, meta, is_stale))
             if not kids:
                 continue
             # 2θ 范围可能没记（老台账、或批处理时没设范围）→ 别让
@@ -1061,23 +1111,38 @@ def refresh_product_groups(window: QMainWindow) -> None:
                     if node.get("tth_min") is None
                     or node.get("tth_max") is None
                     else f"2θ {node['tth_min']:g}–{node['tth_max']:g}°")
+            # 台账那套设置与**当前**设置不同时，把当前值也写进悬停提示
+            # （跟 1D 产物一样的道理：一眼看得出这批是按什么算的）
+            now = f"2θ {cur['tth_min']:g}–{cur['tth_max']:g}°"
+            differs = (node.get("config") != cur["config"]
+                       or (node.get("tth_min") is not None
+                           and abs(float(node["tth_min"]) - cur["tth_min"]) > 0.01)
+                       or (node.get("tth_max") is not None
+                           and abs(float(node["tth_max"]) - cur["tth_max"]) > 0.01))
+            more = f"\n（当前设置：几何 {cur['config']}、{cur['npt']} 点、{now}）" \
+                if differs else ""
             group = _make_group(
                 f"{node['label']} ({len(kids)})",
                 f"几何 {node.get('config')}、{node.get('npt')} 点、{span}\n"
-                "整组勾上可去 [对比]/[热图]；右键删掉这一组。")
+                "整组勾上可去 [对比]/[热图]；右键删掉这一组。" + more)
             group.setData(0, GROUP_ROLE + 1, node["id"])   # 右键删这一组用
-            for raw_item, meta in kids:
-                add_leaf(group, raw_item, gui_sources.BG,
-                         meta.get("key"), "处理后")
+            for raw_item, meta, is_stale in kids:
+                tail = "处理后（旧算法，不可信）" if is_stale else "处理后"
+                leaf = add_leaf(group, raw_item, gui_sources.BG,
+                                meta.get("key"), tail)
+                if is_stale and leaf is not None:
+                    leaf.setToolTip(
+                        0, f"{leaf.toolTip(0)}\n这一份是按**旧的背景算法**"
+                           "算的（曲线不可信）；要清掉就右键删这一条/这一组，"
+                           "或 [清空缓存]")
             tree.addTopLevelItem(group)
         tree.expandAll()
         if stale:
-            # 说清"它们去哪了"、以及怎么收拾：产物文件还在盘上（用户的数据，
-            # 不替他删），只是不再列出来——旧算法算的曲线拿去做对比只会得到
-            # 旧结论。要清掉它们只能走 [清空缓存]（分组已经不露面，右键够不着）
-            _log(window, f"文件栏跳过 {stale} 条**旧算法**算的处理产物"
-                         "（背景算法已升级，那批曲线不再可信）："
-                         "[清空缓存] 可清掉它们，之后重新批量处理即可")
+            # 列出来、但标"不可信"：产物文件是用户的数据，删不删他说了算
+            _log(window, f"文件栏里有 {stale} 条**旧背景算法**算的处理产物"
+                         "（名字里标着「旧算法，不可信」）：扣背景的算法已"
+                         "升级，那批曲线不再可信——要清掉就右键删那一组，"
+                         "或 [清空缓存]，然后重新批量处理")
         # 恢复展开/勾选/当前项/滚动位置：在信号屏蔽期间做（否则每个被恢复
         # 勾选的条目都要触发一次联动 + 一行日志，200 个条目就是 200 次）
         _restore_tree_state(window, keep)
