@@ -64,6 +64,7 @@
 运行：python -m unittest discover -s tests -v
 """
 import ast
+import builtins
 import itertools
 import json
 import os
@@ -109,6 +110,7 @@ from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import config_ops as gui_config_ops
 from xrd_toolkit.gui import calib_panel as gui_calib_panel
 from xrd_toolkit.gui import calib_model as gui_calib_model
+from xrd_toolkit.gui import calib_table as gui_calib_table
 from xrd_toolkit.gui import plot_export as gui_export
 from xrd_toolkit.gui import customize as gui_customize
 from xrd_toolkit.gui.app import create_window
@@ -285,6 +287,99 @@ class TestPatchTargetsResolve(unittest.TestCase):
                 f"{mod.__name__} 没有 {attr}（test 行 {node.lineno}）"
                 f"——拆模块后 patch 目标要指向调用点所在的模块")
         self.assertGreater(checked, 100, "patch 目标没扫到，检查本测试的解析")
+
+
+class TestNoUndefinedNames(unittest.TestCase):
+    """静态护栏：源文件里不许出现"用了、但全文件没绑定过"的名字。
+
+    为什么要有（2026-09-28 用户报"配方保存无效"）：`app._save_recipe_dialog`
+    里调了 `_proc_settings`，而这个名字**从来没在 app 模块里导入过**——每点
+    一次 [保存为配方…] 都是 NameError：日志区一个字都没有，`outputs/
+    recipes.json` 从来没生成过。这类伤**只有点到那条按钮才现形**，而配方那边
+    的测试全都直接调 `recipe_store.save`（绕过了按钮），于是全绿。
+
+    口径（宽）：模块里**任意作用域**绑定过的名字都算"有"——只抓"整个文件里
+    根本没出现过这个名字"这一档，所以不会误报；代价是不抓"跨函数漏绑定"。
+    真想抓后者要做完整的作用域分析，那是另一件事（需要时再上 mypy/pyflakes）。
+    """
+
+    ROOT = Path(__file__).resolve().parents[1] / "src" / "xrd_toolkit"
+    BUILTINS = set(dir(builtins)) | {
+        "__file__", "__name__", "__doc__", "__package__", "__spec__",
+        "__loader__", "__builtins__", "__debug__"}
+
+    @classmethod
+    def _bound(cls, tree):
+        out = set()
+
+        def target(t):
+            if isinstance(t, ast.Name):
+                out.add(t.id)
+            elif isinstance(t, (ast.Tuple, ast.List)):
+                for e in t.elts:
+                    target(e)
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.add(node.name)
+                args = node.args
+                for a in args.args + args.kwonlyargs + args.posonlyargs:
+                    out.add(a.arg)
+                if args.vararg:
+                    out.add(args.vararg.arg)
+                if args.kwarg:
+                    out.add(args.kwarg.arg)
+            elif isinstance(node, ast.ClassDef):
+                out.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for al in node.names:
+                    out.add((al.asname or al.name).split(".")[0])
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                for t in (node.targets if isinstance(node, ast.Assign)
+                          else [node.target]):
+                    target(t)
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                target(node.target)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        target(item.optional_vars)
+            elif isinstance(node, ast.ExceptHandler):
+                if node.name:
+                    out.add(node.name)
+            elif isinstance(node, ast.comprehension):
+                target(node.target)
+            elif isinstance(node, ast.Lambda):
+                args = node.args
+                for a in args.args + args.kwonlyargs + args.posonlyargs:
+                    out.add(a.arg)
+                if args.vararg:
+                    out.add(args.vararg.arg)
+                if args.kwarg:
+                    out.add(args.kwarg.arg)
+            elif isinstance(node, (ast.Nonlocal, ast.Global)):
+                out.update(node.names)
+        return out
+
+    def test_every_name_read_is_bound_somewhere(self):
+        bad = []
+        scanned = 0
+        for path in sorted(self.ROOT.rglob("*.py")):
+            src = path.read_text(encoding="utf-8")
+            if "import *" in src:
+                continue                      # 星号导入没法静态判断
+            scanned += 1
+            tree = ast.parse(src)
+            have = self._bound(tree) | self.BUILTINS
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Load)
+                        and node.id not in have):
+                    bad.append(f"{path.relative_to(self.ROOT)}:{node.lineno}"
+                               f" 读了没绑定过的名字 {node.id!r}")
+        self.assertGreater(scanned, 20, "没扫到几个文件，检查 ROOT")
+        self.assertEqual(bad, [], "这些名字一跑到就是 NameError：\n  "
+                                  + "\n  ".join(bad))
 
 
 class TestSelectionOnly(unittest.TestCase):
@@ -922,25 +1017,70 @@ class TestFileCheckSelection(unittest.TestCase):
 
         用户 2026-09-27："全选全部不选合一"——标签跟着状态走（全勾上时
         显示"全不选"），按下去做哪件事由状态决定。
+
+        2026-09-28 第 3 条之后，标签把**作用范围**也写出来了：两个方向的
+        范围本来就不一样（勾只勾「原始数据」、清清全部条目，见下一条测试）
+        ——不写出来，按下去发生什么全靠猜。
         """
         w = create_window()
         try:
             w.add_files([f"data/s{i + 1}.tif" for i in range(5)])
             btn = w.findChild(QPushButton, "select_all_btn")
-            self.assertEqual(btn.text(), "全选", "初始（没勾）该显示 全选")
+            self.assertEqual(btn.text(), "全选（原始数据）",
+                             "初始（没勾）该显示 全选")
             btn.click()
             self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Checked
                                 for i in range(5)))
-            self.assertEqual(btn.text(), "全不选", "全勾上后标签该翻过来")
+            self.assertEqual(btn.text(), "全不选（全部条目）",
+                             "全勾上后标签该翻过来")
             self.assertEqual(w.file_label.text(), "已选 5 个文件")
-            self.assertIn("全选：5 个文件", w.log_text.toPlainText())
+            self.assertIn("全选：勾上「原始数据」整组 5 个文件",
+                          w.log_text.toPlainText())
             btn.click()                     # 同一个按钮：这次是"全不选"
             self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Unchecked
                                 for i in range(5)))
-            self.assertEqual(btn.text(), "全选")
+            self.assertEqual(btn.text(), "全选（原始数据）")
             self.assertEqual(w.file_label.text(), "未打开文件")
-            self.assertIn("全不选：5 个条目的对号已取消",
+            self.assertIn("全不选：清掉全部 5 个条目的对号",
                           w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_select_all_leaves_products_alone_but_none_clears_them(self):
+        """「全选」只勾原始数据；「全不选」清掉全树的勾——这不对称是**写明的规矩**。
+
+        用户 2026-09-28 第 3 条报的就是这个不对称（"全选只全选原始数据，
+        全不选会包含产物"）。定下来的口径（2026-09-28）：勾**只勾「原始数据」
+        整组**（产物分组自己点组名勾——勾选集是出图 / 批量处理的输入，顺手
+        把 81 个产物也勾上会让输入集合悄悄翻倍，用户 2026-09-27 踩过"选中 81
+        出 162"）；清**清掉全树**（清是"归零"，归零就该彻底）。两者都写在
+        按钮标签上。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files])
+            for f in files:
+                _store_product(w, f)
+            w.refresh_groups()
+            QApplication.processEvents()
+            raws = [s for s in gui_sources.all_sources(w)
+                    if s.kind == gui_sources.RAW]
+            prod = [s for s in gui_sources.all_sources(w)
+                    if s.kind == gui_sources.ONED]
+            self.assertEqual((len(raws), len(prod)), (2, 2),
+                             "前提：2 条原始 + 2 条 1D 产物")
+            w.select_all_btn.click()
+            QApplication.processEvents()
+            self.assertTrue(all(s.item.checkState(0) == Qt.Checked
+                                for s in raws), "全选：原始数据整组勾上")
+            self.assertTrue(all(s.item.checkState(0) == Qt.Unchecked
+                                for s in prod), "全选不该顺手勾上产物")
+            w.select_all_btn.click()        # 现在它是"全不选（全部条目）"
+            QApplication.processEvents()
+            self.assertTrue(all(s.item.checkState(0) == Qt.Unchecked
+                                for s in raws + prod),
+                            "全不选：连产物一起清（归零就该彻底）")
         finally:
             w.close()
 
@@ -2053,16 +2193,137 @@ class TestRecipeReuse(unittest.TestCase):
         finally:
             w.close()
 
-    def test_recipe_is_refused_on_a_bg_product_panel(self):
-        """处理产物面板上不许套配方：它已经扣完了，再套就是**二次相减**。
+    def test_save_recipe_button_actually_writes_the_store(self):
+        """[保存为配方…] 这个**按钮**要能落盘（2026-09-28 用户报"保存无效"的回归）。
 
-        二次相减的曲线往下掉一截，看着还挺像"扣得更干净"——所以这条要挡。
+        查出来的根因很朴素：`app._save_recipe_dialog` 里调了 `_proc_settings`，
+        而这个名字**在 app 模块里从来没导入过**——每点一次都是 NameError，
+        日志区一个字都没有，`outputs/recipes.json` 从来没生成过（用户机器上
+        确实不存在这个文件，正是佐证）。旧的配方测试都直接调
+        `recipe_store.save(...)`，正好绕过按钮，所以一直全绿。
+
+        这条守在**用户走的那条路**上：点按钮 → 仓库里多一份 → 下拉里立刻
+        能选到它。
         """
         w = create_window()
         try:
             files = _tmp_files(1)
             w.add_files([str(p) for p in files], select=False)
-            key = _store_product(w, files[0], kind="bg")
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                gui_file_dock._open_entry_view(
+                    w, w.file_list.raw_group.child(0), explicit=True)
+                key = f"1D|{files[0]}"
+                self.assertTrue(_wait_until(
+                    lambda: key in w.plot_docks
+                    and getattr(w.plot_docks[key], "last_tth", None) is not None))
+            combo = w.params["背景扣除模式"]
+            combo.setCurrentIndex(combo.findData("auto"))
+            QApplication.processEvents()
+            dlg = mock.MagicMock()
+            dlg.getText.return_value = ("按钮配方", True)
+            with mock.patch.object(gui_app, "QInputDialog", dlg):
+                w.findChild(QPushButton, "recipe_save_btn").click()
+            QApplication.processEvents()
+            self.assertIn("按钮配方", recipe_store.names(),
+                          "点了按钮就该真的存下来")
+            self.assertIn("配方已保存：按钮配方", w.log_text.toPlainText())
+            # 存完立刻能选（下拉当场刷）
+            self.assertGreaterEqual(
+                w.recipe_combo.findData("saved|按钮配方"), 0,
+                "存下来的配方要能马上在下拉里选到")
+        finally:
+            w.close()
+
+    def test_recipe_rows_are_fresh_right_after_a_tweak(self):
+        """刚调完参数，下拉里就该有「本图配方」（用户报"套用无效"的另一半）。
+
+        原先填下拉的动作跑在 `_sync_bg_rows` 里、而"本图配方"是 `_refresh_proc`
+        末尾才写进 window.proc_recipes 的——顺序颠倒，于是**刚处理完那一刻
+        下拉里只有占位项**（"（还没有配方…）"），用户按 [套用] 只得到一句
+        "先在下拉里选一份配方"。真实手势恰恰是"调好参数马上点 [套用]"
+        （2026-09-28 探针复现）。现在 _refresh_proc 收尾回调刷一次。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=False)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                gui_file_dock._open_entry_view(
+                    w, w.file_list.raw_group.child(0), explicit=True)
+                key = f"1D|{files[0]}"
+                self.assertTrue(_wait_until(
+                    lambda: key in w.plot_docks
+                    and getattr(w.plot_docks[key], "last_tth", None) is not None))
+            combo = w.params["背景扣除模式"]
+            combo.setCurrentIndex(combo.findData("auto"))
+            QApplication.processEvents()      # 不再手动调 _sync_bg_rows
+            self.assertGreaterEqual(
+                w.recipe_combo.findData("local"), 0,
+                "调完参数下拉里就该有「本图配方」")
+            self.assertIn("本图配方", w.bg_prov_lbl.text(),
+                          "来处那行也该跟着新鲜")
+        finally:
+            w.close()
+
+    def _bg_product_with_source(self, w, path, values=None):
+        """造一对真有血缘的产物：1D 曲线 + 从它派生的处理产物，返回产物键。"""
+        kw = _kw_of(w)
+        tth = np.linspace(kw["tth_min"], kw["tth_max"], 5)
+        inten = np.asarray(values if values is not None
+                           else [9.0, 6.0, 3.0, 2.0, 1.0], dtype=float)
+        stage_cache.store_1d(path, tth, inten, **kw)
+        key = _store_product(w, path, kind="bg")   # 拿它自己的键（别扫盘猜）
+        return tth, inten, key
+
+    def test_recipe_on_a_bg_product_redoes_from_the_source_curve(self):
+        """产物面板上套配方 = **从它底下的原始曲线重做**（不拒绝、不二次相减）。
+
+        用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"。
+        旧版这里一句拒绝（"这一条是处理产物…配方套不上去"）——想换套参数重做
+        在界面上无路可走。现在就地换成源曲线再套：面板此后就是"这个文件的一条
+        1D 曲线"，配方照常生效，产物也照常能 [采用这份结果]。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=False)
+            tth, inten, key = self._bg_product_with_source(w, files[0])
+            src = gui_sources.make_source(files[0], kind=gui_sources.BG,
+                                          key=key)
+            panel_key = gui_views._open_product_panel(w, src)
+            dock = w.plot_docks[panel_key]
+            gui_panel_state._set_focus(w, panel_key, dock.windowTitle())
+            QApplication.processEvents()
+            self.assertIsNotNone(dock.panel_source, "前提：这是产物面板")
+            recipe_store.save("R", {"mode": "auto", "window_deg": 0.3,
+                                    "anchors": [[2.0, 100.0]]})
+            gui_app._recipe_combo_fill(w)     # 下拉要刷一次才看得到"已保存：R"
+            w.recipe_combo.setCurrentIndex(w.recipe_combo.findData("saved|R"))
+            self.assertEqual(w.recipe_combo.currentData(), "saved|R",
+                             "前提：下拉里选中了那份配方")
+            gui_app._apply_selected_recipe(w)
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("已换成它底下的原始 1D 曲线", log)
+            self.assertIn("已套用配方", log, "配方真的套上去了")
+            self.assertIsNone(dock.panel_source, "面板不再是「产物面板」")
+            self.assertTrue(np.allclose(np.asarray(dock.last_intensity,
+                                                   dtype=float), inten),
+                            "画的是**源曲线**，不是在扣完的曲线上再扣一遍")
+            self.assertEqual((dock.params_snapshot or {}).get("背景扣除模式"),
+                             "auto", "配方把模式也带过来了")
+        finally:
+            w.close()
+
+    def test_recipe_is_refused_when_the_source_curve_is_gone(self):
+        """找不到源曲线时仍然拒绝，并说清为什么（不静默、不硬套）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=False)
+            key = _store_product(w, files[0], kind="bg")   # 没有 1D、也没台账
             src = gui_sources.make_source(files[0], kind=gui_sources.BG, key=key)
             panel_key = gui_views._open_product_panel(w, src)
             dock = w.plot_docks[panel_key]
@@ -2070,11 +2331,17 @@ class TestRecipeReuse(unittest.TestCase):
             QApplication.processEvents()
             recipe_store.save("R", {"mode": "auto", "window_deg": 0.3,
                                     "anchors": [[2.0, 100.0]]})
+            gui_app._recipe_combo_fill(w)     # 下拉要刷一次才看得到"已保存：R"
             w.recipe_combo.setCurrentIndex(w.recipe_combo.findData("saved|R"))
+            self.assertEqual(w.recipe_combo.currentData(), "saved|R",
+                             "前提：下拉里选中了那份配方")
             gui_app._apply_selected_recipe(w)
-            self.assertIn("处理产物", w.log_text.toPlainText())
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("换配方重做不了", log)
+            self.assertIn("打开原始条目重出图再处理", log)
             self.assertEqual((dock.params_snapshot or {}).get("背景扣除模式"),
-                             "off", "产物面板的模式不许被配方改掉")
+                             "off", "拒绝时产物面板的模式不许被改掉")
         finally:
             w.close()
 
@@ -2170,14 +2437,96 @@ class TestGroupSelectionBadge(unittest.TestCase):
             _store_product(w, files[0])
             w.refresh_groups()
             group = _group_by_text(w, "1D 产物")
-            self.assertEqual(group.text(0), "1D 产物", "展开时是纯名字")
+            base = group.text(0)
+            # 组名 = 家族名 + 这一组按什么算的（2026-09-28 第 4 条：按积分
+            # 设置分组），本测试只关心**名字里不带总数**、徽标另有其数
+            self.assertTrue(base.startswith("1D 产物 2θ "), base)
+            self.assertNotIn("(1)", base, "名字里不再带总数")
             group.setExpanded(False)
             QApplication.processEvents()
-            self.assertEqual(group.text(0), "1D 产物（0/1 选中）",
+            self.assertEqual(group.text(0), f"{base}（0/1 选中）",
                              "产物条目默认不勾（导入不勾选那套口径）")
             group.child(0).setCheckState(0, Qt.Checked)
             QApplication.processEvents()
-            self.assertEqual(group.text(0), "1D 产物（1/1 选中）")
+            self.assertEqual(group.text(0), f"{base}（1/1 选中）")
+        finally:
+            w.close()
+
+
+class TestOpenRowMarks(unittest.TestCase):
+    """文件栏的"正在打开"记号（用户 2026-09-28 第 5 条）。
+
+    用户的原话："文件栏背景加深代表这个图正在打开，选中未选中仅用框内的标志
+    表示"。改之前整行深色是 Qt 的"当前行"高亮（还被限制成"只能在勾选着的行
+    上"），而哪张图开着在文件栏里**完全看不出来**。现在：
+
+      * 有面板活着的条目 = 整行淡色 + 左侧小点（refresh_open_marks）；
+      * 勾没勾只看框里的小勾（Qt 的选中底色已在 FileTree 的样式里取消）；
+      * 两个记号互不影响——取消勾选不该把"开着"的记号抹掉，反过来也一样。
+    """
+
+    def _marked(self, item):
+        return (item.background(0).color().isValid()
+                and item.background(0).color().alpha() > 0
+                and not item.icon(0).isNull())
+
+    def test_row_is_marked_while_a_panel_is_open(self):
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=False)
+            first = w.file_list.raw_group.child(0)
+            second = w.file_list.raw_group.child(1)
+            self.assertFalse(self._marked(first), "还没开图：不该有记号")
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                gui_file_dock._open_entry_view(w, first, explicit=True)
+                self.assertTrue(_wait_until(
+                    lambda: "1D|" + str(files[0]) in w.plot_docks))
+                QApplication.processEvents()
+                self.assertTrue(self._marked(first), "开着的那条要有记号")
+                self.assertFalse(self._marked(second), "没开的条目不许被带上")
+                # 取消勾选不影响"开着"的记号（两种记号各管各的）
+                first.setCheckState(0, Qt.Checked)
+                QApplication.processEvents()
+                self.assertTrue(self._marked(first))
+                first.setCheckState(0, Qt.Unchecked)
+                QApplication.processEvents()
+                self.assertTrue(self._marked(first),
+                                "勾选状态与「正在打开」是两回事")
+                # 关掉面板 → 记号收回
+                gui_app._close_panel(w, "1D|" + str(files[0]))
+                QApplication.processEvents()
+                self.assertFalse(self._marked(first), "关了就收回记号")
+        finally:
+            w.close()
+
+    def test_product_rows_get_marked_too(self):
+        """产物条目（「处理后」）开着面板时同样有记号。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=False)
+            key = _store_product(w, files[0], kind="bg")
+            # 处理产物在文件栏里靠**台账**列出来（1D 产物才是扫盘）
+            stage_cache.record_batch(
+                "bg", "20260928-235959-test01", label="处理后 09-28 23:59（测试）",
+                items=[(files[0], key)], config=w.config_name,
+                npt=int(w.params["输出点数"].value()), tth_min=1.0,
+                tth_max=8.0, settings={}, note="1 个文件")
+            w.refresh_groups()
+            QApplication.processEvents()
+            item = None
+            for src in gui_sources.all_sources(w):
+                if src.kind == gui_sources.BG:
+                    item = src.item
+            self.assertIsNotNone(item, "前提：文件栏里有处理后条目")
+            self.assertFalse(self._marked(item))
+            gui_views._open_product_panel(
+                w, gui_sources.make_source(files[0], kind=gui_sources.BG,
+                                           key=key))
+            QApplication.processEvents()
+            self.assertTrue(self._marked(item), "产物条目也要有记号")
         finally:
             w.close()
 
@@ -2223,14 +2572,18 @@ class TestProductGroups(unittest.TestCase):
         finally:
             w.close()
 
-    def test_oned_group_lists_products_from_other_settings(self):
-        """改了 2θ 范围之后，按旧范围算的 1D 产物**照样列着**（名字里标注）。
+    def test_oned_products_are_grouped_by_their_settings(self):
+        """**按积分设置分组**：两组 theta 不同的 1D 各自一组，不掺在一起。
 
-        用户 2026-09-28："我在处理1d图时，处理后的图把1d图的文件给替换了…
-        删除缓存的文件只能用户自己删"。真相：盘上一份没少，是文件栏那颗
-        「1D 产物」组按**当前设置**正查键，而 2θ 范围是缓存身份的一半——
-        他把上限从 8.0 改成 7.0 之后那一组整个空掉，看起来像被顶掉了。
-        现在改成扫盘：磁盘上有什么就显示什么，不一样的地方写在名字里。
+        用户 2026-09-28 两条一起定的：
+          * 第 4 条："同一批原始数据出两组 theta 不同的 1d 图会掺在一起，
+            应该有分组区分"——改之前全库只有一个「1D 产物」组，靠行尾那截
+            `1D（2θ 1–8°）` 区分，而且那截尾巴是**相对当前设置**算的（改一下
+            坞顶的范围，尾巴就从 A 行跳到 B 行，像两组换了身份）；
+          * "处理后的图把 1d 图的文件给替换了…删除缓存只能用户自己删"——
+            盘上一份没少，是那颗组按**当前设置**正查键、范围一改整组空掉。
+        现在：扫盘（磁盘上有什么就显示什么）+ 一组一套设置 + 组名写着是哪
+        一套；当前设置那一组排最前、名字后面标「（当前设置）」。
         """
         w = create_window()
         try:
@@ -2245,13 +2598,30 @@ class TestProductGroups(unittest.TestCase):
             w.refresh_groups()
             group = _group_by_text(w, "1D 产物")
             self.assertIsNotNone(group, "旧范围的产物也必须列出来")
+            self.assertIn("2θ 1–7°", group.text(0), "组名里写着它是按什么算的")
+            self.assertNotIn("当前设置", group.text(0),
+                             "它不是坞顶当前那一套（1–8°），不该标「当前设置」")
             self.assertEqual(group.childCount(), 2)
             leaf = group.child(0)
-            self.assertIn("2θ", leaf.text(0), "名字里标出它按什么范围算的")
-            self.assertIn("1–7", leaf.text(0).replace("–", "–"))
-            self.assertIn("与当前设置不同", leaf.toolTip(0))
+            self.assertIn("1D", leaf.text(0), "组内同名同类：范围由组名交代")
+            self.assertIn("当前设置是", group.toolTip(0),
+                          "悬停提示里写出当前设置，好知道该按什么重算")
             src = gui_sources.source_of(leaf)
             self.assertIn(src.key, keys, "挂着的是那一份产物的键（点开读它）")
+            # 再按当前范围（1–8°）算一批 → **第二组**冒出来，两组并存
+            for f in files:
+                stage_cache.store_1d(
+                    f, np.linspace(1.0, 8.0, 5),
+                    np.array([1.0, 2.0, 3.0, 2.0, 1.0]),
+                    config=kw["config"], npt=kw["npt"],
+                    tth_min=1.0, tth_max=8.0)
+            w.refresh_groups()
+            titles = [g.text(0) for g in w.file_list.groups()
+                      if "1D 产物" in g.text(0)]
+            self.assertEqual(len(titles), 2, f"该分成两组：{titles}")
+            self.assertIn("1D 产物 2θ 1–8°（当前设置）", titles,
+                          "当前那一组排最前并标明")
+            self.assertIn("1D 产物 2θ 1–7°", titles)
         finally:
             w.close()
 
@@ -2809,17 +3179,27 @@ class TestBackgroundFromProduct(unittest.TestCase):
         finally:
             w.close()
 
-    def test_batch_background_skips_bg_products(self):
-        """扣背景产物条目跳过（已经是扣完的），日志说清原因。"""
+    def test_batch_redoes_a_bg_product_from_its_source_curve(self):
+        """处理产物在批里**按它底下的原始 1D 曲线重做**，不跳过、也不二次相减。
+
+        用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"。
+        旧口径是"处理产物跳过（幂等，不再来一遍）"——可用户要的是"换套参数
+        重做"。现在的做法：输入换成它血缘上那条 1D 曲线（元数据里的 base_key
+        → 台账兜底），所以既做得成、又不会在扣完的曲线上再扣一遍。
+        """
         w = create_window()
         try:
             files = _tmp_files(1)
             w.add_files([str(p) for p in files])
+            kw = _kw_of(w)
+            # 真血缘：先有一条 1D 曲线，再有一条从它派生的处理产物
+            tth = np.linspace(1.0, 8.0, 5)
+            inten = np.array([9.0, 6.0, 3.0, 2.0, 1.0])
+            stage_cache.store_1d(files[0], tth, inten, **kw)
             key = _store_product(w, files[0], kind="bg")
             stage_cache.record_batch(
-                "bg", "skip-batch", label="扣背景 09-25 08:00（空扫相减）",
-                items=[(files[0], key)], **_kw_of(w),
-                settings={"mode": "blank"})
+                "bg", "redo-batch", label="扣背景 09-25 08:00（手动锚点）",
+                items=[(files[0], key)], **kw, settings={"mode": "anchor"})
             w.refresh_groups()
             _group_by_text(w, "扣背景 09-25 08:00").child(0).setCheckState(
                 0, Qt.Checked)
@@ -2833,14 +3213,18 @@ class TestBackgroundFromProduct(unittest.TestCase):
             cb.setCurrentIndex(cb.findData("anchor"))
             dock.params_snapshot = dict(dock.params_snapshot or {},
                                         **{"背景扣除模式": "anchor"})
-            w.bg_anchors[str(files[0])] = [(1.0, 1.0)]
-            before = len(self._mine(files[0]))
+            w.bg_anchors[str(files[0])] = [(1.0, 9.0), (8.0, 1.0)]
             w.proc_batch_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("没有选中的文件", log)
-            self.assertIn("处理产物已经是处理完的结果", log)
-            self.assertEqual(len(self._mine(files[0])), before, "不该新增批次")
+            self.assertIn("按**它底下的原始 1D 曲线**重做", log)
+            self.assertIn("批量处理完成：1/1", log, "这条不再被跳过")
+            self.assertIn("其中 1 条是处理产物", log)
+            batches = self._mine(files[0])
+            self.assertGreaterEqual(len(batches), 2,
+                                    "重做要另记一批（新参数 = 新一批）")
+            self.assertTrue(stage_cache.has_key("bg", batches[0]["items"][
+                str(Path(files[0]).resolve())]["key"]), "产物真落盘")
         finally:
             w.close()
 
@@ -3100,6 +3484,158 @@ class TestProcessingChain(unittest.TestCase):
             self.assertGreater(len(blank_rows), 0,
                                "裁剪段在 CSV 里应当是空单元格")
             self.assertNotIn("nan", csv_text, "空值不能写成字面 nan")
+        finally:
+            w.close()
+
+
+class TestProcessingPageExits(unittest.TestCase):
+    """「处理」页的两条出口 + 2θ 范围的键/数据一致性（用户 2026-09-28）。
+
+    用户报的原话："处理阶段的 2theta 范围无效（检查所有 2theta 是否都能生效
+    以及怎么生效）"、"处理单张 1d 数据应该在用户确定处理结果后出现在文件区的
+    处理后数据中"。定下来的两条（2026-09-28 用户选择）：
+
+      * 7乙：处理页也要有"按新 2θ 重算这张图"的出口——2θ 是**积分期**参数，
+        处理链只吃手上那条曲线，处理页原先只有 [重画]（纯显示），改了 2θ
+        没有任何地方能让数据跟上；
+      * 第 4 条：[采用这份结果] 把单张的处理结果落成产物、进文件栏
+        「处理后 …」（与 [批量处理] 落的是同一种东西）。
+
+    外加一条真 bug 的回归：批量处理取原始曲线时**面板优先、无视当前 2θ**
+    ——面板是按 1–8° 算的、用户改成 2–7° 再批量，产物会按 2–7° 的键写盘、
+    里面装的却是 1–8° 的数据（键与数据对不上，以后按 2–7° 查还会命中它）。
+    """
+
+    def setUp(self):
+        stage_cache.write_batches("bg", [])
+        # 假积分**整条测试期间都挂着**：开图、[按 2θ 重算这张图]、[批量处理]
+        # 都要走它。第一版只 mock 了开图那一小段，重算时打到真积分器上（拿
+        # 空文件）+ 后台线程，看着像"按钮没用"——测试自己骗自己
+        self._patcher = mock.patch.object(gui_views, "_compute_integration",
+                                          side_effect=self._fake)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    @staticmethod
+    def _fake(path_str, geom, npt):
+        """曲线端点跟着 geom 的 2θ 走（好验证"重算"真的换了范围）。"""
+        lo = float(geom.get("tth_min_deg") or 0.5)
+        hi = float(geom.get("tth_max_deg") or 8.5)
+        tth = np.linspace(lo, hi, 200)
+        y = 10.0 + 500.0 * np.exp(-0.5 * ((tth - (lo + hi) / 2) / 0.1) ** 2)
+        return tth, y
+
+    def _panel(self, w):
+        """开一张 1D 面板（默认 2θ 1–8°）。"""
+        files = _tmp_files(1)
+        add_checked(w, [str(p) for p in files])
+        _open_view(w, "1D")
+        self.assertTrue(_wait_until(
+            lambda: len(_axes(w, "1D", str(files[0])).lines) > 0))
+        return files[0], w.plot_docks["1D|" + str(files[0])]
+
+    def _mine(self, path):
+        """台账里跟这个文件有关的那几批。"""
+        out = []
+        for node in stage_cache.list_batches("bg", prune=True):
+            if str(Path(path).resolve()) in (node.get("items") or {}):
+                out.append(node)
+        return out
+
+    def _anchor_mode(self, w, dock, path):
+        """切到手动锚点并在数据两端各放一个锚点（背景扣得动）。"""
+        cb = w.params["背景扣除模式"]
+        cb.setCurrentIndex(cb.findData("anchor"))
+        w.params["背景窗口 (°)"].setValue(1.0)
+        tth = np.asarray(dock.last_tth, dtype=float)
+        inten = np.asarray(dock.last_intensity, dtype=float)
+        w.bg_anchors[str(path)] = [
+            (float(tth[0]), float(inten[0])), (float(tth[-1]), float(inten[-1]))]
+        gui_views._refresh_proc(w)
+        QApplication.processEvents()
+
+    def test_keep_this_result_writes_a_single_product(self):
+        """[采用这份结果]：单张的处理结果进文件栏「处理后 …」（用户第 4 条）。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            self._anchor_mode(w, dock, path)
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("已采用这份结果", log)
+            batches = self._mine(path)
+            self.assertEqual(len(batches), 1, "该落一条台账")
+            self.assertEqual(batches[0]["note"], "1 个文件")
+            meta = batches[0]["items"][str(Path(path).resolve())]
+            self.assertTrue(stage_cache.has_key("bg", meta["key"]),
+                            "产物真落盘")
+            # 文件栏里立刻长出「处理后 …」分组，子项就是这一条
+            self.assertTrue(_wait_until(
+                lambda: _group_by_text(w, "处理后") is not None),
+                "文件栏里该出现处理后分组")
+            group = _group_by_text(w, "处理后")
+            self.assertEqual(group.childCount(), 1)
+            self.assertIn(path.stem, group.child(0).text(0))
+            # 与 [批量处理] 落的是同一种东西：双击能打开（读盘不重算）
+            src = gui_sources.source_of(group.child(0))
+            self.assertEqual(src.kind, gui_sources.BG)
+            gui_views._open_product_panel(w, src)
+            QApplication.processEvents()
+            self.assertIn(f"1D|bg#{src.key}", w.plot_docks)
+        finally:
+            w.close()
+
+    def test_keep_this_result_refuses_when_chain_is_off(self):
+        """三项全关时 [采用这份结果] 只记一句、不写产物（存下来也是白存）。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            QApplication.processEvents()
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            self.assertIn("三项都关着", w.log_text.toPlainText())
+            self.assertEqual(self._mine(path), [])
+        finally:
+            w.close()
+
+    def test_recalc_button_re_integrates_with_the_current_range(self):
+        """[按 2θ 重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            self.assertAlmostEqual(float(np.asarray(dock.last_tth)[-1]),
+                                   8.0, places=6, msg="初始按默认范围（1–8°）算")
+            w.params["2θ 上限 (°)"].setValue(5.0)
+            w.proc_recalc_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: abs(float(np.asarray(w.plot_docks["1D|" + str(path)]
+                                             .last_tth)[-1]) - 5.0) < 1e-6),
+                "重算后的曲线端点该跟着新范围走")
+            self.assertIn("重算", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_batch_never_processes_a_stale_range_curve(self):
+        """改了 2θ 再 [批量处理]：不许拿面板里旧范围那条曲线凑数（真 bug 回归）。
+
+        旧版 `_curve_source` 只要面板开着就直接用它、**完全无视当前 2θ**：
+        产物按新范围的键写盘、数据却是旧范围的。现在对不上就跳过并说清原因。
+        """
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            self._anchor_mode(w, dock, path)
+            w.params["2θ 下限 (°)"].setValue(2.0)
+            w.params["2θ 上限 (°)"].setValue(7.0)
+            w.proc_batch_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("批量处理完成：0/1", log)
+            self.assertIn("面板里那条是按 2θ 1–8° 算的", log)   # 面板那份的来源
+            self.assertIn("现在填的是 2θ 2–7°", log)
+            self.assertEqual(self._mine(path), [],
+                             "没有产物落进（尤其是别落到 2–7° 的键上）")
         finally:
             w.close()
 
@@ -8663,11 +9199,20 @@ class TestCalibration(unittest.TestCase):
                 self.assertEqual(d["dist"]["A"].text(), "+0.40")     # 手动−自动
                 self.assertEqual(d["dev"]["A"].text(), "+0.30")      # 0.50−0.20
                 self.assertEqual(d["dist"]["B"].text(), "+0.00")
+                # 基准默认 = 当前配置 → 结论讲"候选 vs 当前配置"
+                self.assertIn("比 当前配置 ", w.calib_verdict.text())
                 # 基准可选：切成 A 之后，B 的 Δ 变成 自动 − 手动
+                #
+                # 结论也跟着换参照（用户 2026-09-28 第 2 条："数据结论不受
+                # 对比基准的影响"——改之前参照写死是"当前配置"，切基准时
+                # 结论一个字都不变）。现在 Δ 行与结论看同一列：基准 = 手动1
+                # （dev 0.50），当前配置与 B 都是 自动1（dev 0.20）→ 都"比 A 好"
                 w.calib_base_combo.setCurrentIndex(
                     w.calib_base_combo.findData("A"))
                 self.assertEqual(d["dist"]["B"].text(), "-0.40")
                 self.assertEqual(d["dist"]["A"].text(), "基准")
+                self.assertIn("比 A 好 0.30 px", w.calib_verdict.text())
+                self.assertNotIn("比 当前配置", w.calib_verdict.text())
                 # 保存对象 = 当前配置（此时是被采纳的 自动1）
                 self.assertIn("自动1", w.calib_save_hint.text())
         finally:
@@ -9670,6 +10215,81 @@ class TestCalibCurrent(unittest.TestCase):
                               w.log_text.toPlainText())
                 w.calib_pixel_chk.setChecked(True)
             self.assertIn("像素尺寸已确认：200.0 µm", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def _hand_edit(self, w, pixel=None, beam_row=None, beam_col=None):
+        """走一遍 [编辑当前配置…] 的对话框（exec 换成"直接确定"）。"""
+        def fake_exec(self):
+            for name, value in (("beam_row_spin", beam_row),
+                                ("beam_col_spin", beam_col)):
+                if value is not None:
+                    self.findChild(QDoubleSpinBox, name).setValue(value)
+            if pixel is not None:
+                self.findChildren(QDoubleSpinBox)[0].setValue(pixel)
+            return QDialog.Accepted
+        with mock.patch.object(QDialog, "exec", new=fake_exec):
+            gui_calib._edit_current(w)
+
+    def _enter_calib(self, w):
+        w.show()
+        with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                               return_value=np.ones((256, 256)) * 10):
+            add_checked(w, ["data/fake_a.tif"])
+            w.calib_btn.click()
+            w.calib_pixel_chk.setChecked(True)
+        return w.calib_state
+
+    def test_hand_entered_geometry_lands_in_the_result_list(self):
+        """手输几何要**进累积结果列表**：A/B 下拉、对比基准都能选到它。
+
+        用户 2026-09-28 第 1 条："校准自定义的几何配置不会计入原始值或者说
+        不会存储在选框里"——改之前它只活在 state["current_geom"] 里（没有
+        户口）：切走就找不回来、放不进 A/B 槽、也不能当基准。
+        """
+        w = create_window()
+        try:
+            st = self._enter_calib(w)
+            self._hand_edit(w, pixel=150.0, beam_row=1021.0, beam_col=1023.0)
+            self.assertTrue(st["custom"])
+            names = [r["name"] for r in st["results"]]
+            self.assertIn("自定义1", names, "手输几何该进结果列表")
+            # A 槽的下拉里能选到它（选项 = 结果名）
+            gui_calib_table._sync_slot_combos(w)
+            combo = w.calib_slot_combo["A"]
+            self.assertGreaterEqual(combo.findData("自定义1"), 0,
+                                    "A 槽下拉里要能选到「自定义1」")
+            # 放进 A 槽 → 表里 A 列就是这条几何（环心行跟着它）
+            combo.setCurrentIndex(combo.findData("自定义1"))
+            QApplication.processEvents()
+            self.assertEqual(st["slots"]["A"], "自定义1")
+            self.assertEqual(w.calib_vals["A"]["center_r"].text(), "1021.00")
+            # 再选回"当前配置"里的自定义那条 → 保护标记跟着回来
+            # （否则下一次自动结果会把手输的东西悄悄替换掉）
+            gui_calib._adopt_result(w, "自定义1", why="")
+            self.assertTrue(st["custom"], "重新选中自定义那条要恢复保护")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_edit_dialog_sets_the_beam_center(self):
+        """对话框里能改**环心行/列**（用户 2026-09-28 第 2 条，2甲②）。
+
+        改之前对话框里根本没有束心输入框：`_beam` 存了却从没被读回，
+        手输几何的束心永远是接手时那一个——而束心正是校准最常动的东西。
+        """
+        w = create_window()
+        try:
+            st = self._enter_calib(w)
+            self._hand_edit(w, beam_row=1234.5, beam_col=987.25)
+            self.assertEqual(st["current_geom"]["beam_center_rc"],
+                             (1234.5, 987.25))
+            # 表里的"环心行/环心列"两行跟着它
+            self.assertIn("1234.5", w.calib_vals["current"]["center_r"].text())
+            self.assertIn("987.2", w.calib_vals["current"]["center_c"].text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -10740,6 +11360,37 @@ class TestSavePoni(unittest.TestCase):
                                    return_value=("", "")):
                 w.findChild(QPushButton, "save_poni_btn").click()
             self.assertNotIn("已保存几何参数", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_save_writes_the_current_config_not_the_entry(self):
+        """校准页里按 [保存参数]：存的是**当前配置**（含手输），不是选中条目。
+
+        用户 2026-09-28 第 2 条（2甲①）报的就是这个：手输改完当前配置再按
+        保存，导出的还是那条旧条目的数字（"改完保存，文件里是旧的"）。
+        现在与同栏的 [保存为配置] 一个口径。
+        """
+        w = create_window()
+        try:
+            out = Path(tempfile.mkdtemp()) / "current.poni"
+            entry = w.config["geometry"]
+            # 造一个与条目**明显不同**的当前配置（不弹对话框，直接进状态）
+            w.calib_state = {
+                "points": [], "results": [],
+                "slots": {"current": None, "A": None, "B": None},
+                "pinned": {"A": False, "B": False}, "next_slot": "A",
+                "current_geom": dict(entry, dist_m=entry["dist_m"] + 0.02),
+                "current_from": "手输", "current_metrics": None,
+                "current_error": None, "custom": True, "counters": {}}
+            with mock.patch.object(QFileDialog, "getSaveFileName",
+                                   return_value=(str(out), "pyFAI 几何 (*.poni)")):
+                w.findChild(QPushButton, "save_poni_btn").click()
+            import pyFAI
+            g = pyFAI.load(str(out))
+            self.assertAlmostEqual(g.dist, entry["dist_m"] + 0.02,
+                                   msg="该存当前配置（校准页表里那一列）")
+            self.assertIn("校准页「当前配置」", w.log_text.toPlainText(),
+                          "日志要说清存的是哪一份")
         finally:
             w.close()
 

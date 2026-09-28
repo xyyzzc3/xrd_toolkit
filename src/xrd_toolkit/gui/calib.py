@@ -69,9 +69,9 @@ from xrd_toolkit.gui.calib_model import (
     CALIB_PANEL_RESERVE_PX, COMPARE_HINT, COMPARE_ROWS, CP_COLOR,
     KIND_LABELS, MIN_POINTS, MIN_RINGS, PANEL_SCALE, RING_COLOR,
     SLOT_LABELS, SNAP_TOL_DEG,
-    SOURCE_IMPROVE_MIN_PX, _add_result, _adopt_decision, _calib_state,
-    _fill_slot, _geom_to_result_shape, _next_name, _result_by_name,
-    _result_dev, _result_to_geom, _slot_label, _verdict)
+    SOURCE_IMPROVE_MIN_PX, _add_custom_result, _add_result, _adopt_decision,
+    _calib_state, _fill_slot, _geom_to_result_shape, _next_name,
+    _result_by_name, _result_dev, _result_to_geom, _slot_label, _verdict)
 from xrd_toolkit.gui.calib_table import (
     _on_slot_changed, _refresh_table, _sync_slot_combos)
 from xrd_toolkit.gui.calib_panel import (
@@ -109,7 +109,9 @@ def _adopt_result(window: QMainWindow, name: str, why: str = "自动采纳") -> 
     state["current_metrics"] = item["result"].get("metrics")
     state["current_error"] = item["result"].get("metrics_error")
     state["current_from"] = name
-    state["custom"] = False
+    # 重新选中"自定义"那条 = 又把手输的几何拿回来用了：保护标记要跟着回来，
+    # 否则下一次自动结果就会把它悄悄替换掉（用户手输的东西不该被覆盖）
+    state["custom"] = item.get("kind") == "custom"
     if why:
         dev = _result_dev(item["result"])
         dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
@@ -209,6 +211,16 @@ def _edit_current(window: QMainWindow) -> None:
 
     对话框顶部可以先"从条目预填"（= 借另一条条目的几何），再逐个改数值
     ——于是"借用其它批次"与"手输"是同一件事的两个入口，页面上不占地方。
+
+    两处按用户 2026-09-28 第 1、2 条改的：
+      * **束心行/列也在这里改**（`beam_center_rc`，表里的"环心行/环心列"
+        两行）。改之前对话框里根本没有这两个框，`_beam` 存了却从没被读回
+        ——手输几何的束心永远是接手时那一个（"从条目预填"也只搬 7 个数字、
+        留下旧束心），而束心正是校准最常动的东西；
+      * 确定之后这条几何**进累积结果列表**（`_add_custom_result`）：于是
+        A/B 两个下拉（选项 = 结果名）里能选到它、能钉进槽、能当对比基准，
+        切走再切回来也还在——改之前它只活在 current_geom 这个没有户口的
+        变量里。
     """
     state = _calib_state(window)
     geom = dict(state["current_geom"] or {})
@@ -216,6 +228,8 @@ def _edit_current(window: QMainWindow) -> None:
         _log(window, "当前配置还没设定（先选一个标准文件进校准模式）")
         return
     px = _geom_px_keys(geom)
+    beam = geom.get("beam_center_rc") or (None, None)
+    row0, col0 = (beam + (None, None))[:2] if beam else (None, None)
     dlg = QDialog(window)
     dlg.setWindowTitle("编辑当前配置")
     form = QFormLayout(dlg)
@@ -243,12 +257,24 @@ def _edit_current(window: QMainWindow) -> None:
         box.setValue(float(value))
         form.addRow(text, box)
         boxes[key_] = box
+    # 束心（行/列，像素）：表里的"环心行/环心列"两行就是它。留 0 位小数
+    # （它是像素坐标；默认值取当前几何，没有就 0——图上点一下就能改）
+    for text, key_, init in (("环心行 (px)", "beam_row", row0),
+                             ("环心列 (px)", "beam_col", col0)):
+        box = QDoubleSpinBox()
+        box.setRange(-1e5, 1e5)
+        box.setDecimals(2)
+        box.setValue(float(init) if init is not None else 0.0)
+        box.setObjectName(f"{key_}_spin")     # 测试按名字找（不靠索引顺序）
+        form.addRow(text, box)
+        boxes[key_] = box
 
     def prefill(_idx):
         key = pre.currentData()
         if key is None:
             return
-        g = config.CONFIGS[key]["geometry"]
+        entry = config.CONFIGS[key]
+        g = entry["geometry"]
         boxes["pixel_um"].setValue(g["pixel_size_m"] * 1e6)
         boxes["wavelength_a"].setValue(g["wavelength_m"] * 1e10)
         boxes["dist_mm"].setValue(g["dist_m"] * 1e3)
@@ -256,7 +282,13 @@ def _edit_current(window: QMainWindow) -> None:
         boxes["poni2_px"].setValue(g["poni2_m"] / g["pixel_size_m"])
         boxes["rot1_deg"].setValue(g["rot1_deg"])
         boxes["rot2_deg"].setValue(g["rot2_deg"])
-        boxes["_beam"] = tuple(config.CONFIGS[key].get("beam_center", (None, None)))
+        # 束心也跟着预填（改之前这里存进 boxes["_beam"] 就再没人读过：
+        # "从条目预填"于是只搬 7 个数字、留下旧束心）
+        bc = entry.get("beam_center") or (None, None)
+        if bc[0] is not None:
+            boxes["beam_row"].setValue(float(bc[0]))
+        if bc[1] is not None:
+            boxes["beam_col"].setValue(float(bc[1]))
 
     pre.currentIndexChanged.connect(prefill)
     row = QHBoxLayout()
@@ -279,7 +311,7 @@ def _edit_current(window: QMainWindow) -> None:
         "poni2_m": boxes["poni2_px"].value() * pixel,
         "rot1_deg": boxes["rot1_deg"].value(),
         "rot2_deg": boxes["rot2_deg"].value(),
-        "beam_center_rc": geom.get("beam_center_rc"),
+        "beam_center_rc": (boxes["beam_row"].value(), boxes["beam_col"].value()),
     }
     for key in ("tth_min_deg", "tth_max_deg"):
         if key in geom:
@@ -290,8 +322,13 @@ def _edit_current(window: QMainWindow) -> None:
     state["custom"] = True                    # 改过就是"自定义"
     state["current_metrics"] = None
     state["current_error"] = None
-    _log(window, f"当前配置已手动修改（自定义）：距离 "
-                 f"{new_geom['dist_m'] * 1e3:.2f} mm、像素 {pixel * 1e6:.1f} µm")
+    # 进累积列表（用户 2026-09-28 第 1 条）：A/B 下拉与基准都能选到它
+    name = _add_custom_result(state, new_geom)
+    _log(window, f"当前配置已手动修改（{name}，自定义）：距离 "
+                 f"{new_geom['dist_m'] * 1e3:.2f} mm、像素 {pixel * 1e6:.1f} µm"
+                 f"、环心 {new_geom['beam_center_rc'][1]:.1f} 列 / "
+                 f"{new_geom['beam_center_rc'][0]:.1f} 行"
+                 f"——已进结果列表（A / B 下拉与「对比基准」里都能选到它）")
     _refresh_current_metrics(window)
     _calib_sync(window)
     # 改完即重画：不然表里数字换了、图上的青线还是旧几何的（2026-09-26
@@ -309,6 +346,28 @@ def _metrics_worker(path_str: str, geom: dict) -> dict:
     out = dict(geom)
     _attach_metrics(out, image, geom)     # initial=None：不重复算初值那一份
     return out
+
+
+def _stack_custom_metrics(state: dict) -> None:
+    """把当前配置的指标**也写进最后那条"自定义"结果**。
+
+    为什么需要（用户 2026-09-28 第 1 条的后半截）：手输几何现在会进结果
+    列表，用户就能把它放进 A / B 槽去跟自动/手动结果比。但指标是异步算
+    出来、记在 `state["current_metrics"]` 里的（那是"当前配置"那一列的
+    数据源），结果条目自带的那份还是 None——不补这一笔，放进槽里就显示
+    "无可用环位偏差、判不了"，等于选了个哑巴。
+
+    只在"当前配置就是那条手输几何"时补（`slots["current"]` 为空 + custom
+    = True）：一旦采纳了别的结果，当前配置与那条自定义结果就不是一回事了。
+    """
+    if state.get("slots", {}).get("current") is not None \
+            or not state.get("custom"):
+        return
+    for item in reversed(state.get("results") or []):
+        if item.get("kind") == "custom":
+            item["result"]["metrics"] = state.get("current_metrics")
+            item["result"]["metrics_error"] = state.get("current_error")
+            return
 
 
 def _refresh_current_metrics(window: QMainWindow) -> None:
@@ -335,6 +394,7 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
             return
         state["current_metrics"] = result.get("metrics")
         state["current_error"] = result.get("metrics_error")
+        _stack_custom_metrics(state)
         _calib_sync(window)
 
     def error(msg):
@@ -344,6 +404,7 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
             return
         state["current_metrics"] = None
         state["current_error"] = msg
+        _stack_custom_metrics(state)
         _calib_sync(window)
 
     task = BackgroundTask(_metrics_worker, str(path), dict(geom),
@@ -407,8 +468,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_poni.clicked.connect(lambda: _import_poni(window))
     btn_save_poni = QPushButton("保存参数")
     btn_save_poni.setObjectName("save_poni_btn")
-    btn_save_poni.setToolTip("保存 .poni：把坞顶「几何配置」选中条目的几何"
-                             "写成 pyFAI 交换格式文件")
+    btn_save_poni.setToolTip("保存 .poni：把**当前配置**（本页表里第一列那个，"
+                             "含手输/自定义）的几何写成 pyFAI 交换格式文件"
+                             "——与 [保存为配置] 同一个口径")
     btn_save_poni.clicked.connect(lambda: _save_poni(window))
     btn_del = QPushButton("删除")
     btn_del.setObjectName("del_config_btn")
@@ -529,9 +591,10 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     tb.addLayout(base_row)
 
     # 两句话把"谁和谁比"钉死（用户 2026-09-27："对比基准和结论表述不清，
-    # 不知道是谁在和谁比"）：Δ 行看基准列，结论看当前配置——下拉框只管前者
+    # 不知道是谁在和谁比"；2026-09-28 第 2 条又说"结论不受基准影响"——
+    # 于是两者统一：**Δ 行与结论都看这个下拉框**，一屏只讲一对人）
     delta_note = QLabel("Δ = 该列 − 基准列（基准那一列写「基准」）；"
-                        "下面结论一律以「当前配置」为参照，逐个候选报")
+                        "下面结论也以基准那一列为参照，逐个候选报")
     delta_note.setWordWrap(True)
     delta_note.setStyleSheet("color: gray;")
     tb.addWidget(delta_note)

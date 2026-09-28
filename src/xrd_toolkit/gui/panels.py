@@ -237,6 +237,11 @@ def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
     dock = window.plot_docks.pop(key, None)
     if dock is None:
         return
+    # 关掉一个面板 → 文件栏里那一条的"正在打开"记号要收回去（见
+    # file_dock.refresh_open_marks；经窗级回调，不反向 import 文件坞）
+    mark = getattr(window, "mark_open_rows", None)
+    if mark is not None:
+        mark()
     # 覆盖光标可能还挂在抓手过滤器名下（关面板时鼠标可能正停在
     # 抓取区上，来不及收 Leave）：主动撤销，别把方向光标留下
     grip_filter = getattr(_content(dock), "_grip_filter", None)

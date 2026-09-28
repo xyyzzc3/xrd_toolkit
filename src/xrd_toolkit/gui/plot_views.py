@@ -693,17 +693,69 @@ def _bg_path_of(dock):
     return getattr(dock, "panel_file", None)
 
 
-def _curve_source(window, path, kw: dict):
-    """取某个文件**现有**的 1D 曲线：面板缓存优先，其次 1D 产物。
+def _panel_1d_key(panel, path):
+    """面板里那条曲线是按**哪把 1D 键**算的（读它自己的快照）。
 
-    没有则返回 (None, None)——批量扣背景要拿原始曲线去重取锚点强度，
-    拿不到的文件会被跳过并记进摘要（不静默）。
+    快照里记着算这张图时用的几何条目 / 点数 / 2θ 范围（`_data_snapshot`
+    的口径），拿它们重算一把键即可——与"取数"用的是同一套算法，不靠肉眼
+    比浮点。面板还没算过 / 快照缺项 / 文件读不了 → None（一律当"对不上"，
+    安全的一侧）。
     """
+    snap = getattr(panel, "params_snapshot", None) or {}
+    lo, hi = snap.get("2θ 下限 (°)"), snap.get("2θ 上限 (°)")
+    npt = snap.get("输出点数")
+    if lo is None or hi is None or npt is None:
+        return None
+    try:
+        return stage_cache.key_of_1d(str(path),
+                                     config=str(snap.get("config") or ""),
+                                     npt=int(npt), tth_min=float(lo),
+                                     tth_max=float(hi))
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _curve_source(window, path, kw: dict):
+    """取某个文件**按当前设置算好的**那条 1D 曲线：面板里那条优先，其次 1D 产物。
+
+    返回 (tth, intensity, why)：取到 → why=None；取不到 → why 是一句人话
+    （批量处理据此记账，不静默）。批量扣背景要拿原始曲线去重取锚点强度。
+
+    **为什么"面板里那条"要同一把键才算数**（2026-09-28 用户报"处理阶段
+    2θ 范围无效"查出的真 bug）：旧版只要那个文件的面板开着就直接用它，
+    **完全无视 kw**——面板是按 2θ 1–8° 算的、用户改成 2–7° 再 [批量处理]，
+    产物会按 2–7° 的键写盘、里面装的却是 1–8° 的数据：键与数据对不上，
+    而且以后按 2–7° 查还会"命中"它（文件栏的行尾是从曲线自己读的，于是
+    界面上露馅成"明明选了 2–7° 却列着 1–8°"）。
+    """
+    try:
+        want = stage_cache.key_of_1d(str(path),
+                                     config=str(kw.get("config") or ""),
+                                     npt=int(kw.get("npt")),
+                                     tth_min=kw.get("tth_min"),
+                                     tth_max=kw.get("tth_max"))
+    except (TypeError, ValueError, OSError):
+        want = None
     panel = window.plot_docks.get("1D|" + str(path))
     if panel is not None and getattr(panel, "last_tth", None) is not None:
-        return panel.last_tth, panel.last_intensity
+        if want is not None and _panel_1d_key(panel, path) == want:
+            return panel.last_tth, panel.last_intensity, None
     got = stage_cache.load_1d(path, **kw)
-    return got if got is not None else (None, None)
+    if got is not None:
+        return got[0], got[1], None
+    if panel is not None and getattr(panel, "last_tth", None) is not None:
+        # 面板里有曲线、但不是当前设置这一份：把"面板那份是什么范围"说清楚，
+        # 用户才知道该按哪个范围重算（最常见的就是 2θ 改过还没重算）
+        snap = getattr(panel, "params_snapshot", None) or {}
+        lo, hi = snap.get("2θ 下限 (°)"), snap.get("2θ 上限 (°)")
+        cur = f"（现在填的是 2θ {kw['tth_min']:g}–{kw['tth_max']:g}°）" \
+            if kw.get("tth_min") is not None and kw.get("tth_max") is not None \
+            else ""
+        if lo is not None and hi is not None:
+            return None, None, (f"面板里那条是按 2θ {float(lo):g}–{float(hi):g}° "
+                                f"算的，按当前设置还没算过{cur}")
+        return None, None, "面板里那条是别的设置算的，按当前设置还没算过"
+    return None, None, "还没有 1D 结果（先点 [1D] 出图）"
 
 
 def _curve_for(window, path):
@@ -871,6 +923,163 @@ def _set_recipe_controls(window: QMainWindow, recipe: dict) -> None:
     _sync_cut_label(window)                                # 清单标签跟着换
 
 
+def _retarget_product_panel_to_source(window, dock) -> bool:
+    """把"处理产物"面板就地换成**它底下那条原始 1D 曲线**（换配方重做的入口）。
+
+    用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"。
+    改之前产物面板是一堵墙：[套用] 直接拒绝、[采用这份结果] 也拒绝（都怕
+    二次相减），用户想"换套参数重做"在界面上无路可走——只有一句"打开它
+    对应的原始条目"，而那样会另开一张面板、当前这张的视图状态就丢了。
+
+    这里就地换：面板此后就是"这个文件的一条 1D 曲线"（`panel_source` 清掉），
+    配方照常往上套、结果照常 [采用这份结果]。**二次相减的隐患由"换输入"消除**
+    ——重做吃的正是没扣过背景的那条曲线（见 stage_cache.load_proc_source），
+    而不是在扣完的曲线上再扣一遍。
+
+    返回 True = 可以用（本来就不是产物面板，或换成功）；False = 换不了（已记日志）。
+    """
+    src = getattr(dock, "panel_source", None)
+    if src is None or src.kind != gui_sources.BG:
+        return True
+    got = stage_cache.load_proc_source(src.key)
+    if "why" in got:
+        _log(window, f"换配方重做不了：{got['why']}")
+        return False
+    dock.last_tth, dock.last_intensity = got["tth"], got["intensity"]
+    dock.panel_source = None            # 变回"这个文件的一条曲线"
+    dock.panel_display = f"1D_{Path(src.path).name}"
+    dock.setWindowTitle(dock.panel_display)
+    _log(window, f"这一条是处理产物：已换成它底下的原始 1D 曲线"
+                 f"（来源：{got['from']}）——配方按它重做，不是二次相减")
+    return True
+
+
+def _process_source(window, source, kw, settings, params0, blank_curve,
+                    anchor_source=None) -> dict:
+    """把**一条**来源处理一遍并落成产物（[批量处理] 与 [采用这份结果] 共用）。
+
+    为什么必须是同一份实现：屏幕上的曲线与写进产物的这一份必须来自同一个
+    `apply_chain` 的输出（见 _proc_curve 的说明）——两处各写一遍必然漂移，
+    而漂移的表现是"图上看着好好的、对比里数字对不上"，最难查。
+
+    返回 dict：ok / why（没产出的原因，人话）/ path / key / anchors / dropped
+    / kind（这条来源是哪一类条目）。锚点只传 2θ 位置、强度在这条来源自己的
+    曲线上重取（跨批次复用与整批处理一贯的口径，见 services/recipes 与
+    _proc_batch_apply）。
+    """
+    path = Path(source.path)
+    # 落产物时挂在哪把键下面：RAW 按当前设置算，产物条目挂在它自己那份上
+    base_key = None
+    if source.kind == gui_sources.RAW:
+        tth, intensity, why = _curve_source(window, path, kw)
+        if why is not None:
+            return {"ok": False, "why": why, "path": path}
+    elif source.kind == gui_sources.BG:
+        # 处理产物：**从它底下的原始 1D 曲线重做**（用户 2026-09-28 第 3 条）。
+        # 不是拿扣完的曲线再扣一遍（那是二次相减，曲线会整体往下掉一截，
+        # 看着还挺像"扣得更干净"）。血缘能查到哪把 1D 键就挂回哪把，
+        # 查不到（老产物）就按当前设置那把——两种都是"这个文件的一条 1D"。
+        got = stage_cache.load_proc_source(source.key)
+        if "why" in got:
+            return {"ok": False, "why": got["why"], "path": path}
+        tth, intensity = got["tth"], got["intensity"]
+        base_key = got.get("base")
+    else:
+        # 1D 产物：读那一份（钉住的键），不按当前设置重算
+        got = gui_sources.load_product(source)
+        if got is None:
+            return {"ok": False, "why": "产物读不到了（被删了？）", "path": path}
+        tth, intensity = got
+    xs = [x for x, _ in settings["anchors"]]
+    per_file, dropped = _anchors_on_curve(xs, tth, intensity)
+    params = {**params0, "anchors": per_file}
+    processed, base = process.apply_chain(tth, intensity, params,
+                                          blank_curve=blank_curve)
+    if base is None and settings["mode"] != "off":
+        return {"ok": False, "path": path,
+                "why": "背景拟合没成功（锚点太少 / 全落在数据范围外？）"}
+    proc_settings = {**settings, "anchors": per_file}
+    if source.kind == gui_sources.ONED:
+        # 挂在**那份 1D 产物**的键下面：勾的是哪一条，处理的就是哪一条
+        produced = stage_cache.store_proc_by_key(source.key, tth, processed,
+                                                 settings=proc_settings,
+                                                 source=path.name)
+    elif base_key:
+        # 处理产物重做：挂回它血缘上那把 1D 键（查得到的话）
+        produced = stage_cache.store_proc_by_key(base_key, tth, processed,
+                                                 settings=proc_settings,
+                                                 source=path.name)
+    else:
+        produced = stage_cache.store_proc(path, tth, processed, **kw,
+                                          settings=proc_settings)
+    if getattr(window, "bg_anchors", None) is None:
+        window.bg_anchors = {}
+    window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
+    # 配方**按文件**记下来（处理页那行"本图配方"读它）。**不写进面板
+    # 快照**：面板显示的曲线只由它自己的快照决定，处理不该偷偷改掉人家
+    # 正在看的曲线（用户 2026-09-27 晚："原始数据会被改变"）
+    note_proc_recipe(window, path,
+                     _proc_recipe({**settings, "anchors": per_file},
+                                  source=anchor_source))
+    return {"ok": True, "why": None, "path": path, "key": Path(produced).stem,
+            "anchors": per_file, "dropped": len(dropped),
+            "kind": source.kind}
+
+
+def _proc_keep_this(window: QMainWindow) -> None:
+    """[采用这份结果]：把编辑对象这张图上**眼下这条处理后的曲线**落成产物。
+
+    用户 2026-09-28 第 4 条："处理单张 1d 数据应该在用户确定处理结果后出现在
+    文件区的处理后数据中"——单张处理原先只活在画布上（_refresh_proc 只重画、
+    什么都不写），想留住成果得"勾上自己再点 [批量处理]"，绕且不好理解。
+    这里就是那一步的显式入口：一个来源、一次台账、文件栏立刻长出一组
+    「处理后 …」。落的产物与 [批量处理] 完全同一种（同一份 apply_chain 输出、
+    同一套台账），所以对比 / 热图 / 导出 / 双击打开全都能直接用它。
+    """
+    dock = window.plot_docks.get(window.focus_panel)
+    path = _bg_path_of(dock) if dock is not None else None
+    if dock is None or path is None:
+        _log(window, "先点一张 1D 图（编辑对象），再点 [采用这份结果]")
+        return
+    # 处理产物面板：先就地换成它底下的原始 1D 曲线（用户 2026-09-28 第 3 条），
+    # 换成功就照常"采用"——存下来的是一份**重做**的产物，不是二次相减
+    if not _retarget_product_panel_to_source(window, dock):
+        return
+    settings = _proc_settings(window, dock, path)
+    params0 = _proc_params(window, dock, path)
+    if settings["mode"] == "off" and not process.chain_parts(settings):
+        _log(window, "「处理」页里三项都关着（背景扣除 / 平滑 / 裁剪）——"
+                     "先开一项，再点 [采用这份结果]（否则存下来的与原始曲线一样）")
+        return
+    src = getattr(dock, "panel_source", None)
+    source = src if src is not None else gui_sources.make_source(path)
+    geom = _collect_geometry(window)
+    npt = int(window.params["输出点数"].value())
+    kw = dict(config=window.config_name, npt=npt,
+              tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    blank = getattr(window, "bg_blank", None)
+    blank_curve = ((blank["tth"], blank["intensity"])
+                   if settings["mode"] == "blank" and blank is not None
+                   else None)
+    # 锚点来处 = 本图手点（None）：单张处理的锚点就是这个文件自己的
+    res = _process_source(window, source, kw, settings, params0, blank_curve,
+                          anchor_source=None)
+    if not res["ok"]:
+        _log(window, f"没存成产物：{res['why']}")
+        return
+    label, batch = _proc_batch_label(settings)
+    stage_cache.record_batch(
+        "bg", batch, label=label, items=[(res["path"], res["key"])],
+        config=window.config_name, npt=npt,
+        tth_min=kw.get("tth_min"), tth_max=kw.get("tth_max"),
+        settings={k: v for k, v in settings.items() if k != "anchors"},
+        note="1 个文件")
+    _log(window, f"已采用这份结果：{Path(path).name}"
+                 f"（{process.chain_label(settings)}）——文件栏「{label}」里"
+                 f"可以整组拿去 [对比] / [热图]，双击看这一条")
+    window.refresh_groups()       # 文件栏里立刻长出这一组
+
+
 def _proc_batch_apply(window: QMainWindow) -> None:
     """[批量处理]：把「处理」页当前这套链用到勾选文件，各生成一份处理产物。
 
@@ -887,9 +1096,12 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     每个目标面板的参数快照也写成同一套设置——这样"面板上看到的曲线"与
     "对比里用的曲线"是同一条（否则两处数字对不上，最容易让人怀疑自己）。
 
-    可处理的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，
-    只是钉在某一份缓存上，见 _open_product_panel 的说明）；**处理产物**
-    跳过——它已经是处理完的结果，再处理一遍就是二次扣除/二次平滑。
+    可处理的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，只是
+    钉在某一份缓存上，见 _open_product_panel 的说明）+ **处理产物**——后者
+    按**它底下的原始 1D 曲线重做**（用户 2026-09-28 第 3 条："套用别的配方的
+    处理图不能二次处理了，修正"）。旧版把处理产物整条跳过（"幂等，不再来
+    一遍"），可用户要的是"换套参数重做"：现在输入换成没扣过背景的那条曲线，
+    所以既做得到、又不会二次扣除/二次平滑（见 stage_cache.load_proc_source）。
     """
     dock = window.plot_docks.get(window.focus_panel)
     focus_path = _bg_path_of(dock) if dock is not None else None
@@ -909,19 +1121,18 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         _log(window, "先在图上点几个锚点（背景扣除模式 = 手动锚点），"
                      "再点 [批量处理]")
         return
-    # 可处理的是原始数据 + 1D 产物；处理产物本身跳过（见 docstring）
+    # 可处理的是原始数据 + 1D 产物 + 处理产物（后者按它底下的原始曲线重做，
+    # 见 docstring——用户 2026-09-28 第 3 条）
     picked = gui_sources.checked_sources(window)
     targets = [s for s in picked
-               if s.kind in (gui_sources.RAW, gui_sources.ONED)]
-    already = [s for s in picked if s.kind == gui_sources.BG]
+               if s.kind in (gui_sources.RAW, gui_sources.ONED, gui_sources.BG)]
+    redone = [s for s in targets if s.kind == gui_sources.BG]
     if not targets:
-        _log(window, "没有选中的文件"
-                     "（处理产物已经是处理完的结果，不用再来一遍）"
-                     if already else "没有选中的文件")
+        _log(window, "没有选中的文件")
         return
-    if already:
-        _log(window, f"跳过 {len(already)} 个处理产物条目："
-                     "它们已经是处理完的结果（幂等，不再来一遍）")
+    if redone:
+        _log(window, f"其中 {len(redone)} 条是处理产物：按**它底下的原始 1D "
+                     f"曲线**重做（不是二次相减）")
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
@@ -930,7 +1141,8 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     blank_curve = ((blank["tth"], blank["intensity"])
                    if settings["mode"] == "blank" and blank is not None
                    else None)
-    done = skipped = from_product = 0
+    done = skipped = from_product = from_bg = 0
+    skip_why = {}                         # 跳过原因 → 个数（末尾各记一行）
     out_of_range = files_with_drop = 0    # 锚点落到数据范围外的统计
     records = []    # [(源文件, 产物键)]：整批完了写一次台账（不是每张一次）
     seen = set()    # 同一文件只扣一份（勾了它的原始条目又勾了它的 1D 产物）
@@ -942,61 +1154,40 @@ def _proc_batch_apply(window: QMainWindow) -> None:
                          "（另一条已经算过了）")
             continue
         seen.add(str(path))
-        if source.kind == gui_sources.RAW:
-            tth, intensity = _curve_source(window, path, kw)
-        else:
-            # 1D 产物：读那一份（钉住的键），不按当前设置重算
-            got = gui_sources.load_product(source)
-            tth, intensity = got if got is not None else (None, None)
-        if tth is None:
+        # 一条来源的"取曲线 → 重取锚点强度 → 跑整条链 → 落产物 → 记配方"
+        # 整段都在 _process_source 里（与 [采用这份结果] 共用同一份实现）
+        res = _process_source(window, source, kw, settings, params0,
+                              blank_curve, anchor_source=focus_display)
+        if not res["ok"]:
             skipped += 1
+            skip_why[res["why"]] = skip_why.get(res["why"], 0) + 1
             continue
-        per_file, dropped_here = _anchors_on_curve(xs, tth, intensity)
-        if dropped_here:
+        if res["dropped"]:
             # 锚点落在本图数据范围外：**丢掉**（np.interp 会静默钳到端点值，
             # 等于拿边缘那一点当锚点，图上完全看不出来）。跨批次复用配方时
             # 这条最常见——用户 2026-09-27 讨论时一起定的口径。
-            out_of_range += len(dropped_here)
+            out_of_range += res["dropped"]
             files_with_drop += 1
-        params = {**params0, "anchors": per_file}
-        # 整条链一次跑完（背景 → 平滑 → 裁剪）：屏幕上的曲线与写进产物的
-        # 这一份是同一个函数的输出，不存在两处实现漂移
-        processed, base = process.apply_chain(tth, intensity, params,
-                                              blank_curve=blank_curve)
-        if base is None and settings["mode"] != "off":
-            skipped += 1
-            continue
-        proc_settings = {**settings, "anchors": per_file}
-        if source.kind == gui_sources.RAW:
-            produced = stage_cache.store_proc(path, tth, processed, **kw,
-                                              settings=proc_settings)
-        else:
-            # 挂在**那份 1D 产物**的键下面：勾的是哪一条，处理的就是哪一条
-            produced = stage_cache.store_proc_by_key(
-                source.key, tth, processed, settings=proc_settings,
-                source=path.name)
+        records.append((res["path"], res["key"]))
+        if res["kind"] == gui_sources.ONED:
             from_product += 1
-        records.append((path, Path(produced).stem))
-        if getattr(window, "bg_anchors", None) is None:
-            window.bg_anchors = {}
-        window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
-        # 配方**按文件**记下来（处理页那行"本图配方"读它）。**不写进面板
-        # 快照**：面板显示的曲线只由它自己的快照决定，批量处理不该偷偷改掉
-        # 人家正在看的原始曲线（用户 2026-09-27 晚："原始数据会被改变"）
-        # 配方记**这个文件自己的**锚点（位置与整批共用、强度是它曲线上的），
-        # 两个用处：① 处理页那行"本图配方"说的是这张图真实用的那套；
-        # ② 按配方就能复算出这份产物的键（锚点强度进了键）
-        recipe = _proc_recipe({**settings, "anchors": per_file},
-                              source=focus_display)
-        note_proc_recipe(window, path, recipe)
+        elif res["kind"] == gui_sources.BG:
+            from_bg += 1
         done += 1
         if (i + 1) % 20 == 0:
             _log(window, f"批量处理：{i + 1}/{len(targets)}…")
-    tail = (f"，跳过 {skipped} 个（还没有 1D 结果，先点 [1D] 出图）"
-            if skipped else "")
-    via = f"，其中 {from_product} 条来自 1D 产物" if from_product else ""
+    tail = f"，跳过 {skipped} 个" if skipped else ""
+    via = ""
+    if from_product:
+        via += f"，其中 {from_product} 条来自 1D 产物"
+    if from_bg:
+        via += f"，其中 {from_bg} 条是处理产物（按各自的原始曲线重做）"
     _log(window, f"批量处理完成：{done}/{len(targets)} 个文件"
                  f"（{process.chain_label(settings)}）{tail}{via}")
+    # 跳过原因逐条写清楚（不静默）：最常见的是"2θ 改过、按新范围还没算"
+    # ——旧版这种情况会**拿面板里旧范围的曲线**接着扣，键与数据对不上
+    for why, n in sorted(skip_why.items(), key=lambda kv: -kv[1]):
+        _log(window, f"  跳过 {n} 个：{why}")
     if out_of_range:
         _log(window, f"注意：{files_with_drop} 个文件上有 {out_of_range} 个锚点"
                      f"落在数据 2θ 范围外，已跳过那些锚点"
@@ -1080,6 +1271,13 @@ def _refresh_proc(window: QMainWindow) -> None:
                          _proc_recipe(
                              _proc_settings(window, dock, tick_path),
                              source=None))
+    # 「配方」小节的显示（来处那行 + 下拉）跟着刷一遍：配方是在上面那几行
+    # 才写进 window.proc_recipes 的，而填下拉/写来处原先发生在 _sync_bg_rows
+    # 里、跑在这之前——刚调完参数时下拉里还只有占位项，用户按 [套用] 只得到
+    # "先在下拉里选一份配方"（2026-09-28 探针复现的用户报"套用无效"）
+    recipe_hook = getattr(window, "_recipe_rows_sync", None)
+    if recipe_hook is not None and tick_path is not None:
+        recipe_hook()
     _update_smooth_points(window, dock)
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]

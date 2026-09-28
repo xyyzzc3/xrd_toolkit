@@ -337,11 +337,13 @@ def check_one_d_product_background(window) -> None:
     """F. 1D 产物条目也能扣背景（用户 2026-09-25 问起的那条）。
 
     "1D 产物"= 那条原始积分曲线（钉在某份缓存上），不是"已完成"的东西：
-    勾它 → [批量处理] → 真扣一份，且**挂在勾的那份 1D 的键下面**；
-    而"扣背景产物"条目仍然跳过（再扣就是二次相减）。
+    勾它 → [批量处理] → 真扣一份，且**挂在勾的那份 1D 的键下面**。
+    （处理产物条目自 2026-09-28 起也会被 [批量处理] 收下——按它底下的原始
+    1D 曲线重做，见 H 段末；本段只验 1D 产物这一路。）
     """
     print("\nF. 1D 产物扣背景（真数据）")
     from xrd_toolkit.services import stage_cache
+    # 1D 产物按设置分组（可能有好几组）：这一段只要一组就够，任取一组
     group = next((g for g in window.file_list.groups()
                   if g.text(0).startswith("1D 产物")), None)
     report(group is not None, "文件栏里有「1D 产物」组",
@@ -418,13 +420,19 @@ def check_product_delete(window) -> None:
     from xrd_toolkit.gui import file_dock as gui_file_dock
     from xrd_toolkit.gui import sources as gui_sources
     from xrd_toolkit.services import stage_cache
-    group = next((g for g in window.file_list.groups()
-                  if g.text(0).startswith("1D 产物")), None)
-    report(group is not None, "有「1D 产物」组可删")
-    if group is None or group.childCount() < 2:
-        report(False, '组里至少两条（只有 1 条没法验"删一条留一条"）',
-               group.childCount() if group is not None else 0)
+    # 1D 产物自 2026-09-28 起**按积分设置分组**（一组一套设置），所以挑
+    # "第一条"是不对的（真缓存里往往有好几组）：要挑**至少有两条**的那一组，
+    # 才验得了"删一条留一条"。
+    groups_1d = [g for g in window.file_list.groups()
+                 if g.text(0).startswith("1D 产物")]
+    report(bool(groups_1d), "有「1D 产物」组可删",
+           f"{len(groups_1d)} 组")
+    group = next((g for g in groups_1d if g.childCount() >= 2), None)
+    if group is None:
+        report(False, '找得到一组至少两条的（没法验"删一条留一条"）',
+               [g.childCount() for g in groups_1d])
         return
+    title = group.text(0)          # 展开状态下 = 纯组名（徽标只在折叠时挂）
     # ① 删一条
     before = group.childCount()
     victim = gui_sources.source_of(group.child(0))
@@ -433,7 +441,7 @@ def check_product_delete(window) -> None:
     n = gui_file_dock.drop_product_item(window, group.child(0))
     report(n == 1 and not npz.exists(), "删一条：只在盘上少了这一个文件", n)
     after = next((g for g in window.file_list.groups()
-                  if g.text(0).startswith("1D 产物")), None)
+                  if g.text(0) == title), None)
     report(after is not None and after.childCount() == before - 1,
            "分组还在、少了一条", f"{before} → "
            f"{after.childCount() if after is not None else '无'}")
@@ -443,16 +451,21 @@ def check_product_delete(window) -> None:
     report(n == len(keys), "删整组：份数与组里条目数一致", f"{n}/{len(keys)}")
     report(all(not (stage_cache.CACHE_ROOT / k.kind / f"{k.key}.npz").exists()
                for k in keys), "整组的产物文件都没了")
-    report(not any(g.text(0).startswith("1D 产物")
+    report(not any(g.text(0) == title
                    for g in window.file_list.groups()), "分组消失")
-    # ③ 扣背景那边同理（台账不留空壳）
+    # ③ 扣背景那边同理（台账不留空壳）。
+    # 认人要用**批次号**而不是组名：批标签只到"分钟"，同一分钟里的两批
+    # （可见参数相同、锚点强度不同）名字会一样，重名的第二组起才带"· 第 N 组"
+    # 尾注——删掉前一个之后，剩下的那个尾注又会收回，按文字比就错判
     bg = next((g for g in window.file_list.groups()
                if g.text(0).startswith("处理")), None)
     if bg is not None:
+        bg_id = bg.data(0, gui_file_dock.GROUP_BATCH_ROLE)
         n = gui_file_dock.drop_product_group(window, bg)
         report(n == 0 or n > 0, "扣背景分组整组删除跑通", f"{n} 份")
-        report(not any(g.text(0) == bg.text(0)
-                       for g in window.file_list.groups()), "那一组也没了")
+        report(not any(g.data(0, gui_file_dock.GROUP_BATCH_ROLE) == bg_id
+                       for g in window.file_list.groups()),
+               "那一组也没了（按批次号认人）")
 
 
 def check_processing_chain(window, lab6: str) -> None:

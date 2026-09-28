@@ -1105,6 +1105,11 @@ def _open_plot_panel(window: QMainWindow, name: str, key: str,
     # 不会串进新面板
     window._panel_epoch[key] = window._panel_epoch.get(key, 0) + 1
     window.plot_docks[key] = sub
+    # 文件栏里给这个条目打上"正在打开"的记号（淡色 + 小点，见
+    # file_dock.refresh_open_marks）。经窗级回调，避免反向 import 文件坞
+    mark = getattr(window, "mark_open_rows", None)
+    if mark is not None:
+        mark()
     z = window._area_zoom
     hint = sub.sizeHint()
     sub.resize(max(60, round(hint.width() * z)),   # 必须显式设（见 docstring）

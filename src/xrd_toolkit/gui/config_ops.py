@@ -95,20 +95,34 @@ def _import_poni(window: QMainWindow) -> None:
 
 
 def _save_poni(window: QMainWindow) -> None:
-    """[保存参数]：把当前选中的几何配置写成标准 .poni 文件。
+    """[保存参数]：把**当前配置**的几何写成标准 .poni 文件。
+
+    用户 2026-09-28 第 2 条（2甲①）查出来的：这个按钮原先存的是**坞顶
+    「几何配置」选中条目**的几何——手输/手改过当前配置之后按它，导出的
+    还是那条旧条目的数字（"改完保存，文件里是旧的"，最容易让人以为改动
+    没生效）。现在与同栏的 [保存为配置] 同一个口径：**存当前配置**（校准
+    页表里第一列那个，含手输/自定义）。没有校准状态（不在校准页）才退回
+    条目几何。
 
     保存内容 = 探测器距离 / 中心点 / 像素尺寸 / 波长 / 倾斜角。
     中心点在 .poni 标准里就是 poni1/poni2 米制坐标（像素束心含
     显示语义、不含倾斜修正，不属于几何量——加载回来时由
     getFit2D 重算，往返探测已验证自洽）。作业规格里的"掩膜文件
     路径"是可选项：引擎尚未支持掩膜，且 pyFAI .poni 格式本身没
-    有掩膜字段，故不写。保存成功记日志（列出保存内容，供核对）。
-    默认文件名 = {配置名}.poni、默认目录 outputs/，同 [加载参数]
-    共用一套读写口径（pyFAI 只在点击时导入，CLI/测试不为启动背
-    依赖）。
+    有掩膜字段，故不写。保存成功记日志（列出保存内容与**来处**，
+    供核对）。默认文件名 = {配置名}.poni、默认目录 outputs/，同
+    [加载参数] 共用一套读写口径（pyFAI 只在点击时导入，CLI/测试
+    不为启动背依赖）。
     """
-    cfg = window.config   # 当前选中条目（label / geometry / beam_center）
-    geom = cfg["geometry"]
+    state = getattr(window, "calib_state", None) or {}
+    from_calib = state.get("current_geom") is not None
+    if from_calib:
+        geom = state["current_geom"]
+        src_txt = "校准页「当前配置」"
+    else:
+        cfg = window.config   # 当前选中条目（label / geometry / beam_center）
+        geom = cfg["geometry"]
+        src_txt = f"配置条目「{window.config_name}」"
     default = str(Path("outputs") / f"{window.config_name}.poni")
     path_str, _ = QFileDialog.getSaveFileName(
         window, "保存几何参数（.poni）", default,
@@ -134,7 +148,7 @@ def _save_poni(window: QMainWindow) -> None:
         _log(window, f".poni 保存失败（{err}）")
         return
     _log(window, f"已保存几何参数 → {path_str}"
-                 f"（距离 {geom['dist_m'] * 1e3:.2f} mm，"
+                 f"（{src_txt}：距离 {geom['dist_m'] * 1e3:.2f} mm，"
                  f"中心 poni1={geom['poni1_m']:.6g} m, "
                  f"poni2={geom['poni2_m']:.6g} m，"
                  f"像素 {geom['pixel_size_m'] * 1e6:.1f} µm，"

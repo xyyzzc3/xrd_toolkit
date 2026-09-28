@@ -5,10 +5,13 @@
 导出/对比/热图都读它（统一走 sources.checked_sources）。
 
 文件栏是一棵树（用户 2026-09-24 提"每次完成一个大功能后在文件栏有一个
-新的子文件夹"）：顶上「原始数据」组，下面是各阶段产物分组（「1D 产物」=
-当前设置算好的；「处理后 …」= 每次 [批量处理] 一组）。勾组 = 整组全选，
-两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**原始数据那部分的接口沿用老列表的写法**（item(i)/
-count()/addItem，见 FileTree），免得几十处读写全改一遍。
+新的子文件夹"）：顶上「原始数据」组，下面是各阶段产物分组（「1D 产物 …」=
+**一套积分设置一组**，组名写着是哪一套；「处理后 …」= 每次 [批量处理] 一组）。
+勾组 = 整组全选，两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**整行颜色
+只表示"这个条目有图正开着"**（淡色 + 左侧小点，见 refresh_open_marks），
+勾没勾只看框里的小勾——用户 2026-09-28 第 5 条定的。**原始数据那部分的接口
+沿用老列表的写法**（item(i)/count()/addItem，见 FileTree），免得几十处读写
+全改一遍。
 
 导入**不再自动打勾**（用户 2026-09-25 定）：200 张数据要自己说了算，
 勾选走 [全选] / [按条件选…]（区间·间隔·名字）或点对号方块。
@@ -16,6 +19,7 @@ count()/addItem，见 FileTree），免得几十处读写全改一遍。
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
     QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
@@ -230,6 +234,14 @@ class FileTree(QTreeWidget):
         self.setUniformRowHeights(True)
         self.setTextElideMode(Qt.ElideMiddle)   # 窄坞里长名字中间省略
         self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # **选中底色取消**（用户 2026-09-28 第 5 条："文件栏背景加深代表这个
+        # 图正在打开，选中未选中仅用框内的标志表示"）：改之前整行深色是 Qt 的
+        # "当前行"高亮，含义只能靠猜；现在整行颜色专供"正在打开"（见
+        # refresh_open_marks），勾没勾只看框里那个小勾。
+        # 只改 item 的底色，不动文字颜色与其它控件（树是文件坞里唯一的视图）
+        self.setStyleSheet(
+            "QTreeView::item:selected, QTreeView::item:selected:active,"
+            " QTreeView::item:selected:!active { background: transparent; }")
         # 覆盖 minimumSizeHint：QListWidget/QTreeWidget 内部写死约 270px
         # （按"能显示条目"设计），而 dock 布局只认这个 hint、不认
         # setMinimumWidth。覆盖后文件栏才能收到按钮行决定的真实最窄宽度
@@ -344,13 +356,17 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     # 由第二排三个按钮锁住），常驻一行会把列撑宽。
     # 全选 / 全不选合成一个（用户 2026-09-27："全选全部不选合一"）：
     # 标签跟着状态走——全勾上时按它就是"全不选"，否则是"全选"
-    btn_all = QPushButton("全选")
+    btn_all = QPushButton("全选（原始数据）")
     btn_pick = QPushButton("按条件选…")
     btn_all.setObjectName("select_all_btn")   # 老名字沿用（测试/别名）
     btn_pick.setObjectName("select_pick_btn")
-    btn_all.setToolTip("全勾上时按 = 全不选（含各产物分组）；"
-                       "否则 = 勾上「原始数据」里的全部文件"
-                       "（各产物分组请点组名自己勾）")
+    # 两个方向的作用范围不同（勾只勾原始数据、清清全部），标签已经写出来；
+    # tooltip 再说一遍"为什么"（用户 2026-09-28 第 3 条问过）
+    btn_all.setToolTip("按下去做哪件事、作用于谁，看按钮上的字：\n"
+                       "「全选（原始数据）」= 勾上原始数据整组"
+                       "（产物分组请点组名自己勾——勾选集是出图/批量处理的"
+                       "输入，顺手全勾会让输入集合翻倍）；\n"
+                       "「全不选（全部条目）」= 清掉全树的勾（含各产物分组）")
     window.select_all_btn = btn_all
     btn_pick.setToolTip("按区间（第几个到第几个）、间隔（每 N 个选 1 个）"
                         "或名字包含来勾选，可叠加，可追加；"
@@ -455,7 +471,15 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_export.clicked.connect(lambda: _run_export(window))
 
     def select_all():
-        # 全选 / 全不选共用这一个入口，按当前状态决定做哪件事
+        """[全选（原始数据）] / [全不选（全部条目）]：一个按钮、两件事。
+
+        **两个方向的范围本来就不一样**（用户 2026-09-28 第 3 条报"全选只全选
+        原始数据，全不选却会包含产物"）：勾**只勾「原始数据」整组**（产物
+        分组要自己点组名勾——勾选集是出图/批量处理的输入，顺手把 81 个产物
+        也勾上会让输入集合悄悄翻倍，用户 2026-09-27 踩过"选中 81 出 162"）；
+        清**清掉全树的对号**（清是"归零"，归零就该彻底）。
+        范围的不同现在写在按钮标签上（见 _sync_select_label），不再是暗规矩。
+        """
         total = window.file_list.count()
         if not total:
             _log(window, "文件列表是空的")
@@ -465,12 +489,14 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             # 已经全勾上 → 取消全部对号（含各产物分组）
             leaves = [s.item for s in gui_sources.all_sources(window)]
             _set_checks(window, [(it, False) for it in leaves])
-            _log(window, f"全不选：{n} 个条目的对号已取消")
+            _log(window, f"全不选：清掉全部 {n} 个条目的对号"
+                         "（原始数据 + 各产物分组）")
             return
         # [全选]：勾上「原始数据」整组（产物分组不自动勾——那要自己挑）
         _set_checks(window, [(window.file_list.item(i), True)
                              for i in range(total)])
-        _log(window, f"全选：{total} 个文件（「原始数据」整组）")
+        _log(window, f"全选：勾上「原始数据」整组 {total} 个文件"
+                     "（各产物分组要自己点组名勾）")
 
     def _all_raw_checked() -> bool:
         """「原始数据」里是不是每一条都勾上了（切换按钮据此决定做哪件事）。"""
@@ -680,14 +706,19 @@ def _set_current_keeping_scroll(tree, item) -> None:
 
 
 def _sync_current_to_checks(window: QMainWindow) -> None:
-    """高亮只能落在"勾选着的条目"上；落在别处就**取消高亮**。
+    """Qt 的"当前项"不许停在没勾选的条目上；停在别处就清掉当前项。
 
-    防"看起来选中了其实没勾"的假象——点对号方块取消勾选时 Qt 会先把那行
-    设为当前项，不纠正就留下一行无对号的高亮。
+    防的是"点一行就留下一块底部/键盘焦点的痕迹"——点对号方块取消勾选时
+    Qt 会先把那行设为当前项，不纠正它就留在一个"没勾的行"上。
+
+    旧版这里叫"高亮"，因为那会儿整行深色是 Qt 的当前项底色；2026-09-28
+    起**整行颜色专供"正在打开"**（见 refresh_open_marks，选中底色已在
+    FileTree 的样式里取消），所以本函数现在只管 Qt 的当前项本身（键盘
+    导航 / 滚动锚点还认它），不再负责任何颜色。
 
     旧版这里是"跳到第一个勾选条目"：那个条目通常就是列表最顶上那条文件，
     于是取消勾选、点组节点、[全选] 都会把列表拽回顶端（用户 2026-09-26
-    起的反复投诉）。改成**直接取消高亮**（`setCurrentItem(None)`）之后
+    起的反复投诉）。改成**直接清掉当前项**（`setCurrentItem(None)`）之后
     没有可跳的目标，也就没有了"同步放回/延后放回"的时序竞态——用户
     2026-09-27："没打字就跳了"，正是那种偶发。
     """
@@ -730,8 +761,9 @@ def _keys_of(item, kind: str = None) -> list:
 def drop_product_group(window: QMainWindow, item) -> int:
     """删掉**一组**产物（盘上的产物 + 对应的台账条目），返回删掉的份数。
 
-    两种组：处理批次（一整批，`drop_batch`）与「1D 产物」（当前设置下算好
-    的那些，逐键删）。菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在
+    两种组：处理批次（一整批，`drop_batch`）与「1D 产物 …」（那**一组设置**
+    下算好的那些，逐键删——按设置分组之后，删一组 = 删一套设置的结果）。
+    菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在
     PySide6 里打不了补丁，弹菜单那一步没法在无头环境里走——所以把"删"这一
     步单独摘出来，能测的就是它）。
     """
@@ -988,23 +1020,71 @@ def ask_clear_cache(window: QMainWindow) -> None:
     _log(window, f"已删除所有缓存：{cleared} 个产物文件")
 
 
-def _settings_diff_text(meta, lo, hi, cur) -> str:
-    """"2θ 1–7°、几何 lmfp2_lab6"——这份产物与**当前设置**不一样的地方。
+def _oned_sig(meta, lo, hi) -> tuple:
+    """一套积分设置的指纹 = 1D 产物分组的身份。
 
-    空串 = 一模一样。用户 2026-09-28 定的规矩：改了设置之后旧产物也得照样
-    列在文件栏里（不许凭空消失），但要一眼看得出它是按什么算的。
-    2θ 那项比的是**曲线实际铺到的范围**（tth 首末点）——元数据里没记范围，
-    而曲线永远知道自己在哪儿。
+    取的就是 1D 缓存键里那些**人看得见**的因子（几何条目 / 点数 / 2θ 范围）
+    加上积分实现版本——同指纹的产物是"同一套设置下算出来的同一批"，正是
+    用户 2026-09-28 第 4 条要的那种分组（"同一批原始数据出两组 theta 不同的
+    1d 图会掺在一起"）。文件指纹不在其中：它是"哪张图"，不是"哪套设置"。
     """
-    bits = []
-    if abs(lo - cur["tth_min"]) > 0.01 or abs(hi - cur["tth_max"]) > 0.01:
-        bits.append(f"2θ {lo:.3g}–{hi:.3g}°")
-    if meta.get("config") and cur["config"] and \
-            str(meta["config"]) != str(cur["config"]):
-        bits.append(f"几何 {meta['config']}")
-    if meta.get("npt") and int(meta["npt"]) != int(cur["npt"]):
-        bits.append(f"{int(meta['npt'])} 点")
-    return "，".join(bits)
+    return (str(meta.get("config") or ""), int(meta.get("npt") or 0),
+            round(float(lo), 6), round(float(hi), 6),
+            int(meta.get("engine") or 0))
+
+
+def _oned_sig_is_current(sig, cur) -> bool:
+    """这套设置是不是坞顶**当前**那一套（组名标「当前设置」+ 排最前）。"""
+    return (sig[0] == str(cur["config"]) and sig[1] == int(cur["npt"])
+            and abs(sig[2] - cur["tth_min"]) <= 0.01
+            and abs(sig[3] - cur["tth_max"]) <= 0.01)
+
+
+def _fmt_deg(x) -> str:
+    """2θ 端点给人看的写法：「1.001」「7.999」「12.5」（三位小数、去尾零）。
+
+    为什么要它：范围是从**曲线端点**读的（元数据里老产物没记范围，曲线永远
+    知道自己在哪儿），直接 `:g` 会打出「1.00117–7.99883°」这种全精度噪声
+    ——真数据探针里一眼就看见它了。三位小数足够区分实际会出现的范围差；
+    万一两组因此重名，文件栏那边还有"· 第 N 组"尾注兜底。
+    """
+    return f"{float(x):.3f}".rstrip("0").rstrip(".")
+
+
+def _oned_group_title(sig, cur) -> str:
+    """1D 产物组的组名：把"这一组是按什么算的"写在名字里。
+
+    例子：「1D 产物 2θ 1.001–7.999°（当前设置）」「1D 产物 2θ 3–12° ·
+    1000 点 · 几何 lmfp2_lab6」。与当前设置一致的部分不重复写（省宽度），
+    不一致的才补出来——一眼就能分清哪一组是刚才那两下算出来的。
+
+    "1D 产物"这个家族名留在最前面（徽标、右键菜单、日志都按它认这一族）。
+    """
+    config, npt_, lo, hi, engine = sig
+    bits = [f"2θ {_fmt_deg(lo)}–{_fmt_deg(hi)}°"]
+    if npt_ != int(cur["npt"]):
+        bits.append(f"{npt_} 点")
+    if config and config != str(cur["config"]):
+        bits.append(f"几何 {config}")
+    if engine != stage_cache.INTEGRATION_VERSION:
+        bits.append("旧积分版本")
+    title = "1D 产物 " + " · ".join(bits)
+    if _oned_sig_is_current(sig, cur):
+        title += "（当前设置）"
+    return title
+
+
+def _oned_group_tip(sig, cur) -> str:
+    """1D 产物组的悬停提示：这一组是什么、与当前设置差在哪儿。"""
+    config, npt_, lo, hi, _engine = sig
+    txt = (f"按这套设置算好的 1D 产物：几何 {config or '—'}、{npt_} 点、"
+           f"2θ {_fmt_deg(lo)}–{_fmt_deg(hi)}°。\n整组勾上可去 [对比] / [热图]；"
+           "点开读的就是这一份，不重算。")
+    if not _oned_sig_is_current(sig, cur):
+        txt += (f"\n（当前设置是：几何 {cur['config']}、{cur['npt']} 点、"
+                f"2θ {_fmt_deg(cur['tth_min'])}–{_fmt_deg(cur['tth_max'])}°"
+                f"——要按当前设置再算一批，勾上文件点 [1D]）")
+    return txt
 
 
 def _group_key(item, tree):
@@ -1086,11 +1166,11 @@ def _restore_tree_state(window: QMainWindow, keep: dict) -> None:
 
 
 def refresh_product_groups(window: QMainWindow) -> None:
-    """重建文件栏里的产物分组：「1D 产物」+ 各组「处理后 …」。
+    """重建文件栏里的产物分组：各组「1D 产物 …」+ 各组「处理后 …」。
 
     数据来源两处，各有各的道理：
-      - 1D 产物**正向查**：按当前设置算键 → 看文件在不在（与"点 [1D]
-        会不会命中缓存"完全同源，设置一变分组自然跟着变）；
+      - 1D 产物**扫盘 + 按积分设置分组**：磁盘上有什么就显示什么（不许
+        因为改了设置就凭空消失），同指纹的归一组、组名写着是哪一套设置；
       - 处理产物**读台账**：产物键里含设置哈希，反查不出来，只能靠
         [批量处理] 当时记的那一笔（见 services/stage_cache 的台账一节）。
 
@@ -1126,12 +1206,19 @@ def refresh_product_groups(window: QMainWindow) -> None:
             it = tree.item(i)
             by_path[str(Path(it.data(0, Qt.UserRole)).resolve())] = it
 
-        # ① 1D 产物：**扫盘**列出（磁盘上有什么就显示什么）
+        # ① 1D 产物：**扫盘**列出（磁盘上有什么就显示什么），**按积分设置分组**
         #
         # 旧版按"当前设置"正查键，于是**改了 2θ 范围之后那一组会整个空掉**
         # （键里含范围）——用户 2026-09-28 报的"处理后的把 1D 的替换了"
         # 就是这个：其实一份都没少，只是不显示。规矩定成"缓存里有什么就
         # 显示什么，删不删由我自己决定"，与设置不一致的**在名字里标出来**。
+        #
+        # **分组 = 一套积分设置**（2026-09-28 用户第 4 条："同一批原始数据出
+        # 两组 theta 不同的 1d 图会掺在一起，应该有分组区分"）：改之前全库
+        # 只有一个"1D 产物"组，靠行尾 `1D（2θ 1–8°）` 区分，而且那截尾巴是
+        # **相对当前设置**算的——把坞顶的 2θ 一改，尾巴会从 A 行跳到 B 行，
+        # 看着像两组数据换了身份。现在与处理产物（一批一组）同一个形状：
+        # 一组一套设置，组名就写着是哪一套。
         geom = _collect_geometry(window)
         npt = int(window.params["输出点数"].value())
         cur = {"tth_min": float(geom.get("tth_min_deg") or 0.0),
@@ -1145,34 +1232,25 @@ def refresh_product_groups(window: QMainWindow) -> None:
             p = Path(it.data(0, Qt.UserRole))
             by_path_name.setdefault(str(p), it)
             by_name.setdefault(p.name, it)
-        by_item = {}
+        groups_1d = {}          # 设置指纹 → [(条目, 键, 元数据, lo, hi), ...]
         for key, meta, lo, hi in stage_cache.list_products("1d"):
             it = by_path_name.get(str(meta.get("path") or ""))
             if it is None:
                 it = by_name.get(str(meta.get("source") or ""))
             if it is None:
                 continue        # 不在当前文件栏里 → 不显示
-            by_item.setdefault(id(it), []).append((it, key, meta, lo, hi))
-        # 按**文件栏的行序**排（同一文件有多份产物时全部列出——比如按 1–8°
-        # 和 1–7° 各算过一次，两份都是你的缓存；名字里各自标着范围）
-        have = []
-        for i in range(tree.count()):
-            have.extend(by_item.get(id(tree.item(i)), ()))
-        if have:
-            group = _make_group(
-                "1D 产物",
-                "磁盘上的 1D 产物：当前设置算好的、以及按别的 2θ 范围 / 几何"
-                "算的都在（后者名字里标了出来）——缓存里有的就列在这儿，"
-                "删不删由你自己决定。\n整组勾上可去 [对比]/[热图]；"
-                "点开读的就是这一份，不重算。")
-            for it, key, meta, lo, hi in have:
-                diff = _settings_diff_text(meta, lo, hi, cur)
-                tail = f"1D（{diff}）" if diff else "1D"
-                leaf = add_leaf(group, it, gui_sources.ONED, key, tail)
-                if diff and leaf is not None:
-                    leaf.setToolTip(
-                        0, f"{leaf.toolTip(0)}\n这一份是按 {diff} 算的"
-                           f"（与当前设置不同）；点开读的就是它，不重算")
+            groups_1d.setdefault(_oned_sig(meta, lo, hi), []).append(
+                (it, key, meta, lo, hi))
+        for sig in sorted(groups_1d, key=lambda s: (_oned_sig_is_current(s, cur),
+                                                    s[2], s[3])):
+            rows = groups_1d[sig]
+            # 组内按**文件栏的行序**排（同一文件的两份产物都在时也能对上眼）
+            order = {id(tree.item(i)): i for i in range(tree.count())}
+            rows.sort(key=lambda r: order.get(id(r[0]), 10 ** 9))
+            group = _make_group(_oned_group_title(sig, cur),
+                                _oned_group_tip(sig, cur))
+            for it, key, meta, lo, hi in rows:
+                add_leaf(group, it, gui_sources.ONED, key, "1D")
             tree.addTopLevelItem(group)
 
         # ② 处理：一次 [批量处理] = 一组（台账，新的在上）
@@ -1182,6 +1260,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
                 sum(len(n["items"]) for n in batches):
             stage_cache.write_batches("bg", batches)   # 产物没了的条目落盘清掉
         stale = 0
+        seen_labels = {}      # 组名 → 已出现几次（重名时加尾注，见下）
         for node in batches:
             kids = []
             for path, meta in sorted(node["items"].items()):
@@ -1205,10 +1284,11 @@ def refresh_product_groups(window: QMainWindow) -> None:
             span = ("2θ 未记"
                     if node.get("tth_min") is None
                     or node.get("tth_max") is None
-                    else f"2θ {node['tth_min']:g}–{node['tth_max']:g}°")
+                    else f"2θ {_fmt_deg(node['tth_min'])}–"
+                         f"{_fmt_deg(node['tth_max'])}°")
             # 台账那套设置与**当前**设置不同时，把当前值也写进悬停提示
             # （跟 1D 产物一样的道理：一眼看得出这批是按什么算的）
-            now = f"2θ {cur['tth_min']:g}–{cur['tth_max']:g}°"
+            now = f"2θ {_fmt_deg(cur['tth_min'])}–{_fmt_deg(cur['tth_max'])}°"
             differs = (node.get("config") != cur["config"]
                        or (node.get("tth_min") is not None
                            and abs(float(node["tth_min"]) - cur["tth_min"]) > 0.01)
@@ -1216,8 +1296,16 @@ def refresh_product_groups(window: QMainWindow) -> None:
                            and abs(float(node["tth_max"]) - cur["tth_max"]) > 0.01))
             more = f"\n（当前设置：几何 {cur['config']}、{cur['npt']} 点、{now}）" \
                 if differs else ""
+            # 组名重了要能分开（2026-09-28 探针逮到）：批标签只到"分钟"，
+            # 同一分钟里跑了两批**可见参数相同、锚点强度不同**的（哈希因此
+            # 不同 = 两批），名字就一模一样——两个长得一样的组里各有一条同一
+            # 文件的条目，删了哪一个都看不出来。重名的第二组起加尾注。
+            label = str(node["label"])
+            seen_labels[label] = seen_labels.get(label, 0) + 1
+            if seen_labels[label] > 1:
+                label = f"{label} · 第 {seen_labels[label]} 组"
             group = _make_group(
-                node["label"],
+                label,
                 f"几何 {node.get('config')}、{node.get('npt')} 点、{span}\n"
                 "整组勾上可去 [对比]/[热图]；右键删掉这一组。" + more)
             group.setData(0, GROUP_BATCH_ROLE, node["id"])   # 右键删这一组用
@@ -1248,6 +1336,68 @@ def refresh_product_groups(window: QMainWindow) -> None:
     _refresh_file_label(window)
     _sync_select_label(window)
     _refresh_group_badges(window)   # 重建出新组了：折叠着的那些要带上数字
+    refresh_open_marks(window)      # 重建出来的是新对象：标记要重新打一遍
+
+
+# 「正在打开」的两种记号（用户 2026-09-28 第 5 条）：整行淡色 + 左侧小点
+_OPEN_ROW_BG = "#e8f0fb"
+_open_dot = None        # 懒建（建 QPixmap 要先有 QApplication）
+
+
+def _open_dot_icon() -> QIcon:
+    """左侧那个小实心点：深蓝色 8 px 圆，居中画在 10×10 的透明底上。
+
+    为什么要它：整行淡色在浅色主题下很淡（远看像隔行着色），旁边再给一个
+    "实心点 = 有面板活着"的硬记号，扫一眼就能数出开着几张。
+    """
+    global _open_dot
+    if _open_dot is None:
+        pm = QPixmap(10, 10)
+        pm.fill(QColor(0, 0, 0, 0))          # 透明
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(QBrush(QColor("#1a6fd4")))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(1, 1, 8, 8)
+        painter.end()
+        _open_dot = QIcon(pm)
+    return _open_dot
+
+
+def refresh_open_marks(window: QMainWindow) -> None:
+    """把"这个条目有活着的面板"画出来：整行淡色 + 左侧小点。
+
+    用户 2026-09-28 第 5 条："文件栏背景加深代表这个图正在打开，选中未选中
+    仅用框内的标志表示"。改之前整行深色是 Qt 的"当前行"高亮（而且被限制成
+    "只能在勾选着的行上"，见 _sync_current_to_checks），而**哪张图开着**在
+    文件栏里根本看不出来——`dock.panel_item` 只被用来做删除时的清理。
+
+    现在反过来：整行颜色专供"正在打开"，勾没勾只看框里的小勾（Qt 的选中
+    底色已在 FileTree.__init__ 的样式里取消）。
+
+    认哪一条开着：面板键是 `"<视图>|<条目身份>"`（1D/2D/剖面/瀑布都按条目
+    开），身份 = sources.source_id（原始文件是路径、产物是 "阶段#键"）——
+    所以直接拿键的后半段跟每个条目的身份对。对比/热图是**单槽多文件**视图
+    （键里没有 "|"，见 plot_compare._plot_compare），不对应单个条目，不参与。
+
+    什么时候调：面板开（plot_panels._open_plot_panel 末尾）/ 关
+    （panels._close_panel 里）/ 文件栏重建（refresh_product_groups 末尾），
+    都经 window.mark_open_rows 回调，避免那两个模块反向 import 文件坞。
+    """
+    open_ids = {key.split("|", 1)[1] for key in getattr(window, "plot_docks", {})
+                if "|" in key}
+    brush = QBrush(QColor(_OPEN_ROW_BG))
+    icon = _open_dot_icon()
+    for src in gui_sources.all_sources(window):
+        item = src.item
+        if item is None:
+            continue
+        if gui_sources.source_id(src) in open_ids:
+            item.setBackground(0, brush)
+            item.setIcon(0, icon)      # 同一张图重复设同一个 icon 无害
+        else:
+            item.setBackground(0, QBrush())   # 空画刷 = 恢复默认（无底）
+            item.setIcon(0, QIcon())
 
 
 def checked_items(window: QMainWindow) -> list:
@@ -1293,7 +1443,11 @@ def _sync_select_label(window: QMainWindow) -> None:
         n = raw.childCount()
         checked = sum(1 for i in range(n)
                       if raw.child(i).checkState(0) == Qt.Checked)
-        btn.setText("全不选" if n and checked == n else "全选")
+        # 标签把**作用范围**写出来（用户 2026-09-28 第 3 条）：这个按钮本来就
+        # 是"勾只勾原始数据、清却清全部"（见 select_all 的说明），两个方向
+        # 的范围不同——不写出来，用户按下去发生什么全靠猜
+        btn.setText("全不选（全部条目）" if n and checked == n
+                    else "全选（原始数据）")
     _refresh_check_labels(window)
 
 

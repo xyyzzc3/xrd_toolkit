@@ -279,9 +279,17 @@ def proc_settings_hash(settings: dict) -> str:
 def _proc_product(path, *, config: str, npt: int, tth_min=None, tth_max=None,
                   settings: dict) -> Path:
     """处理产物路径：按**当前设置**算出的 1D 键 + 处理链哈希。"""
+    return _cache_dir(PROC_KIND) / f"{proc_key_of(
+        cache_key(path, config=config, npt=npt, tth_min=tth_min,
+                  tth_max=tth_max), settings)}.npz"
+
+
+def _proc_product_and_base(path, *, config: str, npt: int, tth_min=None,
+                           tth_max=None, settings: dict):
+    """(产物路径, 它底下那条 1D 键)——store_proc 要顺手把 base 写进元数据。"""
     base = cache_key(path, config=config, npt=npt, tth_min=tth_min,
                      tth_max=tth_max)
-    return _cache_dir(PROC_KIND) / f"{proc_key_of(base, settings)}.npz"
+    return _cache_dir(PROC_KIND) / f"{proc_key_of(base, settings)}.npz", base
 
 
 def load_proc(path, *, config: str, npt: int, tth_min=None, tth_max=None,
@@ -298,16 +306,65 @@ def load_proc(path, *, config: str, npt: int, tth_min=None, tth_max=None,
 
 def store_proc(path, tth, intensity, *, config: str, npt: int, tth_min=None,
                tth_max=None, settings: dict, source: str = "") -> Path:
-    """写处理产物（原子）。元数据里记下**整条链**与背景设置。"""
+    """写处理产物（原子）。元数据里记下**整条链**、背景设置与**血缘**。
+
+    `base_key`（它底下那条 1D 曲线的键）是 2026-09-28 补的：用户第 3 条
+    "套用别的配方的处理图不能二次处理了"要能"换套参数重做"，而重做的输入
+    必须是**没扣过背景的那条曲线**——键是哈希，从产物路径反推不出来，只能
+    当时记下（store_proc_by_key 一直记着，这条路径以前漏了）。
+    """
+    target, base = _proc_product_and_base(path, config=config, npt=npt,
+                                          tth_min=tth_min, tth_max=tth_max,
+                                          settings=settings)
     return _write_curve(
-        _proc_product(path, config=config, npt=npt, tth_min=tth_min,
-                      tth_max=tth_max, settings=settings),
-        tth, intensity,
+        target, tth, intensity,
         meta={"source": source or str(Path(path).name), "config": config,
               "npt": int(npt), "engine": INTEGRATION_VERSION,
               "algo": BG_ALGO_VERSION,          # 背景算法版本（见其说明）
+              "base_key": base,                 # 血缘：底下那条 1D 曲线
               "kind": PROC_KIND, "created": time.time(),
               "chain": chain_desc(settings), "settings": settings})
+
+
+def load_proc_source(key: str) -> dict:
+    """处理产物的**源曲线**（换配方重做的输入）：dict 或 {why: ...}。
+
+    用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"。
+    重做的输入必须是**它底下那条 1D 曲线**——不是已经扣过背景的曲线：在扣完
+    的曲线上再扣一遍 = 二次相减，曲线整体往下掉一截，看着还挺像"扣得更干净"。
+
+    血缘两个来源：
+      * 新产物：元数据里有 `base_key`（store_proc / store_proc_by_key 都写）；
+      * 老产物：没记血缘 → 从台账里翻出它属于哪一批，按那一批记的几何 / 点数
+        / 2θ 范围去读那条 1D 缓存（只读缓存、不重算：这里不是"算"的入口）。
+
+    返回 {"tth", "intensity", "base", "from"}；取不到时 {"why": 人话}。
+    """
+    meta = meta_by_key(PROC_KIND, key)
+    base = meta.get("base_key")
+    if base:
+        got = load_by_key("1d", str(base))
+        if got is not None:
+            return {"tth": got[0], "intensity": got[1], "base": str(base),
+                    "from": "产物元数据里的血缘"}
+        return {"why": "元数据里记着血缘，但那条 1D 曲线不在了"
+                       "（缓存被清过？）——打开原始条目重出图再处理"}
+    for node in list_batches(PROC_KIND, prune=False):
+        for path, item in (node.get("items") or {}).items():
+            if str(item.get("key") or "") != str(key):
+                continue
+            if node.get("config") is None or node.get("npt") is None:
+                continue
+            got = load_1d(path, config=str(node["config"]), npt=int(node["npt"]),
+                          tth_min=node.get("tth_min"),
+                          tth_max=node.get("tth_max"))
+            if got is not None:
+                return {"tth": got[0], "intensity": got[1], "base": None,
+                        "from": "台账（那一批的几何 / 点数 / 2θ 范围）"}
+            return {"why": "这一份是旧产物（没记血缘），按台账里那套设置也没"
+                           "找到那条 1D 曲线——打开原始条目重出图再处理"}
+    return {"why": "这一份是旧产物（没记血缘），台账里也翻不到它"
+                   "——打开原始条目重出图再处理"}
 
 
 # ══ 产物台账（界面上的"阶段文件夹"靠它）══════════════════════

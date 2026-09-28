@@ -80,7 +80,7 @@ from xrd_toolkit.gui.file_dock import (
     FILE_FILTER, FileTree, _ask_duplicate, _ask_rename, _build_file_dock,
     _dropped_items, _on_file_selected, _refresh_file_label, _scan_folder,
     _sync_current_to_checks, _sync_select_label, _unique_display_name,
-    add_files, refresh_product_groups)
+    add_files, refresh_open_marks, refresh_product_groups)
 # 校准相关按职责分了三块（2026-09-23 拆分）：页面与流程在 calib，
 # 中央校准图面板在 calib_panel，配置条目进出在 config_ops。这里全部
 # 再导出（见模块 docstring 的"兼容再导出"），外部照旧经 gui_app 取用。
@@ -100,7 +100,7 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
-    _param_box_set, _reload_config_combo, _set_focus)
+    _param_box_set, _proc_settings, _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_heat)
@@ -110,9 +110,10 @@ from xrd_toolkit.gui.plot_panels import (
     _open_plot_panel, _pan_motion, _pan_press, _pan_release, _sync_bar_active,
     _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _proc_batch_apply, _compute_integration,
-    _draw_1d, _open_source_group, _open_source_view, _plot_view, _refresh_proc,
-    _spawn_task, apply_recipe, chain_label_of, recipe_text)
+    _apply_image_params, _apply_params, _proc_batch_apply, _proc_keep_this,
+    _compute_integration, _draw_1d, _open_source_group, _open_source_view,
+    _plot_view, _refresh_proc, _retarget_product_panel_to_source, _spawn_task,
+    apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import recipes as recipe_store
 
@@ -303,6 +304,33 @@ def _sync_bg_rows(window: QMainWindow) -> None:
     for name, row in rows.items():
         row.setVisible(name == mode
                        or (name == "anchor" and mode == "auto"))
+    _sync_recipe_rows(window)
+    # "显示原始曲线对比"只在真的在扣的时候才有意义
+    window.params["背景显示原始"].setEnabled(mode != "off")
+    window.params["负值截断为 0"].setEnabled(mode != "off")
+    if hasattr(window, "bg_pick_btn"):
+        pickable = mode in ("anchor", "auto")   # auto = 自动 + 锚点校正
+        window.bg_pick_btn.setEnabled(pickable)
+        window.bg_clear_btn.setEnabled(pickable)
+        if not pickable and window.bg_pick_btn.isChecked():
+            window.bg_pick_btn.setChecked(False)   # 离开锚点模式即停止拾取
+    _update_bg_count(window)
+
+
+def _sync_recipe_rows(window: QMainWindow) -> None:
+    """「配方」这一小节的两样显示：「本图配方」来处那行 + 配方下拉。
+
+    **为什么单独一个函数、而且要在记录配方之后调**（2026-09-28 探针查出来的
+    用户报"套用无效"）：填下拉的动作原先只在 _sync_bg_rows 里做，而
+    _on_bg_mode 是"_sync_bg_rows → _refresh_proc"这个顺序——配方是
+    _refresh_proc 末尾才写进 window.proc_recipes 的，于是**刚调完参数那一刻
+    下拉里还只有占位项**（"还没有配方…"），用户按 [套用] 只得到一句"先在下拉
+    里选一份配方"。真实的手势恰恰就是"调好参数马上点 [套用]"。
+
+    现在由 _refresh_proc 收尾时经 window._recipe_rows_sync 回调一次（与
+    _bg_rows_sync 同一套路，避免 plot_views 反向 import app），顺序问题从
+    根上消失——不管谁先谁后，记录之后就刷一次。
+    """
     # 处理来处：这个文件上次是用哪套设置处理的（**只作展示**，不回填面板——
     # 用户 2026-09-27 晚："原始数据会被改变…应该是原始 tif"）
     lbl = getattr(window, "bg_prov_lbl", None)
@@ -314,16 +342,6 @@ def _sync_bg_rows(window: QMainWindow) -> None:
                   or {}).get(str(path_))
         lbl.setText(recipe_text(recipe))
     _recipe_combo_fill(window)
-    # "显示原始曲线对比"只在真的在扣的时候才有意义
-    window.params["背景显示原始"].setEnabled(mode != "off")
-    window.params["负值截断为 0"].setEnabled(mode != "off")
-    if hasattr(window, "bg_pick_btn"):
-        pickable = mode in ("anchor", "auto")   # auto = 自动 + 锚点校正
-        window.bg_pick_btn.setEnabled(pickable)
-        window.bg_clear_btn.setEnabled(pickable)
-        if not pickable and window.bg_pick_btn.isChecked():
-            window.bg_pick_btn.setChecked(False)   # 离开锚点模式即停止拾取
-    _update_bg_count(window)
 
 
 def _recipe_combo_fill(window: QMainWindow) -> None:
@@ -387,12 +405,12 @@ def _apply_selected_recipe(window: QMainWindow) -> None:
         _log(window, "这份配方是「空扫相减」：它靠的是那张空扫图，"
                      "空扫图不在配方里，套不了")
         return
-    src = getattr(dock, "panel_source", None)
-    if src is not None and src.kind == gui_sources.BG:
-        # 处理产物面板本身已经扣完了（快照被钉成"不扣"）；再套一份配方就是
-        # 二次相减——曲线会往下掉一截，还挺像"扣得更干净"
-        _log(window, "这一条是**处理产物**（已经扣完了）——配方套不上去；"
-                     "想换参数重做，打开它对应的原始条目")
+    # 处理产物面板：**就地换成它底下的原始 1D 曲线**，配方照常往上套
+    # （用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"）。
+    # 旧版在这里一句拒绝（怕二次相减），界面上就没路可走了——现在把"输入"
+    # 换成没扣过背景的那条曲线，二次相减的隐患从根上没有了
+    # （见 plot_views._retarget_product_panel_to_source）
+    if not _retarget_product_panel_to_source(window, dock):
         return
     apply_recipe(window, dock, path, recipe)
 
@@ -1288,6 +1306,30 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.bg_redraw_btn = btn_bg_redraw
     btn_bg_redraw.clicked.connect(lambda: _refresh_proc(window))
     btns_bg.addWidget(btn_bg_redraw)
+    # [按 2θ 重算这张图]（用户 2026-09-28 定"处理页也要有这个出口"）：
+    # 2θ 范围是**积分期**参数，处理链只吃"手上那条曲线"——处理页原先只有
+    # [重画]（纯显示），改了 2θ 没有任何地方能让数据跟上，看着就是"无效"。
+    # 这里直接复用 1D 页那支 [重算这张图]（_apply_params），口径完全一样
+    btn_bg_recalc = QPushButton("按 2θ 重算这张图")
+    btn_bg_recalc.setObjectName("proc_recalc_btn")
+    btn_bg_recalc.setToolTip("按坞顶的 2θ 范围 / 点数**重新积分**编辑对象这张图"
+                             "（处理页原先没有这个出口，改了 2θ 只能去 1D 页"
+                             "按 [重算这张图]）。重算完处理链会自动按新曲线重画")
+    btn_bg_recalc.clicked.connect(lambda: _apply_params(window))
+    window.proc_recalc_btn = btn_bg_recalc
+    btns_bg.addWidget(btn_bg_recalc)
+    # [采用这份结果]（用户 2026-09-28 第 4 条）：把编辑对象这张图上**眼下这条
+    # 处理后的曲线**落成产物、进文件栏的「处理后 …」分组——单张也有交代，
+    # 不用"勾上自己再点批量处理"这种绕法。口径与 [批量处理] 逐位相同（同一个
+    # apply_chain 的输出 + 同一套台账），只是目标只有编辑对象这一个
+    btn_bg_keep = QPushButton("采用这份结果")
+    btn_bg_keep.setObjectName("proc_keep_btn")
+    btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果**存成产物**："
+                           "文件栏里长出一个「处理后 …」分组，对比 / 热图 / 导出"
+                           "下次直接复用（与 [批量处理] 落的是同一种东西）")
+    btn_bg_keep.clicked.connect(lambda: _proc_keep_this(window))
+    window.proc_keep_btn = btn_bg_keep
+    btns_bg.addWidget(btn_bg_keep)
     # [批量处理]：把编辑对象的锚点（只传 2θ 位置）用到所有勾选文件，
     # 各扣各的并存成产物——对比/热图下次直接读它（跨会话秒开）。
     # 绝对强度不能跨文件套，见 plot_views._proc_batch_apply 的说明
@@ -2071,6 +2113,11 @@ def create_window() -> QMainWindow:
     # 背景扣除专用行的显隐同步入口（panel_state 回放面板快照后回调，
     # 同样避免反向 import）
     window._bg_rows_sync = _sync_bg_rows
+    # 「配方」小节的显示刷新入口：_refresh_proc 记完"本图配方"之后回调
+    # （顺序见 _sync_recipe_rows 的说明——用户报"套用无效"的根因之一）
+    window._recipe_rows_sync = lambda: _sync_recipe_rows(window)
+    # 文件栏"正在打开"记号的刷新入口（面板开/关时回调，用户 2026-09-28 第 5 条）
+    window.mark_open_rows = lambda: refresh_open_marks(window)
     # 焦点切换入口：当前编辑对象那块面板的标题栏深一档（plot_panels
     # 的 _sync_bar_active；panel_state 只负责回调，不反向 import）
     window._on_focus_changed = (

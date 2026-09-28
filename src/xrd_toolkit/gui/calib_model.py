@@ -15,10 +15,12 @@ if TYPE_CHECKING:      # 只为类型注解：本模块运行时零 Qt
     from PySide6.QtWidgets import QMainWindow
 
 
-# 结果种类（校准功能页的累积命名前缀）。原始 = 起点（借来的条目 / 手输 /
-# 手改的几何），其余三个是校准动作产出的结果。
+# 结果种类（校准功能页的累积命名前缀）。原始 = 起点（借来的条目），
+# custom = 手输/手改的几何（用户 2026-09-28 第 1 条：它也要进累积列表，
+# 否则"改完切走就找不回来、也不能放进 A/B 槽或当基准"），其余三个是
+# 校准动作产出的结果。
 KIND_LABELS = {"raw": "原始", "auto": "自动", "manual": "手动",
-               "refined": "精修"}
+               "refined": "精修", "custom": "自定义"}
 SLOT_LABELS = {"current": "当前配置", "A": "A", "B": "B"}
 # "当前配置"的替换门槛（px）：新结果的环位偏差要比当前配置好**这么多**
 # 才自动采纳。依据：同一张图重复跑，几何参数会抖（PONI 1.6~2.2 px）而环
@@ -92,6 +94,24 @@ def _add_result(state: dict, kind: str, result: dict) -> str:
     name = _next_name(state, kind)
     state["results"].append({"name": name, "kind": kind, "result": result})
     return name
+
+
+def _add_custom_result(state: dict, geom: dict, base_result: dict = None) -> str:
+    """把**手输/手改的几何**作为一条结果挂进累积列表，返回它的名字。
+
+    用户 2026-09-28 第 1 条："校准自定义的几何配置不会计入原始值或者说不会
+    存储在选框里"——改之前手输几何只活在 `state["current_geom"]` 里（一个
+    没有户口的变量）：它显示在"当前配置"那一列，但**从不进 results 表**，
+    所以 A/B 下拉（选项 = 结果名）里没有它、切走就找不回来、也不能当基准。
+    现在它与自动/手动结果一视同仁地进表，于是三个槽都能放它。
+
+    存的是**结果形状**（px 键，与其他结果同形），像素尺寸与波长不在其中
+    ——它们不参与拟合，回填时由 `_result_to_geom(result, base)` 从当前几何
+    继承（用户手输的那两个值就活在当前几何里）。
+    """
+    result = dict(base_result or _geom_to_result_shape(geom))
+    result.setdefault("metrics", None)      # 指标由 _refresh_current_metrics
+    return _add_result(state, "custom", result)   # 异步补（同当前配置那一列）
 
 
 def _fill_slot(state: dict, name: str) -> str:
@@ -240,43 +260,43 @@ def _delta_text(base_res, res, key_: str) -> str:
     return f"{(v - b) * _row_spec(key_)[2]:+.2f}"
 
 
-def _verdict(cur_res, cur_name: str, others) -> str:
-    """结论行：**每个候选都跟"当前配置"比，两边的名字都写全**。
+def _verdict(ref_res, ref_name: str, others) -> str:
+    """结论行：**每个候选都跟"对比基准"那一列比，两边的名字都写全**。
 
-    others = [(名字, 结果), ...]——槽 A / B 里**有内容**的那几个。
+    others = [(名字, 结果), ...]——除基准列以外**有内容**的那几列。
 
-    为什么改成这样（用户 2026-09-27："对比基准和结论表述不清，不知道是谁在
-    和谁比"）：旧版只比一对，而且那一对是"基准列 vs A/B 里挑一个"
-    （`other = "A" if base != "A" else "B"`）——基准选 A 时"当前配置"被整个
-    撇开，于是同一屏里 Δ 行讲一对人、结论讲另一对人。现在分成两件事：
-    **Δ 行**相对"对比基准"那一列（表格里看得见是哪一列），**结论**一律以
-    "当前配置"为参照逐个候选报——"这个新结果值不值得采纳"才是这一页要做的
-    决定。数字全部带名字，谁是多少一目了然。
+    用户 2026-09-28 第 2 条："数据结论不受对比基准的影响"——对，改之前**结论
+    写死了以「当前配置」为参照**（Δ 行才看基准列），于是把基准切成 A 时，
+    下面那行结论一个字都不变。现在参照系 = 用户选的那一列：基准是"当前配置"
+    时就是原来的样子；基准选 A，结论就变成"当前配置 / B 各自 vs A"。
+
+    首参名从 cur_* 改成 ref_* 正是这件事：参照列是谁由调用方给（见
+    calib_table._refresh_table），本函数不再假定是"当前配置"。
     """
-    if cur_res is None:
-        return "结论：还没有可比的当前配置"
-    cur_dev = _result_dev(cur_res)
-    if cur_dev is None:
-        return (f"结论：{cur_name} 没有可用环位偏差，判不了"
+    if ref_res is None:
+        return "结论：对比基准那一列还没有结果，判不了（先选一个有结果的基准）"
+    ref_dev = _result_dev(ref_res)
+    if ref_dev is None:
+        return (f"结论：{ref_name} 没有可用环位偏差，判不了"
                 f"（看上面两列的数值自行判断）")
-    tell, nums = [], [f"{cur_name} {cur_dev:.2f} px"]
+    tell, nums = [], [f"{ref_name} {ref_dev:.2f} px"]
     for name, res in others:
         dev = _result_dev(res) if res is not None else None
         if dev is None:
             tell.append(f"{name} 没有可用环位偏差，判不了")
             continue
         nums.append(f"{name} {dev:.2f} px")
-        diff = dev - cur_dev
+        diff = dev - ref_dev
         if abs(diff) < SOURCE_IMPROVE_MIN_PX:
-            tell.append(f"{name} 与 {cur_name} 差不多（差 {abs(diff):.2f} px"
+            tell.append(f"{name} 与 {ref_name} 差不多（差 {abs(diff):.2f} px"
                         f" < 门槛 {SOURCE_IMPROVE_MIN_PX:.2f}）")
         elif diff < 0:
-            tell.append(f"{name} 比 {cur_name} 好 {abs(diff):.2f} px")
+            tell.append(f"{name} 比 {ref_name} 好 {abs(diff):.2f} px")
         else:
-            tell.append(f"{name} 比 {cur_name} 差 {abs(diff):.2f} px")
+            tell.append(f"{name} 比 {ref_name} 差 {abs(diff):.2f} px")
     if not tell:
-        return (f"结论：{cur_name} 还没有可比的候选"
-                f"（把结果放进 A / B 槽，或先跑一次自动校准）")
+        return (f"结论：{ref_name} 还没有可比的候选"
+                f"（把另一份结果放进 A / B 槽，或先跑一次自动校准）")
     return ("结论：" + "；".join(tell)
             + "（环位偏差 " + " ｜ ".join(nums) + "）")
 

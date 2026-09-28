@@ -74,9 +74,12 @@ def _refresh_table(window: QMainWindow) -> None:
                     # "这格没数据"（用户 2026-09-27："表述不清"）
                     "基准" if slot == base_slot
                     else _delta_text(base_res, res[slot], key_))
-    # 结论一律以**当前配置**为参照逐个候选报（见 _verdict 的说明）——
-    # 与"对比基准"下拉框解耦，两者各管一件事：Δ 行看基准列，结论看要不要采纳
+    # 结论以**对比基准那一列**为参照逐个候选报（用户 2026-09-28 第 2 条：
+    # "数据结论不受对比基准的影响"——改之前参照写死是"当前配置"，切基准时
+    # 结论一个字都不变）。基准默认就是"当前配置"，所以默认行为与原来一致：
+    # 各候选 vs 当前配置。Δ 行与结论现在看**同一列**，同一屏不再讲两对人。
     others = [(SLOT_LABELS[slot], res[slot])
-              for slot in ("A", "B") if res[slot] is not None]
+              for slot in ("current", "A", "B")
+              if slot != base_slot and res[slot] is not None]
     window.calib_verdict.setText(
-        _verdict(res["current"], SLOT_LABELS["current"], others))
+        _verdict(base_res, SLOT_LABELS.get(base_slot, "基准"), others))
