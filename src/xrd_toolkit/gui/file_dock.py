@@ -56,6 +56,13 @@ def _dropped_items(event) -> list:
 
 # ══ 左侧：文件栏（树：原始数据 + 各阶段产物分组）════════════
 GROUP_ROLE = Qt.UserRole + 3        # 组节点标记（条目没有这个槽）
+GROUP_BATCH_ROLE = GROUP_ROLE + 1   # 处理组的台账批次号（右键"删除这一组"用）
+GROUP_TITLE_ROLE = GROUP_ROLE + 2   # 组的**纯名字**（不含折叠时才显示的
+                                    # "（n/m 选中）"后缀，见 _group_title）
+# 槽号一律走上面的名字，别再写 GROUP_ROLE + n 的字面量：2026-09-28 给徽标
+# 加槽时就撞过一次——新槽正好落在"批次号"那一格上，于是处理组的名字被批次
+# id 顶掉（文件栏上显示成 "probe-batch"），而组态、勾选、右键删除全都正常，
+# 只有名字错。这种撞车不报错，只是"名字看起来怪"，最难查。
 
 
 class FileItem(QTreeWidgetItem):
@@ -93,10 +100,90 @@ class FileItem(QTreeWidgetItem):
         return super().setData(*((0,) + args if len(args) == 2 else args))
 
 
+def _set_group_title(node, base: str) -> None:
+    """写组的**纯名字**（折叠徽标由 _refresh_group_badges 统一渲染）。"""
+    node.setData(0, GROUP_TITLE_ROLE, base)
+    node.setText(0, base)
+
+
+def _group_title(node) -> str:
+    """组的纯名字 = 不带"（n/m 选中）"徽标的那个。
+
+    日志、悬停提示、右键菜单一律读它——`text(0)` 是**显示文本**，组折叠
+    时后面挂着徽标，念出来会变成"已选中整组 1D 产物（81/81 选中）（81 个…）"。
+    """
+    return node.data(0, GROUP_TITLE_ROLE) or node.text(0)
+
+
+def _group_counts(node) -> tuple:
+    """组里 (勾了几条, 共几条)。递归数——组里再套组也数得对。
+
+    只数**子项**的对号，不数组自身的：组态是子项算出来的派生量（见
+    _group_state），信它就会把"组上暂时是空格"误报成"里面一条没勾"。
+    """
+    n = m = 0
+    for i in range(node.childCount()):
+        child = node.child(i)
+        if is_group(child):
+            cn, cm = _group_counts(child)
+            n += cn
+            m += cm
+        else:
+            m += 1
+            if child.checkState(0) == Qt.Checked:
+                n += 1
+    return n, m
+
+
+def _refresh_group_badges(window: QMainWindow) -> None:
+    """组名后缀"（n/m 选中）"，**只在组折叠时显示**（用户 2026-09-28）。
+
+    起因是"勾选集比想的大"那类事故（162 条 = 81 原始 + 81 处理后）：组
+    折叠着看不见里面的对号，而组上又是不亮的——0 条和勾了 81 条在列表里
+    长得一模一样（半勾那一态 2026-09-26 已按用户要求去掉，见 _group_state），
+    所以"我想不到里面还留着一整批勾"这件事没有任何线索。徽标补上的正是
+    这条线索。展开时条目的对号就在眼前，不重复写数字。
+
+    **改文字会发 itemChanged**，而 on_item_changed 把组上的 itemChanged
+    当成"组被勾了"、会把组的状态**铺给全部子项**——组此刻通常是空格，
+    于是写一个徽标就会把里面的对号全清掉（静默的那种）。所以整个过程用
+    _check_syncing 罩住（它正是那个槽的重入闸），旧值存下来再还原：本函数
+    会被已经罩着的调用方（_set_checks）叫到，不能一把掀开。
+
+    幂等：文本没变就不 setText，反复调没有副作用——所以"勾选变了 / 组
+    重建了 / 展开折叠了"三处都放心地叫它（_sync_group_states、
+    refresh_product_groups、文件坞的两条信号）。
+    """
+    if getattr(window, "file_list", None) is None:
+        return
+    prev = window._check_syncing
+    window._check_syncing = True
+    try:
+        tree = window.file_list
+        for node in [tree.raw_group] + tree.groups():
+            base = _group_title(node)
+            if node.isExpanded():
+                text = base
+            else:
+                n, m = _group_counts(node)
+                text = f"{base}（{n}/{m} 选中）"
+            if node.text(0) != text:
+                node.setText(0, text)
+    finally:
+        window._check_syncing = prev
+
+
 def _make_group(text: str, tip: str = "") -> FileItem:
-    """建一个组节点（阶段文件夹）：可勾（勾 = 整组全选）、加粗、带提示。"""
+    """建一个组节点（阶段文件夹）：可勾（勾 = 整组全选）、加粗、带提示。
+
+    名字进 GROUP_TITLE_ROLE（纯名字）；显示文本由 _refresh_group_badges
+    按展开/折叠渲染（折叠时后缀"（n/m 选中）"）。**组名里不再带总数**
+    （原来是"1D 产物 (81)"）：那个数字跟徽标里的分母重复，同一行两个数字
+    反而分不清谁是谁。
+    """
     node = FileItem([text])
     node.setData(0, GROUP_ROLE, True)
+    node.setData(0, GROUP_TITLE_ROLE, text)
     node.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable
                   | Qt.ItemIsUserCheckable)
     node.setCheckState(0, Qt.Unchecked)
@@ -292,7 +379,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
                 for i in range(item.childCount()):
                     item.child(i).setCheckState(0, item.checkState(0))
                 if item.checkState(0) == Qt.Checked:
-                    _log(window, f"已选中整组 {item.text(0)}"
+                    _log(window, f"已选中整组 {_group_title(item)}"
                                  f"（{item.childCount()} 个；"
                                  "点击视图按钮开始计算）")
             else:
@@ -309,6 +396,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         _sync_current_to_checks(window)
         _refresh_file_label(window)
         _sync_select_label(window)
+        _refresh_group_badges(window)
 
     def on_item_clicked(item, column=0):
         """手势区分：
@@ -329,6 +417,13 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     window.file_list.itemChanged.connect(on_item_changed)
     window.file_list.itemClicked.connect(on_item_clicked)
+    # 展开/折叠 = 徽标消失/出现（"（n/m 选中）"只在折叠时显示）。
+    # 两个信号都连：Qt 在"本来就展开/收起"时不发信号，真发不发不值得赌，
+    # 刷新函数是幂等的（读 isExpanded 自己判断），多调一次没副作用
+    window.file_list.itemExpanded.connect(
+        lambda *_a: _refresh_group_badges(window))
+    window.file_list.itemCollapsed.connect(
+        lambda *_a: _refresh_group_badges(window))
     # 双击条目 = 打开这一张的 1D 图（"点开看一张"最顺手的手势；右键菜单
     # 里也有同一条，两个都留着——双击的第一次单击会顺手勾上这一条，
     # 无害；不想动勾选就用右键）
@@ -642,7 +737,7 @@ def drop_product_group(window: QMainWindow, item) -> int:
     """
     if item is None or not is_group(item) or item is window.file_list.raw_group:
         return 0
-    batch = item.data(0, GROUP_ROLE + 1)
+    batch = item.data(0, GROUP_BATCH_ROLE)
     if batch:
         n = stage_cache.drop_batch("bg", batch)
         tail = "（台账一并清掉）"
@@ -651,7 +746,7 @@ def drop_product_group(window: QMainWindow, item) -> int:
         for kind, keys in _group_keys_by_kind(item).items():
             n += stage_cache.drop_keys(kind, keys)
         tail = ""
-    _log(window, f"已删除产物分组「{item.text(0)}」：{n} 份产物{tail}")
+    _log(window, f"已删除产物分组「{_group_title(item)}」：{n} 份产物{tail}")
     refresh_product_groups(window)
     return n
 
@@ -916,13 +1011,13 @@ def _group_key(item, tree):
     """组节点的稳定身份（重建前后认人用）。
 
     重建前后组节点是**新对象**，只能靠数据槽认人：处理组用台账批次号
-    （GROUP_ROLE + 1，右键"删除这一组"用的也是它）；原始数据组与 1D
+    （GROUP_BATCH_ROLE，右键"删除这一组"用的也是它）；原始数据组与 1D
     产物组没有批次号，各给一个固定名——**不能都退回同一个名字**，否则
     "收起原始数据"会被误判成"收起 1D 产物"，把好端端展开着的组收起来。
     """
     if item is tree.raw_group:
         return ("raw",)
-    batch = item.data(0, GROUP_ROLE + 1)
+    batch = item.data(0, GROUP_BATCH_ROLE)
     return ("bg", str(batch)) if batch else ("1d",)
 
 
@@ -1016,7 +1111,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
         leaf.setCheckState(0, Qt.Unchecked)
         gui_sources.set_item_source(leaf, raw_item.data(0, Qt.UserRole),
                                     kind, key)
-        leaf.setToolTip(0, f"{raw_item.toolTip(0)}\n{group.text(0)}")
+        leaf.setToolTip(0, f"{raw_item.toolTip(0)}\n{_group_title(group)}")
         group.addChild(leaf)
         return leaf
 
@@ -1025,7 +1120,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
     tree.blockSignals(True)
     try:
         tree.clear_groups()
-        tree.raw_group.setText(0, f"原始数据 ({tree.count()})")
+        _set_group_title(tree.raw_group, "原始数据")
         by_path = {}
         for i in range(tree.count()):
             it = tree.item(i)
@@ -1065,7 +1160,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
             have.extend(by_item.get(id(tree.item(i)), ()))
         if have:
             group = _make_group(
-                f"1D 产物 ({len(have)})",
+                "1D 产物",
                 "磁盘上的 1D 产物：当前设置算好的、以及按别的 2θ 范围 / 几何"
                 "算的都在（后者名字里标了出来）——缓存里有的就列在这儿，"
                 "删不删由你自己决定。\n整组勾上可去 [对比]/[热图]；"
@@ -1122,10 +1217,10 @@ def refresh_product_groups(window: QMainWindow) -> None:
             more = f"\n（当前设置：几何 {cur['config']}、{cur['npt']} 点、{now}）" \
                 if differs else ""
             group = _make_group(
-                f"{node['label']} ({len(kids)})",
+                node["label"],
                 f"几何 {node.get('config')}、{node.get('npt')} 点、{span}\n"
                 "整组勾上可去 [对比]/[热图]；右键删掉这一组。" + more)
-            group.setData(0, GROUP_ROLE + 1, node["id"])   # 右键删这一组用
+            group.setData(0, GROUP_BATCH_ROLE, node["id"])   # 右键删这一组用
             for raw_item, meta, is_stale in kids:
                 tail = "处理后（旧算法，不可信）" if is_stale else "处理后"
                 leaf = add_leaf(group, raw_item, gui_sources.BG,
@@ -1152,7 +1247,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
     # 数字与状态行跟着刷新（只改文字，不碰树）
     _refresh_file_label(window)
     _sync_select_label(window)
-
+    _refresh_group_badges(window)   # 重建出新组了：折叠着的那些要带上数字
 
 
 def checked_items(window: QMainWindow) -> list:
@@ -1178,6 +1273,7 @@ def _sync_group_states(window: QMainWindow) -> None:
     for node in [tree.raw_group] + tree.groups():
         node.setCheckState(0, _group_state(
             node.child(i).checkState(0) for i in range(node.childCount())))
+    _refresh_group_badges(window)   # 批量改完，折叠着的组上的数字也要跟上
 
 
 def _sync_select_label(window: QMainWindow) -> None:

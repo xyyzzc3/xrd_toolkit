@@ -2104,6 +2104,84 @@ class TestRecipeReuse(unittest.TestCase):
             w.close()
 
 
+class TestGroupSelectionBadge(unittest.TestCase):
+    """折叠的组名后缀"（n/m 选中）"（用户 2026-09-28："在文件栏加上个当前
+    有多少被选中的显示，仅在文件被折叠时显示"）。
+
+    起因是"勾选集比想的大"那类事故（162 条 = 81 原始 + 81 处理后）：组
+    折叠着看不见里面的对号，而组上又是不亮的（半勾没有专属状态，见
+    _group_state），于是"里面还留着一整批勾"没有任何线索。徽标只在**折叠**
+    时出现——展开时对号就在眼前，不重复写数字。
+    """
+
+    def test_badge_appears_only_when_collapsed(self):
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            raw = w.file_list.raw_group
+            raw.setExpanded(True)
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据", "展开时不带数字")
+            raw.setExpanded(False)
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据（2/2 选中）")
+            raw.setExpanded(True)
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据", "再展开，数字退场")
+        finally:
+            w.close()
+
+    def test_badge_follows_checks_and_keeps_them(self):
+        """折叠着改勾选：数字跟上，且**别的对号一个都不许掉**。
+
+        这条用例钉的是一个静默陷阱：改组名文字会发 itemChanged，而文件坞
+        把它当成"组被勾了/取消了"、会把组的状态铺给全部子项——组此刻通常
+        是空格，于是"写一个徽标"就能把里面的对号全清掉。实现用
+        _check_syncing 罩住了那一步（见 _refresh_group_badges）。
+        """
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
+                            "data/s3.tif"])
+            raw = w.file_list.raw_group
+            raw.setExpanded(False)
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据（3/3 选中）")
+            raw.child(1).setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据（2/3 选中）")
+            self.assertEqual(
+                [raw.child(i).checkState(0) for i in range(3)],
+                [Qt.Checked, Qt.Unchecked, Qt.Checked],
+                "改徽标不许动对号")
+            raw.setCheckState(0, Qt.Checked)     # 整组再勾上
+            QApplication.processEvents()
+            self.assertEqual(raw.text(0), "原始数据（3/3 选中）")
+        finally:
+            w.close()
+
+    def test_product_group_badge(self):
+        """产物组的名字里不再带总数（"1D 产物 (1)"）——那个数字跟徽标里的
+        分母重复，同一行两个数字分不清谁是谁。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            w.add_files([str(p) for p in files], select=True)
+            _store_product(w, files[0])
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            self.assertEqual(group.text(0), "1D 产物", "展开时是纯名字")
+            group.setExpanded(False)
+            QApplication.processEvents()
+            self.assertEqual(group.text(0), "1D 产物（0/1 选中）",
+                             "产物条目默认不勾（导入不勾选那套口径）")
+            group.child(0).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            self.assertEqual(group.text(0), "1D 产物（1/1 选中）")
+        finally:
+            w.close()
+
+
 class TestProductGroups(unittest.TestCase):
     """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量处理] 一组。
 
