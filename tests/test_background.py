@@ -19,8 +19,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.services.background import (
-    compute_baseline, estimate_baseline_sliding, estimate_baseline_snip,
-    fit_anchor_baseline, interp_onto_grid, subtract_background)
+    AUTO_WINDOW_DEG, compute_baseline, estimate_baseline_sliding,
+    estimate_baseline_snip, fit_anchor_baseline, interp_onto_grid,
+    subtract_background)
 
 TTH = np.linspace(0.0, 10.0, 2001)
 
@@ -507,11 +508,15 @@ class TestComputeBaselineDispatch(unittest.TestCase):
         anchors = [(2.0, 300.0), (8.0, 150.0)]
         base = compute_baseline(TTH, self.y, {"mode": "anchor",
                                               "anchors": anchors})
-        # 锚点之外借自动基线的形状：锚点定电平、自动定形状
+        # 锚点之外借自动基线的形状：锚点定电平、自动定形状。
+        # 形状用的窗口 = **默认窗口常量**（没给 window_deg 时走它）：这里读常量
+        # 而不是写字面量——默认值改过三次（1.0 → 0.5 → 0.3 → 0.2°），
+        # 这条测试要守的是"锚点模式借自动形状"这件事，不是某个具体数字
         np.testing.assert_allclose(
             base, fit_anchor_baseline(
                 TTH, anchors,
-                shape=estimate_baseline_sliding(TTH, self.y, 0.3)))
+                shape=estimate_baseline_sliding(TTH, self.y,
+                                                AUTO_WINDOW_DEG)))
 
     def test_blank_without_curve_returns_none(self):
         self.assertIsNone(compute_baseline(TTH, self.y, {"mode": "blank"}))

@@ -116,6 +116,10 @@ from xrd_toolkit.gui.plot_views import (
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import recipes as recipe_store
+# 自动基线窗口的**默认值**（0.2°，见 background 里的来历）：控件初始值、
+# 悬停提示都读它，免得"引擎默认 / 面板默认 / 恢复默认 / 控件初始值"四处
+# 各写一个字面量、改一个漏一个（2026-09-28 之前控件就是写死的 1.0）
+from xrd_toolkit.services.background import AUTO_WINDOW_DEG
 
 
 VIEW_NAMES = ("2D", "剖面", "1D", "瀑布")   # 四个图面板（作图按钮的顺序）
@@ -1067,16 +1071,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     form_bg.addRow(blank_row)
 
     # 自动模式：窗口宽度（唯一的旋钮）
+    # 初始值 = 引擎默认（background.AUTO_WINDOW_DEG，2026-09-28 起 0.2°）：
+    # 改之前这里是写死的 1.0，与面板默认/恢复默认（都是引擎那个值）不一致
+    # ——没聚焦任何面板时 `_proc_settings` 会退回读控件，读到的就是那个 1.0
     bg_window_box = QDoubleSpinBox()
     bg_window_box.setRange(0.1, 10.0)
     bg_window_box.setDecimals(2)
     bg_window_box.setSingleStep(0.1)
-    bg_window_box.setValue(1.0)
+    bg_window_box.setValue(AUTO_WINDOW_DEG)
     bg_window_box.setMaximumWidth(84)
     bg_window_box.setToolTip("窗口宽度：多宽的一段算\"背景\"而不是\"峰\"。"
                              "取最宽峰宽的 3~10 倍（本数据峰宽约 0.1~0.3°，"
-                             "默认 1.0°）；取小了峰会被当背景扣掉，取大了"
-                             "跟不上背景自身的起伏")
+                             f"默认 {AUTO_WINDOW_DEG:g}°）；取小了峰会被"
+                             "当背景扣掉，取大了跟不上背景自身的起伏")
     window.params["背景窗口 (°)"] = bg_window_box
     auto_row = bg_group([bg_row((bg_window_box, 1), (QWidget(), 1))])
     form_bg.addRow(auto_row)
@@ -1436,7 +1443,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "热图下限": 1.0,
         "热图上限": 100000.0,
         "背景扣除模式": "off",
-        "背景窗口 (°)": 0.3,
+        "背景窗口 (°)": 0.2,
         "空扫归一化": 1.0,
         "锚点拟合方式": "pchip",
         "背景显示原始": True,

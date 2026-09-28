@@ -12452,9 +12452,13 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.params["背景窗口 (°)"].setValue(4.0)
             w.findChild(QPushButton, "reset_image_btn").click()
             self.assertEqual(w.params["背景扣除模式"].currentData(), "off")
-            # 窗口默认 0.5°（2026-09-26 从 1.0° 改，见 background.AUTO_WINDOW_DEG）
-            # 窗口默认 0.3°（2026-09-27 用户定的，见 background.AUTO_WINDOW_DEG）
-            self.assertEqual(w.params["背景窗口 (°)"].value(), 0.3)
+            # 窗口默认跟着引擎默认走（2026-09-26 从 1.0° → 0.5°、09-27 → 0.3°、
+            # 09-28 用户："默认值 0.3 改成 0.2"）。这里断的是**同一个常量**：
+            # 恢复默认、面板默认、控件初始值三处都读它，别再各写一个数
+            from xrd_toolkit.services.background import AUTO_WINDOW_DEG
+            self.assertEqual(w.params["背景窗口 (°)"].value(),
+                             AUTO_WINDOW_DEG)
+            self.assertEqual(AUTO_WINDOW_DEG, 0.2)
             ax = _axes(w, "1D", self.PATH)
             self.assertEqual(_bg_lines(ax)[1], [])
             self.assertIsNotNone(getattr(dock, "last_tth", None))
