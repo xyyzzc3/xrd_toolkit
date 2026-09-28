@@ -12,7 +12,7 @@ disconnectNotify → PyGILState_Ensure）。两边都不让，进程就永远停
 Python 栈**再退出，一眼能看出卡点。
 
 用法：
-    python scripts/run_tests.py               # 全量，看门狗 20 分钟
+    python scripts/run_tests.py               # 全量，看门狗 30 分钟
     python scripts/run_tests.py -t 600        # 看门狗 10 分钟
     python scripts/run_tests.py -p "test_stage*"    # 只跑某些文件
 
@@ -30,8 +30,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="带看门狗的全量测试")
-    ap.add_argument("-t", "--timeout", type=float, default=1200.0,
-                    help="看门狗秒数（默认 1200）")
+    # 默认 1800 秒（2026-09-28 从 1200 调上来）：全量已经要 1165 秒，20 分钟
+    # 只剩 35 秒余量——正常跑完就贴着上限，再添几条用例就会被误报成"卡住"。
+    # 看门狗宽了不会漏掉真死锁：真死锁的特征是 0% CPU，`ps -o %cpu` 一眼可辨
+    # （脚本自己也会打印全线程栈）。
+    ap.add_argument("-t", "--timeout", type=float, default=1800.0,
+                    help="看门狗秒数（默认 1800）")
     ap.add_argument("-p", "--pattern", default="test*.py",
                     help="文件名通配（默认 test*.py）")
     ap.add_argument("-v", "--verbose", action="store_true")
