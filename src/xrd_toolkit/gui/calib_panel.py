@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
     CP_COLOR, PANEL_SCALE, RING_COLOR, SNAP_TOL_DEG,
-    _calib_state, _geom_px_keys, _result_by_name)
+    _calib_state, _geom_px_keys, _metrics_dev, _result_by_name, _slot_label)
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.panel_state import (_auto_contrast_values,
                                          _collect_geometry, _log)
@@ -259,7 +259,14 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
             if np.isfinite(paths["r_min_px"]) else "环半径：无解")
     ax.set_xlabel("横向 (px)")
     ax.set_ylabel("纵向 (px)")
-    ax.set_title(f"{window.calib_display}  ·  {span}")
+    # 标题里写明"青环是谁画的"（用户 2026-09-30："加一个图上的[说明]……让用户
+    # 知道结果就是当前用的数据"）：青环 = 当前配置（哪条结果 + 它现在的环位
+    # 偏差）——图上看到的东西和"现在用的几何"从此对得上号
+    state = _calib_state(window)
+    dev = _metrics_dev(state.get("current_metrics"))
+    dev_txt = f" · 环位偏差 {dev:.2f} px" if dev is not None else ""
+    ax.set_title(f"{window.calib_display}  ·  青环 = 当前配置："
+                 f"{_slot_label(state, 'current')}{dev_txt}  ·  {span}")
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
     # 视野（必须在所有画线之后设）：默认锁死 = 图像那一框；面板上勾了

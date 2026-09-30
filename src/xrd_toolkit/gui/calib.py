@@ -90,7 +90,7 @@ from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services.integrator import (
-    calibrate_lab6, refine_lab6_from_points)
+    calibrate_lab6, refine_lab6_from_points, snap_lab6_ring)
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
 
@@ -423,13 +423,16 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
 
     布局（自上而下）：
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
+      自动    定位环心并精修 / 在当前配置上再精修
+      手动    选点计数 + 撤销/清空 + 用选点精修
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
               一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对「当前配置」）
               + 结论行 + ⚠ 说明
-      自动    定位环心并精修 / 在当前配置上再精修
-      手动    选点计数 + 撤销/清空 + 用选点精修
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
+
+    数据表在**最下**（用户 2026-09-30："校准数据放最下，跟自动手动换位置"）：
+    流程上先跑自动/手动、再回头看结果，所以动作区在上、结果区在下。
 
     操作区排在最上面（用户 2026-09-26 晚定）：里面的 [加载参数][保存参数]
     [删除] 作用的就是坞顶「几何配置」那一行选中的条目，紧挨着它才看得出
@@ -600,15 +603,18 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     hint.setStyleSheet("color: gray;")
     tb.addWidget(hint)
     lay.addWidget(intro)
-    lay.addWidget(table_box)
+    # 数据表（三列表 + Δ + 结论）**放最下**（用户 2026-09-30："校准数据放最下，
+    # 跟自动手动换位置"）：页面顺序 = 介绍 → 自动 → 手动 → 数据。
+    # 它在最后才 addWidget（见下），这里只留引用
     window.calib_verdict = verdict
 
     # ── 自动 ───────────────────────────────────────────────
     auto_box = QGroupBox("自动")
     al = QVBoxLayout(auto_box)
     auto_hint = QLabel("从**当前配置**出发：定位环心（取点拟合，FFT 兜底）"
-                       "→ pyFAI 精修；或在当前几何上再精修一遍。结果进"
-                       "列表，并按环位偏差决定要不要替换当前配置。")
+                       "→ pyFAI 精修；或在当前几何上再精修一遍。结果**直接"
+                       "成为当前配置**（青环马上跟着动，好/差多少写在日志里），"
+                       "同时进下面的累积列表。")
     auto_hint.setWordWrap(True)
     al.addWidget(auto_hint)
     btn_auto = QPushButton("定位环心并精修")
@@ -622,12 +628,14 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.addWidget(auto_box)
     window.calib_start_auto = btn_auto
     window.calib_start_refined = btn_refined
+    # （数据表在手动区之后才加进布局——见本函数末尾，用户要求放最下）
 
     # ── 手动 ───────────────────────────────────────────────
     manual_box = QGroupBox("手动")
     ml = QVBoxLayout(manual_box)
     manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
-                         "（±0.5°）；至少 3 个点、覆盖 2 个不同的环。")
+                         "（±0.5°；判环可疑时会自动按尺度重判一遍）；"
+                         "至少 3 个点、覆盖 2 个不同的环。")
     manual_hint.setWordWrap(True)
     ml.addWidget(manual_hint)
     points_label = QLabel("已选 0 个点 / 0 个环")
@@ -642,6 +650,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_manual.setObjectName("start_manual_calib")
     ml.addWidget(btn_manual)
     lay.addWidget(manual_box)
+    lay.addWidget(table_box)      # 数据表放最下（用户 2026-09-30 定）
     window.calib_points_label = points_label
     window.calib_undo_btn = btn_undo
     window.calib_clear_btn = btn_clear
@@ -825,22 +834,133 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
     path_str = 标样文件路径（window.calib_path）：手动链路本身只要点
     坐标，指标却需要图像本身，所以这里多读一次图（后台线程，读失败
     只让指标缺失，不影响校准结果）。
+
+    判环可疑时（同一环号被点在明显不同的半径上）先按尺度重判一遍再拟合
+    ——见 _reindex_by_scale（用户 2026-09-30："第 0 青环里套了两个真实的环，
+    点它们都判成第 0 环"）。
     """
+    image = None
+    load_error = None
+    if path_str is not None:
+        try:
+            image = _load_image(path_str)
+        except Exception as exc:                      # noqa: BLE001
+            load_error = f"{type(exc).__name__}: {exc}"
+    rings, note = _reindex_by_scale(points, rings, geom, center0_px, image)
     result = refine_lab6_from_points(
         points, rings, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
         center0_px=center0_px)
     result["beam_center_rc"] = (center0_px[1], center0_px[0])
+    if note:
+        result["reindex_note"] = note    # 主线程写进日志（不悄悄换判法）
     if path_str is not None:
-        try:
-            image = _load_image(path_str)
-        except Exception as exc:                      # noqa: BLE001
+        if image is None:
             result["metrics"] = None
             result["metrics_initial"] = None
-            result["metrics_error"] = f"{type(exc).__name__}: {exc}"
+            result["metrics_error"] = load_error
         else:
             _attach_metrics(result, image, geom, initial=geom)
     return result
+
+
+# 判环可疑时按哪些距离尺度重试（见 _reindex_by_scale）。距离是这套几何里
+# **整体缩放环位置**的那个量：它错一个比例，低角侧的真实环就会被压到"第 0
+# 环"以下、判环全挤在一起。
+_MANUAL_SCALE_PROBE = (0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.20)
+# 同一环号被点到的两个半径差超过这个比例 = 判环挤在一起了
+# （同一个环上点两次半径只差几个百分点，不会误报）
+_SUSPICIOUS_RADIUS_RATIO = 1.15
+
+
+def _ring_radius(p, center_px) -> float:
+    """点到束心的半径（px）——判"同一个环号是不是横跨了两个半径"。"""
+    return float(np.hypot(float(p[0]) - float(center_px[0]),
+                          float(p[1]) - float(center_px[1])))
+
+
+def _rings_look_suspicious(points, rings, center_px) -> bool:
+    """同一个环号被点在明显不同的半径上 → 判环很可能挤在一起了。
+
+    用户 2026-09-30 报的正是这个：第 0 青环里套了两个真实环，点它们都判成
+    环 0（半径差一倍）。这是"几何尺度偏了"的火警，触发下面的尺度扫描。
+    """
+    by_ring = {}
+    for p, k in zip(points, rings):
+        by_ring.setdefault(int(k), []).append(_ring_radius(p, center_px))
+    for radii in by_ring.values():
+        if len(radii) >= 2 \
+                and max(radii) / max(min(radii), 1e-9) > _SUSPICIOUS_RADIUS_RATIO:
+            return True
+    return False
+
+
+def _rings_at_scale(points, geom, center_px, scale) -> list:
+    """把距离乘 scale 后重新判环；有任何一点判不到环就返回空表（那套不能用）。"""
+    g = dict(geom)
+    g["dist_m"] = float(geom["dist_m"]) * float(scale)
+    px = float(g["pixel_size_m"])
+    out = []
+    for x, y in points:
+        k = snap_lab6_ring(
+            float(x), float(y), pixel_size_m=px,
+            wavelength_m=float(g["wavelength_m"]), dist_m=float(g["dist_m"]),
+            poni1_m=float(g["poni1_px"]) * px, poni2_m=float(g["poni2_px"]) * px,
+            rot1_deg=float(g.get("rot1_deg") or 0.0),
+            rot2_deg=float(g.get("rot2_deg") or 0.0), tol_deg=SNAP_TOL_DEG)
+        if k is None:
+            return []
+        out.append(int(k))
+    return out
+
+
+def _reindex_by_scale(points, rings, geom, center0_px, image):
+    """判环可疑时：扫几个尺度重判环、各拟合一次，挑**环位偏差最小**的那套。
+
+    返回 (rings, 说明)；不需要扫 / 扫不动时返回 (rings, "")——不猜、不动。
+
+    为什么扫尺度：判环是"拿当前几何把点击点换算成 2θ、再找最近的理论环"，
+    而低角侧没有更低的环可判——距离错一个比例时最里面几个真实环全被压到
+    第 0 环。距离是唯一整体缩放环位置的量，所以按比例扫它、每个候选重新判环
+    再拟合，用 16 个环的环位偏差挑解（单看 2~3 个点会过拟合，指标才有分辨力）。
+
+    门槛：只有比原尺度（1.0）好 **0.05 px 以上**才换——与"当前配置要不要
+    换"同一个噪声口径（calib_model.SOURCE_IMPROVE_MIN_PX），免得在噪声里跳。
+    """
+    if image is None or not _rings_look_suspicious(points, rings, center0_px):
+        return rings, ""
+
+    def _fit(scale):
+        cand = _rings_at_scale(points, geom, center0_px, scale)
+        if not cand:
+            return None
+        try:
+            res = refine_lab6_from_points(
+                points, cand, pixel_size_m=float(geom["pixel_size_m"]),
+                wavelength_m=float(geom["wavelength_m"]),
+                dist0_m=float(geom["dist_m"]) * float(scale),
+                center0_px=center0_px)
+        except Exception:                              # noqa: BLE001
+            return None
+        _attach_metrics(res, image, geom, initial=geom)
+        dev = _result_dev(res)
+        return None if dev is None else (dev, scale, cand)
+
+    base = _fit(1.0)
+    if base is None:
+        return rings, ""      # 指标算不出来 = 没有判据：老实地不动
+    best = base
+    for s in _MANUAL_SCALE_PROBE:
+        if abs(s - 1.0) < 1e-9:
+            continue
+        got = _fit(s)
+        if got is not None and got[0] <= best[0] - SOURCE_IMPROVE_MIN_PX:
+            best = got
+    if best[1] == base[1]:
+        return rings, ""
+    dev, scale, cand = best
+    return cand, (f"判环可疑（同一环号横跨了两个半径）：按距离尺度 {scale:g} 重判"
+                  f"更合理——环位偏差 {dev:.2f} px，原判法 {base[0]:.2f} px")
 
 
 def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
@@ -960,6 +1080,9 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
     state = _calib_state(window)
     name = _add_result(state, kind, result)
     label = KIND_LABELS.get(kind, kind)
+    if result.get("reindex_note"):
+        # 判环换过一套（尺度扫描赢的）：先写这句，下面的结果才读得懂
+        _log(window, result["reindex_note"])
     _log(window, f"{label}完成（{name}）：距离 "
                  f"{result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
@@ -967,10 +1090,10 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
                  f"{_metrics_note(result)}")
     take, note = _adopt_decision(state, name)
     if take:
+        # 一律采纳（用户 2026-09-30："只要是用户操作的……都填入当前，
+        # 让用户看到变化"）——青环立刻跟着动，说明里写明好了/差了多少
         _adopt_result(window, name, why="自动采纳")
-        _log(window, note)
-    else:
-        _log(window, note)
+    _log(window, note)
     _log(window, _fill_slot(state, name))
     _calib_sync(window)
     if kind == "manual" and state.get("manual_n", 99) < 6:

@@ -132,18 +132,20 @@ def _fill_slot(state: dict, name: str) -> str:
 
 
 def _adopt_decision(state: dict, name: str) -> tuple:
-    """"拟合得好不好"决定当前配置要不要换成这条结果：返回 (是否采纳, 说明)。
+    """新结果要不要换成当前配置：返回 (是否采纳, 说明)。
 
-    纯函数（不碰 window），便于直接单测。规则四条：
-      * 手改/手输过（custom）→ 永不自动替换，只说明；
-      * 当前配置还是**借来的出发点**（槽为空）→ 直接采纳：借来的几何是在
-        别的批次的图上量出来的，它的环位偏差在这张图上没有可比性——它是
-        起点，不是候选者（新批次的第一条结果总是采纳）；
-      * 两者都是"跑出来的"（当前配置指向某条结果）→ 新结果要赢过门槛
-        SOURCE_IMPROVE_MIN_PX 才采纳（"没变好就不替换"，避免在噪声里
-        来回跳）；
-      * 比不出来（任一侧无指标）→ 采纳：它是用户刚跑出来的，没有证据
-        说它更差。
+    纯函数（不碰 window），便于直接单测。
+
+    **用户 2026-09-30 改的口径：只要你按了按钮（自动 / 手动 / 精修），结果
+    一律采纳成当前配置**——原话"只要是用户操作的，无论自动手动精修都填入
+    当前，让用户看到变化"。原先那条"要比当前配置好 ≥0.05 px 才换"的门槛
+    因此退休：阈值判得再对，青环不动，用户就会以为精修没生效（原话："由于
+    自动填入是按顺序，导致精修完需要自己选才能看到变化"）。
+
+    采纳说明里**照旧把两边的环位偏差都写出来**（好了多少 / 差了多少都写，
+    不藏）；覆盖你手输/手改的几何时额外点一句"它仍留在结果列表里"——
+    东西没丢，只是当前用的换了。SOURCE_IMPROVE_MIN_PX 现在只用来分档措辞
+    （优于 / 差不多 / 差多少），不再决定采纳与否。
     """
     item = _result_by_name(state, name)
     if item is None:
@@ -152,21 +154,24 @@ def _adopt_decision(state: dict, name: str) -> tuple:
     cur_dev = _metrics_dev(state.get("current_metrics"))
     cur_txt = state.get("current_from") or "当前配置"
     dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-    if state.get("custom"):
-        return False, (f"当前配置是你手动改过的几何（自定义），"
-                       f"不自动替换为 {name}")
-    if state["slots"]["current"] is None:
+    custom_tail = ("；你手输/手改的那份仍在结果列表里（自定义），"
+                   "随时能选回来" if state.get("custom") else "")
+    if state["slots"]["current"] is None and not state.get("custom"):
+        # 借来的出发点：它是在别的批次的图上量出来的，环位偏差在这张图上
+        # 没有可比性——它是起点，不是候选者（新批次的第一条结果总是采纳）
         return True, (f"当前配置 → {name}（新批次的第一条结果，直接采纳；"
                       f"原先是{cur_txt}，{dev_txt}）")
-    if state.get("current_geom") is None or cur_dev is None or dev is None:
-        # 没有当前几何（第一次）或两边比不出来 → 采纳
-        return True, f"当前配置 → {name}（{dev_txt}）"
-    if cur_dev - dev >= SOURCE_IMPROVE_MIN_PX:
-        return True, (f"当前配置 → {name}（环位偏差 {dev:.2f} px，优于 "
-                      f"{cur_txt} 的 {cur_dev:.2f} px）")
-    return False, (f"当前配置保持 {cur_txt}（环位偏差 {cur_dev:.2f} px vs "
-                   f"{name} 的 {dev:.2f} px，改善不足 "
-                   f"{SOURCE_IMPROVE_MIN_PX:.2f} px）")
+    if cur_dev is None or dev is None:
+        return True, f"当前配置 → {name}（{dev_txt}）{custom_tail}"
+    diff = cur_dev - dev
+    if diff >= SOURCE_IMPROVE_MIN_PX:
+        verdict = f"优于 {cur_txt} 的 {cur_dev:.2f} px"
+    elif diff <= -SOURCE_IMPROVE_MIN_PX:
+        verdict = f"比 {cur_txt} 的 {cur_dev:.2f} px 差 {-diff:.2f} px"
+    else:
+        verdict = (f"与 {cur_txt} 的 {cur_dev:.2f} px 差不多"
+                   f"（差 {abs(diff):.2f} px）")
+    return True, f"当前配置 → {name}（{dev_txt}，{verdict}）{custom_tail}"
 
 
 def _geom_to_result_shape(geom: dict) -> dict:

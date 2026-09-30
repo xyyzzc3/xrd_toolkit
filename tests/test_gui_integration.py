@@ -53,6 +53,7 @@
     模式 = 参数坞换页 + 中央校准图面板开出（勾选的第一个文件；没勾
     文件只提示）；自动校准后台跑（mock 引擎）→ 自动列 + 保存区提示；
     校准图点环判环吸附/拒点、撤销/清空、手动校准 → 手动列 + Δ 列；
+    判环可疑（同一环号横跨两个半径）时按距离尺度重判（TestManualReindex）；
     面板关/退出模式后迟到结果作废；连点重跑旧任务过期；[保存为配置]
     = key/label 校验 + 落盘临时用户文件 + 下拉框同步自动选中 +
     覆盖确认；校准页 [返回分析模式] 出口 + 开关文字随状态变
@@ -9469,6 +9470,36 @@ class TestCalibration(unittest.TestCase):
         finally:
             w.close()
 
+    def test_current_slot_combo_does_not_duplicate_the_result(self):
+        """当前配置指向某条结果时，那个下拉里不许有两条同名项。
+
+        用户 2026-09-30："自定义 自定义1，当前选中 2 在选项中还有 2"。
+        首项只在"当前配置没指向结果"（手输的自定义 / 借来的条目）时才插——
+        那会儿它显示的是结果列表里没有的东西。
+        """
+        w = create_window()
+        try:
+            state = gui_calib._calib_state(w)
+            res = {"dist_m": 1.5958, "poni1_px": 1045.2, "poni2_px": 1022.0,
+                   "rot1_deg": 0.0, "rot2_deg": 0.0, "residual_deg": 0.004,
+                   "beam_center_rc": (1021.5, 1022.0), "metrics": None}
+            gui_calib._add_result(state, "auto", res)
+            state["slots"]["current"] = "自动1"
+            gui_calib._sync_slot_combos(w)
+            combo = w.calib_slot_combo["current"]
+            texts = [combo.itemText(i) for i in range(combo.count())]
+            self.assertEqual(texts.count("自动1"), 1, f"不许重复：{texts}")
+            self.assertEqual(combo.currentText(), "自动1",
+                             "选中的那条就是列表里它自己")
+            # 没指向结果时（手输的自定义）首项照旧要有：它显示的东西不在列表里
+            state["slots"]["current"] = None
+            state["custom"] = True
+            gui_calib._sync_slot_combos(w)
+            texts = [combo.itemText(i) for i in range(combo.count())]
+            self.assertEqual(texts[0], "自定义")
+        finally:
+            w.close()
+
     def test_delta_column_and_last_save_source(self):
         w = create_window()
         try:
@@ -9921,6 +9952,84 @@ class TestSaveCalibConfig(unittest.TestCase):
         self.assertEqual(res["beam_center_rc"], (1022.0, 1022.3))
 
 
+class TestManualReindex(unittest.TestCase):
+    """手动判环可疑时的"尺度重判"（用户 2026-09-30 报的判错环）。
+
+    原话："如果第 0 青环里面套了两个真实的环，点击真实的环，里面的两个环都会
+    标记为第 0 环"——判环是拿当前几何把点换算成 2θ 再找最近的理论环，低角侧
+    没有更低的环可判，所以**尺度一偏、最里面几个真实环全挤到第 0 环**。
+    修法：同一环号横跨两个半径 = 火警 → 扫几个距离尺度、各自重判环再拟合，
+    挑环位偏差最小的那套（只在明显更好时才换，口径与采纳门槛同一个 0.05 px）。
+    """
+
+    GEOM = {"pixel_size_m": 200e-6, "wavelength_m": 1.223e-11, "dist_m": 1.5958,
+            "poni1_px": 1045.2, "poni2_px": 1022.0,
+            "rot1_deg": 0.0, "rot2_deg": 0.0}
+    CENTER = (1022.0, 1021.5)          # (列, 行) = 束心
+    # 半径 190 / 220 / 400 px 的三个点：前两个在"同一个环号"上但半径差 16%
+    PTS = [(1022.0, 1211.5), (1022.0, 1241.5), (1022.0, 1421.5)]
+
+    def test_suspicious_when_one_ring_index_spans_two_radii(self):
+        self.assertTrue(gui_calib._rings_look_suspicious(
+            self.PTS, [0, 0, 1], self.CENTER))
+        self.assertFalse(gui_calib._rings_look_suspicious(
+            self.PTS, [0, 1, 2], self.CENTER))
+        # 同一个环上点两次（半径只差几个百分点）不算可疑
+        same = [(1022.0, 1211.5), (1022.0, 1220.0), (1022.0, 1421.5)]
+        self.assertFalse(gui_calib._rings_look_suspicious(
+            same, [0, 0, 1], self.CENTER))
+
+    @staticmethod
+    def _fake_refine(points, rings, **kw):
+        return {"rings_used": list(rings), "dist_m": kw["dist0_m"],
+                "poni1_px": 1045.2, "poni2_px": 1022.0,
+                "rot1_deg": 0.0, "rot2_deg": 0.0, "residual_deg": 0.004}
+
+    def test_scale_search_picks_the_better_indexing(self):
+        """尺度 0.9 那套拟合明显更好（0.10 vs 0.40 px）→ 换它，并写明理由。"""
+
+        def fake_attach(res, image, geom, initial=None):
+            dev = 0.10 if res["rings_used"] == [0, 1, 2] else 0.40
+            res["metrics"] = {"dev_px": dev, "clip_frac": 0.0, "n_complete": 16,
+                              "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}
+
+        with mock.patch.object(
+                gui_calib, "_rings_at_scale",
+                side_effect=lambda p, g, c, s: ([0, 1, 2] if abs(s - 0.9) < 1e-9
+                                                else [0, 0, 1])), \
+             mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               side_effect=self._fake_refine), \
+             mock.patch.object(gui_calib, "_attach_metrics",
+                               side_effect=fake_attach):
+            got, note = gui_calib._reindex_by_scale(
+                self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
+        self.assertEqual(got, [0, 1, 2], "该换成尺度 0.9 那套判环")
+        self.assertIn("尺度 0.9", note)
+        self.assertIn("0.10 px", note)
+        self.assertIn("原判法 0.40 px", note)
+
+    def test_no_switch_without_a_clear_win(self):
+        """所有尺度一样好（或更差）→ 原样不动、不给说明（不猜）。"""
+        with mock.patch.object(gui_calib, "_rings_at_scale",
+                               side_effect=lambda p, g, c, s: [0, 1, 2]), \
+             mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               side_effect=self._fake_refine), \
+             mock.patch.object(gui_calib, "_attach_metrics",
+                               side_effect=lambda res, img, g, initial=None:
+                               res.update({"metrics": {"dev_px": 0.30}})):
+            got, note = gui_calib._reindex_by_scale(
+                self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
+        self.assertEqual(got, [0, 0, 1])
+        self.assertEqual(note, "")
+
+    def test_no_image_means_no_judgement(self):
+        """没有图像（面板没开）→ 连扫都不扫（没有判据就不猜）。"""
+        got, note = gui_calib._reindex_by_scale(
+            self.PTS, [0, 0, 1], self.GEOM, self.CENTER, None)
+        self.assertEqual(got, [0, 0, 1])
+        self.assertEqual(note, "")
+
+
 class TestCalibMetrics(unittest.TestCase):
     """引擎指标接线：附在结果 dict 上 + 写进日志后缀；失败不静默、不拖垮校准。
 
@@ -10201,28 +10310,34 @@ class TestCalibModel(unittest.TestCase):
         self.assertIn("自动2", note)
         self.assertIn("优于", note)
 
-    def test_marginally_better_is_not_adopted(self):
-        """两者都是跑出来的 → 改善小于门槛（0.05 px）就不换，那是跑动噪声。"""
+    def test_marginally_better_is_adopted_and_says_so(self):
+        """现在**一律采纳**（用户 2026-09-30："只要是用户操作的……都填入当前，
+        让用户看到变化"），0.05 px 只用来分档措辞（优于 / 差不多 / 差多少）。"""
         st = self._from_result(0.30)
         name = self._with(st, "auto", dev=0.28)
         take, note = gui_calib_model._adopt_decision(st, name)
-        self.assertFalse(take)
-        self.assertIn("当前配置保持", note)
-        self.assertIn("改善不足", note)
+        self.assertTrue(take, "用户按钮跑出来的结果一律进当前配置")
+        self.assertIn("当前配置 → 自动2", note)
+        self.assertIn("差不多", note)
 
-    def test_worse_result_is_not_adopted(self):
+    def test_worse_result_is_adopted_and_says_how_much_worse(self):
+        """更差也采纳（按钮是用户按的），但日志要写明差了多少。"""
         st = self._from_result(0.24)
         name = self._with(st, "manual", dev=0.31)
-        take, _note = gui_calib_model._adopt_decision(st, name)
-        self.assertFalse(take)
+        take, note = gui_calib_model._adopt_decision(st, name)
+        self.assertTrue(take)
+        self.assertIn("当前配置 → 手动1", note)
+        self.assertIn("差 0.07 px", note)
 
-    def test_hand_edited_geometry_freezes_adoption(self):
-        """手改/手输过（自定义）→ 再好的结果也不自动替换。"""
+    def test_hand_edited_geometry_is_replaced_but_kept_in_the_list(self):
+        """手输/手改的几何现在也会被按钮结果覆盖（同上），但说明里必须点明
+        "那份仍在结果列表里"——东西没丢，只是当前用的换了。"""
         st = self._state(custom=True, current_metrics={"dev_px": 0.52})
         name = self._with(st, "auto", dev=0.10)
         take, note = gui_calib_model._adopt_decision(st, name)
-        self.assertFalse(take)
+        self.assertTrue(take)
         self.assertIn("自定义", note)
+        self.assertIn("随时能选回来", note)
 
     def test_metrics_dev_accepts_both_shapes(self):
         """口径：结果 dict 里套着 metrics，而"当前配置"的指标就是 metrics。"""

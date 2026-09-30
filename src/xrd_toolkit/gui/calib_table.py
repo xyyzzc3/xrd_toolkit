@@ -19,14 +19,21 @@ from xrd_toolkit.gui.panel_state import _log
 
 
 def _sync_slot_combos(window: QMainWindow) -> None:
-    """把累积结果填进三个槽的下拉框（状态是唯一真相，重填时保留选择）。"""
+    """把累积结果填进三个槽的下拉框（状态是唯一真相，重填时保留选择）。
+
+    "当前配置"那个框的**首项**只在它没指向某条结果时才插：那时它显示的是
+    结果列表里没有的东西（手输的自定义 / 借来的条目）。指向结果时再插一项，
+    已选中的那条就会在列表里**出现两次**（用户 2026-09-30 报的"当前选中 2
+    在选项中还有 2"）——此时让"选中的那一项"就是列表里它自己即可。
+    """
     state = _calib_state(window)
     names = [item["name"] for item in state["results"]]
     for slot, combo in window.calib_slot_combo.items():
         combo.blockSignals(True)
         combo.clear()
         if slot == "current":
-            combo.addItem(_slot_label(state, "current"), None)
+            if state["slots"].get("current") is None:
+                combo.addItem(_slot_label(state, "current"), None)
         else:
             combo.addItem("—（空）", None)
         for name in names:
