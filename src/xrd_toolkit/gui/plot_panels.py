@@ -348,9 +348,11 @@ class _SlimToolbar(QWidget):
     # 就是这些图。键名沿用 mpl 工具清单里的回调名（edit_parameters /
     # save_figure），既有调用点与测试不用改。
     ACTION_SPECS = (
-        ("home", "Home", "回到这张图最初的样子", "home"),
+        ("home", "Home",
+         "回到这张图最初的视野（只动视野，不动设置）", "home"),
         ("zoom", "放大镜",
-         "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大", "zoom_to_rect"),
+         "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大；调好后直接 [Save]"
+         "（存的就是当前画面）", "zoom_to_rect"),
         ("edit_parameters", "Customize", "编辑轴与曲线属性",
          "qt4_editor_options"),
         ("save_figure", "Save", "把这张图另存为图片", "filesave"),

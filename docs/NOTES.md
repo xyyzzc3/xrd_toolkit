@@ -149,14 +149,23 @@ explain how it was made.
 result, and Compare / Heatmap / export read the processing product when there is one (saying so in the
 log: "处理产物 N 条"). What you see on screen is produced by the same function that writes the file.
 
-**Four buttons at the foot of the page** (two exits added on 2026-09-28): **重画** (redraw every curve
-panel from its own snapshot — display only), **按 2θ 重算这张图** (re-integrate the edit target with the
+**Three buttons at the foot of the page** (exits added on 2026-09-28; 重画 deleted on 2026-09-30):
+**重算这张图** — called 按 2θ 重算这张图 until 2026-09-30, same name and same action as the 1D page's
+button (re-integrate the edit target with the
 2θ range / point count from the top of the dock — the 2θ range is an *integration-time* parameter and the
 processing chain only ever eats the curve it is handed, so before this button existed the processing page
 offered no way at all to make the data follow a range change, which reads as "the 2θ range does nothing
 here"), **采用这份结果** (store the processed curve currently on the edit target as a product and let it
 appear in the file bar's 处理后 … group — one file, one ledger entry, no need to check the file and go
 through [批量处理]; user, 2026-09-28 #4), and **批量处理（勾选文件）**.
+
+**"Redraw" is not a button any more** (2026-09-30). [重画] on this page ran `_refresh_proc` — the very
+path that fires automatically on every processing-control change — and 绘图's [只重画，不重算] shared its
+implementation with each panel's [Home]. Both were duplicate entrances, so both are gone. The workflow is
+now one sentence: **parameters redraw live → zoom with the magnifier / wheel → [Save] (which stores the
+canvas as it stands)**; overshoot and press a panel's [Home] to pull the view back (it moves the view
+only, never the settings). The zoom window is still written back into the panel snapshot, so a redraw
+triggered by a parameter change will **not** reset a view you have zoomed into.
 
 **A 2θ range and a cache key are the same thing, and nothing may mix them up** (a real bug found by the
 same feedback): when [批量处理] needed a raw file's curve it used to prefer the in-memory panel curve and

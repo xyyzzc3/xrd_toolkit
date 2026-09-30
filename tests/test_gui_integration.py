@@ -9,8 +9,8 @@
     test_entrance_switching_follows_buttons）；
   - 六个作图类型按钮住在「绘图」页里（属性名不变）：点击 = 为当前文件
     开面板并计算该视图 → 出图（点一次算一次，纯动作不是开关）；
-    页里另有 [出图（勾选文件）][只重画当前][导出图片…]，1D/扣背景/
-    对比页各带自己的产出按钮；
+    页里另有 [出图（勾选文件）][导出图片…]，1D/扣背景/对比页各带
+    自己的产出按钮（"重画"按钮 2026-09-30 已删，见那条用例）；
   - 面板按「视图 + 文件」成对创建：同一视图可同时开多张不同文件
     的图，标题 = 视图_文件名（如 1D_fake_a.tif）；
   - 计算完成的图自动成为"编辑对象"，[应用] 重算它（焦点指向
@@ -3537,7 +3537,8 @@ class TestProcessingPageExits(unittest.TestCase):
     以及怎么生效）"、"处理单张 1d 数据应该在用户确定处理结果后出现在文件区的
     处理后数据中"。定下来的两条（2026-09-28 用户选择）：
 
-      * 7乙：处理页也要有"按新 2θ 重算这张图"的出口——2θ 是**积分期**参数，
+      * 7乙：处理页也要有"按新 2θ 重算这张图"的出口（今名 [重算这张图]，
+        2026-09-30 与 1D 页统一）——2θ 是**积分期**参数，
         处理链只吃手上那条曲线，处理页原先只有 [重画]（纯显示），改了 2θ
         没有任何地方能让数据跟上；
       * 第 4 条：[采用这份结果] 把单张的处理结果落成产物、进文件栏
@@ -3550,7 +3551,7 @@ class TestProcessingPageExits(unittest.TestCase):
 
     def setUp(self):
         stage_cache.write_batches("bg", [])
-        # 假积分**整条测试期间都挂着**：开图、[按 2θ 重算这张图]、[批量处理]
+        # 假积分**整条测试期间都挂着**：开图、[重算这张图]、[批量处理]
         # 都要走它。第一版只 mock 了开图那一小段，重算时打到真积分器上（拿
         # 空文件）+ 后台线程，看着像"按钮没用"——测试自己骗自己
         self._patcher = mock.patch.object(gui_views, "_compute_integration",
@@ -3675,7 +3676,7 @@ class TestProcessingPageExits(unittest.TestCase):
             w.close()
 
     def test_recalc_button_re_integrates_with_the_current_range(self):
-        """[按 2θ 重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
+        """[重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
         w = create_window()
         try:
             path, dock = self._panel(w)
@@ -4563,6 +4564,10 @@ class TestParamDockSplitLayout(unittest.TestCase):
 
         出图链路本身由别的测试覆盖，这里守的是"按钮搬对页 + 接线没断"
         （C 拆分时最容易犯的错就是把按钮留在旧页/忘了接）。
+
+        顺带钉住 2026-09-30 的删除：**"重画"不再有按钮**——[重画]（处理页）
+        跑的就是自动通路，[只重画，不重算]（绘图页）与每图的 [Home] 同源；
+        用户定的新流程是"参数实时重画 + 放大镜调视野 + 保存存当前画面"。
         """
         w = create_window()
         try:
@@ -4580,8 +4585,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 # 绘图页：[出图（勾选文件）] 按当前类型再出一次
                 w.entrance_buttons["绘图"].click()
                 draw = w.param_stack.widget(w.PARAM_PAGES["绘图"])
-                for btn in (w.plot_now_btn, w.redraw_now_btn,
-                            w.export_img_btn):
+                for btn in (w.plot_now_btn, w.export_img_btn):
                     self.assertTrue(draw.isAncestorOf(btn), btn.text())
                 w.plot_now_btn.click()
                 QApplication.processEvents()
@@ -4589,14 +4593,19 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertEqual(
                     w.log_text.toPlainText().count("开始积分"), 2,
                     "[出图（勾选文件）] 该按当前类型再来一次")
-                # 扣背景页 / 对比页的产出按钮
-                for name, btn in (("处理", "bg_redraw_btn"),
+                # 处理页 / 对比页的产出按钮
+                for name, btn in (("处理", "proc_recalc_btn"),
+                                  ("处理", "proc_keep_btn"),
+                                  ("处理", "proc_batch_btn"),
                                   ("对比", "plot_cmp_btn"),
                                   ("对比", "plot_heat_btn")):
                     page = w.param_stack.widget(w.PARAM_PAGES[name])
                     self.assertTrue(
                         page.isAncestorOf(getattr(w, btn)),
                         f"{btn} 应在{name}页里")
+                # "重画"按钮不许长回来（用户 2026-09-30：只留放大镜）
+                for gone in ("bg_redraw_btn", "redraw_now_btn"):
+                    self.assertFalse(hasattr(w, gone), f"{gone} 应当已删")
         finally:
             w.close()
 

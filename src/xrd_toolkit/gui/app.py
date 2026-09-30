@@ -598,8 +598,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 窗口顶部，见 _build_toolbar / _switch_entrance）——用户 2026-09-24
     # 定稿："最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
-    # 底部各带一个"产出"按钮（1D：[出图（勾选 N 个）]；处理：[重画]；对比：
-    # [出对比][出热图]；绘图：[出图（勾选 N 个）][只重画，不重算][导出图片]）。
+    # 底部各带"产出"按钮（1D：[出图…][重算这张图]；处理：[重算这张图]
+    # [采用这份结果][批量处理…]；对比：[出对比][出热图]；绘图：[出图…]
+    # [导出图片…]）。**"重画"不再有按钮**（用户 2026-09-30）：改参数本来
+    # 就实时重画，视野另有每张图标题栏的 [Home]；保存存的就是当前画面。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
@@ -1306,22 +1308,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 宽度在本函数末尾按 minimumSizeHint 算一次，隐藏的行不计入尺寸；
     # 先收起再量会把宽度量小、切模式时被裁。所以放到末尾、量完之后。
 
-    # 处理页产出：[重画] = 按各面板快照重画全部曲线面板（改锚点/窗口
-    # 后手动触发；平时改控件是实时预览）
-    btn_bg_redraw = QPushButton("重画")
-    btn_bg_redraw.setObjectName("bg_redraw_btn")
-    window.bg_redraw_btn = btn_bg_redraw
-    btn_bg_redraw.clicked.connect(lambda: _refresh_proc(window))
-    btns_bg.addWidget(btn_bg_redraw)
-    # [按 2θ 重算这张图]（用户 2026-09-28 定"处理页也要有这个出口"）：
-    # 2θ 范围是**积分期**参数，处理链只吃"手上那条曲线"——处理页原先只有
-    # [重画]（纯显示），改了 2θ 没有任何地方能让数据跟上，看着就是"无效"。
-    # 这里直接复用 1D 页那支 [重算这张图]（_apply_params），口径完全一样
-    btn_bg_recalc = QPushButton("按 2θ 重算这张图")
+    # 处理页只有一个"重算"出口（用户 2026-09-30 定：**删掉 [重画]**——它跑的
+    # 就是 _refresh_proc 这条**自动**通路，改任一处理控件（含每点一次锚点）
+    # 本来就会跑，按钮纯冗余；"用已有数据重画"另有每张图标题栏的 [Home]）。
+    # [重算这张图]（用户 2026-09-28 定"处理页也要有这个出口"，2026-09-30 与
+    # 1D 页统一成一个名字）：2θ 范围是**积分期**参数，处理链只吃"手上那条
+    # 曲线"——改了 2θ 没有任何地方能让数据跟上，看着就是"无效"。这里直接
+    # 复用 1D 页那支同名按钮（_apply_params），口径完全一样
+    btn_bg_recalc = QPushButton("重算这张图")
     btn_bg_recalc.setObjectName("proc_recalc_btn")
     btn_bg_recalc.setToolTip("按坞顶的 2θ 范围 / 点数**重新积分**编辑对象这张图"
-                             "（处理页原先没有这个出口，改了 2θ 只能去 1D 页"
-                             "按 [重算这张图]）。重算完处理链会自动按新曲线重画")
+                             "（与 1D 页的同名按钮是同一个动作）；重算完处理链"
+                             "会自动按新曲线重画")
     btn_bg_recalc.clicked.connect(lambda: _apply_params(window))
     window.proc_recalc_btn = btn_bg_recalc
     btns_bg.addWidget(btn_bg_recalc)
@@ -1518,20 +1516,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
     btn_col2.addWidget(btn_reset_img, 1)
     btn_col2.addWidget(btn_apply_img, 1)
-    # 本页三个产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图；[只重画，不重算]
-    # 用已有数据重画编辑对象（不重算）；[导出图片] 走批量存图流程
+    # 本页两个产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图；
+    # [导出图片] 走批量存图流程。（[只重画，不重算] 已删——用户 2026-09-30：
+    # 它的底层 _redraw_panel 就是每张图标题栏 [Home] 用的那个函数，而且改
+    # 显示参数本来就有同组的 [应用]；保存存的就是屏幕当前状态，自己放大
+    # 自己存即可）
     btn_plot_now = QPushButton("出图（未勾选）")
     btn_plot_now.setObjectName("plot_now_btn")
     btn_plot_now.setToolTip("按上面选中的类型，对**文件栏里勾选**的条目出图"
                             "（勾了多少个，按钮上就写着多少）")
     window.plot_now_btn = btn_plot_now
     btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
-    btn_redraw_now = QPushButton("只重画，不重算")
-    btn_redraw_now.setObjectName("redraw_now_btn")
-    btn_redraw_now.setToolTip("用**已经算好的数据**把编辑对象那张图重画一遍"
-                              "（改显示参数后看效果用，不动数据、不重新积分）")
-    window.redraw_now_btn = btn_redraw_now
-    btn_redraw_now.clicked.connect(lambda: _redraw_focus(window))
     btn_export_img = QPushButton("导出图片…")
     btn_export_img.setObjectName("export_img_btn")
     window.export_img_btn = btn_export_img
@@ -1539,7 +1534,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     plot_row = QHBoxLayout()
     plot_row.setSpacing(4)
     plot_row.addWidget(btn_plot_now, 1)
-    plot_row.addWidget(btn_redraw_now, 1)
     btn_clear_cache = QPushButton("清空缓存")
     btn_clear_cache.setObjectName("clear_cache_btn")
     btn_clear_cache.setToolTip("删掉分阶段产物缓存（outputs/_stage）"
@@ -1654,7 +1648,8 @@ def _build_toolbar(window: QMainWindow) -> None:
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
     `[校准] [1D] [处理] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
     （见 _switch_entrance）；出图动作由各页底部的产出按钮负责
-    （[出图（勾选 N 个）] / [重画] / [出对比][出热图] / [出图（勾选 N 个）]）。
+    （[出图…][重算这张图] / [重算这张图][采用这份结果][批量处理…] /
+    [出对比][出热图] / [出图…][导出图片…]）。
 
     六个作图类型按钮（2D/剖面/1D/瀑布/对比/热图）都搬进了「绘图」页
     （_build_plot_type_row）：工具栏因此从 7 项收到 5 项，也消掉了
@@ -1855,26 +1850,6 @@ def _clear_stage_cache(window: QMainWindow) -> None:
     window.refresh_groups()   # 文件栏里的产物分组跟着清空
     _log(window, f"已清空缓存：{n} 个产物、{info['bytes'] / 1e6:.1f} MB"
                  f"（下次出图会重新积分）")
-
-
-def _redraw_focus(window: QMainWindow) -> None:
-    """「绘图」页的 [只重画当前]：用已有数据重画编辑对象（不重算）。
-
-    与面板 [Home] 同一条路（plot_views._redraw_panel）；没选编辑对象
-    或还没算完时只记日志。
-    """
-    from xrd_toolkit.gui.plot_views import _redraw_panel
-    key = window.focus_panel
-    if key is None:
-        _log(window, "先点击要重画的图面板（如 1D），再点 [只重画当前]")
-        return
-    dock = window.plot_docks.get(key)
-    reason = _redraw_panel(window, key)
-    if reason:
-        _log(window, f"[只重画当前] {dock.windowTitle() if dock else key}"
-                     f"：{reason}")
-        return
-    _log(window, f"[只重画当前] 已重画：{dock.windowTitle()}")
 
 
 def _build_plot_type_row(window: QMainWindow) -> QWidget:
