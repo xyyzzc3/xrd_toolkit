@@ -157,6 +157,9 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     # 时回调随画布一起失效，无需显式断开
     canvas.mpl_connect(
         "button_press_event", lambda ev: _on_calib_click(window, key, ev))
+    # 整幅画完就拍一帧当贴图底图（选点走增量贴图，见 _add_calib_marker）
+    window.calib_bg = None
+    canvas.mpl_connect("draw_event", lambda ev: _cache_calib_bg(window, ev))
     # 显式 resize + 级联摆位（同 _open_plot_panel 套路：子窗口不会
     # 自动适配内容）；不进 plot_docks，级联只数已开的图面板数
     hint = sub.sizeHint()
@@ -251,11 +254,17 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
         stride = max(1, len(control_points) // 1000)
         pts = np.asarray(control_points)[::stride]
         ax.plot(pts[:, 0], pts[:, 1], ".", color=CP_COLOR, ms=2.5)
+    # 选点标记：整幅重画时重建，并把它们的 artist 记进 window.calib_marker_artists
+    # ——贴图路径要靠这份名单把**所有**标记重画（见 _add_calib_marker：
+    # 底图里没有标记，只贴新点会把之前的擦掉）
+    window.calib_marker_artists = []
     if ring_marks:
         for x, y, ring in ring_marks:
-            ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)
-            ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
-                        va="bottom", ha="left")
+            ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9,
+                         mew=1.5)[0]
+            txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
+                              va="bottom", ha="left")
+            window.calib_marker_artists += [ln, txt]
     span = ("环半径 %.0f~%.0f px" % (paths["r_min_px"], paths["r_max_px"])
             if np.isfinite(paths["r_min_px"]) else "环半径：无解")
     ax.set_xlabel("横向 (px)")
@@ -347,14 +356,56 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
         _log(window, f"{head}，{how}，{tail}")
 
 
+def _cache_calib_bg(window: QMainWindow, _event=None) -> None:
+    """整幅画完 → 把画布那一帧拍下来（给 _add_calib_marker 贴图用）。
+
+    与 plot_panels 的 `_blit_take` 同一个道理：整幅重绘一次要 ~0.6 s
+    （2048² 图像的 LogNorm 上色 + 重采样，探针实测，2026-10-01），而选点
+    只多一个圈 + 一个数字。挂在 draw_event 上——**任何一次整幅重绘之后
+    都会重拍**，所以这份背景永不过期（增量画的圈不在里面，所以撤销/改
+    环号那种"要把旧标记擦掉"的动作仍然走整幅重画，见 _redraw_calib）。
+    """
+    canvas = getattr(window, "calib_canvas", None)
+    ax = getattr(window, "calib_ax", None)
+    if canvas is None or ax is None:
+        return
+    try:
+        window.calib_bg = canvas.copy_from_bbox(ax.figure.bbox)
+    except Exception:                                  # noqa: BLE001
+        window.calib_bg = None      # 后端不支持贴图：退回整幅重画
+
+
 def _add_calib_marker(window: QMainWindow, x, y, ring: int) -> None:
-    """增量标记：点击成功后只加一个青圈 + 环号（不整幅重画 imshow，
-    点起来不卡）。"""
+    """增量标记：点击成功后只加一个青圈 + 环号——**贴图**，不整幅重画。
+
+    用户 2026-10-01 报"校准功能卡死两次，都是在选点时"：原先这里调
+    `draw_idle`，而那等于**每次点一下都把整幅 2048² 图像重绘一遍**——探针
+    实测 610 ms/次（真窗口更慢），事件循环整个被占住，连点几下就像死机。
+    现在把背景那一帧贴回来、只画标记再上屏（几毫秒）。
+    没有缓存（面板刚建、后端不支持）就老实退回整幅画，行为不变。
+
+    **贴图时必须把所有已记录的标记重画一遍**（用户当天接着报"圆环会消失"）：
+    底图是"上一次**整幅**画"的那一帧，里面没有后来贴上去的标记——只画新点
+    的话，"贴回底图"这一步就把先前所有点擦掉了。名单见 calib_marker_artists
+    （整幅重画时重建，见 _draw_calib_image）。
+    """
     ax = window.calib_ax
-    ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)
-    ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
-                va="bottom", ha="left")
-    window.calib_canvas.draw_idle()
+    canvas = window.calib_canvas
+    arts = getattr(window, "calib_marker_artists", None)
+    if arts is None:
+        arts = window.calib_marker_artists = []
+    ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)[0]
+    txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
+                      va="bottom", ha="left")
+    arts += [ln, txt]
+    bg = getattr(window, "calib_bg", None)
+    if bg is None or not hasattr(canvas, "restore_region"):
+        canvas.draw_idle()          # 没缓存/不支持：整幅画（下一次 draw_event 会补拍）
+        return
+    canvas.restore_region(bg)
+    for art in arts:                # 全部标记（不只是新点）——底图里没有它们
+        ax.draw_artist(art)
+    canvas.blit(ax.figure.bbox)
 
 
 def _redraw_calib_if_open(window: QMainWindow) -> None:

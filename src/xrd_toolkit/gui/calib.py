@@ -938,9 +938,13 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
     if image is None or not _rings_look_suspicious(points, rings, center0_px):
         return rings, ""
 
-    def _fit(scale):
+    def _fit(scale, screen=True):
         cand = _rings_at_scale(points, geom, center0_px, scale)
         if not cand:
+            return None
+        if screen and _rings_look_suspicious(points, cand, center0_px):
+            # 便宜的先筛一遍（几步判环，~10 ms）：环号还是挤在一起的那套
+            # 不可能对，别花 200 ms 去拟合它（用户 2026-10-01："按优化来"）
             return None
         try:
             res = refine_lab6_from_points(
@@ -954,7 +958,8 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
         dev = _result_dev(res)
         return None if dev is None else (dev, scale, cand)
 
-    base = _fit(1.0)
+    # 基准（1.0）**不筛**：它就是"原判法"，得量出它的环位偏差当比较基准
+    base = _fit(1.0, screen=False)
     if base is None:
         return rings, ""      # 指标算不出来 = 没有判据：老实地不动
     best = base

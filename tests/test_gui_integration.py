@@ -9500,6 +9500,81 @@ class TestCalibration(unittest.TestCase):
         finally:
             w.close()
 
+    def test_picking_a_point_blits_instead_of_redrawing_everything(self):
+        """选点走**贴图**，不整幅重画（用户 2026-10-01："选点时卡死"）。
+
+        实测：整幅重绘一次 ~0.6 s（2048² 图的 LogNorm 上色 + 重采样，探针
+        实测 610 ms/次），原先每点一下都付这份钱、事件循环整个被占住——连点
+        几下就像死机。现在拍一帧当底图，选点只贴新加的圈和数字（10 ms）。
+        这条钉住路径：有底图 → blit、不 draw；没底图（面板刚建/后端不支持）
+        → 老实退回整幅画。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                for _ in range(10):
+                    QApplication.processEvents()
+            canvas = w.calib_canvas
+            self.assertIsNotNone(getattr(w, "calib_bg", None),
+                                 "整幅画完该把底图拍下来")
+            calls = {"blit": 0, "draw": 0}
+            with mock.patch.object(canvas, "blit",
+                                   side_effect=lambda *a, **k:
+                                   calls.__setitem__("blit",
+                                                     calls["blit"] + 1)), \
+                 mock.patch.object(canvas, "draw_idle",
+                                   side_effect=lambda *a, **k:
+                                   calls.__setitem__("draw",
+                                                     calls["draw"] + 1)):
+                self._click_rings(w, ((2, 0),))
+            self.assertEqual(calls["blit"], 1, "选点该走贴图（blit）")
+            self.assertEqual(calls["draw"], 0, "不许整幅重画")
+            # 没有底图时退回整幅画（面板刚建、后端不支持贴图）
+            w.calib_bg = None
+            with mock.patch.object(canvas, "draw_idle") as idle:
+                self._click_rings(w, ((4, 90),))
+            self.assertTrue(idle.called, "没有底图就老实整幅画")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_blitted_picks_redraw_every_marker(self):
+        """贴图重画时**所有**选点标记都要重画（用户 2026-10-01："圆环会消失"）。
+
+        底图是上一次**整幅画**的那一帧，里面没有后来贴上去的标记——只画新点
+        的话，"贴回底图"这一步会把先前的点全擦掉（贴图上线后实测：连点两个
+        点，第一个圈就没了）。所以每次贴图都要按 calib_marker_artists 把全部
+        标记重画一遍。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                for _ in range(10):
+                    QApplication.processEvents()
+            ax = w.calib_ax
+            seen = []
+            with mock.patch.object(ax, "draw_artist",
+                                   side_effect=lambda a: seen.append(a)):
+                self._click_rings(w, ((2, 0),))
+                first = len(seen)
+                self._click_rings(w, ((4, 90),))
+                second = len(seen) - first
+            self.assertEqual(first, 2, "第 1 个点：圈 + 环号两个 artist")
+            self.assertEqual(second, 4,
+                             f"第 2 个点要重画两个点的 4 个 artist（实际 {second}）")
+            self.assertEqual(len(w.calib_marker_artists), 4)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_pixel_confirmation_sits_above_the_action_sections(self):
         """像素尺寸确认住在页面**顶部**（操作组下面、自动/手动之前）。
 
