@@ -22,6 +22,9 @@
     未保存的图会弹窗询问（保存 / 不保存 / 取消）；
   - _collect_geometry：面板输入覆盖配置条目值；2θ 上下限（积分设置）
     经 geom 传进计算链路（引擎侧区间约束见 test_partial_ring.py）；
+  - 参数坞的"未应用"灰字（TestPendingEdits，用户 2026-09-30 的"丙"）：
+    改了要按一下才生效的控件 → 灰字亮，按了 → 灭；改动**按图记着**，
+    切走再切回来还在；自动开关填的展示值不算改动；
   - 绘图区 = MDI 子窗口（每图一窗）：自由缩放（拖过 = 记画布比例，
     主窗口缩放不牵动子窗口）、开新图不动旧图、[弹出]/[收回] 搬进
     搬出独立 OS 窗口；
@@ -3782,6 +3785,143 @@ class TestProcessingPageExits(unittest.TestCase):
                 path, config=w.config_name,
                 npt=int(w.params["输出点数"].value()),
                 tth_min=2.0, tth_max=7.0))
+        finally:
+            w.close()
+
+
+class TestPendingEdits(unittest.TestCase):
+    """「未应用」灰字 + 按图记住（用户 2026-09-30 定的"丙"方案）。
+
+    用户原话："参数页显示本图的参数，就是上方图片名称的本图参数。如果用户改了，
+    添加一个灰字未应用来区分，切图再切回来保持"。三条：
+      * 改了"要按一下才生效"的控件（2θ/点数、显示参数）→ 对应那个灰字亮，
+        按了 [重算这张图] / [应用显示设置] → 灭（它量的是"控件 vs 快照"的差）；
+      * 切图再切回来：你填的值**还在**（按图记在面板上），灰字照旧亮着——
+        改之前是回放直接把它冲掉、一声不响；
+      * 自动开关勾着时，它那对上下限是程序算完填进控件的展示值，不算改动
+        （不然"未应用"会永远亮着）。
+    """
+
+    def _two_panels(self, w):
+        """两张 1D 面板都算好，焦点停在第一张上（返回文件与两个面板键）。"""
+        files = _tmp_files(2)
+        add_checked(w, [str(p) for p in files])
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(lambda: all(
+                getattr(w.plot_docks.get("1D|" + str(f)), "last_tth", None)
+                is not None for f in files)), "两张 1D 图都该算好")
+        ka, kb = ("1D|" + str(f) for f in files)
+        gui_panel_state._set_focus(w, ka, "A")
+        QApplication.processEvents()
+        return files, ka, kb
+
+    def test_data_group_marks_and_clears(self):
+        """改 2θ → 灰字亮；[重算这张图] → 灭。"""
+        w = create_window()
+        try:
+            self._two_panels(w)
+            lbl = w.pending_labels["数据"]
+            self.assertTrue(lbl.isHidden(), "一开始没有改动 → 灰字不该亮")
+            w.params["2θ 上限 (°)"].setValue(7.0)
+            QApplication.processEvents()
+            self.assertFalse(lbl.isHidden(), "改了 2θ → 灰字该亮")
+            self.assertTrue(w.pending_labels["图像"].isHidden(),
+                            "图像组没改 → 它的灰字不该跟着亮")
+            w.proc_recalc_btn.click()
+            self.assertTrue(_wait_until(lambda: lbl.isHidden()),
+                            "按了 [重算这张图] → 灰字该灭")
+        finally:
+            w.close()
+
+    def test_edit_survives_a_focus_round_trip(self):
+        """切图再切回来：用户填的值还在，灰字也还在（用户原话"保持"）。"""
+        w = create_window()
+        try:
+            files, ka, kb = self._two_panels(w)
+            box = w.params["2θ 上限 (°)"]
+            box.setValue(7.0)
+            QApplication.processEvents()
+            gui_panel_state._set_focus(w, kb, "B")
+            QApplication.processEvents()
+            self.assertNotAlmostEqual(box.value(), 7.0,
+                                      msg="切到 B：框里该显示 B 的参数")
+            gui_panel_state._set_focus(w, ka, "A")
+            QApplication.processEvents()
+            self.assertAlmostEqual(box.value(), 7.0, places=6,
+                                   msg="切回 A：用户填的值该还在")
+            self.assertFalse(w.pending_labels["数据"].isHidden(),
+                             "灰字也该跟着回来")
+        finally:
+            w.close()
+
+    def test_auto_owned_values_are_not_pending(self):
+        """自动模式填进控件的展示值不算改动；取消自动 + 填值 → 亮，[应用] → 灭。"""
+        w = create_window()
+        try:
+            self._two_panels(w)
+            lbl = w.pending_labels["图像"]
+            self.assertTrue(lbl.isHidden(),
+                            "自动纵轴算出来的上下限不算用户改动")
+            w.params["纵轴自动"].setChecked(False)
+            QApplication.processEvents()
+            self.assertFalse(lbl.isHidden(), "取消自动 = 用户改动 → 该亮")
+            w.params["纵轴上限"].setValue(5000.0)
+            QApplication.processEvents()
+            self.assertFalse(lbl.isHidden())
+            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
+            self.assertTrue(lbl.isHidden(), "[应用显示设置] 之后该灭")
+        finally:
+            w.close()
+
+    def _plot_only(self, w, file, params):
+        """只勾这一个文件、设参数、出图并等完成（TestParamSnapshot._plot_fake 的简版）。"""
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            for i in range(w.file_list.count()):
+                item = w.file_list.item(i)
+                item.setCheckState(Qt.Checked
+                                   if item.data(Qt.UserRole) == file
+                                   else Qt.Unchecked)
+            for name, value in params.items():
+                w.params[name].setValue(value)
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: getattr(w.plot_docks.get("1D|" + file), "last_tth",
+                                None) is not None))
+        return f"1D|{file}"
+
+    def test_values_used_to_plot_a_new_panel_are_not_pending(self):
+        """"填数 → 出图"不算"上一张图的未应用改动"。
+
+        用户填 2θ 出一个新范围的新图——那是**指令**，已经被用掉了；不区分的话
+        切回原来那张图会凭空冒出一个"未应用"（TestParamSnapshot 那两条就是这么
+        挂的：点回 A 该看到 A 自己的值，不是刚填给 B 的值）。
+        """
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            ka = self._plot_only(w, "data/fake_a.tif", {"2θ 下限 (°)": 1.5})
+            self._plot_only(w, "data/fake_b.tif", {"2θ 下限 (°)": 2.5})
+            gui_panel_state._set_focus(w, ka, "A")
+            QApplication.processEvents()
+            self.assertEqual(w.params["2θ 下限 (°)"].value(), 1.5,
+                             "切回 A 该看到 A 自己的值，不是刚填给新图的值")
+            self.assertTrue(w.pending_labels["数据"].isHidden(),
+                            "刚填的值已经用掉了，不算 A 的未应用改动")
+        finally:
+            w.close()
+
+    def test_without_an_edit_target_nothing_breaks(self):
+        """没有编辑对象时改控件：不崩、也不亮（没有"本图"可言）。"""
+        w = create_window()
+        try:
+            self.assertIsNone(w.focus_panel)
+            w.params["2θ 上限 (°)"].setValue(7.0)
+            QApplication.processEvents()
+            self.assertTrue(w.pending_labels["数据"].isHidden())
         finally:
             w.close()
 

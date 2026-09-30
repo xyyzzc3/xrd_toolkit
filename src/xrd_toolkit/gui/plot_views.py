@@ -48,7 +48,8 @@ from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
-    _data_snapshot, _display_snapshot, _log, _panel_param, _param_box_set,
+    _data_snapshot, _display_snapshot, _log, _note_params_consumed,
+    _panel_param, _param_box_set, _refresh_pending_labels,
     _set_focus)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panels import _settle
@@ -130,6 +131,11 @@ def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
     dock = window.plot_docks.get(key)
     if dock is not None:
         dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
+        # 数据参数刚被写成控件当前值（[_plot_view] 出图/重算也走这里）→
+        # 那张图的「未应用」灰字该灭了，而且这组值已经**被用掉**（不再算
+        # 谁的待办改动——见 panel_state._capture_pending）
+        _note_params_consumed(window, "数据")
+        _refresh_pending_labels(window)
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     runner(window, path, key, geom, npt)
@@ -268,11 +274,14 @@ def _apply_params(window: QMainWindow) -> None:
     _log(window, f"[应用] 重算编辑对象：{dock.windowTitle()}")
     if view == "对比":
         _run_compare(window, key)   # 一组文件全部重算
-        return
-    if view == "热图":
+    elif view == "热图":
         _run_heatmap(window, key, force=True)   # 数据参数变了：全部重积分
-        return
-    _run_view(window, view, dock.panel_file, key)
+    else:
+        _run_view(window, view, dock.panel_file, key)
+    # 上面这些都会把控件当前值写进那张图的快照 → 数据组的「未应用」灰字
+    # 该灭了（它量的是"控件 vs 快照"的差，见 panel_state._refresh_pending_labels）
+    _note_params_consumed(window, "数据")
+    _refresh_pending_labels(window)
 
 
 def _apply_image_params(window: QMainWindow) -> None:
@@ -299,6 +308,10 @@ def _apply_image_params(window: QMainWindow) -> None:
         window.focus_label.setText("编辑对象：未选中图面板")
         return
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+    # 快照刚被写成控件当前值 → 图像组的「未应用」灰字该灭了（与 _apply_params
+    # 同一个口径：灰字量的是"控件 vs 快照"的差）；这组值也算被用掉了
+    _note_params_consumed(window, "图像")
+    _refresh_pending_labels(window)
     view = key.split("|", 1)[0]
     if view == "剖面":
         # 角度变了要先重算（读图 + 线剖面，后台线程），其余都是"用已有
@@ -443,6 +456,8 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
         else:
             _on_integration_error(window, path, key, msg)
 
+    # 派活了：坞顶那组数据参数**被用掉**（见 _consume_data_params）
+    _consume_data_params(window)
     _spawn_task(window, key, worker,
                 (str(path), geom, npt, window.config_name), done, error)
 
@@ -784,6 +799,20 @@ def _curve_source(window, path, kw: dict):
     return None, None, "还没有 1D 结果（先点 [1D] 出图）"
 
 
+def _consume_data_params(window: QMainWindow) -> None:
+    """坞顶那组数据参数（2θ 上下限 / 输出点数）刚被**用掉**。
+
+    调用点 = 真正拿这把范围去取数/积分的地方：派积分任务（_spawn）、
+    对比 / 热图取数（_curve_for）、[采用这份结果]、[批量处理]（后两个即使
+    命中缓存没真积分，也算"按这把范围取过数"）。
+
+    为什么要标：用户填 2θ=2.5 出一张新图 / 打一批产物，那 2.5 是**指令**、
+    已经被用掉了——不标的话，切回上一张图会凭空冒出一个"未应用"
+    （见 panel_state._capture_pending 与 _note_params_consumed）。
+    """
+    _note_params_consumed(window, "数据")
+
+
 def _curve_for(window, path):
     """对比 / 热图取曲线：**产物优先**（扣背景产物 → 1D 产物），否则 None。
 
@@ -795,6 +824,7 @@ def _curve_for(window, path):
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    _consume_data_params(window)   # 按这把范围取数：这组值用掉了
     dock = window.plot_docks.get(window.focus_panel)
     if dock is not None:
         # 设置模板 = 当前编辑对象那份（背景三项 + 平滑 + 裁剪），锚点按**该
@@ -1087,6 +1117,7 @@ def _proc_keep_this(window: QMainWindow) -> None:
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    _consume_data_params(window)   # 按这把范围取数：这组值用掉了
     blank = getattr(window, "bg_blank", None)
     blank_curve = ((blank["tth"], blank["intensity"])
                    if settings["mode"] == "blank" and blank is not None
@@ -1229,6 +1260,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    _consume_data_params(window)   # 按这把范围取数：这组值用掉了
     blank = getattr(window, "bg_blank", None)
     blank_curve = ((blank["tth"], blank["intensity"])
                    if settings["mode"] == "blank" and blank is not None
@@ -1375,6 +1407,10 @@ def _refresh_proc(window: QMainWindow) -> None:
         if snap.get("裁剪区间"):
             snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
         dock.params_snapshot = snap
+        # 这条通路也把显示参数控件值写进了快照（_display_snapshot 取控件值）
+        # → 图像组的值算是被用掉了（灰字随之灭）
+        _note_params_consumed(window, "图像")
+        _refresh_pending_labels(window)
     tick_path = _bg_path_of(dock) if dock is not None else None
     if tick_path is not None and not getattr(window, "_param_replaying", False):
         # 手调也算这个文件的配方（来处 = None = 本图手点）：处理页那行
@@ -1847,6 +1883,7 @@ def _pending_products(window: QMainWindow, name: str, rest: list) -> list:
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
+    _consume_data_params(window)   # 按这把范围取数：这组值用掉了
     todo = []
     for source in rest:                       # rest = 来源对象（已按原始数据过滤）
         path = Path(source.path)

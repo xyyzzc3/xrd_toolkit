@@ -242,11 +242,193 @@ def _panel_param(window: QMainWindow, dock, name: str,
     w = window.params.get(name)
     if w is None:
         return default
+    return _widget_value(w)
+
+
+def _widget_value(w):
+    """控件的值 → 快照里的表示（勾选框 bool / 下拉框 data / 其余 value()）。"""
     if isinstance(w, QCheckBox):
         return w.isChecked()
     if isinstance(w, QComboBox):
         return w.currentData()
     return w.value()
+
+
+def _set_widget_value(w, value) -> None:
+    """快照里的表示写回控件（_widget_value 的逆；回放与"未应用"回填共用）。
+
+    下拉框找不到这一项（data 不在列表里）就保持原样——与回放同一条口径。
+    """
+    if isinstance(w, QCheckBox):
+        w.setChecked(bool(value))
+    elif isinstance(w, QComboBox):
+        idx = w.findData(value)
+        if idx >= 0:
+            w.setCurrentIndex(idx)
+    else:
+        w.setValue(value)
+
+
+# ── 「未应用」：改了要按一下才生效的控件（用户 2026-09-30 的"丙"方案） ──
+# 用户原话："参数页显示本图的参数，就是上方图片名称的本图参数。如果用户改了，
+# 添加一个灰字未应用来区分，切图再切回来保持"。三件事：
+#   ① 灰字：当前编辑对象有"改了还没生效"的改动时，坞顶那两个灰字亮着；
+#   ② 记住：改动**按图**记（`dock.pending_params`），切走再切回来原样还在
+#      （改之前的行为是：切图时回放直接把用户填的值冲掉，什么提示都没有）；
+#   ③ 生效即清：快照一旦追上控件（[重算这张图] / 图像 [应用] 都会写快照），
+#      差集自然为空、灰字自己灭——不需要谁专门去"清 pending"。
+# 表里只放**要按一下才生效**的控件。即改即生效的不放：处理页那几项
+# （背景/平滑/裁剪/锚点）与热图色图/归一化/对数/自动范围（改完立刻按新值重画，
+# 见 app 里 _refresh_heat 的接线）——它们没有"未应用"这一态。
+_PENDING_GROUPS = {
+    "数据": ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"),
+    "图像": ("自动对比度", "对比度下限", "对比度上限", "剖面角度 (°)",
+             "对数纵轴", "纵轴自动", "纵轴下限", "纵轴上限",
+             "对比归一化", "归一化目标", "曲线配色", "对比堆叠",
+             "热图下限", "热图上限"),
+}
+
+
+def _pending_names() -> tuple:
+    """两组控件的名字并成一条（按表里的顺序）。"""
+    return tuple(name for names in _PENDING_GROUPS.values() for name in names)
+
+
+# "自动"开关勾着时，这几项是**程序算完填进控件**的灰色展示值，不是用户输入
+# （量它们会让"未应用"永远亮着）：自动对比度→对比度上下限、纵轴自动→纵轴
+# 上下限、热图自动范围→热图上下限。开关自己（owner）照常参与比较。
+_AUTO_OWNS = {
+    "自动对比度": ("对比度下限", "对比度上限"),
+    "纵轴自动": ("纵轴下限", "纵轴上限"),
+    "热图自动范围": ("热图下限", "热图上限"),
+}
+
+
+def _auto_owner(name: str):
+    """这个键归哪个"自动"开关管（不管就返回 None）。"""
+    for owner, owned in _AUTO_OWNS.items():
+        if name in owned:
+            return owner
+    return None
+
+
+def _group_of(name: str):
+    """这个键属于哪一组（数据 / 图像；不在名单里返回 None）。"""
+    for group, names in _PENDING_GROUPS.items():
+        if name in names:
+            return group
+    return None
+
+
+def _note_user_edit(window: QMainWindow, name: str) -> None:
+    """用户动了某个"要按一下才生效"的控件 → 这组的值又变回"没被用掉"。
+
+    配套 _note_params_consumed：两个标记一起决定"这次改动算不算未应用"
+    （见 _capture_pending 的说明——"填数 → 出图"必须不算）。
+    """
+    consumed = dict(getattr(window, "_pending_consumed", None) or {})
+    group = _group_of(name)
+    if group is not None:
+        consumed[group] = False
+    window._pending_consumed = consumed
+    _refresh_pending_labels(window)
+
+
+def _note_params_consumed(window: QMainWindow, group: str) -> None:
+    """这一组控件的当前值刚被**用掉**（算了/重算了一张图、应用了显示设置）。
+
+    用掉之后它们就不再是"未应用"：用户填 2.5 出一张新图，那是**指令**，
+    不是"上一张图的未生效改动"——不区分的话，切回上一张图时它会把刚填的值
+    当成那张图的待办冒出来（TestParamSnapshot 那两条就是这么挂的）。
+    """
+    consumed = dict(getattr(window, "_pending_consumed", None) or {})
+    consumed[group] = True
+    window._pending_consumed = consumed
+
+
+def _pending_diff(window: QMainWindow, dock) -> dict:
+    """当前控件值 vs 该面板**已生效**快照的差（只算上面那张表里的键）。
+
+    两个"程序自己填的值不算用户改动"的例外（探针实测踩到的，不排掉的话
+    "未应用"会永远亮着）：
+      * 自动模式勾着时，它的姊妹上下限是**程序算完填进控件**的展示值
+        （纵轴自动→纵轴上下限、热图自动范围→热图上下限、自动对比度→
+        对比度上下限），灰显只读，不是用户输入；
+      * 带空占位项的下拉（`currentData()` 是 None）与快照里的 ""（默认表
+        的写法）是同一个意思——直接比会永远不等。
+    快照里没有这个键（老快照）同样不算改动：宁可少报，也别误报。
+    """
+    snap = getattr(dock, "params_snapshot", None) or {}
+    out = {}
+    for name in _pending_names():
+        if name not in snap:
+            continue
+        w = window.params.get(name)
+        if w is None:
+            continue
+        owner = _auto_owner(name)
+        if owner is not None:
+            ow = window.params.get(owner)
+            if ow is not None and _widget_value(ow) is True:
+                continue
+        value = _widget_value(w)
+        same = (value == snap[name]) or (value is None and snap[name] == "")
+        if not same:
+            out[name] = value
+    return out
+
+
+def _refresh_pending_labels(window: QMainWindow) -> None:
+    """按"当前编辑对象有没有未应用的改动"开关那两个灰字（没控件就跳过）。"""
+    labels = getattr(window, "pending_labels", None)
+    if not labels:
+        return
+    dock = window.plot_docks.get(window.focus_panel)
+    diff = _pending_diff(window, dock) if dock is not None else {}
+    for group, label in labels.items():
+        label.setVisible(any(name in diff for name in _PENDING_GROUPS[group]))
+
+
+def _capture_pending(window: QMainWindow, key) -> None:
+    """切走之前：把"改了还没生效"的控件值记给**正要离开**的那张图。
+
+    用户 2026-09-30："切图再切回来保持"——不记的话回放会把它们冲掉。
+    记在面板对象上（不是全局）：面板关了它就跟着一块儿忘掉，与
+    "关闭即遗忘"的既有口径一致。
+
+    **刚被用掉的那组不记**（`_pending_consumed`）：用户填 2θ=2.5 按 [出图]
+    出一张新图，2.5 是**指令**、不是"上一张图的未生效改动"——记下来的话，
+    切回上一张图会凭空冒出一个"未应用"（TestParamSnapshot 两条实测）。
+    """
+    dock = window.plot_docks.get(key) if key else None
+    if dock is None:
+        return
+    consumed = getattr(window, "_pending_consumed", None) or {}
+    dock.pending_params = {
+        name: value
+        for name, value in _pending_diff(window, dock).items()
+        if not consumed.get(_group_of(name))
+    } or None
+
+
+def _overlay_pending(window: QMainWindow, dock) -> None:
+    """切进来之后：把该面板自己的未应用改动铺回控件（在快照回放**之后**调）。
+
+    挂 _param_replaying 旗标：写控件会触发那些"改了即重画"的信号，
+    不挡的话这一铺会被当成用户改动。
+    """
+    pend = getattr(dock, "pending_params", None)
+    if not pend:
+        return
+    prev = getattr(window, "_param_replaying", False)
+    window._param_replaying = True
+    try:
+        for name, value in pend.items():
+            w = window.params.get(name)
+            if w is not None:
+                _set_widget_value(w, value)
+    finally:
+        window._param_replaying = prev
 
 
 def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
@@ -298,14 +480,7 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
         w = window.params.get(name)
         if w is None:
             continue
-        if isinstance(w, QCheckBox):
-            w.setChecked(value)
-        elif isinstance(w, QComboBox):
-            idx = w.findData(value)
-            if idx >= 0:
-                w.setCurrentIndex(idx)   # data 不在列表里就保持原样（下方兜底）
-        else:
-            w.setValue(value)
+        _set_widget_value(w, value)   # data 不在下拉列表里就保持原样（下方兜底）
     # 视图 2θ 范围跟随积分范围时：输入框显示"正在用的视图" =
     # 该面板快照里的积分范围（无快照值退回控件当前值，防御后路）
     for name, fallback in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
@@ -381,16 +556,23 @@ def _set_focus(window: QMainWindow, key: str, title: str) -> None:
 
     切过去的同时回放该面板的参数快照——点哪张图，旁边就显示哪张
     图的参数。重复点同一面板直接返回：不冲掉用户正在改的值。
+
+    "未应用"的两步也在这里（用户 2026-09-30）：走之前把没生效的改动**记给
+    离开的那张图**，进来之后再把它**铺回控件**——所以切走切回来，你填的值
+    还在（改之前是回放直接冲掉、一声不响）。
     """
     if window.focus_panel == key:
         return
     prev = window.focus_panel
+    _capture_pending(window, prev)
     window.focus_panel = key
     window.focus_label.setText(f"编辑对象：{title}")
     dock = window.plot_docks.get(key)
     snap = getattr(dock, "params_snapshot", None)
     if snap is not None:
         _load_params_snapshot(window, snap)
+    _overlay_pending(window, dock)      # 这张图自己的未应用改动：切回来要还在
+    _refresh_pending_labels(window)
     # 焦点变了通知外面（面板壳用它把"活动"标题栏挪到新面板；回调挂在
     # window 上，本模块是最底层、不 import 兄弟模块——同 _bg_rows_sync）
     hook = getattr(window, "_on_focus_changed", None)

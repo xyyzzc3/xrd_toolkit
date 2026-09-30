@@ -100,7 +100,8 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
-    _param_box_set, _proc_settings, _reload_config_combo, _set_focus)
+    _note_user_edit, _param_box_set, _pending_names, _proc_settings,
+    _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_heat)
@@ -561,6 +562,26 @@ def _on_choose_blank(window: QMainWindow) -> None:
     _log(window, f"开始积分空扫图：{Path(path_str).name}")
 
 
+def _connect_pending_hooks(window: QMainWindow) -> None:
+    """给"要按一下才生效"的控件挂上「未应用」灰字的刷新（用户 2026-09-30）。
+
+    只管刷灰字这一件事：改动**按图**记住、切图时回填，都是 panel_state 那套
+    （_capture_pending / _overlay_pending）在 _set_focus 里做的。名单见
+    panel_state._PENDING_GROUPS——即改即生效的控件不在里面。
+    """
+    for name in _pending_names():
+        w = window.params.get(name)
+        if w is None:
+            continue
+        hook = lambda *_, win=window, n=name: _note_user_edit(win, n)   # noqa: E731
+        if isinstance(w, QCheckBox):
+            w.toggled.connect(hook)
+        elif isinstance(w, QComboBox):
+            w.currentIndexChanged.connect(hook)
+        else:
+            w.valueChanged.connect(hook)
+
+
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
     """参数坞：顶部两行固定件（"编辑对象"名 / "几何配置"条目）+ 五个
     入口页（校准 / 1D / 处理 / 对比 / 绘图），翻页由工具栏那五个入口
@@ -695,6 +716,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["输出点数"] = npt
     dlay.addWidget(QLabel("点"))
     dlay.addWidget(npt, 1)
+    # 「未应用」灰字（用户 2026-09-30 的"丙"）：你改了这两项但还没按
+    # [重算这张图] 时亮着——"图上还是按旧范围算的"一眼可见。切图/记住由
+    # panel_state 那一套管（_PENDING_GROUPS 的"数据"组）
+    lbl_data_pending = QLabel("未应用")
+    lbl_data_pending.setStyleSheet("color: gray;")
+    lbl_data_pending.setToolTip("改的 2θ 范围 / 点数还没生效（图上仍是按旧"
+                                "范围算的）——按 1D 页或处理页的 [重算这张图]")
+    lbl_data_pending.setVisible(False)
+    dlay.addWidget(lbl_data_pending)
     lay.addWidget(data_row)               # 固定第三行，不随页面滚动
     window.data_row = data_row
 
@@ -1543,7 +1573,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     plot_row.addWidget(btn_export_img, 1)
     plot_row.addWidget(btn_clear_cache, 1)
     btns_draw.addLayout(plot_row)
+    # 「未应用」灰字（同坞顶数据行那个）：显示参数改了还没按 [应用显示设置]
+    # 时亮着。两组灰字在这里一起交给 panel_state 管（_PENDING_GROUPS）
+    lbl_img_pending = QLabel("未应用（显示设置）")
+    lbl_img_pending.setStyleSheet("color: gray;")
+    lbl_img_pending.setToolTip("改的显示参数还没生效——按右边的 [应用显示设置]")
+    lbl_img_pending.setVisible(False)
+    btns_draw.addWidget(lbl_img_pending)
     btns_draw.addLayout(btn_col2)   # [恢复默认][应用]（显示参数）
+    window.pending_labels = {"数据": lbl_data_pending, "图像": lbl_img_pending}
+    _connect_pending_hooks(window)
 
     # 拖动坞边框的尺寸下限（上下左右都设）：左右 = 最宽一张表单的
     # 最小宽度 + "壳"（滚动条 + 分组/表单边距，另加少量余量），拖
