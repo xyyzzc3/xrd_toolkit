@@ -423,11 +423,13 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
 
     布局（自上而下）：
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
+              + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
+              看得见；2026-10-01 从数据表里搬回来）
       自动    定位环心并精修 / 在当前配置上再精修
-      手动    选点计数 + 撤销/清空 + 用选点精修
+      手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 改环号）
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
-              一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对「当前配置」）
+              一行 + 8 行数值 + 2 行 Δ（相对「当前配置」）
               + 结论行 + ⚠ 说明
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
 
@@ -497,6 +499,21 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     ops.addLayout(row2)
     lay.addWidget(ops_box)
 
+    # 像素尺寸确认：单独一行，钉在「操作」组下面（页面顶部区域）。
+    # 它是校准的**前置门禁**（没确认不让跑，见 _initial_ready），必须在
+    # 自动/手动按钮之前看得见。位置来回搬过三趟：原挤在「操作」按钮堆里
+    # （用户 2026-09-26 报"容易被忽视"，因为卡在参数坞可见区最下沿）→ 搬进
+    # 数据表上方 → 2026-09-30 数据表挪到页面最下，它又跟着沉下去了
+    # （用户 2026-10-01："把像素尺寸放上面，太下面了不方便"）→ 现在单独一行。
+    chk_pix = QCheckBox("像素尺寸已确认")
+    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
+                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
+                       "是错的。只在像素值变了时才要求重新确认。")
+    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
+                                        _calib_sync(window)))
+    lay.addWidget(chk_pix)
+    window.calib_pixel_chk = chk_pix
+
     key_edit = QLineEdit()
     key_edit.setPlaceholderText("条目 key，如 lmfp2_lab6")
     key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
@@ -537,23 +554,13 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
         window.calib_slot_combo[slot] = combo
     tb.addLayout(head)
 
-    # 当前配置一行 + 像素尺寸确认：紧挨着三个槽下拉框放（表格上方）——
-    # 这两件事是"往下看对比表之前必须先看见的"：用的是哪份几何、它的
-    # 像素这个尺度锚点确认没有。像素确认原先挤在「操作」组的按钮堆里，
-    # 实测正好卡在参数坞可见区最下沿（窗口 1000 高、勾选框在 y≈794），
-    # 用户 2026-09-26 报"像素尺寸的位置容易被忽视"
+    # 当前配置一行：紧挨着三个槽下拉框放——"往下看对比表之前必须先看见的"
+    # 那件事：当前用的到底是哪一份几何。（像素尺寸确认曾经也住这儿，2026-10-01
+    # 单独搬回页面顶部了，见上面。）
     cur_lbl = QLabel("当前配置：—")
     cur_lbl.setWordWrap(True)
     tb.addWidget(cur_lbl)
     window.calib_current_lbl = cur_lbl
-    chk_pix = QCheckBox("像素尺寸已确认")
-    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
-                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
-                       "是错的。只在像素值变了时才要求重新确认。")
-    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
-                                        _calib_sync(window)))
-    tb.addWidget(chk_pix)
-    window.calib_pixel_chk = chk_pix
 
     grid = QGridLayout()
     grid.setHorizontalSpacing(6)

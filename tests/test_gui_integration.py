@@ -9500,6 +9500,32 @@ class TestCalibration(unittest.TestCase):
         finally:
             w.close()
 
+    def test_pixel_confirmation_sits_above_the_action_sections(self):
+        """像素尺寸确认住在页面**顶部**（操作组下面、自动/手动之前）。
+
+        它是校准的前置门禁（没确认不让跑），搬过三趟：挤在「操作」按钮堆里
+        被忽视（2026-09-26）→ 数据表上方 → 2026-09-30 数据表挪到最下之后它
+        跟着沉底（用户 2026-10-01："把像素尺寸放上面，太下面了不方便"）。
+        这条钉住位置，别再沉下去。
+        """
+        w = create_window()
+        try:
+            page = w.calib_scroll.widget()
+            layout = page.layout()
+            names = []
+            for i in range(layout.count()):
+                wid = layout.itemAt(i).widget()
+                if wid is w.calib_pixel_chk:
+                    names.append("像素确认")
+                elif isinstance(wid, QGroupBox):
+                    names.append(wid.title())
+            self.assertIn("像素确认", names, "像素确认框该在页面布局里")
+            self.assertLess(names.index("像素确认"), names.index("自动"))
+            self.assertLess(names.index("像素确认"), names.index("手动"))
+            self.assertLess(names.index("像素确认"), names.index("数据"))
+        finally:
+            w.close()
+
     def test_right_click_edits_a_points_ring_index(self):
         """右键某个选点 → 改它的环号（用户 2026-09-30 定的后手）。
 
