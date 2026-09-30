@@ -254,17 +254,13 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
         stride = max(1, len(control_points) // 1000)
         pts = np.asarray(control_points)[::stride]
         ax.plot(pts[:, 0], pts[:, 1], ".", color=CP_COLOR, ms=2.5)
-    # 选点标记：整幅重画时重建，并把它们的 artist 记进 window.calib_marker_artists
-    # ——贴图路径要靠这份名单把**所有**标记重画（见 _add_calib_marker：
-    # 底图里没有标记，只贴新点会把之前的擦掉）
+    # 选点标记：整幅重画时按 state 重建，artist 记进 window.calib_marker_artists。
+    # 它们是**不可见**的（见 _new_marker_artists）：整幅画里不出现，底图才是
+    # 干净的；贴图（_refresh_calib_markers，由 draw_event 触发）时单独画上去
     window.calib_marker_artists = []
     if ring_marks:
         for x, y, ring in ring_marks:
-            ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9,
-                         mew=1.5)[0]
-            txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
-                              va="bottom", ha="left")
-            window.calib_marker_artists += [ln, txt]
+            window.calib_marker_artists += _new_marker_artists(ax, x, y, ring)
     span = ("环半径 %.0f~%.0f px" % (paths["r_min_px"], paths["r_max_px"])
             if np.isfinite(paths["r_min_px"]) else "环半径：无解")
     ax.set_xlabel("横向 (px)")
@@ -356,14 +352,68 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
         _log(window, f"{head}，{how}，{tail}")
 
 
+def _new_marker_artists(ax, x, y, ring: int) -> list:
+    """一个选点标记（青圈 + 环号）的 artist，**先设成不可见**。
+
+    不可见是为了把它们**排除在整幅重画之外**：整幅画一次要给 2048² 图重过
+    LogNorm（几百毫秒到十几秒），而标记只是几个圈——它们只在贴图时用
+    `draw_artist` 单独画（draw_artist 不看可见性，见 _refresh_calib_markers）。
+    这样底图永远是"干净的"（不含标记），撤销/清空只要贴回底图再画剩下的标记。
+    """
+    ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)[0]
+    txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
+                      va="bottom", ha="left")
+    for art in (ln, txt):
+        art.set_visible(False)
+    return [ln, txt]
+
+
+def _refresh_calib_markers(window: QMainWindow) -> None:
+    """把选点标记贴到画布上：贴回底图 + 画所有标记 + 上屏（几毫秒）。
+
+    没有底图（面板刚建、后端不支持贴图）就老实整幅画一次——draw_event 里
+    会补拍底图，之后又回到贴图这条路。
+    """
+    ax = window.calib_ax
+    canvas = window.calib_canvas
+    arts = getattr(window, "calib_marker_artists", None) or []
+    bg = getattr(window, "calib_bg", None)
+    if bg is None or not hasattr(canvas, "restore_region") \
+            or not hasattr(canvas, "blit"):
+        canvas.draw_idle()
+        return
+    canvas.restore_region(bg)
+    for art in arts:
+        art.set_visible(True)       # draw_artist 不看可见性，但摆明了更省心
+        ax.draw_artist(art)
+        art.set_visible(False)
+    canvas.blit(ax.figure.bbox)
+
+
+def _rebuild_calib_markers(window: QMainWindow) -> None:
+    """按 state["points"] 重建全部标记并贴一次（撤销 / 清空 / 改环号后调）。"""
+    ax = getattr(window, "calib_ax", None)
+    if ax is None:
+        return
+    for art in getattr(window, "calib_marker_artists", None) or []:
+        try:
+            art.remove()
+        except Exception:                                  # noqa: BLE001
+            pass
+    window.calib_marker_artists = []
+    for x, y, ring in _calib_state(window)["points"]:
+        window.calib_marker_artists += _new_marker_artists(ax, x, y, ring)
+    _refresh_calib_markers(window)
+
+
 def _cache_calib_bg(window: QMainWindow, _event=None) -> None:
-    """整幅画完 → 把画布那一帧拍下来（给 _add_calib_marker 贴图用）。
+    """整幅画完：拍一张底图（干净的，不含标记）+ 把标记贴回去。
 
     与 plot_panels 的 `_blit_take` 同一个道理：整幅重绘一次要 ~0.6 s
-    （2048² 图像的 LogNorm 上色 + 重采样，探针实测，2026-10-01），而选点
-    只多一个圈 + 一个数字。挂在 draw_event 上——**任何一次整幅重绘之后
-    都会重拍**，所以这份背景永不过期（增量画的圈不在里面，所以撤销/改
-    环号那种"要把旧标记擦掉"的动作仍然走整幅重画，见 _redraw_calib）。
+    （2048² 图像的 LogNorm 上色 + 重采样，探针实测，2026-10-01），而选点、
+    撤销、清空、改环号都只需要动那几个圈。挂在 draw_event 上——**任何一次
+    整幅重绘之后都会重拍**（换几何、改视野都在其中），所以底图永不过期；
+    窗口一缩放也会重画 → 重拍。
     """
     canvas = getattr(window, "calib_canvas", None)
     ax = getattr(window, "calib_ax", None)
@@ -373,39 +423,23 @@ def _cache_calib_bg(window: QMainWindow, _event=None) -> None:
         window.calib_bg = canvas.copy_from_bbox(ax.figure.bbox)
     except Exception:                                  # noqa: BLE001
         window.calib_bg = None      # 后端不支持贴图：退回整幅重画
+        return
+    _refresh_calib_markers(window)  # 整幅画里没有标记（不可见），这里贴上去
 
 
 def _add_calib_marker(window: QMainWindow, x, y, ring: int) -> None:
-    """增量标记：点击成功后只加一个青圈 + 环号——**贴图**，不整幅重画。
+    """点击成功后加一个青圈 + 环号——**贴图**（几毫秒），不整幅重画。
 
-    用户 2026-10-01 报"校准功能卡死两次，都是在选点时"：原先这里调
-    `draw_idle`，而那等于**每次点一下都把整幅 2048² 图像重绘一遍**——探针
-    实测 610 ms/次（真窗口更慢），事件循环整个被占住，连点几下就像死机。
-    现在把背景那一帧贴回来、只画标记再上屏（几毫秒）。
-    没有缓存（面板刚建、后端不支持）就老实退回整幅画，行为不变。
-
-    **贴图时必须把所有已记录的标记重画一遍**（用户当天接着报"圆环会消失"）：
-    底图是"上一次**整幅**画"的那一帧，里面没有后来贴上去的标记——只画新点
-    的话，"贴回底图"这一步就把先前所有点擦掉了。名单见 calib_marker_artists
-    （整幅重画时重建，见 _draw_calib_image）。
+    用户 2026-10-01："校准功能卡死两次，都是在选点时"：原先这里调
+    `draw_idle`，等于每点一下都把整幅 2048² 图像重绘一遍（探针实测 610 ms
+    每次，真窗口更慢），事件循环整个被占住。现在只贴标记（见
+    _refresh_calib_markers）。
     """
-    ax = window.calib_ax
-    canvas = window.calib_canvas
     arts = getattr(window, "calib_marker_artists", None)
     if arts is None:
         arts = window.calib_marker_artists = []
-    ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)[0]
-    txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
-                      va="bottom", ha="left")
-    arts += [ln, txt]
-    bg = getattr(window, "calib_bg", None)
-    if bg is None or not hasattr(canvas, "restore_region"):
-        canvas.draw_idle()          # 没缓存/不支持：整幅画（下一次 draw_event 会补拍）
-        return
-    canvas.restore_region(bg)
-    for art in arts:                # 全部标记（不只是新点）——底图里没有它们
-        ax.draw_artist(art)
-    canvas.blit(ax.figure.bbox)
+    arts += _new_marker_artists(window.calib_ax, x, y, ring)
+    _refresh_calib_markers(window)
 
 
 def _redraw_calib_if_open(window: QMainWindow) -> None:
@@ -518,7 +552,7 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     if getattr(event, "button", None) == MouseButton.RIGHT:
         # 后手：自动判环没救回来时，右键某个点直接改它的环号（用户 2026-09-30）
         if _edit_ring_of_nearest(window, float(event.xdata), float(event.ydata)):
-            _redraw_calib(window)
+            _rebuild_calib_markers(window)      # 只重画标记（不整幅重画）
         return
     g = _calib_draw_geometry(window)
     ring = snap_lab6_ring(
@@ -541,7 +575,12 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
 
 
 def _undo_calib_point(window: QMainWindow) -> None:
-    """撤销最后一个选点：整幅重画（去掉该点标记）。"""
+    """撤销最后一个选点：**只重建标记**（不整幅重画）。
+
+    用户 2026-10-01："手动选点的撤销和全清都卡了，就是变深色然后卡住"——
+    原先这两个动作都走 `_redraw_calib`（整幅重画：2048² 图再过一遍 LogNorm
+    上色，几百毫秒到十几秒），而其实只需要动那几个青圈。
+    """
     from xrd_toolkit.gui.calib import (_calib_sync, _ensure_current, _refresh_current_metrics,
         _reset_calib_form)   # 破循环：见模块说明
     state = _calib_state(window)
@@ -549,12 +588,12 @@ def _undo_calib_point(window: QMainWindow) -> None:
         return
     state["points"].pop()
     _log(window, f"已撤销最后一个点（剩 {len(state['points'])} 个）")
-    _redraw_calib(window)
+    _rebuild_calib_markers(window)
     _calib_sync(window)
 
 
 def _clear_calib_points(window: QMainWindow) -> None:
-    """清空全部选点（重画 + 标签复位）。"""
+    """清空全部选点：**只重建标记**（不整幅重画，理由同 _undo_calib_point）。"""
     from xrd_toolkit.gui.calib import (_calib_sync, _ensure_current, _refresh_current_metrics,
         _reset_calib_form)   # 破循环：见模块说明
     state = _calib_state(window)
@@ -562,5 +601,5 @@ def _clear_calib_points(window: QMainWindow) -> None:
         return
     state["points"] = []
     _log(window, "已清空选点")
-    _redraw_calib(window)
+    _rebuild_calib_markers(window)
     _calib_sync(window)

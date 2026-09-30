@@ -116,6 +116,7 @@ from xrd_toolkit.gui.plot_views import (
     _plot_view, _refresh_proc, _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui import watchdog
 from xrd_toolkit.services import recipes as recipe_store
 # 自动基线窗口的**默认值**（0.2°，见 background 里的来历）：控件初始值、
 # 悬停提示都读它，免得"引擎默认 / 面板默认 / 恢复默认 / 控件初始值"四处
@@ -2210,6 +2211,11 @@ def create_window() -> QMainWindow:
     # 都没勾），之后每次勾选变化由 _sync_select_label 刷新。放在最后：
     # 按钮与那句说明都归参数坞，要等它建好
     _sync_select_label(window)
+
+    # 卡死现场记录（用户 2026-10-01 报"出图按钮卡死"、本地复现不出来）：
+    # 界面线程停摆超过阈值就把所有线程的栈写进 outputs/hang-*.txt。只记录、
+    # 不干预——现场越干净越好（见 watchdog 模块说明）
+    watchdog.start(window)
 
     window.log("主框架已就绪")
     return window

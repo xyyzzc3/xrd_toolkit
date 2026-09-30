@@ -11,6 +11,7 @@ create_window() 与事件循环分离，测试里只建窗口、不进 app.exec(
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,11 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 from xrd_toolkit.gui.app import create_window
+
+from xrd_toolkit.gui import watchdog as gui_watchdog
+
+# 看门狗的现场文件默认落在仓库 outputs/；测试改到临时目录（见 test_gui_integration 同款说明）
+gui_watchdog.OUT_DIR = Path(tempfile.mkdtemp(prefix="xrd_hang_cfg_"))
 
 # QApplication 是进程级单例：模块加载时建一次，所有测试共用
 _app = QApplication.instance() or QApplication([])

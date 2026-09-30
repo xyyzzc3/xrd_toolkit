@@ -111,6 +111,12 @@ from xrd_toolkit.gui import panel_state as gui_panel_state
 from xrd_toolkit.gui import plot_compare as gui_plot_compare
 from xrd_toolkit.gui import plot_panels as gui_plot_panels
 from xrd_toolkit.gui import plot_export as gui_plot_export
+from xrd_toolkit.gui import watchdog as gui_watchdog
+
+# 卡死看门狗的现场文件默认写进仓库的 outputs/（那是给人的）；测试里换到临时
+# 目录——否则跑一次全量就把 outputs/ 塞满 hang-*.txt，还会覆盖真实运行留下的
+# 现场（2026-10-01 踩到：用户卡死三次，现场全被测试套件挤掉了）
+gui_watchdog.OUT_DIR = Path(tempfile.mkdtemp(prefix="xrd_hang_suite_"))
 from xrd_toolkit.gui import config_ops as gui_config_ops
 from xrd_toolkit.gui import calib_panel as gui_calib_panel
 from xrd_toolkit.gui import calib_model as gui_calib_model
@@ -9571,6 +9577,42 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_undo_and_clear_do_not_redraw_the_whole_figure(self):
+        """撤销/清空只动标记，不整幅重画（用户 2026-10-01："撤销和全清都卡了"）。
+
+        原先两个动作都走 `_redraw_calib`（整幅 2048² 图再过一遍 LogNorm——
+        就是几分钟前刚修掉的"点一下卡一下"那个成本）。现在它们只重建标记
+        （贴图路径）：探针实测撤销 8 ms、清空 5 ms，标记数也对。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            self.assertEqual(len(w.calib_marker_artists), 6, "3 个点 × 2 artist")
+            with mock.patch.object(w.calib_canvas, "draw_idle") as idle, \
+                 mock.patch.object(w.calib_canvas, "blit") as blit:
+                gui_calib_panel._undo_calib_point(w)
+                QApplication.processEvents()
+                self.assertTrue(blit.called, "撤销该走贴图")
+                self.assertFalse(idle.called, "撤销不许整幅重画")
+            self.assertEqual(len(w.calib_marker_artists), 4)
+            self.assertEqual(len(w.calib_state["points"]), 2)
+            with mock.patch.object(w.calib_canvas, "draw_idle") as idle2, \
+                 mock.patch.object(w.calib_canvas, "blit") as blit2:
+                gui_calib_panel._clear_calib_points(w)
+                QApplication.processEvents()
+                self.assertTrue(blit2.called, "清空该走贴图")
+                self.assertFalse(idle2.called, "清空不许整幅重画")
+            self.assertEqual(w.calib_marker_artists, [])
+            self.assertEqual(w.calib_state["points"], [])
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_blitted_picks_redraw_every_marker(self):
         """贴图重画时**所有**选点标记都要重画（用户 2026-10-01："圆环会消失"）。
 
@@ -10120,6 +10162,65 @@ class TestSaveCalibConfig(unittest.TestCase):
                 None, [(1, 2), (3, 4), (5, 6)], [0, 1, 2], geom,
                 (1022.3, 1022.0))
         self.assertEqual(res["beam_center_rc"], (1022.0, 1022.3))
+
+
+class TestHangWatchdog(unittest.TestCase):
+    """卡死现场记录（用户 2026-10-01 报"出图按钮卡死"、本地复现不出来）。
+
+    猜不得：真卡住时栈里写着那一刻每个线程停在哪一行。这条用一个**故意
+    停摆**的界面线程验证——不处理事件 2 秒，看门狗该把现场写进文件。
+    """
+
+    def test_a_stalled_ui_thread_gets_its_stacks_written(self):
+        folder = Path(tempfile.mkdtemp(prefix="xrd_hang_"))
+        # 看门狗是 create_window() 挂上的：参数要在建窗口**之前**换好
+        with mock.patch.object(gui_watchdog, "STALL_SECONDS", 0.4), \
+             mock.patch.object(gui_watchdog, "POLL_SECONDS", 0.1), \
+             mock.patch.object(gui_watchdog, "OUT_DIR", folder):
+            w = create_window()
+            try:
+                QApplication.processEvents()
+                time.sleep(2.0)          # 不处理事件 = 界面线程停摆
+            finally:
+                w.close()
+            files = sorted(folder.glob("hang-*.txt"))
+            self.assertTrue(files, "停摆后该写出一个现场文件")
+            text = files[0].read_text(encoding="utf-8")
+            self.assertIn("停摆", text)
+            self.assertIn("Thread", text, "要带各线程的栈（faulthandler）")
+
+    def test_a_busy_ui_thread_writes_nothing(self):
+        """界面线程一直在转（正常情况）→ 不写现场、不打扰。"""
+        folder = Path(tempfile.mkdtemp(prefix="xrd_hang_ok_"))
+        with mock.patch.object(gui_watchdog, "STALL_SECONDS", 1.0), \
+             mock.patch.object(gui_watchdog, "POLL_SECONDS", 0.1), \
+             mock.patch.object(gui_watchdog, "OUT_DIR", folder):
+            w = create_window()
+            beat = w._hang_state
+            # 打拍子交给**后台线程**：主线程在整套测试的负载下偶尔会被调度拖住，
+            # 而"停摆"是相对墙钟的——靠主线程打拍子会偶发误判（这条用例抖过两次）
+            stop = threading.Event()
+
+            def tick():
+                while not stop.is_set():
+                    beat["beat"] += 1
+                    time.sleep(0.02)
+
+            t = threading.Thread(target=tick, daemon=True)
+            t.start()
+            try:
+                deadline = time.time() + 2.5      # 心跳一直在跳 = 界面活着
+                while time.time() < deadline:
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+            finally:
+                stop.set()
+                t.join(timeout=1.0)
+            try:
+                self.assertEqual(list(folder.glob("hang-*.txt")), [],
+                                 "界面活着就不该写现场")
+            finally:
+                w.close()
 
 
 class TestManualReindex(unittest.TestCase):
