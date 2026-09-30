@@ -9542,6 +9542,35 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_manual_button_explains_why_it_is_disabled(self):
+        """不够格时要**写出原因**（用户 2026-10-01："手选完了点击用选点精修无效"）。
+
+        那时按钮是灰的，点下去 Qt 直接丢掉、日志一个字都不写——而最可能的
+        原因正是判环挤在一起（几个点都判成同一个环号）。现在那一行会说明
+        "至少几个点/几个环"，并指出出路（右键改环号）；按钮 tooltip 也写。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (2, 90), (2, 180)))
+            self.assertFalse(w.calib_start_manual.isEnabled(),
+                             "3 个点全在同一个环上：不该让点")
+            txt = w.calib_points_label.text()
+            self.assertIn("至少", txt, "要写清门槛")
+            self.assertIn("右键", txt, "要把出路一起指出来")
+            self.assertIn("不同的环", w.calib_start_manual.toolTip())
+            # 覆盖到第 2 个环 → 松绑、说明恢复成一句话
+            self._click_rings(w, ((4, 45),))
+            self.assertTrue(w.calib_start_manual.isEnabled())
+            self.assertNotIn("至少", w.calib_points_label.text())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_blitted_picks_redraw_every_marker(self):
         """贴图重画时**所有**选点标记都要重画（用户 2026-10-01："圆环会消失"）。
 

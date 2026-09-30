@@ -647,6 +647,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     manual_hint.setWordWrap(True)
     ml.addWidget(manual_hint)
     points_label = QLabel("已选 0 个点 / 0 个环")
+    points_label.setWordWrap(True)      # 不够格时它会写一长句原因（见 _calib_sync）
     ml.addWidget(points_label)
     row = QHBoxLayout()
     btn_undo = QPushButton("撤销一点")
@@ -656,6 +657,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     ml.addLayout(row)
     btn_manual = QPushButton("用选点精修")
     btn_manual.setObjectName("start_manual_calib")
+    btn_manual.setToolTip(f"用你点的这些点反推几何。至少要 {MIN_POINTS} 个点、"
+                          f"覆盖 {MIN_RINGS} 个**不同的环**才让点（灰着时看上面那"
+                          f"行说明；都判成同一个环号了就用右键改）")
     ml.addWidget(btn_manual)
     lay.addWidget(manual_box)
     lay.addWidget(table_box)      # 数据表放最下（用户 2026-09-30 定）
@@ -700,9 +704,20 @@ def _calib_sync(window: QMainWindow) -> None:
     state = _calib_state(window)
     points = state["points"]
     n_rings = len({p[2] for p in points})
-    window.calib_points_label.setText(f"已选 {len(points)} 个点 / {n_rings} 个环")
-    window.calib_start_manual.setEnabled(
-        len(points) >= MIN_POINTS and n_rings >= MIN_RINGS)
+    enough = len(points) >= MIN_POINTS and n_rings >= MIN_RINGS
+    # 不够格时**把原因写出来**（用户 2026-10-01："手选完了点击用选点精修无效"）：
+    # 那时按钮是灰的，点下去 Qt 直接丢掉、一个字都不写——而最可能的原因正是
+    # 判环挤在一起（同一个环号好几个点），顺手把出路（右键改环号）也指出来
+    # 只有"环数不够"才多嘴解释（那才是让人看不懂的那种：点明明点了一堆，
+    # 按钮却灰着）。单纯点还不够多时保持简短——上方提示本来就写着"至少 3 个
+    # 点"，计数也在眼前。一个点都没点时更不必解释。
+    window.calib_points_label.setText(
+        f"已选 {len(points)} 个点 / {n_rings} 个环"
+        if (n_rings >= MIN_RINGS or not points) else
+        f"已选 {len(points)} 个点 / {n_rings} 个环——至少要 {MIN_POINTS} 个点、"
+        f"覆盖 {MIN_RINGS} 个不同的环才能精修（都判成同一个环号了？"
+        f"右键某个点可以改它的环号）")
+    window.calib_start_manual.setEnabled(enough)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
     window.calib_start_refined.setEnabled(state["current_geom"] is not None)
@@ -1034,10 +1049,12 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
 def _start_manual_calib(window: QMainWindow) -> None:
     """[用选点精修]：用户点后台精修（初值 = 当前配置；环心 = 分析条目束心）。"""
     state = _calib_state(window)
-    if len(state["points"]) < MIN_POINTS \
-            or len({p[2] for p in state["points"]}) < MIN_RINGS:
-        _log(window, f"手动校准至少需要 {MIN_POINTS} 个点、"
-                     f"覆盖 {MIN_RINGS} 个不同的环")
+    _pts = state["points"]
+    if len(_pts) < MIN_POINTS or len({p[2] for p in _pts}) < MIN_RINGS:
+        _log(window, f"手动校准至少需要 {MIN_POINTS} 个点、覆盖 {MIN_RINGS} 个"
+                     f"不同的环——现在是 {len(_pts)} 个点 / "
+                     f"{len({p[2] for p in _pts})} 个环；都挤在同一个环号上时，"
+                     f"右键某个点可以改它的环号")
         return
     if not _initial_ready(window):
         return   # 像素尺寸没确认：只提示，不建任务
