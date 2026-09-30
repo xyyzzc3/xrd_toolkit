@@ -218,9 +218,9 @@ def _edit_current(window: QMainWindow) -> None:
         ——手输几何的束心永远是接手时那一个（"从条目预填"也只搬 7 个数字、
         留下旧束心），而束心正是校准最常动的东西；
       * 确定之后这条几何**进累积结果列表**（`_add_custom_result`）：于是
-        A/B 两个下拉（选项 = 结果名）里能选到它、能钉进槽、能当对比基准，
-        切走再切回来也还在——改之前它只活在 current_geom 这个没有户口的
-        变量里。
+        A/B 两个下拉（选项 = 结果名）里能选到它、能钉进槽、能被采纳成
+        「当前配置」，切走再切回来也还在——改之前它只活在 current_geom
+        这个没有户口的变量里。
     """
     state = _calib_state(window)
     geom = dict(state["current_geom"] or {})
@@ -328,7 +328,7 @@ def _edit_current(window: QMainWindow) -> None:
                  f"{new_geom['dist_m'] * 1e3:.2f} mm、像素 {pixel * 1e6:.1f} µm"
                  f"、环心 {new_geom['beam_center_rc'][1]:.1f} 列 / "
                  f"{new_geom['beam_center_rc'][0]:.1f} 行"
-                 f"——已进结果列表（A / B 下拉与「对比基准」里都能选到它）")
+                 f"——已进结果列表（A / B 下拉里能选到它）")
     _refresh_current_metrics(window)
     _calib_sync(window)
     # 改完即重画：不然表里数字换了、图上的青线还是旧几何的（2026-09-26
@@ -425,8 +425,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
-              一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对"对比基准"）
-              + 基准下拉 + 结论行 + ⚠ 说明
+              一行 + 像素尺寸确认 + 8 行数值 + 2 行 Δ（相对「当前配置」）
+              + 结论行 + ⚠ 说明
       自动    定位环心并精修 / 在当前配置上再精修
       手动    选点计数 + 撤销/清空 + 用选点精修
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
@@ -580,21 +580,14 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
             row_idx += 1
     tb.addLayout(grid)
 
-    base_row = QHBoxLayout()
-    base_row.addWidget(QLabel("对比基准"))
-    combo_base = QComboBox()
-    for slot in ("current", "A", "B"):
-        combo_base.addItem(SLOT_LABELS[slot], slot)
-    combo_base.currentIndexChanged.connect(
-        lambda _i: _refresh_table(window))
-    base_row.addWidget(combo_base, 1)
-    tb.addLayout(base_row)
-
-    # 两句话把"谁和谁比"钉死（用户 2026-09-27："对比基准和结论表述不清，
-    # 不知道是谁在和谁比"；2026-09-28 第 2 条又说"结论不受基准影响"——
-    # 于是两者统一：**Δ 行与结论都看这个下拉框**，一屏只讲一对人）
-    delta_note = QLabel("Δ = 该列 − 基准列（基准那一列写「基准」）；"
-                        "下面结论也以基准那一列为参照，逐个候选报")
+    # 「对比基准」下拉框已删（用户 2026-09-30："直接把对比基准删了，直接出
+    # 结论当前配置和 a、b 对比分别怎么样，随着用户选择 ab 当前进行变化"）。
+    # 参照系固定 = 当前配置：Δ 行与结论都朝它比，A/B 槽换了内容结论就跟着变。
+    # 历史：2026-09-27 加它是因为"不知道谁在和谁比"；2026-09-28 让它同时管
+    # 结论与 Δ；现在干脆去掉这一层——一屏只讲"当前配置 vs A、vs B"这一件事，
+    # 比"选一个基准再看结论"少一步，也不会再出现"基准列写着 A、结论在讲 B"。
+    delta_note = QLabel("Δ = 该列 − 当前配置；结论同样以「当前配置」为参照，"
+                        "把 A、B 两个候选分别报出来")
     delta_note.setWordWrap(True)
     delta_note.setStyleSheet("color: gray;")
     tb.addWidget(delta_note)
@@ -609,7 +602,6 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.addWidget(intro)
     lay.addWidget(table_box)
     window.calib_verdict = verdict
-    window.calib_base_combo = combo_base
 
     # ── 自动 ───────────────────────────────────────────────
     auto_box = QGroupBox("自动")

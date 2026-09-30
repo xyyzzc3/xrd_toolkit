@@ -2501,6 +2501,48 @@ class TestOpenRowMarks(unittest.TestCase):
         finally:
             w.close()
 
+    def test_the_current_row_keeps_its_open_tint(self):
+        """当前行也要看得见"正在打开"的淡色（2026-09-30 修的尾巴）。
+
+        根因：原来那条样式表（`QTreeView::item:selected { background:
+        transparent }`）把条目**自己**的背景刷子也一起盖掉了——刚从别处点
+        过来的那一行只剩左侧小点、淡色没了，而它恰恰是最该被看见的一行。
+        现在绘制走 _RowPaintDelegate：交基类前摘掉"选中"状态位（Qt 的选中
+        深色不画），条目自己的刷子由代理先铺一遍。
+
+        这里**真的渲染一遍抓像素**：数据槽里的刷子查不出这种问题——出事
+        的正是"样式表/绘制路径"这一层（旧样式表在时，`_marked()` 照样为真）。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=False)
+            tree = w.file_list
+            first = tree.raw_group.child(0)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                gui_file_dock._open_entry_view(w, first, explicit=True)
+                self.assertTrue(_wait_until(
+                    lambda: "1D|" + str(files[0]) in w.plot_docks))
+            QApplication.processEvents()
+            w.show()
+            tree.setCurrentItem(first)          # 当前行 = 开着的那条
+            for _ in range(5):
+                QApplication.processEvents()
+            img = tree.viewport().grab().toImage()
+            rect = tree.visualItemRect(first)
+            y = rect.center().y()
+            colors = {img.pixelColor(x, y).name()
+                      for x in (rect.center().x(), rect.right() - 3)}
+            self.assertIn(gui_file_dock._OPEN_ROW_BG, colors,
+                          "当前行也要铺「正在打开」的淡色")
+        finally:
+            # 本用例 show() 过（要真渲染才能抓像素）→ 关窗会弹"未保存的图"
+            # 确认框；离屏下没人点，必须按脚本关（同 TestCloseFlow 的做法）
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_product_rows_get_marked_too(self):
         """产物条目（「处理后」）开着面板时同样有记号。"""
         w = create_window()
@@ -3599,6 +3641,39 @@ class TestProcessingPageExits(unittest.TestCase):
         finally:
             w.close()
 
+    def test_a_second_batch_click_while_re_integrating_is_refused(self):
+        """补算 1D 还没跑完时再点 [批量处理]：只记一句，不排第二拨。
+
+        两拨回调各自接着跑一遍处理 → 产物与台账都会翻倍（同一份结果记两次）。
+        所以宁可让用户等这一拨跑完再点（提示写明在重算）。
+        """
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["平滑曲线"].setChecked(True)
+            w.params["平滑窗口 (°)"].setValue(0.2)
+            w.params["2θ 下限 (°)"].setValue(2.0)
+            w.params["2θ 上限 (°)"].setValue(7.0)
+
+            def slow_fake(path_str, geom, npt):
+                time.sleep(0.3)          # 让第一次点击的补算"还在路上"
+                return TestProcessingPageExits._fake(path_str, geom, npt)
+
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=slow_fake):
+                w.proc_batch_btn.click()
+                QApplication.processEvents()
+                w.proc_batch_btn.click()      # 补算还没完：第二次点
+                QApplication.processEvents()
+                self.assertIn("还在按当前设置重算 1D",
+                              w.log_text.toPlainText())
+                self.assertTrue(_wait_until(
+                    lambda: "批量处理完成：1/1" in w.log_text.toPlainText()))
+            self.assertEqual(len(self._mine(path)), 1,
+                             "只该落一拨产物（第二次点不许排队）")
+        finally:
+            w.close()
+
     def test_recalc_button_re_integrates_with_the_current_range(self):
         """[按 2θ 重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
         w = create_window()
@@ -3616,26 +3691,52 @@ class TestProcessingPageExits(unittest.TestCase):
         finally:
             w.close()
 
-    def test_batch_never_processes_a_stale_range_curve(self):
-        """改了 2θ 再 [批量处理]：不许拿面板里旧范围那条曲线凑数（真 bug 回归）。
+    def test_batch_re_integrates_when_the_range_changed(self):
+        """改了 2θ 再 [批量处理]：按新范围补算 1D，再处理（用户 2026-09-30）。
 
-        旧版 `_curve_source` 只要面板开着就直接用它、**完全无视当前 2θ**：
-        产物按新范围的键写盘、数据却是旧范围的。现在对不上就跳过并说清原因。
+        两层历史：① 旧版 `_curve_source` 只要面板开着就直接用它、**完全无视
+        当前 2θ**——产物按新范围的键写盘、数据却是旧范围的（真 bug，2026-09-28
+        修）；② 修法是"对不上就逐条跳过并说清原因"，于是改了范围点 [批量处理]
+        只会得到一堆跳过（用户 2026-09-30 报的尾巴）。现在：缺的那批先在后台
+        按当前设置补算 1D，算完自动接着处理。
+
+        **底线不变**：这批的输入必须是"按当前设置算出来的那条曲线"（同一把
+        键，见 _curve_source）——所以下面既验"补算真的按 2–7° 算"（端点），
+        也验"面板里 1–8° 那条没被当成输入"。
         """
         w = create_window()
         try:
             path, dock = self._panel(w)
-            self._anchor_mode(w, dock, path)
+            w.params["平滑曲线"].setChecked(True)      # 一条不依赖锚点的链
+            w.params["平滑窗口 (°)"].setValue(0.2)
             w.params["2θ 下限 (°)"].setValue(2.0)
             w.params["2θ 上限 (°)"].setValue(7.0)
+            self.assertEqual(
+                float(np.asarray(dock.last_tth)[-1]), 8.0,
+                msg="前提：面板里那条是 1–8° 的旧范围曲线")
             w.proc_batch_btn.click()
             QApplication.processEvents()
+            self.assertTrue(
+                _wait_until(
+                    lambda: "批量处理完成：1/1" in w.log_text.toPlainText()),
+                "补算完该自动接着处理（不再逐条跳过）")
             log = w.log_text.toPlainText()
-            self.assertIn("批量处理完成：0/1", log)
-            self.assertIn("面板里那条是按 2θ 1–8° 算的", log)   # 面板那份的来源
-            self.assertIn("现在填的是 2θ 2–7°", log)
-            self.assertEqual(self._mine(path), [],
-                             "没有产物落进（尤其是别落到 2–7° 的键上）")
+            self.assertIn("还没算过 1D", log)          # 补算那步说明了原因
+            self.assertIn("1D 补算完成", log)
+            # 产物落的是**新范围**那条曲线（不是面板里 1–8° 那份）
+            batches = self._mine(path)
+            self.assertEqual(len(batches), 1, "该落一条台账")
+            key = batches[0]["items"][str(Path(path).resolve())]["key"]
+            got = stage_cache.load_by_key("bg", key)
+            self.assertIsNotNone(got, "产物真落盘")
+            tth = np.asarray(got[0], dtype=float)
+            self.assertAlmostEqual(float(tth[0]), 2.0, places=6)
+            self.assertAlmostEqual(float(tth[-1]), 7.0, places=6)
+            # 补算出来的 1D 也真落了盘（[对比]/[热图] 之后直接读它）
+            self.assertTrue(stage_cache.has_1d(
+                path, config=w.config_name,
+                npt=int(w.params["输出点数"].value()),
+                tth_min=2.0, tth_max=7.0))
         finally:
             w.close()
 
@@ -9153,6 +9254,28 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_the_baseline_dropdown_is_gone(self):
+        """参照系固定「当前配置」：页面上不再有「对比基准」下拉框。
+
+        用户 2026-09-30："直接把对比基准删了，直接出结论当前配置和 a、b
+        对比分别怎么样，随着用户选择 ab 当前进行变化"——删掉这一层，Δ 行
+        与结论就永远讲同一对人（当前配置 vs A、vs B），也不会再出现"基准
+        选着 A、结论在讲 B"。这条钉住"别长回来"。
+        """
+        w = create_window()
+        try:
+            self.assertFalse(hasattr(w, "calib_base_combo"),
+                             "「对比基准」下拉框应当已经删掉")
+            page = w.calib_scroll.widget()
+            labels = [x.text() for x in page.findChildren(QLabel)]
+            self.assertNotIn("对比基准", labels)
+            # 说明文字改讲"参照 = 当前配置"（Δ 行与结论同一对人）
+            notes = [t for t in labels if t.startswith("Δ = 该列")]
+            self.assertTrue(notes, "该有一句说明 Δ 与结论的参照系")
+            self.assertIn("当前配置", notes[0])
+        finally:
+            w.close()
+
     def test_delta_column_and_last_save_source(self):
         w = create_window()
         try:
@@ -9199,20 +9322,25 @@ class TestCalibration(unittest.TestCase):
                 self.assertEqual(d["dist"]["A"].text(), "+0.40")     # 手动−自动
                 self.assertEqual(d["dev"]["A"].text(), "+0.30")      # 0.50−0.20
                 self.assertEqual(d["dist"]["B"].text(), "+0.00")
-                # 基准默认 = 当前配置 → 结论讲"候选 vs 当前配置"
-                self.assertIn("比 当前配置 ", w.calib_verdict.text())
-                # 基准可选：切成 A 之后，B 的 Δ 变成 自动 − 手动
-                #
-                # 结论也跟着换参照（用户 2026-09-28 第 2 条："数据结论不受
-                # 对比基准的影响"——改之前参照写死是"当前配置"，切基准时
-                # 结论一个字都不变）。现在 Δ 行与结论看同一列：基准 = 手动1
-                # （dev 0.50），当前配置与 B 都是 自动1（dev 0.20）→ 都"比 A 好"
-                w.calib_base_combo.setCurrentIndex(
-                    w.calib_base_combo.findData("A"))
-                self.assertEqual(d["dist"]["B"].text(), "-0.40")
-                self.assertEqual(d["dist"]["A"].text(), "基准")
-                self.assertIn("比 A 好 0.30 px", w.calib_verdict.text())
-                self.assertNotIn("比 当前配置", w.calib_verdict.text())
+                # 参照系固定 = 当前配置，A、B 两个候选都报出来（用户
+                # 2026-09-30："直接把对比基准删了，直接出结论当前配置和
+                # a、b 对比分别怎么样，随着用户选择 ab 当前进行变化"）。
+                # 候选按**槽名**报（与表头 当前配置/A/B 对齐）：此时
+                # 当前配置 = 自动1（dev 0.20）、A = 手动1（dev 0.50）、
+                # B = 自动1（同一条结果，差 0.00）
+                self.assertIn("A 比 当前配置 差 0.30 px",
+                              w.calib_verdict.text())
+                self.assertIn("B 与 当前配置 差不多",
+                              w.calib_verdict.text())
+                # "随着用户选择 ab 变化"：把 A 槽换成另一条结果 → Δ 与结论
+                # 立刻跟着变（不再需要先挑"对比基准"）
+                combo_a = w.calib_slot_combo["A"]
+                combo_a.setCurrentIndex(combo_a.findData("自动1"))
+                QApplication.processEvents()
+                self.assertEqual(d["dist"]["A"].text(), "+0.00",
+                                 "A 换成了自动1：Δ 跟着变")
+                self.assertNotIn("手动1", w.calib_verdict.text(),
+                                 "结论里不该再提手动1（它已经不在 A/B 槽里）")
                 # 保存对象 = 当前配置（此时是被采纳的 自动1）
                 self.assertIn("自动1", w.calib_save_hint.text())
         finally:
@@ -9944,8 +10072,9 @@ class TestCalibModel(unittest.TestCase):
         """结论必须写清"谁和谁比"：每个候选 vs **当前配置**，数字都带名字。
 
         用户 2026-09-27："对比基准和结论表述不清，不知道是谁在和谁比"——
-        旧版结论那一对是从 A/B 里挑的（基准选 A 时"当前配置"被撇开），
-        同一屏里 Δ 行和结论讲的不是一对人。
+        中间有一版结论那一对是从 A/B 里挑的（基准选 A 时"当前配置"被撇开），
+        同一屏里 Δ 行和结论讲的不是一对人。2026-09-30 用户把基准下拉整个
+        删了：参照系固定「当前配置」，A、B 都报（见 _verdict 的说明）。
         """
         v = gui_calib_model._verdict(self._res(dev=0.52), "当前配置",
                                      [("A", self._res(dev=0.28))])
@@ -10243,11 +10372,11 @@ class TestCalibCurrent(unittest.TestCase):
         return w.calib_state
 
     def test_hand_entered_geometry_lands_in_the_result_list(self):
-        """手输几何要**进累积结果列表**：A/B 下拉、对比基准都能选到它。
+        """手输几何要**进累积结果列表**：A/B 下拉能选到它、能被采纳。
 
         用户 2026-09-28 第 1 条："校准自定义的几何配置不会计入原始值或者说
         不会存储在选框里"——改之前它只活在 state["current_geom"] 里（没有
-        户口）：切走就找不回来、放不进 A/B 槽、也不能当基准。
+        户口）：切走就找不回来、放不进 A/B 槽、也参与不了对比。
         """
         w = create_window()
         try:

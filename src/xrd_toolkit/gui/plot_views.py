@@ -1080,6 +1080,64 @@ def _proc_keep_this(window: QMainWindow) -> None:
     window.refresh_groups()       # 文件栏里立刻长出这一组
 
 
+def _proc_ensure_curves(window: QMainWindow, missing: list, kw: dict,
+                        geom: dict, npt: int, then) -> None:
+    """把"按当前设置还没算过 1D"的文件后台补算出来，算完调 then()。
+
+    为什么要有这一步（用户 2026-09-30 报的尾巴）：[批量处理] 的输入是"每个
+    文件按**当前设置**在缓存里的那条 1D 曲线"（见 _curve_source 为什么必须
+    同一把键）。改了坞顶的 2θ 范围直接点 [批量处理]，这些文件的曲线还是旧
+    范围的——旧版**逐条跳过**并写明原因（2026-09-28 定的口径，底线是不许拿
+    旧范围的曲线凑数，那条不变），但用户的期待很直白：改了范围，[批量处理]
+    就该按新范围出产物，而不是每次先手动跑一遍 1D。
+
+    所以这里补上：复用 [1D] 那条后台任务（同一个 _spawn，算完顺手
+    stage_cache.store_1d），进度条与失败原因都走已有通路；全部落地后接着
+    跑处理链（then）。补算出来的 1D 照常进文件栏「1D 产物」分组——它们
+    本来就是这一趟要用的曲线，不是临时垃圾。
+
+    同一时间只允许一拨：上一拨还在算时再点 [批量处理] 只记一句（否则
+    两拨回调会各自接着跑一遍处理，产物与台账都翻倍）。
+    """
+    if getattr(window, "_proc_prep", None) is not None:
+        _log(window, "上一批还在按当前设置重算 1D，等它跑完再点 [批量处理]")
+        return
+    lo, hi = kw.get("tth_min"), kw.get("tth_max")
+    span = (f"2θ {lo:g}–{hi:g}°" if lo is not None and hi is not None
+            else "当前设置")
+    state = {"left": len(missing), "total": len(missing), "failed": 0}
+    window._proc_prep = state
+    _log(window, f"这批里有 {len(missing)} 个文件按{span}还没算过 1D"
+                 "——先在后台补算，算完自动接着处理")
+    _progress_show(window, len(missing))
+
+    def one_finished() -> None:
+        state["left"] -= 1
+        _progress_show(window, state["total"], state["total"] - state["left"])
+        if state["left"] > 0:
+            return
+        window._proc_prep = None
+        _progress_hide(window)
+        window.refresh_groups()      # 刚补算的 1D 该进文件栏了
+        if state["failed"]:
+            _log(window, f"其中 {state['failed']} 个文件没算成（见上面的日志），"
+                         "它们会被跳过")
+        _log(window, f"1D 补算完成（{state['total']} 个），接着处理…")
+        then()
+
+    def on_done(window_, key_, task, result) -> None:
+        one_finished()
+
+    def on_error(msg) -> None:
+        state["failed"] += 1
+        _log(window, f"1D 补算失败：{msg}")
+        one_finished()
+
+    for source in missing:
+        _spawn(window, Path(source.path), geom, npt,
+               "1D|" + str(source.path), on_done=on_done, on_error=on_error)
+
+
 def _proc_batch_apply(window: QMainWindow) -> None:
     """[批量处理]：把「处理」页当前这套链用到勾选文件，各生成一份处理产物。
 
@@ -1095,6 +1153,10 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     处理完存进分阶段产物：对比 / 热图 / 导出下次直接读它，跨会话秒开。
     每个目标面板的参数快照也写成同一套设置——这样"面板上看到的曲线"与
     "对比里用的曲线"是同一条（否则两处数字对不上，最容易让人怀疑自己）。
+
+    改了坞顶 2θ 范围后直接点这里（2026-09-30 起）：这批文件按当前设置还没
+    算过 1D 的，**先在后台补算再处理**（见 _proc_ensure_curves）——不再"逐条
+    跳过"。补算出来的 1D 照常进文件栏「1D 产物」。
 
     可处理的条目 = **原始数据** + **1D 产物**（它就是那条原始积分曲线，只是
     钉在某一份缓存上，见 _open_product_panel 的说明）+ **处理产物**——后者
@@ -1141,6 +1203,32 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     blank_curve = ((blank["tth"], blank["intensity"])
                    if settings["mode"] == "blank" and blank is not None
                    else None)
+    # 改了 2θ 范围就直接点这里：这批文件按**当前设置**还没算过 1D
+    # （判断口径与取数完全同一把键，见 _curve_source）。缺就先在后台补算，
+    # 算完自动接着处理——用户 2026-09-30："改完 2θ 范围后 [批量处理]
+    # 不会自动按新范围重积分，只逐条跳过并写明原因"。
+    missing = [s for s in targets
+               if s.kind == gui_sources.RAW
+               and _curve_source(window, Path(s.path), kw)[2] is not None]
+    if missing:
+        _proc_ensure_curves(
+            window, missing, kw, geom, npt,
+            lambda: _proc_batch_run(window, targets, kw, settings, params0,
+                                    blank_curve, focus_display))
+        return
+    _proc_batch_run(window, targets, kw, settings, params0, blank_curve,
+                    focus_display)
+
+
+def _proc_batch_run(window: QMainWindow, targets: list, kw: dict, settings: dict,
+                    params0: dict, blank_curve, focus_display: str) -> None:
+    """[批量处理] 的主循环：逐条取曲线 → 跑链 → 落产物 → 记台账。
+
+    从 _proc_batch_apply 拆出来（2026-09-30）：它现在有两种到达方式——
+    曲线都齐就直接跑；缺"按当前设置那条曲线"的（改了 2θ 还没重算的批）
+    先由 _proc_ensure_curves 后台补算，算完在回调里再跑同一段。
+    """
+    npt = int(kw["npt"])
     done = skipped = from_product = from_bg = 0
     skip_why = {}                         # 跳过原因 → 个数（末尾各记一行）
     out_of_range = files_with_drop = 0    # 锚点落到数据范围外的统计

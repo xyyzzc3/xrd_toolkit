@@ -1,7 +1,8 @@
-"""校准页的「三列表」：当前配置 / A / B + Δ 行 + 基准。
+"""校准页的「三列表」：当前配置 / A / B + Δ 行 + 结论。
 
 从 calib.py 拆出来（纯搬迁）：只做展示与选择（槽下拉=选结果、
-基准下拉=选参考列、以 A/B 为准=采纳），判断都在 calib_model.py。
+以 A/B 为准=采纳），判断都在 calib_model.py。Δ 行与结论的参照系
+固定是「当前配置」（「对比基准」下拉框 2026-09-30 已删）。
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QGridLayout, QGroupBox,
@@ -58,10 +59,16 @@ def _on_slot_changed(window: QMainWindow, slot: str) -> None:
 
 
 def _refresh_table(window: QMainWindow) -> None:
-    """按三个槽的当前内容刷新数值表 + Δ 行 + 结论。"""
+    """按三个槽的当前内容刷新数值表 + Δ 行 + 结论。
+
+    参照系固定 = **当前配置**（用户 2026-09-30："直接把对比基准删了，直接出
+    结论当前配置和 a、b 对比分别怎么样，随着用户选择 ab 当前进行变化"）。
+    「对比基准」下拉框已经删掉——Δ 行与结论讲的是同一对人（每列 vs 当前配置），
+    A/B 槽换一条结果，Δ 与结论立刻跟着变。
+    """
     state = _calib_state(window)
     res = {slot: _slot_result(state, slot) for slot in ("current", "A", "B")}
-    base_slot = window.calib_base_combo.currentData()
+    base_slot = "current"
     base_res = res.get(base_slot)
     for key_, _name, _scale, _fmt, has_delta in COMPARE_ROWS:
         vals = {slot: _row_values(res[slot])[key_] for slot in ("current", "A", "B")}
@@ -74,10 +81,9 @@ def _refresh_table(window: QMainWindow) -> None:
                     # "这格没数据"（用户 2026-09-27："表述不清"）
                     "基准" if slot == base_slot
                     else _delta_text(base_res, res[slot], key_))
-    # 结论以**对比基准那一列**为参照逐个候选报（用户 2026-09-28 第 2 条：
-    # "数据结论不受对比基准的影响"——改之前参照写死是"当前配置"，切基准时
-    # 结论一个字都不变）。基准默认就是"当前配置"，所以默认行为与原来一致：
-    # 各候选 vs 当前配置。Δ 行与结论现在看**同一列**，同一屏不再讲两对人。
+    # 结论逐个候选报"它 vs 当前配置"：A、B 都写全（用户 2026-09-30 把参照系
+    # 钉死在当前配置——不再由用户选基准，也就不会出现"基准选着 A、结论在讲
+    # 别的"这种要多想一步的表述）。Δ 行与结论看的是同一对人。
     others = [(SLOT_LABELS[slot], res[slot])
               for slot in ("current", "A", "B")
               if slot != base_slot and res[slot] is not None]

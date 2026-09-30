@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
     QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSpinBox,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+    QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import stage_cache
@@ -215,6 +216,37 @@ def _group_state(states) -> Qt.CheckState:
     return Qt.Checked if states == {Qt.Checked} else Qt.Unchecked
 
 
+class _RowPaintDelegate(QStyledItemDelegate):
+    """条目底色的画笔：只画"正在打开"，不画 Qt 的选中底色。
+
+    用户 2026-09-28 第 5 条："文件栏背景加深代表这个图正在打开，选中未选中
+    仅用框内的标志表示"。当时是靠 FileTree 上的一条样式表
+    （`QTreeView::item:selected { background: transparent; }`）把 Qt 的选中
+    底色压成透明的——可样式表是"对所有条目一条口径"，它连条目**自己**的
+    背景刷子（refresh_open_marks 设的那层淡色）也一起盖掉了：当前那一行
+    （刚点过的、或刚双击打开的那行）反而是纯白，只剩左边小点——"整行淡色"
+    这个记号在最该看见它的那行偏偏没有（2026-09-30 复核逮到）。
+
+    改到绘制这一层，两步：
+      ① 交基类之前把 option 里的"选中"状态位摘掉 → Qt 的选中底色不画。
+         只是"怎么画"变了：选中逻辑本身在 selection model 里，勾选、右键、
+         删除、键盘操作一律照旧；
+      ② 条目带背景刷子（= "正在打开"）时自己先铺一遍 → 淡色不再依赖样式表
+         放行，也用不着跟任何风格博弈。
+    """
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        option.state &= ~QStyle.StateFlag.State_Selected
+
+    def paint(self, painter, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)   # 背景刷子 = 从模型读的那一份
+        if opt.backgroundBrush.style() != Qt.BrushStyle.NoBrush:
+            painter.fillRect(opt.rect, opt.backgroundBrush)
+        super().paint(painter, opt, index)  # 文字/对号/小点照常
+
+
 class FileTree(QTreeWidget):
     """文件栏：顶上"原始数据"组，往下是各阶段的产物分组。
 
@@ -237,11 +269,9 @@ class FileTree(QTreeWidget):
         # **选中底色取消**（用户 2026-09-28 第 5 条："文件栏背景加深代表这个
         # 图正在打开，选中未选中仅用框内的标志表示"）：改之前整行深色是 Qt 的
         # "当前行"高亮，含义只能靠猜；现在整行颜色专供"正在打开"（见
-        # refresh_open_marks），勾没勾只看框里那个小勾。
-        # 只改 item 的底色，不动文字颜色与其它控件（树是文件坞里唯一的视图）
-        self.setStyleSheet(
-            "QTreeView::item:selected, QTreeView::item:selected:active,"
-            " QTreeView::item:selected:!active { background: transparent; }")
+        # refresh_open_marks），勾没勾只看框里那个小勾。做法见 _RowPaintDelegate
+        # （原先挂的是样式表，它会把条目自己的淡色也一起盖掉）
+        self.setItemDelegate(_RowPaintDelegate(self))
         # 覆盖 minimumSizeHint：QListWidget/QTreeWidget 内部写死约 270px
         # （按"能显示条目"设计），而 dock 布局只认这个 hint、不认
         # setMinimumWidth。覆盖后文件栏才能收到按钮行决定的真实最窄宽度
