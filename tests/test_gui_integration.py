@@ -88,7 +88,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from types import SimpleNamespace
 
 import numpy as np
-from matplotlib.backend_bases import MouseEvent
+from matplotlib.backend_bases import MouseButton, MouseEvent
 from matplotlib.colors import LogNorm
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QColor, QDropEvent, QPointingDevice, QWheelEvent
@@ -9499,6 +9499,46 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(texts[0], "自定义")
         finally:
             w.close()
+
+    def test_right_click_edits_a_points_ring_index(self):
+        """右键某个选点 → 改它的环号（用户 2026-09-30 定的后手）。
+
+        自动判环（含按尺度重判）都没救回来时，用户自己知道该是第几环——直接改，
+        比再点一遍碰运气可靠。环号改了要整幅重画（点上的标注跟着变）。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            state = w.calib_state
+            self.assertEqual([int(p[2]) for p in state["points"]], [2, 4, 6])
+            x, y, _old = state["points"][1]
+            with mock.patch.object(gui_calib_panel, "_ask_ring_index",
+                                   return_value=5) as ask:
+                self._right_click_at(w, x, y)
+            self.assertEqual(ask.call_args[0][1], 4, "问的时候要带上当前环号")
+            self.assertEqual([int(p[2]) for p in state["points"]], [2, 5, 6])
+            self.assertEqual((state["points"][1][0], state["points"][1][1]),
+                             (x, y), "只改环号，位置不动")
+            self.assertIn("环号：4 → 5", self._logs(w))
+            # 右键落在空处：不改、只提示
+            self._right_click_at(w, x + 100.0, y + 100.0)
+            self.assertEqual([int(p[2]) for p in state["points"]], [2, 5, 6])
+            self.assertIn("右键要落在某个选点上", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def _right_click_at(self, w, x, y):
+        """在校准图 (x, y) 处发一次右键点击（改环号的入口）。"""
+        gui_calib_panel._on_calib_click(
+            w, w.calib_key,
+            SimpleNamespace(xdata=x, ydata=y, inaxes=w.calib_ax,
+                            button=MouseButton.RIGHT))
 
     def test_delta_column_and_last_save_source(self):
         w = create_window()

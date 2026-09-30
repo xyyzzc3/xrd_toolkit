@@ -635,6 +635,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     ml = QVBoxLayout(manual_box)
     manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
                          "（±0.5°；判环可疑时会自动按尺度重判一遍）；"
+                         "**右键某个点可以改它的环号**；"
                          "至少 3 个点、覆盖 2 个不同的环。")
     manual_hint.setWordWrap(True)
     ml.addWidget(manual_hint)

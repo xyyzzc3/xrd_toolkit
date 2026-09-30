@@ -5,11 +5,12 @@
 from pathlib import Path
 
 import numpy as np
+from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
+from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QMainWindow, QMdiSubWindow,
                                QPushButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
@@ -396,8 +397,58 @@ def _redraw_calib(window: QMainWindow) -> None:
                       ring_marks=state["points"])
 
 
+# LaB₆ 理论环序号上限（snap_lab6_ring 的 max_rings=16 → 0~15）：右键改环号
+# 的输入框拿它当上界
+_LAB6_MAX_RING = 15
+# 右键改环号：落点离某个选点多近算"点中了这个点"（px）。选点标记是 9 px 的
+# 圆圈，12 px 给触控板留点余量
+_MARKER_PICK_PX = 12.0
+
+
+def _ask_ring_index(window: QMainWindow, old: int) -> int:
+    """问用户"这个点算第几环"。返回 -1 = 取消。
+
+    单独一层是为了测试能替身掉模态框（离屏测试里 QInputDialog 会挂住）。
+    """
+    val, ok = QInputDialog.getInt(
+        window, "改环号",
+        f"这个点现在判成环 {old}：改成第几环？\n"
+        f"（LaB₆ 理论环 0~{_LAB6_MAX_RING}；位置不动，拟合按新环号算）",
+        old, 0, _LAB6_MAX_RING, 1)
+    return int(val) if ok else -1
+
+
+def _edit_ring_of_nearest(window: QMainWindow, x: float, y: float) -> bool:
+    """右键某个选点 → 改它的环号。返回 True = 改了（调用方整幅重画）。
+
+    用户 2026-09-30 定：自动判环（含按尺度重判）都没救回来时的**后手**——
+    你自己知道这个点是第几环，直接改掉，比再点一遍碰运气可靠。
+    """
+    state = _calib_state(window)
+    pts = state["points"]
+    if not pts:
+        _log(window, "还没有选点：先在图上点衍射环；右键用来改已有点的环号")
+        return False
+    dists = [float(np.hypot(p[0] - x, p[1] - y)) for p in pts]
+    i = int(np.argmin(dists))
+    if dists[i] > _MARKER_PICK_PX:
+        _log(window, f"右键要落在某个选点上：最近的点也在 {dists[i]:.0f} px 外")
+        return False
+    old = int(pts[i][2])
+    new = _ask_ring_index(window, old)
+    if new < 0 or new == old:
+        return False
+    pts[i] = (float(pts[i][0]), float(pts[i][1]), new)
+    _log(window, f"第 {i + 1} 个点的环号：{old} → {new}（位置没动，拟合按新"
+                 f"环号算——改完按 [用选点精修] 重跑）")
+    return True
+
+
 def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     """校准图点击：判环吸附 → 记录点 + 图上标记；吸不上 → 日志忽略。
+
+    **右键**落在某个已有点上 = 改那个点的环号（`_edit_ring_of_nearest`，
+    用户 2026-09-30 定的后手）——判环自动修不回来时，你知道它该是第几环。
 
     判环用**屏幕上画青线的那套几何**（_calib_draw_geometry：最近一次
     校准结果覆盖面板初值）——与 _draw_calib_image 同源。用别的几何判，
@@ -413,6 +464,11 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     if getattr(window, "calib_dock", None) is None \
             or getattr(window, "calib_key", None) != key:
         return   # 面板已关/换过：迟到点击忽略
+    if getattr(event, "button", None) == MouseButton.RIGHT:
+        # 后手：自动判环没救回来时，右键某个点直接改它的环号（用户 2026-09-30）
+        if _edit_ring_of_nearest(window, float(event.xdata), float(event.ydata)):
+            _redraw_calib(window)
+        return
     g = _calib_draw_geometry(window)
     ring = snap_lab6_ring(
         float(event.xdata), float(event.ydata),
