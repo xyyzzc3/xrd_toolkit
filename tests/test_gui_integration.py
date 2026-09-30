@@ -3675,6 +3675,50 @@ class TestProcessingPageExits(unittest.TestCase):
         finally:
             w.close()
 
+    def test_recompute_on_a_product_panel_drops_its_product_identity(self):
+        """产物面板按新范围重算前，先摘掉"产物身份"（用户 2026-09-30）。
+
+        用户的模型："本功能的范围**只影响本功能的产物**"——产物是冻结点。
+        改之前实测（探针）：在「处理后」面板上按 [重算这张图]，原始文件会被
+        按新范围重积分、**画进这张产物面板**，而面板仍记着自己是产物（后续
+        [套用]/[采用这份结果]/[批量处理] 会按产物处理它）。同一类的第二处是
+        1D 产物面板：画着新范围的曲线，[采用这份结果] 却回头去读旧范围那一份。
+        现在：先换成它底下的 1D 曲线（同 [套用]），再按新范围重算。
+        """
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            w.params["平滑曲线"].setChecked(True)
+            w.params["平滑窗口 (°)"].setValue(0.2)
+            QApplication.processEvents()
+            w.proc_keep_btn.click()             # 先落一条处理产物
+            self.assertTrue(_wait_until(
+                lambda: _group_by_text(w, "处理后") is not None))
+            src = gui_sources.source_of(
+                _group_by_text(w, "处理后").child(0))
+            self.assertEqual(src.kind, gui_sources.BG)
+            key = gui_views._open_product_panel(w, src)
+            dockp = w.plot_docks[key]
+            self.assertIsNotNone(dockp.panel_source, "前提：这是产物面板")
+            self.assertAlmostEqual(
+                float(np.asarray(dockp.last_tth)[-1]), 8.0, places=6,
+                msg="前提：产物是按 1–8° 算的")
+            # 改范围 → [重算这张图]
+            w.params["2θ 上限 (°)"].setValue(5.0)
+            w.proc_recalc_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: getattr(dockp, "last_tth", None) is not None
+                and abs(float(np.asarray(dockp.last_tth)[-1]) - 5.0) < 1e-6),
+                "面板该按新范围重算")
+            self.assertIsNone(dockp.panel_source, "产物身份必须摘掉")
+            self.assertIn("已换成它底下的原始 1D 曲线",
+                          w.log_text.toPlainText())
+            # 旧的处理产物一个字节没动（本步的范围只影响本步产物）
+            self.assertEqual(len(self._mine(path)), 1,
+                             "旧的处理产物不该被这次重算动到")
+        finally:
+            w.close()
+
     def test_recalc_button_re_integrates_with_the_current_range(self):
         """[重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
         w = create_window()

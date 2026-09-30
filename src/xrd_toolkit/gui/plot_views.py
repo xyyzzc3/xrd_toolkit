@@ -220,10 +220,13 @@ _VIEW_RUNNERS = {"2D": _run_2d, "剖面": _run_profile, "1D": _run_1d,
 
 
 def _apply_params(window: QMainWindow) -> None:
-    """[应用] 按钮：用当前参数重算焦点面板。
+    """[应用] / [重算这张图]：用当前参数重算焦点面板。
 
     焦点面板 = 参数坞顶部"编辑对象"（点图面板或计算完成时设定）；
     没选焦点时提示用户先点图。
+
+    编辑对象若是**产物面板**，先摘掉它的"产物身份"再重算（见下面的说明）——
+    产物是冻结点，重算出来的是另一条曲线，不能顶着旧身份继续走。
     """
     # 多文件视图（对比/热图）的计算在 plot_compare：模块级导入会成环
     # （见文件头"依赖方向"），只取本函数用得到的两个 runner
@@ -239,6 +242,29 @@ def _apply_params(window: QMainWindow) -> None:
         window.focus_label.setText("编辑对象：未选中图面板")
         return
     view = key.split("|", 1)[0]
+    # 产物面板重算前先摘掉"产物身份"（用户 2026-09-30："本功能的范围只影响
+    # 本功能的产物"）：产物是**冻结点**，按新范围重算出来的这条已经不是那一份
+    # 了。不摘有两个后果（① 探针实测，② 同一类）：
+    #   ① 处理产物：原始文件会被按新范围重积分、**画进这张"处理后"面板**，
+    #      而面板仍按产物身份参与后续 [套用]/[采用这份结果]/[批量处理]；
+    #   ② 1D 产物：面板画着新范围的曲线，[采用这份结果] 却回头去读**旧范围**
+    #      那一份（屏幕上看到的与存下来的不是同一条，这里最忌讳的一类错）。
+    # 处理产物走 [套用] 那套"就地换成它底下的 1D 曲线"（血缘查不到会明确拒绝）。
+    # 只有 1D 视图可能有产物面板（产物都是曲线条目），别的视图这里天然是空转。
+    src = getattr(dock, "panel_source", None)
+    if src is not None:
+        if src.kind == gui_sources.BG:
+            if not _retarget_product_panel_to_source(window, dock):
+                return
+        else:
+            dock.panel_source = None
+            dock.panel_display = f"1D_{Path(src.path).name}"
+            dock.setWindowTitle(dock.panel_display)
+            _log(window, f"这一条是 1D 产物（读的是 {src.display} 那一份）："
+                         "按新范围重算后它不再是那一份了，"
+                         "面板改为这个文件的一条 1D 曲线")
+    # 这行要在**所有**分支之前（对比/热图也要它：用户点 [应用] 时日志必须
+    # 说清重算的是谁）；摘身份之后再写，标题才是摘完的那个
     _log(window, f"[应用] 重算编辑对象：{dock.windowTitle()}")
     if view == "对比":
         _run_compare(window, key)   # 一组文件全部重算
@@ -935,6 +961,10 @@ def _retarget_product_panel_to_source(window, dock) -> bool:
     配方照常往上套、结果照常 [采用这份结果]。**二次相减的隐患由"换输入"消除**
     ——重做吃的正是没扣过背景的那条曲线（见 stage_cache.load_proc_source），
     而不是在扣完的曲线上再扣一遍。
+
+    两个调用方：面板上按 [套用]（换配方重做，用户 2026-09-28 第 3 条）与
+    [重算这张图]（`_apply_params`，用户 2026-09-30：产物面板按新范围重算前
+    必须先摘掉产物身份，否则原始文件会被重积分画进这张产物面板）。
 
     返回 True = 可以用（本来就不是产物面板，或换成功）；False = 换不了（已记日志）。
     """
