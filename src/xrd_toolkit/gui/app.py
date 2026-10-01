@@ -104,7 +104,7 @@ from xrd_toolkit.gui.panel_state import (
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
-    _plot_compare, _plot_heatmap, _refresh_heat)
+    _plot_compare, _plot_heatmap, _refresh_compare, _refresh_heat)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _home_key_reset, _hover_leave, _hover_motion, _magnifier_on,
@@ -1041,10 +1041,21 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     form_cmp.addRow(curve_palette)
 
     cmp_stack = QCheckBox("堆叠显示")
-    cmp_stack.setToolTip("瀑布式错开叠放：每条曲线按自身峰高抬到自己的"
-                         "行上，y 刻度 = 样品名（堆叠下纵轴范围/对数不适用）")
+    # 提示写的是**现行**规矩：行距 = 全场峰值 ×0.7，不按各自的峰（用户
+    # 2026-09-26 定）。旧文案还写着"按自身峰高抬到自己的行上"——那是被
+    # 否掉的那条，实现早改了，2026-10-02 顺出来的
+    cmp_stack.setToolTip("瀑布式错开叠放：所有行同一个行高（全场峰值 ×0.7），"
+                         "y 刻度 = 样品名；堆叠下纵轴范围/对数不适用。"
+                         "勾上立刻重画，不用按 [应用]")
     window.params["对比堆叠"] = cmp_stack
     form_cmp.addRow(cmp_stack)
+    # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
+    # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
+    # [应用显示设置] 只在「绘图」页，够不着）。照热图那组的老做法
+    # （_refresh_heat）：显示参数不触发重算，"改了就该看见"。
+    for _w in (cmp_norm, norm_target, curve_palette):
+        _w.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
+    cmp_stack.toggled.connect(lambda _on: _refresh_compare(window))
 
     # ── 背景扣除（小节）：1D/对比/瀑布/热图四条曲线路径共用 ──
     # 三种模式 = 对"背景长什么样"的三个不同假设（物理依据见
@@ -1176,37 +1187,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.bg_prov_lbl = bg_prov_lbl
     form_bg.addRow(bg_prov_lbl)
 
-    # ── 配方（小节）：一份设置存下来，别的批次能照用 ──
-    # 用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点
-    # 可行吗"——可行：跨批次沿用锚点的**位置**（那是装置的性质），强度到每张
-    # 图自己的曲线上重取（同 [批量处理] 一贯的口径，见 services/recipes）。
-    # 配方的来源有两个：本图配方（那个文件上次用的）与已保存的命名配方。
-    add_caption(form_bg, "配方")
-    recipe_combo = QComboBox()
-    recipe_combo.setToolTip("选一份配方：本图配方 = 这个文件上次处理用的那套；"
-                            "下面是已保存的命名配方。选好点 [套用] 才生效——"
-                            "打开原始条目永远是原始曲线，不会自动扣。")
-    window.recipe_combo = recipe_combo
-    recipe_apply_btn = QPushButton("套用")
-    recipe_apply_btn.setObjectName("recipe_apply_btn")
-    recipe_apply_btn.setToolTip("把选中的配方用到**编辑对象**这张图上："
-                                "锚点位置照搬、强度按本图曲线重取，"
-                                "其余设置填进本页控件并立刻重画")
-    recipe_apply_btn.clicked.connect(lambda: _apply_selected_recipe(window))
-    recipe_save_btn = QPushButton("保存为配方…")
-    recipe_save_btn.setObjectName("recipe_save_btn")
-    recipe_save_btn.setToolTip("把**本页当前这套设置**存成一个命名配方，"
-                               "以后任何一批都能套用（存 outputs/recipes.json）")
-    recipe_save_btn.clicked.connect(lambda: _save_recipe_dialog(window))
-    recipe_del_btn = QPushButton("删除")
-    recipe_del_btn.setObjectName("recipe_del_btn")
-    recipe_del_btn.setToolTip("删掉下拉里选中的那份**已保存**配方")
-    recipe_del_btn.clicked.connect(lambda: _delete_selected_recipe(window))
-    window.recipe_btns = (recipe_apply_btn, recipe_save_btn, recipe_del_btn)
-    form_bg.addRow(bg_row((recipe_combo, 2)))
-    form_bg.addRow(bg_row((recipe_apply_btn, 1), (recipe_save_btn, 1),
-                          (recipe_del_btn, 0)))
-
     bg_show_raw = QCheckBox("显示原始曲线对比")
     bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"
                            "（点线）一起画出来，看清扣掉了什么。\n"
@@ -1321,6 +1301,47 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cut_clear_btn.setToolTip("清空清单（= 不裁剪）")
     form_bg.addRow(bg_row((cut_list_lbl, 2), (cut_clear_btn, 0)))
 
+    # ── 配方（小节，**放在整页最下方**）：一份设置存下来，别的批次能照用 ──
+    # 用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点
+    # 可行吗"——可行：跨批次沿用锚点的**位置**（那是装置的性质），强度到每张
+    # 图自己的曲线上重取（同 [批量处理] 一贯的口径，见 services/recipes）。
+    # 配方的来源有两个：本图配方（那个文件上次用的）与已保存的命名配方。
+    # **位置**（用户 2026-10-02 第 3 条："配方位置 最下方？"）：一份配方管的是
+    # **整条链**（背景 + 平滑 + 裁剪），原先夹在背景扣除与平滑之间，看着像
+    # 只管背景——而且你在它下面改的平滑/裁剪其实也会被存进去，顺序跟含义
+    # 反着。挪到三节之后：先把整条链摆好，再存下来。
+    add_caption(form_bg, "配方")
+    recipe_combo = QComboBox()
+    recipe_combo.setToolTip("选一份配方：本图配方 = 这个文件上次处理用的那套；"
+                            "下面是已保存的命名配方。选好点 [套用] 才生效——"
+                            "打开原始条目永远是原始曲线，不会自动扣。")
+    window.recipe_combo = recipe_combo
+    recipe_apply_btn = QPushButton("套用")
+    recipe_apply_btn.setObjectName("recipe_apply_btn")
+    recipe_apply_btn.setToolTip("把选中的配方用到**编辑对象**这张图上："
+                                "锚点位置照搬、强度按本图曲线重取，"
+                                "其余设置填进本页控件并立刻重画")
+    recipe_apply_btn.clicked.connect(lambda: _apply_selected_recipe(window))
+    # [存成配方…]（原名 [保存为配方…]）：存的是**设置**，不是数据——与
+    # 下面的 [存成产物] 成对：一个存"怎么做"，一个存"做出来的东西"。
+    # 用户 2026-10-02 第 2 条说这两个按钮重复，其实是名字太像：
+    # "保存为配方" / "采用这份结果"都像"保存"，各改一个字把差别写在脸上
+    recipe_save_btn = QPushButton("存成配方…")
+    recipe_save_btn.setObjectName("recipe_save_btn")
+    recipe_save_btn.setToolTip("把**本页当前这套设置**（背景 / 平滑 / 裁剪）"
+                               "存成一个命名配方，以后任何一批都能套用"
+                               "（存 outputs/recipes.json）。存的是设置；"
+                               "要把结果留下用下面的 [存成产物]")
+    recipe_save_btn.clicked.connect(lambda: _save_recipe_dialog(window))
+    recipe_del_btn = QPushButton("删除")
+    recipe_del_btn.setObjectName("recipe_del_btn")
+    recipe_del_btn.setToolTip("删掉下拉里选中的那份**已保存**配方")
+    recipe_del_btn.clicked.connect(lambda: _delete_selected_recipe(window))
+    window.recipe_btns = (recipe_apply_btn, recipe_save_btn, recipe_del_btn)
+    form_bg.addRow(bg_row((recipe_combo, 2)))
+    form_bg.addRow(bg_row((recipe_apply_btn, 1), (recipe_save_btn, 1),
+                          (recipe_del_btn, 0)))
+
     # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
     window.bg_rows = {"blank": blank_row, "auto": auto_row,
                       "anchor": anchor_row}
@@ -1366,15 +1387,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_bg_recalc.clicked.connect(lambda: _apply_params(window))
     window.proc_recalc_btn = btn_bg_recalc
     btns_bg.addWidget(btn_bg_recalc)
-    # [采用这份结果]（用户 2026-09-28 第 4 条）：把编辑对象这张图上**眼下这条
-    # 处理后的曲线**落成产物、进文件栏的「处理后 …」分组——单张也有交代，
-    # 不用"勾上自己再点批量处理"这种绕法。口径与 [批量处理] 逐位相同（同一个
-    # apply_chain 的输出 + 同一套台账），只是目标只有编辑对象这一个
-    btn_bg_keep = QPushButton("采用这份结果")
+    # [存成产物]（用户 2026-09-28 第 4 条立项，10-02 改的名）：把编辑对象这张图上
+    # **眼下这条处理后的曲线**落成产物、进文件栏的「处理后 …」分组——单张也有
+    # 交代，不用"勾上自己再点批量处理"这种绕法。口径与 [批量处理] 逐位相同
+    # （同一个 apply_chain 的输出 + 同一套台账），只是目标只有编辑对象这一个。
+    # 名字从 [采用这份结果] 改成 [存成产物]（用户 2026-10-02 第 2 条说它跟
+    # [保存为配方…] 重复）：两者其实是两样东西——这个存**数据**（进文件栏），
+    # 那个存**设置**（可套到别的批次）；旧名字太虚，两个都像"保存"
+    btn_bg_keep = QPushButton("存成产物")
     btn_bg_keep.setObjectName("proc_keep_btn")
     btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果**存成产物**："
                            "文件栏里长出一个「处理后 …」分组，对比 / 热图 / 导出"
-                           "下次直接复用（与 [批量处理] 落的是同一种东西）")
+                           "下次直接复用（与 [批量处理] 落的是同一种东西）。"
+                           "存的是数据；要存「这套设置」用下面的 [存成配方…]")
     btn_bg_keep.clicked.connect(lambda: _proc_keep_this(window))
     window.proc_keep_btn = btn_bg_keep
     btns_bg.addWidget(btn_bg_keep)

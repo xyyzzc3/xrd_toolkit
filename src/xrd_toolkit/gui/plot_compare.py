@@ -20,7 +20,7 @@ from xrd_toolkit.gui.panel_state import (
     _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
     _display_snapshot, _heat_shown, _log, _panel_param,
-    _param_box_set, _proc_params,
+    _param_box_set, _proc_params, _refresh_pending_labels,
     _set_focus)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
@@ -256,6 +256,34 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
     _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
+
+
+def _refresh_compare(window: QMainWindow) -> None:
+    """对比显示参数（归一化 / 归一化目标 / 配色 / 堆叠）改了 → 就地重画。
+
+    用户 2026-10-02 第 1 条："堆叠显示无效"。实测画图那侧是好的（勾上
+    [堆叠显示]、按 [应用显示设置]，y 刻度确实变成样品名、曲线按全场峰值
+    ×0.7 抬起来）——卡在**够不着**：那个勾选框住在「对比」页，而
+    [应用显示设置] 与"未应用"灰字只在「绘图」页，在对比页勾上它，那一页
+    没有任何东西能把改动用出去（也没有灰字提示），看起来就是"勾了没反应"。
+
+    做法照抄热图的 `_refresh_heat`（用户 2026-09-27 那条）：显示参数改了
+    就立刻按新值重画，不需要 [应用]。显示参数不触发重算，本来就是
+    "改了就该看见"的东西——`_display_snapshot` 把控件值写进各面板快照
+    （数据参数沿用旧值），再用已有数据重画；对比是单槽面板，通常就一张。
+    """
+    if getattr(window, "_param_replaying", False):
+        return   # 回放快照期间控件值正被程序改写，不是用户改动（同 _refresh_proc）
+    for key, dock in list(window.plot_docks.items()):
+        if not key.startswith("对比"):
+            continue
+        if not getattr(dock, "compare_data", None):
+            continue     # 还没算完：等它自己画
+        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+        _redraw_compare(window, key)
+    # 这几项从此没有"未应用"这一态：灰字量的是"控件 vs 快照"的差，
+    # 而这里刚把控件值写进了快照（同 _refresh_heat 的收尾）
+    _refresh_pending_labels(window)
 
 
 def _finish_compare(window: QMainWindow, key: str) -> None:
@@ -549,6 +577,48 @@ def _anchor_release(window: QMainWindow, key: str, event) -> None:
     y = _anchor_raw_y(window, dock, ax, xd, i, ln)
     anchors.append((x, y))
     _anchor_changed(window, f"加锚点：2θ = {x:.3f}°（{len(anchors)} 个）")
+
+
+def _anchors_visible(window: QMainWindow, dock) -> bool:
+    """这张 1D 图上现在画着锚点圆圈吗（与 _draw_bg_overlay 同一个门槛）。
+
+    圆圈只在**手动锚点**与**自动基线（自动 + 锚点校正）**两种模式下画
+    （见 _draw_bg_overlay）。右键删除只认"看得见"的锚点——看不见的东西
+    不该被点掉。
+    """
+    path = _bg_path_of(dock)
+    if path is None or not getattr(window, "bg_anchors", {}).get(str(path)):
+        return False
+    return _panel_param(window, dock, "背景扣除模式", "off") in ("anchor", "auto")
+
+
+def _anchor_right_click(window: QMainWindow, key: str, event) -> None:
+    """1D 图上**右键点锚点 = 删掉它**（用户 2026-10-02 第 2 条）。
+
+    原先删单个锚点只有一条窄路：先点亮 [拾取锚点]，再左键点那个圆圈
+    （8 屏幕像素以内）——手势隐形、目标小。右键在 1D 图上是空的（校准图
+    那边右键改环号已有先例），拿它当"删除"最顺；**不要求拾取开关**：
+    它只删不加，误伤的代价是重新点一个回来。
+
+    命中判定与左键删除同一套（transData 之后的 8 px）：同一个圆圈，
+    两个键不该有两种手感。
+    """
+    dock = window.plot_docks.get(key)
+    if dock is None or event.inaxes is None or event.button != 3:
+        return
+    if key.split("|", 1)[0] != "1D" or not _anchors_visible(window, dock):
+        return
+    if event.xdata is None or event.ydata is None:
+        return
+    path = _bg_path_of(dock)
+    anchors = getattr(window, "bg_anchors", {}).get(str(path), [])
+    ax = event.inaxes
+    for i, (ax_, ay_) in enumerate(anchors):
+        px, py = ax.transData.transform((ax_, ay_))
+        if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
+            anchors.pop(i)
+            _anchor_changed(window, f"删除锚点：2θ = {ax_:.3f}°（右键）")
+            return
 
 
 def _anchor_raw_y(window: QMainWindow, dock, ax, xd, i, line) -> float:

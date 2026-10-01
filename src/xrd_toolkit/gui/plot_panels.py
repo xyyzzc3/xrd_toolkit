@@ -1045,15 +1045,20 @@ def _build_1d_widget(window: QMainWindow, key: str) -> QWidget:
     # 锚点拾取的处理在 plot_compare（多文件视图那层），面板壳在本模块
     # ——模块级导入会成环，函数内延迟导入（同 _build_heat_widget）
     from xrd_toolkit.gui.plot_compare import (_anchor_press,
-                                              _anchor_release)
+                                              _anchor_release,
+                                              _anchor_right_click)
     widget = _build_canvas_panel(window, key, "axes_1d", hover=True,
                                  sync="xy")
     # 锚点点选：额外挂一组按/放事件（与热图行点击同一扩展点——canvas 上
-    # 的 mpl_connect 不会被 ax.clear() 清掉，通用平移手势照旧并存）
+    # 的 mpl_connect 不会被 ax.clear() 清掉，通用平移手势照旧并存）。
+    # 按下事件里同时接右键删除（用户 2026-10-02 第 2 条）：只删单个锚点，
+    # 不需要点亮 [拾取锚点]，见 _anchor_right_click。
     canvas = getattr(widget, "canvas", None)
     if canvas is not None:
         canvas.mpl_connect("button_press_event",
                            lambda ev, k=key: _anchor_press(window, k, ev))
+        canvas.mpl_connect("button_press_event",
+                           lambda ev, k=key: _anchor_right_click(window, k, ev))
         canvas.mpl_connect("button_release_event",
                            lambda ev, k=key: _anchor_release(window, k, ev))
     return widget

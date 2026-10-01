@@ -1705,6 +1705,32 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         finally:
             w.close()
 
+    def test_stack_checkbox_applies_live(self):
+        """勾 [堆叠显示] 立刻重画，**不需要** [应用显示设置]（用户 2026-10-02 第 1 条）。
+
+        回归的是"够不着"：这个框住在「对比」页，而 [应用显示设置] 与"未应用"
+        灰字只在「绘图」页——旧行为下在对比页勾上它，那一页没有任何东西能把
+        改动用出去，看上去就是"堆叠显示无效"（画图那侧实测一直是好的）。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
+            w.params["对比堆叠"].setChecked(True)     # 只勾，不按 [应用]
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
+                             ["fake_a.tif", "fake_b.tif"], "勾上就该堆叠")
+            self.assertTrue((w.plot_docks[key].params_snapshot or {})
+                            .get("对比堆叠"), "快照跟着更新")
+            self.assertFalse(w.pending_labels["图像"].isVisibleTo(w),
+                             "即改即生效的参数不该亮'未应用'")
+            w.params["对比堆叠"].setChecked(False)
+            QApplication.processEvents()
+            np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
+            self.assertIsNotNone(ax.get_legend(), "取消堆叠图例回来")
+        finally:
+            w.close()
+
     def test_stack_widget_and_reset(self):
         w = create_window()
         try:
@@ -3828,7 +3854,7 @@ class TestProcessingPageExits(unittest.TestCase):
             w.proc_keep_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("已采用这份结果", log)
+            self.assertIn("已存成产物", log)
             batches = self._mine(path)
             self.assertEqual(len(batches), 1, "该落一条台账")
             self.assertEqual(batches[0]["note"], "1 个文件")
@@ -12952,6 +12978,58 @@ class TestBackgroundSubtraction(unittest.TestCase):
             self._click_anchor(w, ax, ax_, y=ay_)
             self.assertEqual(self._anchors_of(w, dock), [])
             self.assertIn("删除锚点", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_right_click_deletes_one_anchor(self):
+        """右键点锚点 = 删掉那一个，**不需要** [拾取锚点]（用户 2026-10-02 第 2 条）。
+
+        原先删单个锚点只有一条窄路：点亮 [拾取锚点] + 左键点圆圈（8 px 内）。
+        右键在 1D 图上是空的，拿它当"删除"最顺；只删不加，所以不必再要求
+        拾取开关——但要**看得见**才认（锚点圆圈画着，见 _anchors_visible）。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            self._set_mode(w, "anchor")
+            w.bg_pick_btn.setChecked(True)
+            ax = _axes(w, "1D", self.PATH)
+            self._click_anchor(w, ax, 1.0)
+            self._click_anchor(w, ax, 5.0)
+            anchors = self._anchors_of(w, dock)
+            self.assertEqual(len(anchors), 2)
+            w.bg_pick_btn.setChecked(False)      # 拾取关掉：右键照样能删
+            # 注意先取值再删：`anchors` 就是 w.bg_anchors 里那个 list 本身，
+            # 删完它自己也短了（第一版直接在删除后读 anchors[1] → IndexError）
+            ax_, ay_ = anchors[0]
+            kept_x = anchors[1][0]
+            press, _ = _bg_click(ax, ax_, y=ay_)
+            press.button = 3                     # 右键
+            gui_plot_compare._anchor_right_click(w, self.KEY, press)
+            left = self._anchors_of(w, dock)
+            self.assertEqual(len(left), 1, "只删点到的那一个")
+            self.assertAlmostEqual(left[0][0], kept_x, places=6)
+            self.assertIn("删除锚点", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_right_click_ignores_an_invisible_anchor(self):
+        """模式 = 关闭时圆圈没画着 → 右键不删：看不见的东西不该被点掉。"""
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            self._set_mode(w, "anchor")
+            w.bg_pick_btn.setChecked(True)
+            ax = _axes(w, "1D", self.PATH)
+            self._click_anchor(w, ax, 1.0)
+            anchors = self._anchors_of(w, dock)
+            self.assertEqual(len(anchors), 1)
+            self._set_mode(w, "off")             # 圆圈不再画
+            ax_, ay_ = anchors[0]
+            press, _ = _bg_click(ax, ax_, y=ay_)
+            press.button = 3
+            gui_plot_compare._anchor_right_click(w, self.KEY, press)
+            self.assertEqual(len(self._anchors_of(w, dock)), 1)
         finally:
             w.close()
 

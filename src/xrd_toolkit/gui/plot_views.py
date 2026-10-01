@@ -1135,7 +1135,7 @@ def _proc_keep_this(window: QMainWindow) -> None:
         tth_min=kw.get("tth_min"), tth_max=kw.get("tth_max"),
         settings={k: v for k, v in settings.items() if k != "anchors"},
         note="1 个文件")
-    _log(window, f"已采用这份结果：{Path(path).name}"
+    _log(window, f"已存成产物：{Path(path).name}"
                  f"（{process.chain_label(settings)}）——文件栏「{label}」里"
                  f"可以整组拿去 [对比] / [热图]，双击看这一条")
     window.refresh_groups()       # 文件栏里立刻长出这一组
