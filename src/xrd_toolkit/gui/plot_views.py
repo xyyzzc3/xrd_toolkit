@@ -1608,7 +1608,8 @@ def _apply_plain_view(window: QMainWindow, dock, ax) -> bool:
 
 
 def _draw_2d(window: QMainWindow, dock, image) -> None:
-    """在指定的 2D 面板画出衍射图：对数色标 + 颜色条 + 对比度参数 + 束心十字。
+    """在指定的 2D 面板画出衍射图：对数色标 + 颜色条 + 对比度参数
+    + 束心十字（"显示束心"关掉就不画）。
 
     样式对齐 CLI view_diffraction / 校准图：magma + LogNorm、自动
     对比度 1%/99.9% 分位（下限兜底 1.0）、origin="lower"（数组行
@@ -1654,8 +1655,12 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         else:
             cb.update_normal(im)
         dock._colorbar_2d.ax.tick_params(labelsize=7)
-        cy, cx = window.config["beam_center"]
-        ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
+        # 束心十字（当前几何配置的直射束落点）：默认画，可在图像参数里
+        # 取消勾选"显示束心"（用户 2026-10-01）——取消后是一张干净的
+        # 衍射图。读面板快照（每张图各记各的），与色图/对比度同一套
+        if _panel_param(window, dock, "显示束心", True):
+            cy, cx = window.config["beam_center"]
+            ax.plot([cx], [cy], "+", color="white", ms=10, mew=1.2)
         zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _content(dock).draw()

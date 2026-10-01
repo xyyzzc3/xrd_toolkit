@@ -74,6 +74,19 @@ def wait_until(predicate, timeout_s: float = 180.0) -> bool:
     return False
 
 
+def check_all_raw(window) -> None:
+    """清掉全部勾、把「原始数据」整组勾上。
+
+    为什么每段都要显式设一遍：**出现新产物 = 上一轮的勾选清零**（用户
+    2026-10-01 第 8 条，方案"甲"）——勾选集是出图/批量处理的输入，不跨
+    操作粘着。探针各段各有各的输入集合，所以自己摆好再跑。
+    """
+    for i in range(window.file_list.count()):
+        window.file_list.item(i).setCheckState(Qt.Unchecked)
+    window.file_list.raw_group.setCheckState(Qt.Checked)
+    QApplication.processEvents()
+
+
 def content_of(window, key: str):
     """面板容器 → 面板内容（子窗口或弹出窗口都能取）。"""
     return gui_state._content(window.plot_docks[key])
@@ -178,6 +191,7 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
     """多文件视图：整个在 plot_compare 里（对比 + 热图）。"""
     print("\nC. 多文件视图（plot_compare）")
     window.add_files([lmfp], select=True)   # 导入默认不勾选：探针要两个都选上
+    check_all_raw(window)   # A 段出过图 → 有产物落盘 → 勾选已清零，重新摆
     window.compare_btn.click()
     ok = wait_until(lambda: any(
         k.startswith("对比")
@@ -281,6 +295,18 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
                                settings=st) is not None:
             n_bg += 1
     report(n_bg == 2, "两份扣背景产物都落盘了", f"{n_bg}/2")
+    # 刚批量完 → 产物是新出现的 → 上一轮的勾选已按规矩清零（用户
+    # 2026-10-01 第 8 条，方案"甲"：勾选集是出图/批量处理的输入）。
+    # 这里显式勾上「处理后」整组再点 [对比]，验的还是同一件事：
+    # 对比**直接读**那批产物而不是重算。
+    groups = {g.text(0): g for g in window.file_list.groups()}
+    bg_new = [t for t in groups if t.startswith("处理")]
+    report(bool(bg_new), "批量处理后文件栏长出「处理后」组", bg_new[:1])
+    if bg_new:
+        for i in range(window.file_list.count()):
+            window.file_list.item(i).setCheckState(Qt.Unchecked)
+        groups[bg_new[0]].setCheckState(Qt.Checked)
+        QApplication.processEvents()
     before = len(window.log_text.toPlainText())
     window.compare_btn.click()
     wait_until(lambda: "对比完成" in window.log_text.toPlainText())

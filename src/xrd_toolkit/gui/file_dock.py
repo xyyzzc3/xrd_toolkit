@@ -6,7 +6,9 @@
 
 文件栏是一棵树（用户 2026-09-24 提"每次完成一个大功能后在文件栏有一个
 新的子文件夹"）：顶上「原始数据」组，下面是各阶段产物分组（「1D 产物 …」=
-**一套积分设置一组**，组名写着是哪一套；「处理后 …」= 每次 [批量处理] 一组）。
+**一套积分设置一组**，组名写着是哪一套；「处理后 …」= 每次 [批量处理] 一组），
+再往下是「打开的图」（**屏幕上开着的图**逐个列出来，双击提到最前面；校准图
+不在内，那些行不给勾——用户 2026-10-01 第 5 条，见 _sync_open_figures）。
 勾组 = 整组全选，两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**整行颜色
 只表示"这个条目有图正开着"**（淡色 + 左侧小点，见 refresh_open_marks），
 勾没勾只看框里的小勾——用户 2026-09-28 第 5 条定的。**原始数据那部分的接口
@@ -23,15 +25,15 @@ from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
     QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSpinBox,
-    QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTreeWidget,
+    QMainWindow, QMdiSubWindow, QMenu, QMessageBox, QPushButton, QRadioButton,
+    QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import stage_cache
 
 from xrd_toolkit.cli import SUPPORTED_EXTS
-from xrd_toolkit.gui.panel_state import _collect_geometry, _log
+from xrd_toolkit.gui.panel_state import _collect_geometry, _log, _set_focus
 from xrd_toolkit.gui.plot_export import _run_export, _save_figures
 from xrd_toolkit.services.data_loader import load_diffraction_image
 
@@ -64,6 +66,12 @@ GROUP_ROLE = Qt.UserRole + 3        # 组节点标记（条目没有这个槽）
 GROUP_BATCH_ROLE = GROUP_ROLE + 1   # 处理组的台账批次号（右键"删除这一组"用）
 GROUP_TITLE_ROLE = GROUP_ROLE + 2   # 组的**纯名字**（不含折叠时才显示的
                                     # "（n/m 选中）"后缀，见 _group_title）
+PANEL_KEY_ROLE = GROUP_ROLE + 3     # 「打开的图」那一组的行：存面板键
+                                    # （"<视图>|<身份>"）。这些行**不给勾**
+                                    # （它们不是数据，是"屏幕上正开着的东西"），
+                                    # 也不带来源三件套——sources.all_sources
+                                    # 因此看不见它们，出图/批量/导出/校准取样
+                                    # 都不会把一张图片当成输入
 # 槽号一律走上面的名字，别再写 GROUP_ROLE + n 的字面量：2026-09-28 给徽标
 # 加槽时就撞过一次——新槽正好落在"批次号"那一格上，于是处理组的名字被批次
 # id 顶掉（文件栏上显示成 "probe-batch"），而组态、勾选、右键删除全都正常，
@@ -166,6 +174,8 @@ def _refresh_group_badges(window: QMainWindow) -> None:
     try:
         tree = window.file_list
         for node in [tree.raw_group] + tree.groups():
+            if not _is_checkable(node):
+                continue    # 「打开的图」没有"选中几条"这回事，别加徽标
             base = _group_title(node)
             if node.isExpanded():
                 text = base
@@ -178,20 +188,28 @@ def _refresh_group_badges(window: QMainWindow) -> None:
         window._check_syncing = prev
 
 
-def _make_group(text: str, tip: str = "") -> FileItem:
+def _make_group(text: str, tip: str = "", checkable: bool = True) -> FileItem:
     """建一个组节点（阶段文件夹）：可勾（勾 = 整组全选）、加粗、带提示。
 
     名字进 GROUP_TITLE_ROLE（纯名字）；显示文本由 _refresh_group_badges
     按展开/折叠渲染（折叠时后缀"（n/m 选中）"）。**组名里不再带总数**
     （原来是"1D 产物 (81)"）：那个数字跟徽标里的分母重复，同一行两个数字
     反而分不清谁是谁。
+
+    `checkable=False`：「打开的图」那一组用——它装的是屏幕上开着的图，
+    不是数据，没有"全选"这回事（也**绝不设对号槽**：设了 Qt 就会画一个
+    复选框出来）。全树的勾选逻辑（_set_checks / _sync_group_states /
+    _refresh_group_badges / on_item_changed）都按这个开关跳过它。
     """
     node = FileItem([text])
     node.setData(0, GROUP_ROLE, True)
     node.setData(0, GROUP_TITLE_ROLE, text)
-    node.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                  | Qt.ItemIsUserCheckable)
-    node.setCheckState(0, Qt.Unchecked)
+    flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+    if checkable:
+        flags |= Qt.ItemIsUserCheckable
+    node.setFlags(flags)
+    if checkable:
+        node.setCheckState(0, Qt.Unchecked)
     node.setToolTip(0, tip or text)
     font = node.font(0)
     font.setBold(True)
@@ -202,6 +220,118 @@ def _make_group(text: str, tip: str = "") -> FileItem:
 def is_group(item) -> bool:
     """组节点（不是条目：组不带来源三件套）。"""
     return item is not None and bool(item.data(0, GROUP_ROLE))
+
+
+def _is_checkable(item) -> bool:
+    """这个节点带不带对号槽（能不能勾）。
+
+    「打开的图」那些行**不给勾**（它们不是数据，是屏幕上正开着的东西）：
+    全树的勾选逻辑（on_item_changed / on_item_clicked / _set_checks /
+    _sync_group_states / _refresh_group_badges）一律先问这一句——Qt 对
+    没有 ItemIsUserCheckable 的条目**照样接受** setCheckState，画出来
+    就是一个勾选框，而"打开着的图"根本不是可选的数据。
+    """
+    return item is not None and bool(item.flags() & Qt.ItemIsUserCheckable)
+
+
+def panel_key_of(item):
+    """「打开的图」那一行指向的面板键（"<视图>|<身份>"）；别的条目 None。"""
+    return item.data(0, PANEL_KEY_ROLE) if item is not None else None
+
+
+def _raise_panel(window: QMainWindow, key: str) -> None:
+    """把「打开的图」里那一行对应的图提到最前面（子窗口 / 弹出去的独立窗口）。
+
+    顺带把它设成**编辑对象**（`_set_focus`）：点谁就是谁——与直接点面板
+    本身同一个口径（参数坞跟着显示那张图的参数）。
+    """
+    dock = getattr(window, "plot_docks", {}).get(key)
+    if dock is None:
+        return
+    if isinstance(dock, QMdiSubWindow):
+        window.mdi.setActiveSubWindow(dock)
+        dock.raise_()
+    else:                      # 弹出去的独立窗口：归系统管，先抬到最前
+        dock.raise_()
+        dock.activateWindow()
+    _set_focus(window, key, dock.windowTitle())
+
+
+OPEN_FIGURES_TITLE = "打开的图"
+
+
+def _sync_open_figures(window: QMainWindow) -> None:
+    """把「打开的图」那一组对齐到屏幕上真正开着的图（用户 2026-10-01 第 5 条）。
+
+    用户原话："画图出的也放进文件区……对应的主要是现在在左边文件区看不到的
+    内容，比如对比、热图、瀑布之类"。进这一组的是**开着的窗口**本身，不是
+    存过盘的图片文件（图片没有台账、也重算不出来，列它们得另造一本账）：
+    所以它跟着面板开关实时增减，关掉一张图那一行就没了。
+
+    两条规矩（用户 2026-10-01）：
+      - **校准图不放入**——它是校准模式的一部分，出口在坞顶那一行；
+      - 这些行**不给勾**（"看的东西"不是数据，见 _is_checkable）。
+
+    位置：紧跟「原始数据」组（index 1）。它是"我现在在看什么"的导航，
+    该在最上面；产物分组照旧排在后面（`groups()[-1]` 仍是产物组）。
+    行的顺序 = 开图顺序（plot_docks 是插入有序的字典）。
+
+    调用点：refresh_open_marks（面板开/关、文件栏重建都经它）。
+    位置变化只在"键的次序真的变了"时重建子行，否则就地改文字——
+    重建会把用户当前选中的行、折叠状态弄丢（2026-09-27 那类投诉）。
+    """
+    tree = getattr(window, "file_list", None)
+    if tree is None:
+        return
+    docks = getattr(window, "plot_docks", None) or {}
+    wanted = [(key, dock.windowTitle()) for key, dock in docks.items()]
+    group = next((n for n in _top_groups(tree)
+                  if _group_title(n) == OPEN_FIGURES_TITLE), None)
+    if not wanted:
+        if group is not None:          # 一张图都不剩：整个组收走
+            tree.blockSignals(True)
+            try:
+                tree.takeTopLevelItem(tree.indexOfTopLevelItem(group))
+            finally:
+                tree.blockSignals(False)
+        return
+    scroll = tree.verticalScrollBar().value()
+    prev_syncing = window._check_syncing
+    window._check_syncing = True
+    tree.blockSignals(True)
+    try:
+        if group is None:
+            group = _make_group(
+                OPEN_FIGURES_TITLE,
+                "屏幕上开着的图（校准图不在内）。双击 = 提到最前面，"
+                "右键可以关掉这一张。", checkable=False)
+            tree.insertTopLevelItem(1, group)
+            group.setExpanded(True)
+        rows = [group.child(i) for i in range(group.childCount())]
+        if [row.data(0, PANEL_KEY_ROLE) for row in rows] != \
+                [key for key, _title in wanted]:
+            for row in rows:           # 次序/成员变了：整组重排（行数很少）
+                group.removeChild(row)
+            rows = []
+        for i, (key, title) in enumerate(wanted):
+            row = rows[i] if i < len(rows) else None
+            if row is None:
+                row = FileItem([title])
+                row.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                row.setData(0, PANEL_KEY_ROLE, key)
+                row.setIcon(0, _open_dot_icon())   # 与"正在打开"同一个记号
+                group.addChild(row)
+            elif row.text(0) != title:
+                row.setText(0, title)
+            row.setToolTip(0, f"{key}\n双击 = 把这张图提到最前面；"
+                              f"右键可以关掉这一张（不动数据与产物）")
+            row.setBackground(0, QBrush(QColor(_OPEN_ROW_BG)))
+        group.setToolTip(0, f"{OPEN_FIGURES_TITLE}（{len(wanted)} 张）："
+                            "屏幕上开着的图，双击提到最前面")
+    finally:
+        tree.blockSignals(False)
+        window._check_syncing = prev_syncing
+    tree.verticalScrollBar().setValue(scroll)
 
 
 def _group_state(states) -> Qt.CheckState:
@@ -419,6 +549,8 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         """
         if window._check_syncing:
             return
+        if not _is_checkable(item):
+            return      # 「打开的图」那些行/组没有对号：没有联动这回事
         window._check_syncing = True
         try:
             if is_group(item):
@@ -430,7 +562,8 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
                                  "点击视图按钮开始计算）")
             else:
                 parent = item.parent()
-                if parent is not None and is_group(parent):
+                if parent is not None and is_group(parent) \
+                        and _is_checkable(parent):
                     parent.setCheckState(0, _group_state(
                         parent.child(i).checkState(0)
                         for i in range(parent.childCount())))
@@ -454,6 +587,14 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
                   and item.checkState(0) != window._press_state)
         if square:
             return   # Qt 已切换，itemChanged 已同步
+        # 「打开的图」那一行：点它 = 把那张图提到最前面（没有对号可点，
+        # 所以"点行 = 勾上这一条"那套手势在这里没有意义）
+        key = panel_key_of(item)
+        if key is not None:
+            _raise_panel(window, key)
+            return
+        if not _is_checkable(item):
+            return
         if is_group(item):
             if item.checkState(0) != Qt.Checked:
                 item.setCheckState(0, Qt.Checked)   # 整组勾上（点行不取消）
@@ -853,7 +994,15 @@ def _entry_menu(window: QMainWindow, item) -> None:
     menu = QMenu(window)
     actions = {}
     src = None if is_group(item) else gui_sources.source_of(item)
-    if item is None or item is window.file_list.raw_group:
+    panel_key = panel_key_of(item)
+    if panel_key is not None:
+        # 「打开的图」那一行：管的是**窗口**，不是数据——所以这里没有
+        # 删除/导出（那些是 data 的事），只有"看"和"关"
+        actions[menu.addAction("提到最前面")] = "raise_panel"
+        menu.addSeparator()
+        actions[menu.addAction("关闭这一张图（数据与产物都不动）")] = \
+            "close_panel"
+    elif item is None or item is window.file_list.raw_group:
         # 空白处 / 原始数据组：批量打开勾选的那批 + （整组）+ 清缓存。
         # 用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮
         # 在 1D 上超过 24 张一张都不画，所以这里给一条没有上限的入口
@@ -912,6 +1061,11 @@ def _entry_menu(window: QMainWindow, item) -> None:
         export_sources(window, [src])
     elif what == "clear_cache":
         ask_clear_cache(window)
+    elif what == "raise_panel":
+        _raise_panel(window, panel_key)
+    elif what == "close_panel":
+        from xrd_toolkit.gui.panels import _close_panel   # 延迟：见模块说明
+        _close_panel(window, panel_key)   # 与面板自己的 × 同一条路
 
 
 def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
@@ -926,6 +1080,10 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     定。右键那条 `explicit=True` 照旧打开（菜单上明写着 1D，不会误解）。
     产物条目两种手势都直接打开：它们天生只有 1D 这一种。
     """
+    key = panel_key_of(item)
+    if key is not None:
+        _raise_panel(window, key)   # 「打开的图」那些行：双击 = 提到最前面
+        return
     opener = getattr(window, "open_view_source", None)
     if opener is None or item is None or is_group(item):
         return
@@ -1166,18 +1324,24 @@ def _tree_state(window: QMainWindow) -> dict:
     return out
 
 
-def _restore_tree_state(window: QMainWindow, keep: dict) -> None:
+def _restore_tree_state(window: QMainWindow, keep: dict,
+                        restore_checks: bool = True) -> None:
     """把 `_tree_state` 记下的东西放回去（重建之后调）。
 
     顺序有讲究：先恢复展开/勾选（都在信号屏蔽期间做，免得每条都触发一次
     联动 + 一行日志），再恢复当前项与滚动位置——`setCurrentItem` 自己会
     滚动，所以它必须在最后。
+
+    `restore_checks=False`：**只不还勾选**，滚动/收起/当前项照还。
+    什么时候要这样：重建时冒出了新产物 → 上一轮的勾选已经按规矩清掉了
+    （见 _uncheck_everything），不能又叫 `keep` 把它们放回来。用户在
+    哪儿那几样照旧要还——那是 2026-09-27"一操作就跳回顶端"投诉的另一半。
     """
     tree = window.file_list
     for node in _top_groups(tree):
         if _group_key(node, tree) in keep["collapsed"]:
             node.setExpanded(False)
-    if keep["checked"]:
+    if restore_checks and keep["checked"]:
         for src in gui_sources.all_sources(window):
             if src.kind == gui_sources.RAW:
                 continue        # 原始数据组的勾选从来没被动过
@@ -1193,6 +1357,57 @@ def _restore_tree_state(window: QMainWindow, keep: dict) -> None:
             if same == keep["current"]:
                 _set_current_keeping_scroll(tree, src.item)
                 break
+    if not restore_checks:
+        # 勾选刚被清过：当前项不许停在没勾的行上（同 _sync_current_to_checks）
+        _sync_current_to_checks(window)
+
+
+def _product_keys(window: QMainWindow) -> set:
+    """文件栏里全部产物条目的身份 `(kind, key)`（原始数据不算）。"""
+    return {(s.kind, s.key) for s in gui_sources.all_sources(window)
+            if s.kind != gui_sources.RAW}
+
+
+def _product_keys_on_disk() -> set:
+    """**盘上**现有的全部产物身份 `(kind, key)`——不管它在不在文件栏里。
+
+    判"冒出新产物"要拿它当地基，不能拿"文件栏里现在有什么"：导入一个
+    以前算过的文件时，它的产物本来就在盘上、只是**刚被列出来**，那不是
+    新产物——拿文件栏当地基会把这种情况误判成新产物，把用户导入后就勾好
+    的那批对号当场清掉（2026-10-01 探针抓到：点 [1D] 只等到"没有选中的
+    文件"）。
+
+    单次"扫一遍"也不够：产物是**先落盘、后重建**的（算完 → store_1d →
+    refresh），所以"重建时现扫"必然把刚写的键也算进去。真正的基线是
+    **上一次重建时看到的盘面**（见 refresh_product_groups 里的
+    `_products_seen`）。
+    """
+    keys = {("1d", key)
+            for key, _meta, _lo, _hi in stage_cache.list_products("1d")}
+    for node in stage_cache.list_batches("bg"):
+        for _path, meta in node["items"].items():
+            # 台账里"产物已经没了"的条目也在这里：它照样占着这把键，
+            # 免得到时候"重新出现"被当成新产物（prune 在下面照常做）
+            keys.add(("bg", meta.get("key")))
+    return keys
+
+
+def _uncheck_everything(window: QMainWindow) -> int:
+    """清掉全树的勾（原始数据组 + 各产物组），返回清了几条。
+
+    用户 2026-10-01 第 8 条（方案"甲"）：**文件栏出现新产物 = 上一轮的活
+    干完了**，对号该清零重来，而不是继续挂着冒充"这一轮的选择"。
+
+    调用方负责信号屏蔽（重建期间本来就在屏蔽中，见 refresh_product_groups）
+    ——这里只改状态，标签/按钮文字由调用方收尾时统一刷。
+    """
+    changed = 0
+    for src in gui_sources.all_sources(window):
+        if src.item.checkState(0) != Qt.Unchecked:
+            src.item.setCheckState(0, Qt.Unchecked)
+            changed += 1
+    _sync_group_states(window)   # 组态跟着子项走（屏蔽信号时不会自动跑）
+    return changed
 
 
 def refresh_product_groups(window: QMainWindow) -> None:
@@ -1213,6 +1428,15 @@ def refresh_product_groups(window: QMainWindow) -> None:
     """
     tree = window.file_list
     keep = _tree_state(window)     # 重建不许改"用户在哪儿"（见其 docstring）
+    # "冒出新产物"的基线 = **上一次重建时看到的盘面**（不是这次的盘面：
+    # 产物先落盘、后重建，现扫必然把刚写的也算进去；也不是文件栏里已有的：
+    # 那会把"导入以前算过的文件"误判成新产物。见 _product_keys_on_disk）
+    now_on_disk = _product_keys_on_disk()
+    seen_before = getattr(window, "_products_seen", None)
+    newborn = set()
+    if seen_before is not None:
+        newborn = now_on_disk - seen_before
+    window._products_seen = now_on_disk
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""
@@ -1347,7 +1571,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
                     leaf.setToolTip(
                         0, f"{leaf.toolTip(0)}\n这一份是按**旧的背景算法**"
                            "算的（曲线不可信）；要清掉就右键删这一条/这一组，"
-                           "或 [清空缓存]")
+                           "或「删除所有缓存…」")
             tree.addTopLevelItem(group)
         tree.expandAll()
         if stale:
@@ -1355,12 +1579,22 @@ def refresh_product_groups(window: QMainWindow) -> None:
             _log(window, f"文件栏里有 {stale} 条**旧背景算法**算的处理产物"
                          "（名字里标着「旧算法，不可信」）：扣背景的算法已"
                          "升级，那批曲线不再可信——要清掉就右键删那一组，"
-                         "或 [清空缓存]，然后重新批量处理")
+                         "或「删除所有缓存…」，然后重新批量处理")
+        # 冒出新产物（基线见上面那段）= 上一轮的工作结束了：勾选
+        # （出图/批量处理的输入）清零重来（用户 2026-10-01 第 8 条，
+        # 方案"甲"）。清掉之后不能再叫 keep 把旧对号放回来——滚动/
+        # 收起/当前项照旧要还（那是 2026-09-27 那半条）。
+        if newborn:
+            _uncheck_everything(window)
         # 恢复展开/勾选/当前项/滚动位置：在信号屏蔽期间做（否则每个被恢复
         # 勾选的条目都要触发一次联动 + 一行日志，200 个条目就是 200 次）
-        _restore_tree_state(window, keep)
+        _restore_tree_state(window, keep, restore_checks=not newborn)
     finally:
         tree.blockSignals(False)
+    if newborn:
+        # 勾选"自己没了"必须说清楚去哪了，否则就是又一个"东西怎么会不见"
+        _log(window, f"文件栏出现 {len(newborn)} 条新产物：上一轮的勾选已"
+                     "清空（勾选集是出图/批量处理的输入，请重新勾）")
     # 恢复出来的勾选集合可能和进来时不一样（有产物的条目没了）→ 按钮上的
     # 数字与状态行跟着刷新（只改文字，不碰树）
     _refresh_file_label(window)
@@ -1413,21 +1647,38 @@ def refresh_open_marks(window: QMainWindow) -> None:
     什么时候调：面板开（plot_panels._open_plot_panel 末尾）/ 关
     （panels._close_panel 里）/ 文件栏重建（refresh_product_groups 末尾），
     都经 window.mark_open_rows 回调，避免那两个模块反向 import 文件坞。
+
+    「打开的图」那一组也在这里同步（同一件事的两半：谁是开着的）：行是
+    整行淡色 + 左侧小点的**另一处**表达，而且对"单槽多文件"的对比/热图
+    也成立——那两种视图没有对应条目，只在那一组里看得见（用户 2026-10-01
+    第 5 条："现在在左边文件区看不到的内容，比如对比、热图、瀑布之类"）。
     """
+    _sync_open_figures(window)     # 「打开的图」组：开着的窗口逐个列出来
     open_ids = {key.split("|", 1)[1] for key in getattr(window, "plot_docks", {})
                 if "|" in key}
     brush = QBrush(QColor(_OPEN_ROW_BG))
     icon = _open_dot_icon()
-    for src in gui_sources.all_sources(window):
-        item = src.item
-        if item is None:
-            continue
-        if gui_sources.source_id(src) in open_ids:
-            item.setBackground(0, brush)
-            item.setIcon(0, icon)      # 同一张图重复设同一个 icon 无害
-        else:
-            item.setBackground(0, QBrush())   # 空画刷 = 恢复默认（无底）
-            item.setIcon(0, QIcon())
+    tree = window.file_list
+    # 屏蔽信号：setBackground/setIcon 会经 FileItem.setData 走一遍
+    # QTreeWidgetItem::setData → **发 itemChanged**，而 on_item_changed 把
+    # 它当成"勾选变了"——每次重建都给每条已勾的行白记一行"已选中 X"
+    # （2026-10-01 查第 8 条时顺出来的）。这里改的是行颜色/小点，与勾选
+    # 无关，本来就不该触发那套联动。blockSignals 没有嵌套计数，所以存下
+    # 原状态再还原（refresh_product_groups 末尾调来时外层可能是开着的）。
+    prev_blocked = tree.blockSignals(True)
+    try:
+        for src in gui_sources.all_sources(window):
+            item = src.item
+            if item is None:
+                continue
+            if gui_sources.source_id(src) in open_ids:
+                item.setBackground(0, brush)
+                item.setIcon(0, icon)      # 同一张图重复设同一个 icon 无害
+            else:
+                item.setBackground(0, QBrush())   # 空画刷 = 恢复默认（无底）
+                item.setIcon(0, QIcon())
+    finally:
+        tree.blockSignals(prev_blocked)
 
 
 def checked_items(window: QMainWindow) -> list:
@@ -1451,6 +1702,8 @@ def _sync_group_states(window: QMainWindow) -> None:
     """
     tree = window.file_list
     for node in [tree.raw_group] + tree.groups():
+        if not _is_checkable(node):
+            continue    # 「打开的图」（不给勾）：没有组态这回事
         node.setCheckState(0, _group_state(
             node.child(i).checkState(0) for i in range(node.childCount())))
     _refresh_group_badges(window)   # 批量改完，折叠着的组上的数字也要跟上
@@ -1536,6 +1789,8 @@ def _set_checks(window: QMainWindow, wanted: list) -> int:
     changed = 0
     window.file_list.blockSignals(True)
     for item, want in wanted:
+        if not _is_checkable(item):
+            continue    # 「打开的图」那些行不给勾：别给它凭空长出一个复选框
         state = Qt.Checked if want else Qt.Unchecked
         if item.checkState() != state:
             item.setCheckState(state)

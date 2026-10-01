@@ -621,8 +621,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 定稿："最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
     # 底部各带"产出"按钮（1D：[出图…][重算这张图]；处理：[重算这张图]
-    # [采用这份结果][批量处理…]；对比：[出对比][出热图]；绘图：[出图…]
-    # [导出图片…]）。**"重画"不再有按钮**（用户 2026-09-30）：改参数本来
+    # [采用这份结果][批量处理…]；对比：[出对比][出热图]；绘图：[出图…]）。
+    # **"重画"不再有按钮**（用户 2026-09-30）：改参数本来
     # 就实时重画，视野另有每张图标题栏的 [Home]；保存存的就是当前画面。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
@@ -942,6 +942,18 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                       label="剖面角度", suffix=" °",
                       tooltip="剖面线相对参考方向的角度")
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
+
+    # 束心十字（2D 图上那个白色 +）画不画：默认画（与 CLI 的
+    # view_diffraction 一致），取消勾选得到一张干净的衍射图。
+    # 挨着 [应用] 那一套走（改完按 [应用显示设置] 重画，不重新积分）；
+    # 校准图不受影响——那张图上没有这个标记（用户 2026-10-01："绘图的
+    # 2d……校准不要加"）
+    beam_cross = QCheckBox("显示束心")
+    beam_cross.setChecked(True)
+    beam_cross.setToolTip("在 2D 图上画出当前几何配置的束心十字（+）；"
+                          "取消勾选 = 只看原始衍射图")
+    window.params["显示束心"] = beam_cross
+    form_draw.addRow(beam_cross)
 
     # 看图参数：不参与计算，只影响图怎么显示；点 [应用] 落到编辑
     # 对象（快照跟着更新）
@@ -1547,33 +1559,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
     btn_col2.addWidget(btn_reset_img, 1)
     btn_col2.addWidget(btn_apply_img, 1)
-    # 本页两个产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图；
-    # [导出图片] 走批量存图流程。（[只重画，不重算] 已删——用户 2026-09-30：
-    # 它的底层 _redraw_panel 就是每张图标题栏 [Home] 用的那个函数，而且改
-    # 显示参数本来就有同组的 [应用]；保存存的就是屏幕当前状态，自己放大
-    # 自己存即可）
+    # 本页唯一的产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图。
+    # 另外两个都删了（用户 2026-10-01："都删了，保存图片在图片自身的工具栏
+    # 有"）：[导出图片…] 与面板标题栏的 [Save]、关窗时的存盘询问同源
+    # （`plot_export._save_figures` 还在，只是不再占一个按钮）；[清空缓存]
+    # 与文件栏右键「删除所有缓存…」是同一个功能的两处入口，留右键那处
+    # ——它还多一次二次确认。（更早的 [只重画，不重算] 已于 2026-09-30 删）
     btn_plot_now = QPushButton("出图（未勾选）")
     btn_plot_now.setObjectName("plot_now_btn")
     btn_plot_now.setToolTip("按上面选中的类型，对**文件栏里勾选**的条目出图"
                             "（勾了多少个，按钮上就写着多少）")
     window.plot_now_btn = btn_plot_now
     btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
-    btn_export_img = QPushButton("导出图片…")
-    btn_export_img.setObjectName("export_img_btn")
-    window.export_img_btn = btn_export_img
-    btn_export_img.clicked.connect(lambda: _save_figures(window))
-    plot_row = QHBoxLayout()
-    plot_row.setSpacing(4)
-    plot_row.addWidget(btn_plot_now, 1)
-    btn_clear_cache = QPushButton("清空缓存")
-    btn_clear_cache.setObjectName("clear_cache_btn")
-    btn_clear_cache.setToolTip("删掉分阶段产物缓存（outputs/_stage）"
-                               "——下次出图会重新积分")
-    btn_clear_cache.clicked.connect(lambda: _clear_stage_cache(window))
-    window.clear_cache_btn = btn_clear_cache
-    plot_row.addWidget(btn_export_img, 1)
-    plot_row.addWidget(btn_clear_cache, 1)
-    btns_draw.addLayout(plot_row)
+    btns_draw.addWidget(btn_plot_now)
     # 「未应用」灰字（同坞顶数据行那个）：显示参数改了还没按 [应用显示设置]
     # 时亮着。两组灰字在这里一起交给 panel_state 管（_PENDING_GROUPS）
     lbl_img_pending = QLabel("未应用（显示设置）")
@@ -1710,6 +1708,7 @@ def _build_toolbar(window: QMainWindow) -> None:
     for name in ("校准", "1D", "处理", "对比"):
         btn = QPushButton(name)
         btn.setCheckable(True)
+        btn.setToolTip(_ENTRANCE_TIPS[name][0])
         tb.addWidget(btn)
         window.entrance_buttons[name] = btn
         btn.clicked.connect(lambda checked=False, n=name:
@@ -1717,14 +1716,14 @@ def _build_toolbar(window: QMainWindow) -> None:
     tb.addSeparator()
     btn_plot = QPushButton("绘图")
     btn_plot.setCheckable(True)
+    btn_plot.setToolTip(_ENTRANCE_TIPS["绘图"][0])
     tb.addWidget(btn_plot)
     window.entrance_buttons["绘图"] = btn_plot
     btn_plot.clicked.connect(lambda: _switch_entrance(window, "绘图"))
 
     # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
+    # 文字与提示由 _highlight_entrance 统一换（选中时变「退出校准」）
     window.calib_btn = window.entrance_buttons["校准"]
-    window.calib_btn.setToolTip("进入校准工作台：标样数据定几何"
-                               "（束心/距离/倾斜角）；再点别的入口即退出")
     window.calib_btn.toggled.connect(lambda on: _on_mode(window, on))
 
     tb.addSeparator()
@@ -1836,6 +1835,14 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
         return
     if name == "校准" and not window.calib_btn.isChecked():
         return                      # 这一次点击是"退出"，已由 toggled 处理
+    if name != "校准" and not window.entrance_buttons[name].isChecked():
+        # 再点一次已亮着的分析入口 = 退出（用户 2026-10-01：按钮此刻正写着
+        # 「退出某某」，按下就该退）。四个分析入口没有"关掉这个功能"一说，
+        # 退出即**回到开局那个"什么都没选"**：入口全熄灭 + 收起参数坞
+        # （[参数] 按钮随时能再展开）；产物/图一张都不动。
+        _clear_entrance(window)
+        _log(window, f"退出{name}（收起参数坞；[参数] 按钮可以再展开）")
+        return
     window.param_dock.setVisible(True)
     if name != "校准":
         window._last_entrance = name
@@ -1848,10 +1855,37 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     _highlight_entrance(window, name)
 
 
+# 入口按钮的**两副面孔**（用户 2026-10-01）：没选中的写入口名，选中的
+# 那个改写「退出某某」——文字自己就是"怎么回去"的说明，再点一次就退出
+# （见 _switch_entrance 的退出分支）。5707a6f 那版 [校准] 就是这个手感，
+# 2026-09-26 改成坞顶常驻的 [返回分析模式] 之后丢了；这次五个入口一起给。
+# 表里两句话：没选中时的说明、选中时（"再点一下就退出"）的说明。
+_ENTRANCE_TIPS = {
+    "校准": ("进入校准工作台：标样数据定几何（束心 / 距离 / 倾斜角）",
+             "退出校准工作台，回到分析模式"),
+    "1D": ("1D 参数：积分范围 / 输出点数 / 曲线显示",
+           "再点一次退出 1D 页（收起参数坞）"),
+    "处理": ("处理参数：背景扣除 / 平滑 / 裁剪",
+           "再点一次退出处理页（收起参数坞）"),
+    "对比": ("对比参数：归一化 / 配色 / 堆叠",
+           "再点一次退出对比页（收起参数坞）"),
+    "绘图": ("绘图参数：视图类型 / 显示设置",
+           "再点一次退出绘图页（收起参数坞）"),
+}
+
+
 def _highlight_entrance(window: QMainWindow, name: str) -> None:
-    """入口高亮：只有当前那一个勾着；name=None = 谁都不勾。"""
+    """入口高亮：只有当前那一个勾着，且它的按钮写「退出某某」。
+
+    name=None = 谁都不勾（"什么都没选"的开局态，按钮文字复位成入口名）。
+    文字与提示都在这一处换：进/退/换页、开局清空，全走这里，不会各写各的。
+    """
     for key, btn in getattr(window, "entrance_buttons", {}).items():
-        btn.setChecked(key == name)
+        active = key == name
+        btn.setChecked(active)
+        btn.setText(f"退出{key}" if active else key)
+        off_tip, on_tip = _ENTRANCE_TIPS.get(key, (key, f"再点一次退出{key}"))
+        btn.setToolTip(on_tip if active else off_tip)
 
 
 def _select_plot_type(window: QMainWindow, name: str) -> None:
@@ -1873,23 +1907,6 @@ def _plot_selected_type(window: QMainWindow) -> None:
     """「绘图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
     name = getattr(window, "_plot_type", "1D")
     _select_plot_type(window, name)
-
-
-def _clear_stage_cache(window: QMainWindow) -> None:
-    """[清空缓存]：删掉分阶段产物（下次出图重新积分）。
-
-    缓存是"省时间"的，删了只会慢一点、不会算错——所以不做二次确认，
-    日志如实报删了多少（见 services/stage_cache）。
-    """
-    from xrd_toolkit.services import stage_cache
-    info = stage_cache.describe()
-    if not info["files"]:
-        _log(window, "缓存本来就是空的（还没有落过产物）")
-        return
-    n = stage_cache.clear()
-    window.refresh_groups()   # 文件栏里的产物分组跟着清空
-    _log(window, f"已清空缓存：{n} 个产物、{info['bytes'] / 1e6:.1f} MB"
-                 f"（下次出图会重新积分）")
 
 
 def _build_plot_type_row(window: QMainWindow) -> QWidget:
@@ -2018,10 +2035,11 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     + 关校准面板（校准状态清零，关闭即遗忘）。
 
     2026-09-24 起入口是**五个页签式按钮**（[校准][1D][处理]
-    [对比][绘图]，见 _build_toolbar / _switch_entrance）：不再翻转
-    开关文字——"退出校准"可以点另一个入口、可以再点一次已亮着的
-    [校准]（见 _switch_entrance 的早退），也可以按坞顶那行常驻的
-    [返回分析模式]（三条路都汇到这里的 setChecked(False)）。
+    [对比][绘图]，见 _build_toolbar / _switch_entrance）。退出校准有
+    三条路，都汇到这里的 setChecked(False)：再点一次已亮着的 [校准]
+    （见 _switch_entrance 的早退）、点别的入口、按坞顶常驻的
+    [返回分析模式]。按钮文字由 _highlight_entrance 统一换（选中时写
+    「退出校准」——用户 2026-10-01 要的"两副面孔"，五个入口一致）。
     """
     if calibrating:
         window.mode_label.setText("校准模式")

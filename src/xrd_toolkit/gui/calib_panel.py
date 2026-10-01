@@ -17,7 +17,7 @@ from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
     CP_COLOR, PANEL_SCALE, RING_COLOR, SNAP_TOL_DEG,
     _calib_state, _geom_px_keys, _metrics_dev, _result_by_name, _slot_label)
-from xrd_toolkit.gui.panels import _settle
+from xrd_toolkit.gui.panels import _install_resize_grip, _settle
 from xrd_toolkit.gui.panel_state import (_auto_contrast_values,
                                          _collect_geometry, _log)
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -145,6 +145,15 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     fit_row.addStretch(1)
     lay.addLayout(fit_row)
     lay.addWidget(canvas)
+    # 右下角把手（▙）+ 四边/四角抓取带：与 1D 图同一套抓手（用户 2026-10-01：
+    # "校准时二维图……没有 1D 图右下角那个标准的缩放，加上这个"）。两处自己给：
+    #   ① 容器取用函数——校准面板不进 plot_docks（它有自己的 window.calib_dock，
+    #      key 也只是个字符串标签），抓手默认那条路查不到它；
+    #   ② 内容上补挂 .canvas——手抓要装在真正的鼠标落点（画布）上，QWidget 的
+    #      父过滤器收不到子部件事件（见 _install_resize_grip 的说明）。
+    content.canvas = canvas
+    _install_resize_grip(window, key, content,
+                         get_dock=lambda: getattr(window, "calib_dock", None))
     sub.setWidget(content)
     sub.setWindowTitle(f"校准_{path.name}")
     window.calib_dock = sub
@@ -202,6 +211,12 @@ def _close_calib_panel(window: QMainWindow) -> None:
     if hasattr(window, "calib_state"):
         del window.calib_state
     _reset_calib_form(window)
+    # 抓手可能还挂着方向覆盖光标（关面板时鼠标正停在抓取区上，来不及收
+    # Leave）：主动撤销，别把斜向箭头留下（与 panels._close_panel 同一条）
+    content = dock.widget()
+    grip_filter = getattr(content, "_grip_filter", None) if content else None
+    if grip_filter is not None:
+        grip_filter._release_cursor()
     if dock in window.mdi.subWindowList():
         window.mdi.removeSubWindow(dock)
     dock.deleteLater()

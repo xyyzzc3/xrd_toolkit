@@ -465,11 +465,17 @@ class _SlimToolbar(QWidget):
         _log(window, f"[Home] 已回到最初的样子：{title}")
 
     def _log_zoom_toggle(self, on: bool) -> None:
+        """开关翻面时把"现在这套手势是什么"写进日志（与按钮 tooltip 同一句话）。
+
+        左键拖的两副面孔跟着开关走：点亮 = 框选放大、熄灭 = 平移。
+        原先两半都写"左键拖 = 平移"——点亮时那句是错的（用户 2026-10-01
+        报"日志错误"）。
+        """
         if self._window is not None:
             _log(self._window,
                  f"放大镜已{'开启' if on else '关闭'}："
-                 f"{'滚轮以光标为中心缩放' if on else '滚轮滚动绘图区'}，"
-                 f"左键拖 = 平移")
+                 + ("滚轮以光标为中心缩放，左键拖 = 框选放大" if on
+                    else "滚轮滚动绘图区，左键拖 = 平移"))
 
     def save_figure(self, *args):
         # 形参收下 QAction.triggered 的 checked 布尔

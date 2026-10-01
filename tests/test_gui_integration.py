@@ -9,7 +9,7 @@
     test_entrance_switching_follows_buttons）；
   - 六个作图类型按钮住在「绘图」页里（属性名不变）：点击 = 为当前文件
     开面板并计算该视图 → 出图（点一次算一次，纯动作不是开关）；
-    页里另有 [出图（勾选文件）][导出图片…]，1D/扣背景/对比页各带
+    页里另有 [出图（勾选文件）]，1D/扣背景/对比页各带
     自己的产出按钮（"重画"按钮 2026-09-30 已删，见那条用例）；
   - 面板按「视图 + 文件」成对创建：同一视图可同时开多张不同文件
     的图，标题 = 视图_文件名（如 1D_fake_a.tif）；
@@ -204,6 +204,22 @@ def add_checked(w, paths, **kw):
     是噪音。要测"导入默认不勾"本身，直接用 w.add_files。
     """
     w.add_files(paths, select=True, **kw)
+    return w
+
+
+def recheck_all(w):
+    """把全树的勾重新勾上（原始数据 + 各产物分组；「打开的图」不给勾，跳过）。
+
+    为什么要这个辅助（用户 2026-10-01 第 8 条）：**出现新产物 = 上一轮的
+    勾选清零**——勾选集是出图/批量处理的输入，不跨"产出动作"粘着。于是
+    用例里"出图 → 再拿同一批去批量/对比"这类流程要显式重勾一遍；这些用例
+    测的是批量/对比/上限本身，不是勾选的粘性。
+    """
+    for i in range(w.file_list.count()):
+        node = w.file_list.item(i)
+        if gui_file_dock._is_checkable(node):
+            node.setCheckState(Qt.Checked)
+    QApplication.processEvents()
     return w
 
 
@@ -744,6 +760,31 @@ class TestNewViews(unittest.TestCase):
             self.assertEqual(ax.images[0].norm.vmax, 50.0)
             self.assertIn("[应用] 图像参数已重画：2D_fake_b.tif",
                           w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_beam_cross_can_be_turned_off(self):
+        """[显示束心]：2D 图上那个白色 + 默认画，取消勾选 + [应用] 后不画。
+
+        用户 2026-10-01："二维图的圆心用户自己选择是否添加"——只对绘图页
+        的 2D 图；校准图不参与（那张图上根本没有这个标记）。
+        """
+        w = create_window()
+        try:
+            fake_image = np.arange(400, dtype=float).reshape(20, 20)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=fake_image):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "2D")
+                ax = gui_panel_state._content(
+                    _dock(w, "2D", "data/fake_b.tif")).axes_2d
+                self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
+            self.assertEqual(len(ax.lines), 1, "默认该画一个束心十字")
+            self.assertTrue(w.params["显示束心"].isChecked(), "默认勾着")
+            w.params["显示束心"].setChecked(False)
+            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
+            self.assertEqual(len(ax.lines), 0, "取消勾选后不该留十字")
         finally:
             w.close()
 
@@ -2583,6 +2624,125 @@ class TestOpenRowMarks(unittest.TestCase):
             w.close()
 
 
+class TestOpenFiguresGroup(unittest.TestCase):
+    """「打开的图」：屏幕上开着的图在文件栏里也有一行（用户 2026-10-01 第 5 条）。
+
+    用户原话："画图出的也放进文件区……对应的主要是现在在左边文件区看不到的
+    内容，比如对比、热图、瀑布之类"。两条规矩（用户同日定）：**校准图不放入**、
+    这些行**不给勾**（"看的东西"不是数据，不进勾选集）。
+    """
+
+    def _open_1d(self, w, name="data/fake_b.tif"):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            add_checked(w, [name])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: len(_axes(w, "1D", name).lines) > 0))
+        return _dock(w, "1D", name)
+
+    def _rows(self, w):
+        group = _group_by_text(w, "打开的图")
+        if group is None:
+            return []
+        return [group.child(i) for i in range(group.childCount())]
+
+    def test_open_figure_gets_a_row_and_leaves_with_the_panel(self):
+        w = create_window()
+        try:
+            self.assertIsNone(_group_by_text(w, "打开的图"), "开局没有这一组")
+            dock = self._open_1d(w)
+            group = _group_by_text(w, "打开的图")
+            self.assertIsNotNone(group, "出图之后该有「打开的图」")
+            self.assertEqual([r.text(0) for r in self._rows(w)],
+                             [dock.windowTitle()])
+            row = self._rows(w)[0]
+            self.assertEqual(row.data(0, gui_file_dock.PANEL_KEY_ROLE),
+                             "1D|data/fake_b.tif")
+            # 位置：紧跟「原始数据」（产物分组照旧排在后面）
+            self.assertIs(w.file_list.groups()[0], group)
+            # 关掉这张图 → 行没了、组也没了（"开着的图"是它的定义）
+            gui_panels._close_panel(w, "1D|data/fake_b.tif")
+            QApplication.processEvents()
+            self.assertIsNone(_group_by_text(w, "打开的图"))
+        finally:
+            w.close()
+
+    def test_rows_are_not_checkable_and_stay_out_of_the_selection(self):
+        """这一组不参与勾选：行/组都没有对号槽，[全选]/[全不选] 也不碰它。"""
+        w = create_window()
+        try:
+            self._open_1d(w)
+            group = _group_by_text(w, "打开的图")
+            row = self._rows(w)[0]
+            self.assertFalse(gui_file_dock._is_checkable(group))
+            self.assertFalse(gui_file_dock._is_checkable(row))
+            self.assertEqual(len(gui_sources.checked_sources(w)), 1,
+                             "勾选集里只有那条原始数据")
+            for item in (group, row):        # 全选/**全不选**都不许给它长对号
+                gui_file_dock._set_checks(w, [(item, True)])
+                self.assertEqual(item.checkState(0), Qt.Unchecked)
+            w.select_all_btn.click()          # [全选（原始数据）]
+            QApplication.processEvents()
+            self.assertEqual(row.checkState(0), Qt.Unchecked)
+            gui_file_dock._sync_group_states(w)   # 组态重算也不许碰它
+            self.assertEqual(group.checkState(0), Qt.Unchecked)
+        finally:
+            w.close()
+
+    def test_aggregate_views_without_a_file_row_are_listed(self):
+        """对比/热图这类"单槽多文件"视图没有对应条目——这一组正是它们唯一
+        看得见的地方（用户点名："比如对比、热图、瀑布之类"）。"""
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")        # 两张 1D 面板
+                self.assertTrue(_wait_until(lambda: any(
+                    k.startswith("1D|") for k in w.plot_docks)))
+                w.compare_btn.click()      # [对比] = 单槽多文件视图
+                self.assertTrue(_wait_until(lambda: any(
+                    k.startswith("对比") for k in w.plot_docks)))
+            keys = [r.data(0, gui_file_dock.PANEL_KEY_ROLE)
+                    for r in self._rows(w)]
+            self.assertTrue(any(k.startswith("对比") for k in keys),
+                            f"对比面板也该列出来：{keys}")
+            self.assertEqual(sum(1 for k in keys if "|" in k), 2,
+                             f"两张 1D 图也在：{keys}")
+        finally:
+            w.close()
+
+    def test_double_click_raises_the_panel_and_sets_the_focus(self):
+        w = create_window()
+        try:
+            self._open_1d(w)
+            w.focus_panel = None
+            gui_file_dock._open_entry_view(w, self._rows(w)[0])
+            self.assertEqual(w.focus_panel, "1D|data/fake_b.tif",
+                             "双击 = 提到最前面 + 成为编辑对象")
+        finally:
+            w.close()
+
+    def test_calibration_panel_is_not_listed(self):
+        """校准图不放入（用户 2026-10-01）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+                QApplication.processEvents()
+                self.assertIsNotNone(w.calib_dock)
+            self.assertIsNone(_group_by_text(w, "打开的图"),
+                              "校准图不进「打开的图」")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+
 class TestProductGroups(unittest.TestCase):
     """文件栏的"阶段文件夹"：① 1D 产物 ② 每次 [批量处理] 一组。
 
@@ -3074,8 +3234,60 @@ class TestProductGroups(unittest.TestCase):
         finally:
             w.close()
 
+    def test_new_product_clears_the_previous_round_checks(self):
+        """出现新产物 = 新一轮：上一轮的勾选全清（用户 2026-10-01 第 8 条，甲）。
+
+        没有新产物的重建照旧不许动勾选（那是 2026-09-28 定的"重建不许改
+        用户在哪儿"），两种情形在这里各钉一条。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            w.refresh_groups()          # 没有新产物 → 勾选原样
+            self.assertEqual(len(gui_sources.checked_sources(w)), 2,
+                             "没有新产物时，重建不许动勾选")
+            _store_product(w, files[0])   # 冒出一条 1D 产物
+            w.refresh_groups()
+            self.assertEqual(gui_sources.checked_sources(w), [],
+                             "出现新产物 = 上一轮勾选该清零")
+            self.assertIn("上一轮的勾选已清空", w.log_text.toPlainText(),
+                          "勾选自己没了要说清楚去哪了")
+            # 同一份产物再来一次重建：键是同一把，不算"新产物" → 不再清
+            # （也正因为身份认的是 (kind, key) 而不是条数）
+            w.add_files([str(files[0])], select=True)
+            w.refresh_groups()
+            self.assertEqual(len(gui_sources.checked_sources(w)), 1,
+                             "同一批产物重新登记不算新产物")
+        finally:
+            w.close()
+
+    def test_importing_a_file_with_cached_products_keeps_checks(self):
+        """导入"以前算过"的文件：产物只是**刚被列出来**，不是新算的。
+
+        判"新产物"的地基必须是**上一次重建时看到的盘面**，不是文件栏里
+        现在有什么——拿文件栏当地基时，这里会把导入后刚勾好的对号清掉，
+        用户看到的是"点 [1D] 没反应"（2026-10-01 真数据探针当场抓到：
+        "没有选中的文件"）。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            _store_product(w, files[0])        # 先"以前算过"（盘上有产物）
+            w.add_files([str(p) for p in files], select=True)
+            w.refresh_groups()
+            self.assertEqual(len(gui_sources.checked_sources(w)), 1,
+                             "产物早就存在，导入时的勾选不许被清")
+            self.assertNotIn("上一轮的勾选已清空", w.log_text.toPlainText())
+        finally:
+            w.close()
+
     def test_clear_cache_empties_groups(self):
-        """[清空缓存] → 产物分组跟着消失（台账也清了）。"""
+        """「删除所有缓存…」（文件栏右键）→ 产物分组跟着消失（台账也清了）。
+
+        清缓存只剩这一处入口了：绘图页那个 [清空缓存] 按钮已删
+        （用户 2026-10-01："都删了"），右键这条还多一次二次确认。
+        """
         w = create_window()
         try:
             files = _tmp_files(1)
@@ -3083,8 +3295,7 @@ class TestProductGroups(unittest.TestCase):
             _store_product(w, files[0])
             w.refresh_groups()
             self.assertIsNotNone(_group_by_text(w, "1D 产物"))
-            w.entrance_buttons["1D"].click()   # [清空缓存] 在 1D 页底部
-            w.clear_cache_btn.click()
+            gui_file_dock.ask_clear_cache(w)   # 窗口没显示 → 不弹模态
             QApplication.processEvents()
             self.assertIsNone(_group_by_text(w, "1D 产物"))
         finally:
@@ -3288,6 +3499,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
             add_checked(w, [str(p) for p in files])   # 原始也勾上
             _store_product(w, files[0])
             w.refresh_groups()
+            recheck_all(w)   # 产物刚冒出来 → 上一轮的勾选已清零（第 8 条）
             _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
             QApplication.processEvents()
             with mock.patch.object(gui_views, "_compute_integration",
@@ -4776,8 +4988,12 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 # 绘图页：[出图（勾选文件）] 按当前类型再出一次
                 w.entrance_buttons["绘图"].click()
                 draw = w.param_stack.widget(w.PARAM_PAGES["绘图"])
-                for btn in (w.plot_now_btn, w.export_img_btn):
-                    self.assertTrue(draw.isAncestorOf(btn), btn.text())
+                self.assertTrue(draw.isAncestorOf(w.plot_now_btn))
+                # [导出图片…][清空缓存] 已删（用户 2026-10-01："都删了，
+                # 保存图片在图片自身的工具栏有"）：存图走面板 [Save]、
+                # 关窗询问；清缓存走文件栏右键。按钮不许长回来
+                self.assertFalse(hasattr(w, "export_img_btn"))
+                self.assertFalse(hasattr(w, "clear_cache_btn"))
                 w.plot_now_btn.click()
                 QApplication.processEvents()
                 # 当前类型 = 1D → 又起了一次积分（面板已开 = 刷新那张图）
@@ -4854,6 +5070,39 @@ class TestParamDockSplitLayout(unittest.TestCase):
                                          f"切到 {name} 时 {other} 不该还亮着")
             self.assertIn("回到分析模式", w.log_text.toPlainText(),
                           "从校准切出去 = 退校准")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_entrance_buttons_say_exit_when_active(self):
+        """入口按钮的两副面孔：选中的那个写「退出某某」，再点一次退出。
+
+        用户 2026-10-01："在一个模式中……我希望调回之前类似退出校准这四个
+        字的样子，让所有的模式进行时，原本的按钮都显示退出某某，代表再按
+        一下退出"。四个分析入口的"退出" = **回到开局那个什么都没选**：
+        入口全熄灭 + 收起参数坞（[参数] 按钮随时能再展开）；图与产物一张
+        不动（这里连面板都还没开）。
+        """
+        w = create_window()
+        try:
+            for name in ("1D", "处理", "对比", "绘图"):
+                btn = w.entrance_buttons[name]
+                self.assertEqual(btn.text(), name, "没选中时写入口名")
+                btn.click()
+                QApplication.processEvents()
+                self.assertEqual(btn.text(), f"退出{name}", "选中时写退出某某")
+                self.assertTrue(w.param_dock.isVisibleTo(w))
+                self.assertEqual(w.param_stack.currentIndex(),
+                                 w.PARAM_PAGES[name])
+                btn.click()             # 再点一次 = 退出（同一个按钮）
+                QApplication.processEvents()
+                self.assertEqual(btn.text(), name, "退出后文字复位")
+                self.assertFalse(btn.isChecked())
+                self.assertFalse(w.param_dock.isVisibleTo(w),
+                                 "退出 = 收起参数坞")
+                self.assertIsNone(w._last_entrance)
+                self.assertIn(f"退出{name}", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -6596,6 +6845,9 @@ class TestBackgroundBatch(unittest.TestCase):
             _open_view(w, "1D")
             self.assertTrue(_wait_until(lambda: all(
                 len(_axes(w, "1D", f).lines) > 0 for f in files)))
+        # 出图产出了 1D 产物 → 上一轮的勾选已清零（用户 2026-10-01 第 8 条）：
+        # 本组用例接着要拿同一批去 [批量处理]，这里显式重勾一遍
+        recheck_all(w)
 
     def _focus_a_with_anchors(self, w, files):
         """把 A 设成编辑对象、切到手动锚点、放两个锚点（在背景位置上）。"""
@@ -6665,6 +6917,15 @@ class TestBackgroundBatch(unittest.TestCase):
             self._open_both(w, files)
             self._focus_a_with_anchors(w, files)
             w.proc_batch_btn.click()
+            QApplication.processEvents()
+            # 批量刚产出「处理后」产物 → 上一轮的勾选已清零（第 8 条）。
+            # 要接着 [对比]，就显式勾上刚出炉的那一组——这本来就是
+            # "对比读的是处理产物"的前提
+            bg_group = _group_by_text(w, "处理后")
+            self.assertIsNotNone(bg_group, "批量完该有处理后分组")
+            gui_file_dock._set_checks(
+                w, [(s.item, False) for s in gui_sources.all_sources(w)])
+            bg_group.setCheckState(0, Qt.Checked)
             QApplication.processEvents()
             before = len(w.log_text.toPlainText())
             w.compare_btn.click()
@@ -6757,8 +7018,11 @@ class TestStageCacheFlow(unittest.TestCase):
         finally:
             w.close()
 
-    def test_clear_cache_button_reports_and_empties(self):
-        """[清空缓存]：删产物并如实记日志；空缓存时也提示。"""
+    def test_clear_cache_entry_reports_and_empties(self):
+        """清缓存（文件栏右键那条）：删产物并如实记日志；空缓存时也提示。
+
+        按钮版已删（用户 2026-10-01）——这条测的是同一个功能的唯一入口。
+        """
         from xrd_toolkit.services import stage_cache
         w = create_window()
         path = self._real_file("cache_clear.tif")
@@ -6771,11 +7035,11 @@ class TestStageCacheFlow(unittest.TestCase):
                     _axes(w, "1D", path).lines) > 0))
             self.assertGreaterEqual(stage_cache.describe()["files"], 1,
                                     "算过就该有产物")
-            w.clear_cache_btn.click()
+            gui_file_dock.ask_clear_cache(w)   # 窗口没显示 → 不弹模态
             QApplication.processEvents()
-            self.assertIn("已清空缓存", w.log_text.toPlainText())
+            self.assertIn("已删除所有缓存", w.log_text.toPlainText())
             self.assertEqual(stage_cache.describe()["files"], 0)
-            w.clear_cache_btn.click()      # 再点：空缓存也不炸
+            gui_file_dock.ask_clear_cache(w)   # 再来一次：空缓存也不炸
             QApplication.processEvents()
             self.assertIn("缓存本来就是空的", w.log_text.toPlainText())
         finally:
@@ -8143,6 +8407,25 @@ class TestGestures(unittest.TestCase):
         finally:
             w.close()
 
+    def test_magnifier_log_matches_the_live_gesture(self):
+        """日志跟着开关说人话：点亮 = 框选放大，熄灭 = 平移。
+
+        原先两半都写"左键拖 = 平移"，点亮那句是错的（用户 2026-10-01
+        报"日志错误"）。手势本身由 test_press_pans_when_magnifier_off_
+        and_boxes_when_on 钉着，这条只管文案。
+        """
+        w = create_window()
+        try:
+            self._open_1d(w)
+            self._magnifier(w, "data/fake_b.tif", True)
+            self.assertIn("放大镜已开启：滚轮以光标为中心缩放，左键拖 = 框选放大",
+                          w.log_text.toPlainText())
+            self._magnifier(w, "data/fake_b.tif", False)
+            self.assertIn("放大镜已关闭：滚轮滚动绘图区，左键拖 = 平移",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
     def test_wheel_ignored_until_magnifier_on(self):
         """放大镜熄灭 = 滚轮不缩图（事件穿透给绘图区滚动）；点亮才缩放。"""
         w = create_window()
@@ -9105,6 +9388,63 @@ class TestCalibration(unittest.TestCase):
                              w.PARAM_PAGES["1D"])
             self.assertIsNone(w.calib_dock)
             self.assertIn("回到分析模式", self._logs(w))
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_button_reads_exit_calibration(self):
+        """[校准] 按钮选中时写「退出校准」（用户 2026-10-01 要的"两副面孔"）。
+
+        5707a6f 那版就是这个手感，2026-09-26 改成坞顶的 [返回分析模式] 时
+        丢了；现在五个入口统一由 _highlight_entrance 换文字。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            self.assertEqual(w.calib_btn.text(), "退出校准")
+            self.assertIn("退出", w.calib_btn.toolTip())
+            w.calib_btn.click()          # 再点一次 = 退出校准（老手感）
+            QApplication.processEvents()
+            self.assertEqual(w.calib_btn.text(), "校准")
+            self.assertIsNone(w.calib_dock)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_panel_gets_the_resize_grip(self):
+        """校准图子窗口也带右下角那个 ▙ 把手（用户 2026-10-01 第 3 条：
+        "校准时二维图……没有 1D 图右下角那个标准的缩放，加上这个"）。
+
+        抓手认容器走的是 `_get_dock`——校准面板不进 plot_docks，默认
+        那条路（window.plot_docks）查不到它，所以这里两样都钉住：
+        把手在不在、拉伸的是不是校准窗口。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            content = w.calib_dock.widget()
+            grip = getattr(content, "_resize_grip", None)
+            self.assertIsNotNone(grip, "校准面板要有右下角把手")
+            self.assertEqual(grip.text(), "▙")
+            self.assertEqual(grip.height(), 18, "与 1D 图那个把手同尺寸")
+            filt = content._grip_filter
+            self.assertIs(filt._get_dock(), w.calib_dock,
+                          "抓手拉伸的必须是校准窗口（它不住 plot_docks）")
+            # 拖右下角 = 改窗口几何（真正走 _apply_drag 那条路）
+            dock = w.calib_dock
+            before = dock.width()
+            filt._drag = (0, 0, dock.x(), dock.y(), dock.width(),
+                          dock.height(), "bottomright")
+            filt._apply_drag(QPoint(40, 30))
+            self.assertEqual(dock.width(), before + 40)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -11333,6 +11673,7 @@ class TestBatchProgress(unittest.TestCase):
                 dock = w.plot_docks.get("1D|" + p)
                 if dock is not None:
                     dock.close()
+            recheck_all(w)   # ① 出过图 → 勾选已清零（第 8 条）：② 要重新勾
             with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
                     mock.patch.object(gui_views, "_compute_integration",
                                       side_effect=_fake_compute):

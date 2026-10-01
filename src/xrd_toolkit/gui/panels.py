@@ -391,12 +391,17 @@ class _PanelGripFilter(QObject):
         "topright": Qt.SizeBDiagCursor, "bottomleft": Qt.SizeBDiagCursor,
     }
 
-    def __init__(self, window: QMainWindow, key: str, content, grip):
+    def __init__(self, window: QMainWindow, key: str, content, grip,
+                 get_dock=None):
         super().__init__(content)   # 父 = 内容：防 Python GC 静默失效
         self._window = window
         self._key = key
         self._content = content
         self._grip = grip
+        # 容器现查：普通图面板住 window.plot_docks，校准面板不进那张表
+        # （它有自己的 window.calib_dock，见 calib_panel）。认的是"这一刻
+        # 谁是这个内容的容器"，所以传来的是一条取用函数而不是容器本身
+        self._get_dock = get_dock or (lambda: window.plot_docks.get(key))
         self._zone = None      # 当前悬停区（控制光标）
         self._drag = None      # (起点全局坐标, 起点几何, 抓取区名)
         self._cursor_override = False   # 覆盖光标是否挂在本过滤器名下
@@ -439,7 +444,7 @@ class _PanelGripFilter(QObject):
             h = gh + dy
         # 下限：别缩到看不见（内容自身最小 ~65×57，留够余地）
         w, h = max(w, 120), max(h, 100)
-        dock = self._window.plot_docks.get(self._key)
+        dock = self._get_dock()
         if dock is not None:
             dock.setGeometry(x, y, w, h)
 
@@ -504,9 +509,8 @@ class _PanelGripFilter(QObject):
         if et == QEvent.Type.MouseButtonPress:
             if (inside and zone is not None
                     and event.button() == Qt.LeftButton):
-                self._drag = (gpos.x(), gpos.y(), *_dock_geo(self._window,
-                                                             self._key),
-                              zone)
+                self._drag = (gpos.x(), gpos.y(),
+                              *_dock_geo(self._get_dock), zone)
                 return True   # 吃下：不让画布当平移起点
             return False
         # MouseButtonRelease
@@ -516,16 +520,17 @@ class _PanelGripFilter(QObject):
         return False
 
 
-def _dock_geo(window: QMainWindow, key: str):
-    """当前容器几何 (x, y, w, h)；面板已关就原地踏步（拖拽兜底）。"""
-    dock = window.plot_docks.get(key)
+def _dock_geo(get_dock):
+    """当前容器几何 (x, y, w, h)；容器已关就原地踏步（拖拽兜底）。"""
+    dock = get_dock()
     if dock is None:
         return (0, 0, 0, 0)
     g = dock.geometry()
     return (g.x(), g.y(), g.width(), g.height())
 
 
-def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
+def _install_resize_grip(window: QMainWindow, key: str, content,
+                         get_dock=None) -> None:
     """给面板内容装四边/四角抓手 + 右下角可见把手。
 
     把手 = 半透明小三角标签（child of 内容）：光标变斜向箭头、
@@ -542,6 +547,12 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     被带过期坐标的合成事件打回原形，见 _PanelGripFilter 类
     docstring）；把手自带 SizeFDiag 光标，按住把手拖 = 右下角
     拉伸（按压位置会换算回内容坐标判区）。
+
+    `get_dock` = "现在谁装着这个内容"：默认查 window.plot_docks（普通
+    图面板）；校准面板不住那张表，自己传 `lambda: window.calib_dock`
+    ——用户 2026-10-01："校准的子窗口没有 1D 图右下角那个标准的缩放"。
+    内容的画布认 `content.canvas`：普通面板由 _PlotPanel 挂上，校准
+    面板在建面板时补挂（见 calib_panel._open_calib_panel）。
     """
     grip = QLabel("▙", content)
     grip.setCursor(Qt.SizeFDiagCursor)
@@ -549,7 +560,7 @@ def _install_resize_grip(window: QMainWindow, key: str, content) -> None:
     grip.setFixedSize(18, 18)
     grip.move(max(content.width() - 20, 0), max(content.height() - 20, 0))
     content.setMouseTracking(True)
-    filt = _PanelGripFilter(window, key, content, grip)
+    filt = _PanelGripFilter(window, key, content, grip, get_dock=get_dock)
     canvas = getattr(content, "canvas", None)
     # content 必挂：接自己的 Resize 事件重定位把手（1D 面板它的
     # 鼠标事件全被画布挡着，只有 Resize 会来，无害）；画布另挂
