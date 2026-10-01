@@ -58,6 +58,7 @@ from xrd_toolkit.gui.plot_panels import (
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.services import process, stage_cache
+from xrd_toolkit.services.stacking import row_step
 from xrd_toolkit.services.background import (compute_baseline,
                                               subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -1753,9 +1754,11 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     """在指定的瀑布面板画出 36 扇区堆叠瀑布。
 
     画法（2026-09-26 晚按用户口径定了两处）：
-      - **行距统一**：所有行同一个行高（全场峰值 × 0.7），不再按各扇区
-        自己的峰值定行高——那等于把每行都缩到各自的高度，强弱没法横向
-        比（用户："不要按照各自的最高峰归一化，所有的图"）。
+      - **行距统一**：所有行同一个行高（= 第二高的行峰 × 0.7，见
+        services/stacking），不再按各扇区自己的峰值定行高——那等于把每行
+        都缩到各自的高度，强弱没法横向比（用户："不要按照各自的最高峰
+        归一化，所有的图"）；也不按全场最大——一个特别强的扇区会把其余行
+        压成平线（用户 2026-10-02："行间距小一点，让峰明显一点"）。
       - **处理链照跑**：背景用**扇区均值**估一条共同基线、所有扇区减同
         一条（不逐扇区各估各的——空气散射在方位角上均匀，逐扇区各扣会
         把"哪个扇区强"这个瀑布图存在的理由抹平）；**平滑与裁剪逐扇区
@@ -1808,10 +1811,14 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
             end = int(np.argmax(dead)) if dead.any() else len(v)
             curves.append((tth[:end], v[:end], k))
         # 行距统一：所有行同一个行高（等行距 → 各行的强弱能横向比，
-        # y 刻度也均匀分布；裁剪过的巨峰不再撑高自己那一行）
+        # y 刻度也均匀分布；裁剪过的巨峰不再撑高自己那一行）。
+        # 行距怎么定见 services/stacking：**按第二高的行峰**，不按全场
+        # 最大——一个特别强的扇区（实测这批 LMFP：χ=165° 的主峰是第二名的
+        # 3 倍）会把其余 35 行压成平线（用户 2026-10-02："行间距小一点，
+        # 让峰明显一点"）。
         i_pos = np.clip(i2d, 0.0, None)
-        peak = float(np.nanmax(i_pos)) if np.isfinite(i_pos).any() else 0.0
-        step = peak * 0.7 if peak > 0 else 1.0
+        i_pos = np.where(np.isfinite(i_pos), i_pos, 0.0)
+        step = row_step(i_pos.max(axis=0))
         offsets = np.arange(n, dtype=float) * step
         for t_cut, v_cut, k in curves:
             ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],

@@ -789,14 +789,17 @@ class TestNewViews(unittest.TestCase):
             w.close()
 
     def test_waterfall_uniform_rows_and_processing_chain(self):
-        """瀑布：行距统一（全场峰值 ×0.7）+ 处理链逐扇区跑（裁剪/平滑）。
+        """瀑布：行距统一（第二高的行峰 ×0.7）+ 处理链逐扇区跑（裁剪/平滑）。
 
         用户 2026-09-26："不要按照各自的最高峰归一化，所有的图" +
         "瀑布图也是在处理后画，去掉无效的峰就看得清了"。
         4 个扇区、共同基线 10：0 号有巨峰 100，1/2 号只有弱峰 11/12 ——
-        旧规则下行高按各自的峰值算（弱扇区的行被压得只剩一点点）；新规则
-        所有行同高（按全场 100），裁掉巨峰后行高改由剩下的最大峰 12 决定
-        → 弱扇区的特征相对放大 8 倍多。
+        旧规则下行高按各自的峰值算（弱扇区的行被压得只剩一点点）；
+        2026-09-26 改成所有行同高（按全场 100）；2026-10-02 再把基准从
+        "全场最大"换成"**第二高**的那一行"（用户："瀑布图……行间距小一点，
+        让峰明显一点"）：0 号的巨峰不再决定行高，行距由 12 定（= 8.4，
+        而不是 70）——弱扇区的特征因此看得见。真数据上的来龙去脉见
+        services/stacking 的模块头。
         """
         w = create_window()
         try:
@@ -822,7 +825,10 @@ class TestNewViews(unittest.TestCase):
                     return [float(np.asarray(l.get_ydata())[i_mid])
                             for l in ax.lines]
 
-                step = 100.0 * 0.7          # 全场峰值（扇区 0 的巨峰）× 0.7
+                # 行距 = 第二高的行峰（扇区 2 的 12）× 0.7——**不是**全场峰值
+                # 100（扇区 0 的巨峰）——那正是 2026-10-02 改掉的东西：
+                # 一个特别强的扇区不该把其余行压成平线
+                step = 12.0 * 0.7
                 for k, b in enumerate(bases()):
                     self.assertAlmostEqual(b - 10.0, k * step,
                                            delta=step * 0.05)
@@ -832,9 +838,9 @@ class TestNewViews(unittest.TestCase):
                 w.params["裁剪终点 (°)"].setValue(2.1)
                 w.findChild(QPushButton, "cut_add_btn").click()
                 QApplication.processEvents()
-            # 裁掉巨峰后行高改由剩下的最大峰（12）决定 → 每行放大了
-            step2 = 12.0 * 0.7
-            self.assertLess(step2, step, "裁掉巨峰 → 行高应显著变小")
+            # 裁掉巨峰：它那一行也降回基线 10 → 第二高变成扇区 1 的 11
+            step2 = 11.0 * 0.7
+            self.assertLess(step2, step, "巨峰被裁掉，行距跟着降一点")
             for k, b in enumerate(bases()):
                 self.assertAlmostEqual(b - 10.0, k * step2,
                                        delta=step2 * 0.05)
@@ -1653,12 +1659,16 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         return ev
 
     def test_stack_offsets_curves_like_waterfall(self):
-        """堆叠：行距统一 = **全场**峰值 ×0.7（不按各条自己的峰值），
-        y 刻度 = 样品名，无图例；取消堆叠回到平铺 + 图例回来。
+        """堆叠：行距统一 = **第二高**的行峰 ×0.7（不按各条自己的峰值，
+        也不按全场最大），y 刻度 = 样品名，无图例；取消堆叠回到平铺 +
+        图例回来。
 
         用户 2026-09-26："不要按照各自的最高峰归一化，所有的图"——
-        假数据 fake_a 峰值 3、fake_b 峰值 30：两条都按全场峰值 30 抬行
+        假数据 fake_a 峰值 3、fake_b 峰值 30：两条按**同一个**行距抬行
         （旧规则按各自的 3 / 30 抬，等于把每条都缩到自己的高度）。
+        2026-10-02 起基准由"全场最大"换成"第二高的那一行"（同
+        services/stacking）：两条曲线时第二高 = 弱的那条 3 → 行距 2.1，
+        强的那条照它的真实强度探出去——它确实强 10 倍，不该被压平。
         """
         w = create_window()
         try:
@@ -1668,14 +1678,17 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock.params_snapshot["对比堆叠"] = True
             gui_plot_compare._redraw_compare(w, key)
             y_stack = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
-            peak_all = max(float(np.nanmax(y)) for y in y_flat)   # = 30
+            peaks = [float(np.nanmax(y)) for y in y_flat]        # [3, 30]
+            step = sorted(peaks)[-2] * 0.7                       # 第二高 × 0.7
+            self.assertAlmostEqual(step, 3.0 * 0.7, places=6,
+                                   msg="基准是第二高的那条（3），不是最大（30）")
             np.testing.assert_allclose(y_stack[0], y_flat[0])   # 第一条不动
-            np.testing.assert_allclose(y_stack[1], y_flat[1] + peak_all * 0.7)
-            # 两条行基线 = 0 与 全场峰值×0.7（行距统一，不按各自的峰）
+            np.testing.assert_allclose(y_stack[1], y_flat[1] + step)
+            # 两条行基线 = 0 与 行距（同一个行距，不按各自的峰）
             self.assertAlmostEqual(float(y_stack[0][0]),
                                    float(y_flat[0][0]))
             self.assertAlmostEqual(float(y_stack[1][0]) - float(y_flat[1][0]),
-                                   peak_all * 0.7)
+                                   step)
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a.tif", "fake_b.tif"])
             self.assertIsNone(ax.get_legend(), "堆叠下 y 刻度即样品名，无图例")

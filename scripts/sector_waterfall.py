@@ -40,6 +40,7 @@ from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配�
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_sectors
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
+from xrd_toolkit.services.stacking import row_step   # 瀑布行距（与 GUI 同口径）
 
 
 def main() -> None:
@@ -201,13 +202,16 @@ def main() -> None:
 
         # ---- 瀑布图：36 条原强度曲线沿 Y 轴错开堆叠 ----
         # 每条曲线画到自身首个零强度点，使用原强度（不取根号）。
-        # 行距统一：所有行同一个行高 = 全场峰值 × 0.7（不按各扇区自己
-        # 的峰值——那等于把每行缩到各自高度，扇区之间的强弱没法横向比；
-        # 2026-09-26 与 GUI 同口径改）。相邻行允许峰顶部分探入上一行。
+        # 行距统一：所有行同一个行高（不按各扇区自己的峰值——那等于把每行
+        # 缩到各自高度，扇区之间的强弱没法横向比；2026-09-26 与 GUI 同口径），
+        # 而这个行高取"第二高的行峰 × 0.7"、**不取全场最大**——一个特别强
+        # 的扇区会把其余行压成平线（2026-10-02 用户："行间距小一点，让峰明显
+        # 一点"）。口径只有一份：services/stacking.row_step（忽略最高的那一行），
+        # 与 GUI 瀑布图、对比堆叠共用。相邻行允许峰顶部分探入上一行。
         # 每行基线标 χ 值，曲线可对应回各自的 10° 扇区。
         I_pos = np.clip(I2d_plot, 0.0, None)
-        peak_all = float(np.nanmax(I_pos)) if np.isfinite(I_pos).any() else 0.0
-        step = peak_all * 0.7 if peak_all > 0 else 1.0
+        I_pos = np.where(np.isfinite(I_pos), I_pos, 0.0)
+        step = row_step(I_pos.max(axis=0))
         offsets = np.arange(n, dtype=float) * step
 
         fig, ax = plt.subplots(figsize=(12, 8))

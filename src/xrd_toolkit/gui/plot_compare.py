@@ -15,6 +15,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.services.stacking import row_step
+
 from xrd_toolkit.gui.panel_state import (
     _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry,
@@ -164,16 +166,17 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         overrides = getattr(dock, "curve_colors", None) or {}
         stack = _panel_param(window, dock, "对比堆叠", False)
         if stack:
-            # 瀑布式错开叠放，行距统一：所有行同一个行高（全场峰值 ×
-            # 0.7），y 刻度 = 各条基线（显示名）。**不按各自峰值定行高**
-            # ——那等于把每条曲线缩到各自的高度，样品之间的强弱没法横向
-            # 比（用户 2026-09-26："不要按照各自的最高峰归一化，所有的
-            # 图"）。归一化先做（每条显示数据再叠），堆叠下纵轴范围/
+            # 瀑布式错开叠放，行距统一：所有行同一个行高（= 各行峰值的
+            # 第二高的行峰 × 0.7，口径见 services/stacking），y 刻度 = 各条基线
+            # （显示名）。**不按各自峰值定行高**——那等于把每条曲线缩到
+            # 各自的高度，样品之间的强弱没法横向比（用户 2026-09-26：
+            # "不要按照各自的最高峰归一化，所有的图"）；也不按全场最大
+            # ——一条特别强的曲线会把其余压成平线（2026-10-02）。
+            # 归一化先做（每条显示数据再叠），堆叠下纵轴范围/
             # 对数不适用（行偏移由数据决定，同瀑布）
             peaks = [float(np.nanmax(c[1])) for c in curves
                      if len(c[1]) and np.isfinite(c[1]).any()]
-            peak = max(peaks) if peaks else 0.0
-            step = peak * 0.7 if peak > 0 else 1.0
+            step = row_step(peaks)   # 行距口径见 services/stacking（第二高的行峰）
             offsets = [i * step for i in range(len(curves))]
             for (tth, shown, display, i, _ref), off in zip(curves, offsets):
                 color = overrides.get(display) or _curve_color(palette, i)
