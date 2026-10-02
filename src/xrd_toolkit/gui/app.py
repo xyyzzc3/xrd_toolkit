@@ -710,7 +710,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setDecimals(1)
         box.setSuffix("°")
         box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
-        box.setToolTip("参与积分的 2θ 范围（所有分析页共用；改了要重出图）")
+        box.setToolTip("参与积分的 2θ 范围（1D / 处理 / 绘图页共用；"
+                       "改了要重出图才生效）")
         window.params[key] = box
     dlay.addWidget(window.params["2θ 下限 (°)"], 1)
     dlay.addWidget(QLabel("–"))
@@ -719,7 +720,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt.setRange(100, 100000)
     npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
     npt.setMaximumWidth(72)
-    npt.setToolTip("2θ 范围内的采样点数（所有分析页共用）")
+    npt.setToolTip("2θ 范围内的采样点数（1D / 处理 / 绘图页共用；"
+                   "改了要重出图才生效）")
     window.params["输出点数"] = npt
     dlay.addWidget(QLabel("点数"))
     dlay.addWidget(npt, 1)
@@ -1840,17 +1842,20 @@ def _sync_geom_row(window: QMainWindow) -> None:
 
 
 def _sync_data_row(window: QMainWindow) -> None:
-    """坞顶"数据参数"那一行（2θ 范围 + 点数）随页显隐：**校准页不显示**。
+    """坞顶"数据参数"那一行（2θ 范围 + 点数）随页显隐：**校准页与对比页不显示**。
 
-    这一行管的是 1D 积分区间（1D / 处理 / 对比 / 热图都用它），与校准无关
-    ——校准在原始图上定几何，全程不读 2θ 区间（`ring_metrics` 只吃几何）。
-    用户 2026-09-27："校准页参数放 2theta 范围干嘛"。
+    这一行管的是 1D 积分区间，只有**真要按它取数/积分**的页才用它
+    （1D / 处理 / 绘图）。校准页不读 2θ 区间（`ring_metrics` 只吃几何，
+    用户 2026-09-27："校准页参数放 2theta 范围干嘛"）。**对比页 2026-10-03
+    起也不显示**（用户："对对比图改 2θ 会影响所有参与对比的图，这不合适"；
+    "对比页不起作用就藏起来"）——对比/热图只画每个文件**自己**已有的曲线
+    （见 plot_compare._curve_for），这一行在那里不起作用，就不摆着让人误按。
     几何配置那一行相反，校准页要留着：它是借用起点，也是 [加载参数] /
     [保存参数] / [删除] 三个按钮的作用对象。
     """
-    calibrating = (window.param_stack.currentIndex()
-                   == window.PARAM_PAGES["校准"])
-    window.data_row.setVisible(not calibrating)
+    page = window.param_stack.currentIndex()
+    hidden = (window.PARAM_PAGES["校准"], window.PARAM_PAGES["对比"])
+    window.data_row.setVisible(page not in hidden)
 
 
 def _switch_entrance(window: QMainWindow, name: str) -> None:

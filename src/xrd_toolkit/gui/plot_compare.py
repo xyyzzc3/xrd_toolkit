@@ -18,6 +18,7 @@ from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services.stacking import row_step
 
 from xrd_toolkit.gui.panel_state import (
+    DATA_PARAM_DEFAULTS,
     _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry,
     _compare_shown_curves, _content, _curve_color, _data_snapshot,
@@ -28,8 +29,8 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _apply_plain_view, _batch_step, _bg_path_of, _curve_for, _progress_show,
-    _refresh_proc, _spawn)
+    _apply_plain_view, _batch_step, _bg_path_of, _curve_for,
+    _file_data_params, _progress_show, _refresh_proc, _spawn)
 
 
 # 对比面板图例最多列几条：再多就不画了（挡住图的是那 81 行名字）。
@@ -316,29 +317,46 @@ def _finish_compare(window: QMainWindow, key: str) -> None:
         _log(window, "对比失败：所有文件的积分都失败了，面板留空")
 
 
+def _aggregate_snapshot(window: QMainWindow, base: dict) -> dict:
+    """对比 / 热图面板的快照：显示参数照旧，**数据参数（2θ / 点数）不要**。
+
+    用户 2026-10-03："对对比图改 2θ 会影响所有参与对比的图，这不合适"——
+    对比/热图是"看已经算好的东西"，每条曲线有**自己**的范围（取数见
+    plot_views._curve_for），面板不该声称"我按某个全局范围算过"。数据键
+    不进快照正好办两件事：切到对比面板**不回放也不写**坞顶那行（切回
+    1D 页时盒子还是那边自己的值，不串），坞顶那行的「未应用」也不会为
+    对比面板亮（_pending_diff 跳过快照里没有的键）。
+    """
+    snap = _data_snapshot(window, base)
+    for name in DATA_PARAM_DEFAULTS:
+        snap.pop(name, None)
+    return snap
+
+
 def _run_compare(window: QMainWindow, key: str) -> None:
     """对对比面板的每个文件各起一个后台积分，结果画到同一张图。
 
     代次（gen）防过期：重复点 [对比] 或数据 [应用] 时旧代任务
     全部作废。快照开工前拍下（与单文件面板一致）。
+
+    **每个文件按它自己上次用过的数据参数取数**（甲，2026-10-03）：对比
+    读的是每个文件**自己**的产物/范围，不看坞顶那行（那行在对比页也藏
+    起来了）——"对对比图改 2θ 会影响所有参与对比的图，这不合适"。
     """
     dock = window.plot_docks.get(key)
     if dock is None:
         return   # 面板已关：迟到点击/重算不落地
-    # 数据参数 = 控件当前值（计算就用它），显示参数沿用面板自己的
-    # 旧快照（重按 [对比] 刷新不改这张图的长相）
-    dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
-    # 刚把控件值写进快照 = 这组值被用掉了：「未应用」灰字该灭。重按
-    # [对比] 时编辑对象没变，_set_focus 会直接 return、不再刷新，所以
-    # 这里自己刷一次（用户 2026-10-03："点了以后那个未应用的灰字还在"）
+    # 显示参数沿用面板自己的旧快照（重按 [对比] 刷新不改这张图的长相）；
+    # 数据参数不进快照（见 _aggregate_snapshot）
+    dock.params_snapshot = _aggregate_snapshot(window, dock.params_snapshot)
+    # 显示参数的「未应用」灰字该灭（重按 [对比] 时编辑对象没变，
+    # _set_focus 会直接 return、不再刷新——用户 2026-10-03："灰字还在"）
     _refresh_pending_labels(window)
     dock.compare_gen += 1
     gen = dock.compare_gen
     epoch = window._panel_epoch.get(key, 0)   # 面板代数：关过重开旧代全作废
     dock.compare_pending = len(dock.compare_files)
     dock.compare_data = {}
-    geom = _collect_geometry(window)
-    npt = int(window.params["输出点数"].value())
     window._setting_limits = True   # 程序自己清轴：不触发范围同步写回
     try:
         _content(dock).axes_1d.clear()
@@ -404,6 +422,10 @@ def _run_compare(window: QMainWindow, key: str) -> None:
             def error(msg):
                 fail_one(path, display, msg)
 
+            # 这个文件的取数参数 = 它自己上次用过的（甲，与 _curve_for 同源）
+            lo, hi, npt = _file_data_params(path)
+            geom = dict(_collect_geometry(window),
+                        tth_min_deg=lo, tth_max_deg=hi)
             window.status_text.setText(f"正在积分 {Path(path).name}…")
             _spawn(window, path, geom, npt, key,
                    on_done=done, on_error=error)
@@ -444,7 +466,8 @@ def _plot_compare(window: QMainWindow) -> None:
         dock.figure_saved = False
         dock.compare_files = files   # 面板绑定这组来源（重算用）
         dock.compare_gen = 0
-        dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
+        # 新面板：显示参数从默认起步；数据参数不进快照（见 _aggregate_snapshot）
+        dock.params_snapshot = _aggregate_snapshot(window, None)
         _log(window, f"打开对比面板：{len(files)} 条曲线叠一张图"
                      f"（{_sources_mix(files)}）")
     else:
@@ -867,16 +890,15 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
     dock = window.plot_docks.get(key)
     if dock is None:
         return   # 面板已关：迟到点击/重算不落地
-    dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
-    # 同 _run_compare：值刚被用掉，灰字立即刷新（重按 [热图] 时编辑对象
-    # 没变、_set_focus 直接 return，没人刷新就会留着陈旧的"未应用"）
+    # 数据参数不进快照（同 _run_compare：每个文件按自己上次的范围取数）
+    dock.params_snapshot = _aggregate_snapshot(window, dock.params_snapshot)
+    # 显示参数刚被用掉，灰字立即刷新（重按 [热图] 时编辑对象没变、
+    # _set_focus 直接 return，没人刷新就会留着陈旧的"未应用"）
     _refresh_pending_labels(window)
     dock.heat_gen += 1
     gen = dock.heat_gen
     epoch = window._panel_epoch.get(key, 0)
     results = [None] * len(dock.heat_files)   # 文件顺序占位
-    geom = _collect_geometry(window)
-    npt = int(window.params["输出点数"].value())
     missing = []
 
     def cache_of(path, display):
@@ -960,6 +982,10 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
                     if panel.heat_pending == 0:
                         _finish_heatmap(window, key)
 
+                # 这个文件的取数参数 = 它自己上次用过的（甲，与 _curve_for 同源）
+                lo, hi, npt = _file_data_params(path)
+                geom = dict(_collect_geometry(window),
+                            tth_min_deg=lo, tth_max_deg=hi)
                 window.status_text.setText(f"正在积分 {Path(path).name}…")
                 _spawn(window, path, geom, npt, key,
                        on_done=done, on_error=error)
@@ -1024,7 +1050,8 @@ def _plot_heatmap(window: QMainWindow) -> None:
         dock.heat_results = []
         dock.heat_pending = 0
         dock.heat_data = None
-        dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
+        # 新面板：显示参数从默认起步；数据参数不进快照（见 _aggregate_snapshot）
+        dock.params_snapshot = _aggregate_snapshot(window, None)
         _log(window, f"打开热图面板：{len(files)} 个文件拼一张强度图"
                      f"（{_sources_mix(files)}）")
     else:

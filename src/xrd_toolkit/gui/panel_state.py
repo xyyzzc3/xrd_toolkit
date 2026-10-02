@@ -205,6 +205,7 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
     显示不重算，数据参数保持"这张图当时是用什么算的"，顺手改了
     数据控件也不会冒充成这张图的计算参数。
     """
+    given = base is not None      # 要在 "or {}" 之前判（None 会被吞掉）
     base = base or {}
     snap = {"config": window.config_name}
     for name, w in window.params.items():
@@ -218,8 +219,11 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
             snap[name] = value
         elif name in base:
             snap[name] = base[name]
-        else:
+        elif not given:
             snap[name] = value
+        # 给了 base 而 base 里没这个键 = 这张图**故意不管**这个键（对比/热图
+        # 的 2θ/点数，2026-10-03）：保持缺省，别从控件把它救回来——救回来
+        # 就等于"看一眼对比就把坞顶那行染上了"
     # 没有控件的键从旧快照原样带过来：视图 2θ 范围这两个键现在就是这样
     # （用户 2026-09-27 撤了那对输入框，"显示范围用户自己放大就行了"——
     # 但缩放/平移仍在写它们）。上面那圈按控件重建，带不过来的话 [应用]

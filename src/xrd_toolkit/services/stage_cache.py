@@ -634,11 +634,18 @@ def _ranges_index() -> dict:
         # 而查询按 resolve() 归一——macOS 上 /var → /private/var 的软链不
         # 归一就永远对不上（2026-10-03 实测：记忆查不到、退回默认值）
         p = str(Path(p).resolve())
+        # 范围优先取 meta 里**当时要求**的那两个值（= 进缓存键的那两个）：
+        # 对比/热图按它取数时才能原样拼回这把键、命中已有产物（不用重算）。
+        # 老产物 / 全范围产物 meta 里是 None，退回曲线自己的端点——数值
+        # 大致相同但拼不回原键，那边会多算一次，可接受。
+        req_lo, req_hi = meta.get("tth_min"), meta.get("tth_max")
         created = float(meta.get("created") or 0)
         cur = idx.get(p)
         if cur is None or created > cur["created"]:
-            idx[p] = {"tth_min": float(lo), "tth_max": float(hi),
-                      "npt": int(meta.get("npt") or 0), "created": created}
+            idx[p] = {
+                "tth_min": float(req_lo) if req_lo is not None else float(lo),
+                "tth_max": float(req_hi) if req_hi is not None else float(hi),
+                "npt": int(meta.get("npt") or 0), "created": created}
     _ranges_cache = {"gen": _write_gen, "index": idx}
     return idx
 

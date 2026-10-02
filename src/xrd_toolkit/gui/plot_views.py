@@ -837,8 +837,9 @@ def _consume_data_params(window: QMainWindow) -> None:
     """坞顶那组数据参数（2θ 上下限 / 输出点数）刚被**用掉**。
 
     调用点 = 真正拿这把范围去取数/积分的地方：派积分任务（_spawn）、
-    对比 / 热图取数（_curve_for）、[采用这份结果]、[批量处理]（后两个即使
-    命中缓存没真积分，也算"按这把范围取过数"）。
+    [采用这份结果]、[批量处理]（后两个即使命中缓存没真积分，也算"按这把
+    范围取过数"）。**对比 / 热图不在其列**（2026-10-03）：它们按每个文件
+    自己的范围取数（_file_data_params），坞顶那行在那里不起作用。
 
     为什么要标：用户填 2θ=2.5 出一张新图 / 打一批产物，那 2.5 是**指令**、
     已经被用掉了——不标的话，切回上一张图会凭空冒出一个"未应用"
@@ -847,18 +848,33 @@ def _consume_data_params(window: QMainWindow) -> None:
     _note_params_consumed(window, "数据")
 
 
+def _file_data_params(path) -> tuple:
+    """这个文件取数用的 (2θ 下限, 上限, 点数)：**它自己上次用过的**（甲）。
+
+    从没算过 → 出厂默认（panel_state.DATA_PARAM_DEFAULTS）。对比 / 热图
+    取数走它（见 _curve_for）：这两张图的数据参数 2026-10-03 起不再从
+    坞顶那行拿——用户："对对比图改 2θ 会影响所有参与对比的图，这不合适"。
+    """
+    mem = stage_cache.last_range_for(path)
+    lo, hi = mem.get("tth_min"), mem.get("tth_max")
+    return (float(lo) if lo is not None else DATA_PARAM_DEFAULTS["2θ 下限 (°)"],
+            float(hi) if hi is not None else DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
+            int(mem.get("npt") or DATA_PARAM_DEFAULTS["输出点数"]))
+
+
 def _curve_for(window, path):
     """对比 / 热图取曲线：**产物优先**（扣背景产物 → 1D 产物），否则 None。
 
     返回 (tth, intensity, 来源说明)。产物齐了就不用再积分——跨会话秒开
     （用户 2026-09-24 第 5 条：对比直接用上一步扣完背景的产物）。
     来源说明进日志：用哪一份**看得见**，不是悄悄发生的。
+
+    数据参数（2θ / 点数）用**这个文件自己上次用过的**（`_file_data_params`，
+    甲）：对比是"看已经算好的东西"，不该为看一眼把整批按坞顶那行重算
+    （2026-10-03 用户定；坞顶那行在对比页也藏起来了）。
     """
-    geom = _collect_geometry(window)
-    npt = int(window.params["输出点数"].value())
-    kw = dict(config=window.config_name, npt=npt,
-              tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
-    _consume_data_params(window)   # 按这把范围取数：这组值用掉了
+    lo, hi, npt = _file_data_params(path)
+    kw = dict(config=window.config_name, npt=npt, tth_min=lo, tth_max=hi)
     dock = window.plot_docks.get(window.focus_panel)
     if dock is not None:
         # 设置模板 = 当前编辑对象那份（背景三项 + 平滑 + 裁剪），锚点按**该

@@ -5168,30 +5168,39 @@ class TestParamDockSplitLayout(unittest.TestCase):
         finally:
             w.close()
 
-    def test_data_params_row_visible_on_every_page(self):
-        """2θ 范围 / 点数固定在坞顶第三行：**四个分析页**都看得见、都能改；
-        校准页不显示（它管的是 1D 积分区间，校准全程不读它）。
+    def test_data_params_row_visible_on_the_pages_that_use_it(self):
+        """2θ 范围 / 点数在**真按它取数的页**看得见、能改：1D / 处理 / 绘图；
+        校准页与**对比页**不显示。
 
         用户 2026-09-27："1d 画图时能选范围，后面处理时没法选范围，比如
-        对比时，参数里加上"，随后又指出"校准页参数放 2theta 范围干嘛"。
-        几何配置那一行相反：校准页要留着（借用起点 + 那三个按钮的对象）。
+        对比时，参数里加上"，随后又指出"校准页参数放 2theta 范围干嘛"
+        ——校准全程不读 2θ 区间。**2026-10-03 对比页也收起来了**（用户：
+        "对对比图改 2θ 会影响所有参与对比的图，这不合适"；"对比页不起作用
+        就藏起来"）：对比/热图只画每个文件**自己**的曲线（数据参数按文件
+        记忆取，见 TestCompare 那两条），这行在那里不起作用，就别摆着让人
+        误按。几何配置那一行相反：校准页要留着（借用起点 + 那三个按钮的
+        对象）。
         """
         w = create_window()
         try:
             w.show()
-            for page in ("1D", "处理", "对比", "绘图"):
+            for page in ("1D", "处理", "绘图"):
                 w.entrance_buttons[page].click()
                 QApplication.processEvents()
                 for name in ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"):
                     self.assertTrue(w.params[name].isVisible(),
                                     f"{page} 页上该看得见 {name}")
+            w.entrance_buttons["对比"].click()
+            QApplication.processEvents()
+            self.assertFalse(w.data_row.isVisible(),
+                             "对比页上它不该出现（那里不按它取数）")
             w.entrance_buttons["校准"].click()
             QApplication.processEvents()
             self.assertFalse(w.data_row.isVisible(), "校准页上它不该出现")
             self.assertTrue(w.geom_row.isVisible(), "几何配置行校准页要留着")
             w.entrance_buttons["1D"].click()
             QApplication.processEvents()
-            self.assertTrue(w.data_row.isVisible(), "回到分析页该回来")
+            self.assertTrue(w.data_row.isVisible(), "回到它管用的页该回来")
             # 改一下照样进几何（数据参数照旧参与计算）
             w.params["2θ 下限 (°)"].setValue(2.5)
             self.assertAlmostEqual(
@@ -5664,27 +5673,76 @@ class TestCompare(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
 
-    def test_reclick_clears_the_stale_pending_label(self):
-        """重按 [对比] 后「未应用」灰字即时灭（用户 2026-10-03："灰字还在"）。
+    def test_the_data_row_is_hidden_on_the_compare_page(self):
+        """对比页不显示坞顶那行数据参数（用户 2026-10-03："不起作用就藏起来"）。
 
-        点按钮 = 这把 2θ/点数被用掉（_run_compare 开头的快照写回把差清零）；
-        但编辑对象没变，_set_focus 直接 return、不会刷新灰字——刷新要由取数
-        这条路自己补（_run_compare 里的 _refresh_pending_labels）。
+        对比/热图只画每个文件**自己**的曲线，2θ/点数在那里不起作用；与其
+        摆一行按了就重算一整批的控件，不如藏起来（校准页同款先例）。
         """
         w = create_window()
         try:
-            self._plot_compare(w)      # 算完焦点落在对比面板上
-            lbl = w.pending_labels["数据"]
-            self.assertTrue(lbl.isHidden(), "一开始没有改动 → 灰字不该亮")
-            w.params["2θ 上限 (°)"].setValue(6.0)
+            w.entrance_buttons["对比"].click()
             QApplication.processEvents()
-            self.assertFalse(lbl.isHidden(), "改了 2θ → 灰字该亮")
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
+            self.assertTrue(w.data_row.isHidden(), "对比页该藏起来")
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertFalse(w.data_row.isHidden(), "1D 页照旧显示")
+            w.entrance_buttons["处理"].click()
+            QApplication.processEvents()
+            self.assertFalse(w.data_row.isHidden(), "处理页照旧显示")
+        finally:
+            w.close()
+
+    def test_compare_reads_each_files_own_range_and_ignores_the_dock(self):
+        """对比按每个文件自己已有的产物取数：改坞顶那行不重算、也不带过去。
+
+        用户 2026-10-03："对对比图改 2θ 会影响所有参与对比的图，这不合适"。
+        这边钉住新的语义：每个文件用它自己的产物（自己的范围/点数）——
+        [对比] 不因坞顶那行的改动重算，对比面板也不记"未应用"（数据键
+        不进它的快照），看对比更不会把坞顶那行染成对比的范围。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            for p in files:    # 每个文件自己的产物：2–7°、8 点（npt=1234）
+                stage_cache.store_1d(p, np.linspace(2.0, 7.0, 8),
+                                     np.ones(8) * 3.0, config=w.config_name,
+                                     npt=1234, tth_min=2.0, tth_max=7.0)
+            dock = w.plot_docks.get("对比")
+            with mock.patch.object(gui_views, "_compute_integration") as compute:
                 w.compare_btn.click()
                 QApplication.processEvents()
-            self.assertTrue(lbl.isHidden(),
-                            "重按 [对比] 已经把值用掉 → 灰字该灭，不能留旧的")
+                dock = w.plot_docks["对比"]
+                self.assertTrue(_wait_until(
+                    lambda: getattr(dock, "compare_pending", 1) == 0))
+                compute.assert_not_called()      # 命中每个文件自己的产物
+            self.assertEqual(sorted(dock.compare_sources.values()),
+                             ["1D 产物", "1D 产物"])
+            self.assertEqual([len(v[0]) for v in dock.compare_data.values()],
+                             [8, 8], "画的就是那条 8 点产物")
+            # 改坞顶那行 + 再点 [对比]：照旧用产物、不重算、不亮灰字
+            w.params["2θ 上限 (°)"].setValue(6.0)
+            w.params["输出点数"].setValue(999)
+            QApplication.processEvents()
+            self.assertTrue(w.pending_labels["数据"].isHidden(),
+                            "对比面板不管数据参数 → 不该亮「未应用」")
+            with mock.patch.object(gui_views, "_compute_integration") as again:
+                w.compare_btn.click()
+                QApplication.processEvents()
+                self.assertTrue(_wait_until(
+                    lambda: getattr(dock, "compare_pending", 1) == 0))
+                again.assert_not_called()
+            self.assertEqual([len(v[0]) for v in dock.compare_data.values()],
+                             [8, 8])
+            # "看一眼对比"不该把坞顶那行染成对比的范围
+            box = w.params["2θ 上限 (°)"]
+            box.setValue(6.0)
+            w.focus_panel = None            # 模拟"刚才在看别的面板"
+            gui_panel_state._set_focus(w, "对比", "对比")
+            QApplication.processEvents()
+            self.assertAlmostEqual(box.value(), 6.0,
+                                   msg="对比面板没有数据参数，回放不许动那行")
         finally:
             w.close()
 
