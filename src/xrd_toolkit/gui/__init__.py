@@ -94,7 +94,7 @@
   plot_compare.py 多文件视图：对比面板（多条 1D 叠图）+ 热图 + 锚点拾取
   plot_views.py   单文件视图：runner 分发 + 四个视图的出图 + 任务回调
   plot_panels.py  面板壳：画布容器 / 半截工具栏 / 手势 / 轴同步 / 悬停
-  plot_export.py  导出：1D 数据（txt/chi + CSV 总表）+ 图片（PNG/TIF）
+  plot_export.py  导出：1D 数据（txt/chi + 全部数据总表）+ 图片（PNG/TIF）
   file_dock.py    左侧文件坞：文件列表 + 打开 / 拖放 + 显示名去重
   calib.py        校准工作台：自动校准 + 手动选点校准
   calib_model.py  校准页纯逻辑（零 Qt）：状态模型 + 采纳判据 + 取值

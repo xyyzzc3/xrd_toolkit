@@ -30,8 +30,9 @@ import os
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-STORE = Path(os.environ.get("XRD_RECIPES", ROOT / "outputs" / "recipes.json"))
+from xrd_toolkit.paths import OUTPUTS_DIR
+
+STORE = Path(os.environ.get("XRD_RECIPES", OUTPUTS_DIR / "recipes.json"))
 
 
 def _norm(recipe: dict) -> dict:

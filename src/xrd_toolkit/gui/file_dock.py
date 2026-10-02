@@ -492,8 +492,8 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_open.setToolTip("打开文件（可多选）或整个文件夹")
     btn_save.setToolTip("把打开的图存成图片（先勾选要存哪几张，"
                         "再选格式与分辨率）")
-    btn_export.setToolTip("把勾选条目的 1D 产物批量存成两列 txt/chi，"
-                          "可顺带生成 CSV 总表")
+    btn_export.setToolTip("把勾选条目的 1D 产物批量存成两列 txt/chi；"
+                          "两个及以上还能顺带生成全部数据总表")
     open_menu = QMenu(btn_open)
     act_files = open_menu.addAction("打开文件…")
     act_files.setToolTip("选择一个或多个衍射图像加入文件栏")
@@ -1035,7 +1035,8 @@ def _entry_menu(window: QMainWindow, item) -> None:
         actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
         menu.addSeparator()
         actions[menu.addAction(f"删除这一条产物（{src.display}）")] = "drop_item"
-        actions[menu.addAction("导出这一条（txt / chi / CSV）")] = "export_item"
+        # 单条导出不会生成总表（单个数据集就光一个文件）——菜单别写 CSV
+        actions[menu.addAction("导出这一条（txt / chi）")] = "export_item"
     if actions:
         menu.addSeparator()
     actions[menu.addAction("删除所有缓存…")] = "clear_cache"

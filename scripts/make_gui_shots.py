@@ -187,7 +187,7 @@ def shot_views(window) -> None:
 
 
 def shot_batch(window) -> None:
-    """批量：导文件夹 → 积分（日志 k/n）→ 导出 txt + CSV 总表。"""
+    """批量：导文件夹 → 积分（日志 k/n）→ 导出 txt + 全部数据总表。"""
     from xrd_toolkit.gui import plot_export as gui_export
     add_all(window, LMFP, entrance="1D")
     window.view_buttons["1D"].click()

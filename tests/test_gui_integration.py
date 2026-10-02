@@ -100,7 +100,9 @@ from PySide6.QtWidgets import (
     QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import config as config_mod
-from xrd_toolkit.services import process, recipes as recipe_store, stage_cache
+from xrd_toolkit import paths as xrd_paths
+from xrd_toolkit.services import (export as data_export, process,
+                                  recipes as recipe_store, stage_cache)
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 _gui_app = gui_app
@@ -3223,7 +3225,8 @@ class TestProductGroups(unittest.TestCase):
                                                  "suffix": ".txt",
                                                  "csv": False, "bg": False}):
                 gui_export._run_export(w, sources=[src])
-            target = outdir / f"{files[0].stem}_处理产物" / "integrated_2th.txt"
+            # 单条导出 = 平铺一个文件（用户 2026-10-02 定的布局）
+            target = outdir / f"{files[0].stem}_处理产物.txt"
             self.assertTrue(target.exists(), "右键导出该落一份文件")
             data = np.loadtxt(str(target))
             self.assertEqual(list(data[:, 1]), [7.0, 8.0, 9.0])
@@ -3757,7 +3760,12 @@ class TestProcessingChain(unittest.TestCase):
             w.close()
 
     def test_export_skips_cut_points_and_notes_the_chain(self):
-        """导出：裁剪点不写行、头里写明处理链；CSV 里那几格留空。"""
+        """导出：裁剪点不写行、头里写明类别与处理链（纯 ASCII）。
+
+        单个数据集 = 光一个文件（用户 2026-10-02）；扣过背景的名字带
+        `_处理产物` 尾缀——文件自己说清它是什么。总表里空单元格那条
+        见 TestExportCsv.test_cut_columns_become_blank_cells。
+        """
         w = create_window()
         try:
             path, dock = self._panel(w)
@@ -3770,23 +3778,21 @@ class TestProcessingChain(unittest.TestCase):
                                                  "suffix": ".txt",
                                                  "csv": True, "bg": True}):
                 gui_export._run_export(w)
-            txt = (outdir / path.stem / "integrated_2th.txt")
+            txt = outdir / f"{path.stem}_处理产物.txt"
             self.assertTrue(txt.exists(), "该导出一份 txt")
             text = txt.read_text()
-            self.assertIn("processed:", text, "头里要写明处理链")
-            self.assertIn("cut=3.5–4.5°", text)
+            self.assertIn("data category: Processed", text)
+            self.assertIn("chain:", text, "头里要写明处理链")
+            self.assertIn("cut=3.5-4.5deg", text)
             self.assertRegex(text, r"cut: \d+ points removed")
+            for ln in [ln for ln in text.splitlines() if ln.startswith("#")]:
+                self.assertTrue(ln.isascii(), ln)
             data = np.loadtxt(str(txt))
             self.assertTrue(np.isfinite(data[:, 1]).all(),
                             "文件里不该出现 nan 行")
-            # CSV：裁剪列里那几格是空的
-            csv_text = (outdir / "1d_summary.csv").read_text()
-            self.assertIn("空单元格", csv_text)
-            blank_rows = [ln for ln in csv_text.splitlines()
-                          if ln.endswith(",")]
-            self.assertGreater(len(blank_rows), 0,
-                               "裁剪段在 CSV 里应当是空单元格")
-            self.assertNotIn("nan", csv_text, "空值不能写成字面 nan")
+            self.assertEqual(sorted(p.name for p in outdir.iterdir()),
+                             [f"{path.stem}_处理产物.txt"],
+                             "单条导出不建文件夹、不出总表")
         finally:
             w.close()
 
@@ -11936,6 +11942,15 @@ class TestFolderImport(unittest.TestCase):
             w.close()
 
 
+def _only_batch_dir(outdir: Path) -> Path:
+    """批量导出目录：outdir 下恰好一个 `导出_时间戳` 文件夹（按前缀找，
+    不 mock 时间——顺带把命名规范也测进去）。"""
+    found = [p for p in Path(outdir).iterdir()
+             if p.is_dir() and p.name.startswith(data_export.BATCH_PREFIX)]
+    assert len(found) == 1, f"应当恰好一个批量目录，实际 {found}"
+    return found[0]
+
+
 class TestExportData(unittest.TestCase):
     """[导出数据]：1D 结果批量落盘（镜像 CLI 格式）+ 取消/跳过/单文件失败。"""
 
@@ -11952,6 +11967,7 @@ class TestExportData(unittest.TestCase):
                     for p in ("data/fake_a.tif", "data/fake_b.tif"))))
 
     def test_export_writes_cli_format_files(self):
+        """两个文件 → 一个批量文件夹：txt/ 里每条一个 + 开始/完成日志。"""
         w = create_window()
         try:
             self._two_1d_results(w)
@@ -11961,7 +11977,8 @@ class TestExportData(unittest.TestCase):
                                                  "suffix": ".txt",
                                                  "csv": False}):
                 gui_export._run_export(w)
-            target = outdir / "fake_a" / "integrated_2th.txt"
+            batch = _only_batch_dir(outdir)
+            target = batch / data_export.TXT_DIR_NAME / "fake_a.txt"
             self.assertTrue(target.is_file())
             lines = target.read_text(encoding="utf-8").splitlines()
             self.assertEqual(lines[0], "# 2theta(deg)  intensity")
@@ -11969,9 +11986,68 @@ class TestExportData(unittest.TestCase):
             np.testing.assert_allclose(data[:, 0], [0.5, 1.0, 8.5])
             np.testing.assert_allclose(data[:, 1], [1.0, 2.0, 3.0])
             self.assertTrue(
-                (outdir / "fake_b" / "integrated_2th.txt").is_file())
+                (batch / data_export.TXT_DIR_NAME / "fake_b.txt").is_file())
             log = w.log_text.toPlainText()
+            self.assertIn(f"开始导出：2 个文件 → {batch}", log)
             self.assertIn("导出完成：2 个文件", log)
+            self.assertIn("用时", log, "完成行要带用时（多久出来）")
+        finally:
+            w.close()
+
+    def test_single_export_is_one_flat_file(self):
+        """单个数据集：光一个 txt，不包文件夹、不出总表（用户 2026-10-02）。
+
+        弹窗结果里故意给 csv=True：单条的硬闸必须挡住总表。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
+                                    "last_tth", None) is not None))
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": True}):
+                gui_export._run_export(w)
+            self.assertTrue((outdir / "fake_b.txt").is_file())
+            self.assertEqual(sorted(p.name for p in outdir.iterdir()),
+                             ["fake_b.txt"], "单条导出不建文件夹、不出总表")
+            self.assertIn("导出完成：1 个文件", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_bg_checkbox_with_empty_chain_stays_raw(self):
+        """勾了"扣背景后的曲线"但三项全关：照实写 Raw + none，名字不加尾缀。
+
+        链是空的 = 没做任何处理，文件里就是原始值——写 Processed 或给
+        文件名加 `_处理产物` 都是谎报（样例导出时抓到：值逐点等于原始
+        曲线，头里却写着 Processed）。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
+                                    "last_tth", None) is not None))
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": False, "bg": True}):
+                gui_export._run_export(w)
+            self.assertTrue((outdir / "fake_b.txt").is_file(),
+                            "没做处理的曲线不该带 _处理产物 尾缀")
+            text = (outdir / "fake_b.txt").read_text()
+            self.assertIn("# data category: Raw", text)
+            self.assertIn("# chain: none", text)
         finally:
             w.close()
 
@@ -11985,8 +12061,9 @@ class TestExportData(unittest.TestCase):
                                                  "suffix": ".chi",
                                                  "csv": False}):
                 gui_export._run_export(w)
+            batch = _only_batch_dir(outdir)
             self.assertTrue(
-                (outdir / "fake_b" / "integrated_2th.chi").is_file())
+                (batch / data_export.TXT_DIR_NAME / "fake_b.chi").is_file())
         finally:
             w.close()
 
@@ -12027,11 +12104,11 @@ class TestExportData(unittest.TestCase):
             real_write = gui_export._write_export
             calls = {"n": 0}
 
-            def flaky_write(target, tth, intensity, chain=""):
+            def flaky_write(target, tth, intensity, chain="", **kw):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise OSError("磁盘已满")
-                real_write(target, tth, intensity, chain)
+                real_write(target, tth, intensity, chain, **kw)
 
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
@@ -12043,14 +12120,21 @@ class TestExportData(unittest.TestCase):
             log = w.log_text.toPlainText()
             self.assertIn("导出失败 fake_a", log)
             self.assertIn("导出完成：1 个文件", log)
-            self.assertEqual(sorted(p.name for p in outdir.iterdir()),
-                             ["fake_b"])
+            batch = _only_batch_dir(outdir)
+            self.assertEqual(
+                sorted(p.name for p in (batch / data_export.TXT_DIR_NAME)
+                       .iterdir()),
+                ["fake_b.txt"])
         finally:
             w.close()
 
 
 class TestExportCsv(unittest.TestCase):
-    """CSV 总表：同网格直拼 / 网格不一致三路（交集/跳过/取消）。"""
+    """全部数据总表：同网格直拼 / 网格不一致三路（交集/跳过/取消）。
+
+    直调 _write_csv_summary 的用例给合成数据（3 元组也行——会补成
+    Raw/none）；写盘细节（BOM、列明细、ASCII）另有 test_data_export.py。
+    """
 
     def test_same_grid_csv(self):
         w = create_window()
@@ -12062,14 +12146,41 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range") as ask:
                 gui_export._write_csv_summary(w, results, outdir)
             ask.assert_not_called()   # 网格一致不打扰用户
-            target = outdir / "1d_summary.csv"
-            self.assertEqual(target.read_text().splitlines()[0],
-                             "2theta(deg),a,b")
+            target = outdir / data_export.CSV_NAME
+            self.assertEqual(target.read_bytes()[:3], b"\xef\xbb\xbf",
+                             "CSV 带 BOM，Excel 打开不乱码")
+            self.assertEqual(target.read_text(encoding="utf-8-sig")
+                             .splitlines()[0], "2theta(deg),a,b")
             data = np.loadtxt(str(target), delimiter=",", skiprows=1)
             self.assertEqual(data.shape, (3, 3))
             np.testing.assert_allclose(data[:, 0], tth)
             np.testing.assert_allclose(data[:, 1], [1, 2, 3])
-            self.assertIn("已生成 CSV 总表", w.log_text.toPlainText())
+            self.assertIn("已生成全部数据总表（2 列）",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_cut_columns_become_blank_cells(self):
+        """裁剪过的列：那几格留空、写明 blank 说明行、不出现字面 nan。"""
+        w = create_window()
+        try:
+            tth = np.array([1.0, 2.0, 3.0])
+            results = [("a", tth, np.array([1.0, np.nan, 3.0]),
+                        "bg=auto/win=0.2", data_export.CATEGORY_PROCESSED,
+                        None),
+                       ("b", tth, np.array([4.0, 5.0, 6.0]))]
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_ask_csv_range"):
+                gui_export._write_csv_summary(w, results, outdir)
+            text = (outdir / data_export.CSV_NAME).read_text(
+                encoding="utf-8-sig")
+            self.assertIn("# blank cells", text)
+            data_rows = [ln for ln in text.splitlines()
+                         if ln and not ln.startswith("#")][1:]   # 去掉列名行
+            self.assertTrue(any("" in ln.split(",") for ln in data_rows),
+                            "裁剪段在总表里应当是空单元格")
+            self.assertNotIn("nan", text, "空值不能写成字面 nan")
+            self.assertIn("1 列有裁剪区", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -12084,7 +12195,7 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="intersect"):
                 gui_export._write_csv_summary(w, results, outdir)
-            data = np.loadtxt(str(outdir / "1d_summary.csv"),
+            data = np.loadtxt(str(outdir / data_export.CSV_NAME),
                               delimiter=",", skiprows=1)
             # 公共交集 2~3° 按最大点数均匀取样，两列都重插到公共网格
             self.assertEqual(data.shape, (3, 3))
@@ -12106,7 +12217,7 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="skip"):
                 gui_export._write_csv_summary(w, results, outdir)
-            data = np.loadtxt(str(outdir / "1d_summary.csv"),
+            data = np.loadtxt(str(outdir / data_export.CSV_NAME),
                               delimiter=",", skiprows=1)
             self.assertEqual(data.shape, (3, 2))   # 只留网格一致的文件
             self.assertIn("跳过 1 个", w.log_text.toPlainText())
@@ -12122,7 +12233,7 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="cancel"):
                 gui_export._write_csv_summary(w, results, outdir)
-            self.assertIn("已取消 CSV 总表", w.log_text.toPlainText())
+            self.assertIn("已取消全部数据总表", w.log_text.toPlainText())
             self.assertEqual(list(outdir.iterdir()), [])
         finally:
             w.close()
@@ -12136,29 +12247,32 @@ class TestExportCsv(unittest.TestCase):
             w.close()
 
     def test_export_flow_writes_csv_when_checked(self):
-        """导出勾选 CSV → 总表与逐文件 txt 一起落盘。"""
+        """两条及以上且勾选总表 → 批量文件夹里 txt/ 与大集合一起出。"""
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                add_checked(w, ["data/fake_b.tif"])
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
-                    lambda: getattr(_dock(w, "1D", "data/fake_b.tif"),
-                                    "last_tth", None) is not None))
+                    lambda: all(
+                        getattr(_dock(w, "1D", p), "last_tth", None)
+                        is not None
+                        for p in ("data/fake_a.tif", "data/fake_b.tif"))))
             outdir = Path(tempfile.mkdtemp())
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
                                                  "csv": True}):
                 gui_export._run_export(w)
-            self.assertTrue((outdir / "fake_b" / "integrated_2th.txt")
-                            .is_file())
-            csv = outdir / "1d_summary.csv"
-            self.assertEqual(csv.read_text().splitlines()[0],
-                             "2theta(deg),fake_b")
+            batch = _only_batch_dir(outdir)
+            self.assertTrue(
+                (batch / data_export.TXT_DIR_NAME / "fake_b.txt").is_file())
+            csv = batch / data_export.CSV_NAME
+            self.assertEqual(csv.read_text(encoding="utf-8-sig")
+                             .splitlines()[0], "2theta(deg),fake_a,fake_b")
             data = np.loadtxt(str(csv), delimiter=",", skiprows=1)
-            self.assertEqual(data.shape, (3, 2))
+            self.assertEqual(data.shape, (3, 3))
         finally:
             w.close()
 
@@ -13666,6 +13780,34 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 self.assertIsNone(gui_export._build_export_dialog(w, 1))
             self.assertIsNotNone(captured.get("check"))
             self.assertFalse(captured["bg"], "默认不勾 = 导出原始曲线")
+        finally:
+            w.close()
+
+    def test_export_dialog_defaults_and_csv_gate(self):
+        """目录默认 = 完整绝对路径；单个数据集禁用总表复选框（2026-10-02）。"""
+        w = create_window()
+        try:
+            captured = {}
+
+            def fake_exec(self):
+                captured["dir"] = self.findChild(
+                    QLineEdit, "export_dir_edit").text()
+                captured["csv"] = self.findChild(QCheckBox,
+                                                 "export_csv_check")
+                return QDialog.Rejected
+
+            with mock.patch.object(QDialog, "exec", new=fake_exec):
+                gui_export._build_export_dialog(w, 1)
+            self.assertEqual(captured["dir"], str(xrd_paths.OUTPUTS_DIR),
+                             "默认目录是完整绝对路径，不再是字面 outputs")
+            self.assertFalse(captured["csv"].isEnabled(),
+                             "单条导出没有总表可生成")
+            self.assertFalse(captured["csv"].isChecked())
+            with mock.patch.object(QDialog, "exec", new=fake_exec):
+                gui_export._build_export_dialog(w, 2)
+            self.assertTrue(captured["csv"].isEnabled())
+            self.assertTrue(captured["csv"].isChecked(),
+                            "两个及以上默认顺手出一张大集合")
         finally:
             w.close()
 

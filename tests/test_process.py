@@ -201,6 +201,29 @@ class TestChain(unittest.TestCase):
         self.assertEqual(process.chain_desc(self._params()), "none")
         self.assertEqual(process.chain_label(self._params()), "未做处理")
 
+    def test_chain_ascii_variant(self):
+        """导出文件表头用的 ASCII 变体（2026-10-02）：形状不变、字符全 ASCII。
+
+        漂亮版（° – → 、）进 npz 元数据与日志；导出文件必须纯 ASCII，
+        否则 Excel 打开无 BOM 的 UTF-8 就是乱码——用户报的原问题。
+        """
+        settings = {"mode": "anchor", "window_deg": 2.0,
+                    "anchors": [[1.0, 1.0]] * 5, "clip": True,
+                    "smooth_deg": 0.15, "cut_ranges": [(2.0, 3.0)]}
+        ascii_desc = process.chain_desc(settings, ascii_only=True)
+        self.assertTrue(ascii_desc.isascii())
+        self.assertIn("bg=anchor(n=5)/win=2/clip", ascii_desc)
+        self.assertIn("smooth=boxcar/0.15deg", ascii_desc)
+        self.assertIn("cut=2-3deg", ascii_desc)
+        self.assertEqual(process.chain_desc(self._params(), ascii_only=True),
+                         "none")
+        # 老产物 npz 里存的漂亮版链 → 导出时现场转写（字符级替换）
+        self.assertEqual(process.chain_ascii("bg=auto/win=0.18 → cut=2.7–3°"),
+                         "bg=auto/win=0.18 -> cut=2.7-3deg")
+        self.assertEqual(process.chain_ascii(""), "none")
+        self.assertEqual(process.chain_ascii("bg=auto/win=0.2"),
+                         "bg=auto/win=0.2", "本来就是 ASCII 的原样返回")
+
 
 if __name__ == "__main__":
     unittest.main()

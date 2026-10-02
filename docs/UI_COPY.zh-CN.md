@@ -56,6 +56,7 @@
 | 图片工具栏 | 复位视图 / 放大镜 / 保存图片… | Home / Save |
 | 用条目预填校准来源 | 预填 | 借 |
 | 0.05 px 判据 | 明说："差 {} px，小于 0.05 px 视为持平" | 门槛 |
+| 大集合 CSV 文件 | 全部数据总表 | CSV 总表 |
 | 内部实现词 | ——（一律换成用户语言） | 落盘、接线、口径、占位、槽、门槛、key、label、NaN |
 
 ## 4. 消息写法
@@ -89,4 +90,63 @@
 3. **图内英文里引用中文按钮名**：如 `turn on [看环全貌] to see them`
    ——按钮实际文字是中文，引用它的名字照抄原文，不翻译。
 4. **数据文件内容**（导出 txt/CSV 的表头 `2theta(deg)` 等）：数据格式，
-   不是界面语言，不随本文改。
+   不是界面语言，不按 §1–§5 改——但有自己的标准，见 §7。
+
+## 7. 导出文件规范（2026-10-02 定）
+
+> 数据文件内容是数据格式，不按界面文案规则走，但有自己的标准：由
+> `services/export.py` 唯一实现（GUI 与 CLI 同源），
+> `tests/test_data_export.py` 钉住逐字格式。
+
+### 目录与文件名
+
+- 单个数据集：`{输出目录}/{曲线名}{后缀}`——光一个文件，不包文件夹。
+  例：`outputs/lab6-00024_处理产物.txt`。
+- 两个及以上：`{输出目录}/导出_YYYY-MM-DD_HHMMSS/`，里面
+  `全部数据.csv`（大集合）+ `txt/`（每条一个）；同秒重名追加 `_2`。
+- 曲线名 = 文件栏条目显示名（原始数据 = 文件 stem；产物 = `stem_1D` /
+  `stem_处理产物`）；勾"导出扣除背景后的曲线"导出原始数据时，名字尾缀
+  也加 `_处理产物`。
+- 输出目录默认 = 项目根 `outputs/` 的**完整绝对路径**（`xrd_toolkit.paths`，
+  2026-10-02 起；旧行为是相对路径，跟着进程工作目录跑，攒出过第二个
+  outputs）。
+- 旧文件不追改：磁盘上已有的 `*_处理后/` 目录、旧的 `1d_summary.csv`
+  原样保留。
+
+### 曲线文件表头（txt / chi；全 ASCII）
+
+```
+# 2theta(deg)  intensity
+# data category: Processed
+# chain: bg=auto/win=0.18 -> smooth=boxcar/0.15deg -> cut=2.7-3,2.7-3.1deg
+# cut: 171 points removed
+# points: 4245  range: 1.001-5.900 deg
+# config: lmfp1_lab6
+# exported: 2026-10-02 22:55:03
+```
+
+- `data category:` ∈ `Raw` / `1D product` / `Processed`（§1.2 的英文对照，
+  与界面「原始数据 / 1D 产物 / 处理产物」一一对应）；原始数据也要写清楚
+  （`chain: none` + `cut: 0 points removed`）——"没做过处理"也是一种
+  必须写明的事实。
+- 表头**永远纯 ASCII**：`° – → 、` 这些字符在 Excel 里会乱码（用户
+  2026-10-02 报的原问题），链经 `process.chain_ascii` 转写
+  （`°`→`deg`、`–`→`-`、`→`→`->`、`、`→`,`）。
+- `config:` 只在知道几何配置名时写（且名字本身是 ASCII）；`exported:`
+  是秒级时间戳；裁剪点不写行。
+
+### 全部数据.csv（utf-8-sig，带 BOM）
+
+```
+2theta(deg),a,b
+# exported: 2026-10-02 22:55:03
+# column 2: a | category=Raw | chain=none | cut=0 points removed | 4799 points | 2theta=0.500-8.500 deg | config=lmfp1_lab6
+# blank cells = 2theta points inside a cut range (no data)
+0.5,1,
+```
+
+- 第 1 行仍是 `2theta(deg),列名…`，可被 `np.loadtxt(skiprows=1)` 读；
+  其后每列一行来源明细（类别 / 链 / 裁剪点数 / 点数与范围 / 配置）。
+- 裁剪过的列那几格**留空**，不写字面 nan（0 会被当成真实强度）。
+- BOM 必须：列名可能含中文（`_处理产物`），没有 BOM 时 Excel 打开
+  第 1/2 行就是乱码。

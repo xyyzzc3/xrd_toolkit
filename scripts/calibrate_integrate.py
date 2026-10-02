@@ -29,6 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg  # 交互选文件菜单（四脚本共用）
 from xrd_toolkit.config import config_entry_template  # 内置 CONFIGS 条目模板（标定后打印）
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings  # 自动定位环心（校准初值）
+from xrd_toolkit.paths import OUTPUTS_DIR  # 输出根：钉在项目根 outputs（2026-10-02，从哪跑都一样）
+from xrd_toolkit.services import export as data_export  # 导出文件格式的唯一出处（与 GUI 同源）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -59,7 +61,8 @@ def main() -> None:
                         help="material for the auto-range standard: "
                              "auto (detect from filename), lab6, or lmfp — the range "
                              "is then fixed by that material's known peak positions")
-    parser.add_argument("--outdir", default="outputs", help="output directory")
+    parser.add_argument("--outdir", default=None,
+                        help="output directory (default: the project's outputs/ folder)")
     args = parser.parse_args()
 
     wavelength_m = args.wavelength * 1e-10
@@ -187,19 +190,22 @@ def main() -> None:
         # 保存 1D 数据并出图（红虚线 = LaB₆ 理论峰位）。完整版始终保存，
         # 选定区间时另存 *_auto.txt 裁剪版。输出按样品分文件夹
         # （outputs/{数据名}/），calibrated_ 前缀与 integrate_pattern 的
-        # integrated_ 输出区分
-        outdir = Path(args.outdir)
+        # integrated_ 输出区分。写盘格式走 services/export（与 GUI 同源，
+        # 2026-10-02）；本脚本是自己标定，没有 --config 名字可写
+        outdir = Path(args.outdir) if args.outdir else OUTPUTS_DIR
         stem = path.stem
         sample_dir = outdir / stem
         sample_dir.mkdir(parents=True, exist_ok=True)
         dat_path = sample_dir / "calibrated_2th.txt"
         png_path = sample_dir / "calibrated.png"
-        np.savetxt(dat_path, np.c_[tth, intensity], fmt="%.6g", header="2theta(deg)  intensity")
+        data_export.write_curve(dat_path, tth, intensity,
+                                category=data_export.CATEGORY_ONED)
         if lo is not None:
             keep = (tth >= lo) & (tth <= hi)
             tth_plot, intensity_plot = tth[keep], intensity[keep]
-            np.savetxt(sample_dir / "calibrated_2th_auto.txt",
-                       np.c_[tth_plot, intensity_plot], fmt="%.6g", header="2theta(deg)  intensity")
+            data_export.write_curve(sample_dir / "calibrated_2th_auto.txt",
+                                    tth_plot, intensity_plot,
+                                    category=data_export.CATEGORY_ONED)
         else:
             tth_plot, intensity_plot = tth, intensity
 

@@ -30,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 指定 / 菜单选择）
+from xrd_toolkit.paths import OUTPUTS_DIR  # 输出根：钉在项目根 outputs（2026-10-02，从哪跑都一样）
+from xrd_toolkit.services import export as data_export  # 导出文件格式的唯一出处（与 GUI 同源）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -42,7 +44,8 @@ def main() -> None:
                              "lists files in data/ and lets you pick (comma-separated for several)")
     parser.add_argument("--datadir", default="data",
                         help="folder scanned by the interactive menu (only used without --file), default data/")
-    parser.add_argument("--outdir", default="outputs", help="output directory")
+    parser.add_argument("--outdir", default=None,
+                        help="output directory (default: the project's outputs/ folder)")
     parser.add_argument("--npt", type=int, default=5000, help="number of points in the 1D curve")
     parser.add_argument("--config",
                         help=f"Geometry config name from config.py (default: {DEFAULT_CONFIG}); "
@@ -164,19 +167,25 @@ def main() -> None:
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
 
         # 标准两列 txt（2θ, 强度）。完整版始终保存，选定区间时另存
-        # *_auto.txt 裁剪版；输出按样品分文件夹（outputs/{数据名}/）
-        outdir = Path(args.outdir)
+        # *_auto.txt 裁剪版；输出按样品分文件夹（outputs/{数据名}/），
+        # 与同目录的 PNG 住一起。写盘格式统一走 services/export——与
+        # GUI 导出同源（表头写明类别/链/点数/配置/时间，2026-10-02）。
+        outdir = Path(args.outdir) if args.outdir else OUTPUTS_DIR
         stem = path.stem
         sample_dir = outdir / stem
         sample_dir.mkdir(parents=True, exist_ok=True)
         txt_path = sample_dir / "integrated_2th.txt"
         png_path = sample_dir / "integrated.png"
-        np.savetxt(txt_path, np.c_[tth, intensity], fmt="%.6g", header="2theta(deg)  intensity")
+        data_export.write_curve(txt_path, tth, intensity,
+                                category=data_export.CATEGORY_ONED,
+                                config=config_name)
         if lo is not None:
             keep = (tth >= lo) & (tth <= hi)
             tth_plot, intensity_plot = tth[keep], intensity[keep]
-            np.savetxt(sample_dir / "integrated_2th_auto.txt",
-                       np.c_[tth_plot, intensity_plot], fmt="%.6g", header="2theta(deg)  intensity")
+            data_export.write_curve(sample_dir / "integrated_2th_auto.txt",
+                                    tth_plot, intensity_plot,
+                                    category=data_export.CATEGORY_ONED,
+                                    config=config_name)
         else:
             tth_plot, intensity_plot = tth, intensity
 

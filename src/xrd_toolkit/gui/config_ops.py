@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 
-from xrd_toolkit import config
+from xrd_toolkit import config, paths
 from xrd_toolkit.gui.calib_model import _calib_state, _result_by_name
 from xrd_toolkit.gui.panel_state import _log, _reload_config_combo
 
@@ -124,7 +124,7 @@ def _save_poni(window: QMainWindow) -> None:
         cfg = window.config   # 当前选中条目（label / geometry / beam_center）
         geom = cfg["geometry"]
         src_txt = f"配置条目「{window.config_name}」"
-    default = str(Path("outputs") / f"{window.config_name}.poni")
+    default = str(paths.OUTPUTS_DIR / f"{window.config_name}.poni")
     path_str, _ = QFileDialog.getSaveFileName(
         window, "保存几何参数（.poni）", default,
         "pyFAI 几何 (*.poni);;所有文件 (*)")

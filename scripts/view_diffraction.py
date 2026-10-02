@@ -21,6 +21,7 @@ import numpy as np
 
 from xrd_toolkit.cli import interactive_pick_files, pick_config  # 交互菜单（选文件 / 选配置，四脚本共用）
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 指定 / 菜单选择）
+from xrd_toolkit.paths import OUTPUTS_DIR  # 输出根：钉在项目根 outputs（2026-10-02，从哪跑都一样）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.core.processor import line_profile
 
@@ -183,8 +184,9 @@ def main() -> None:
     parser.add_argument("--center",
                         help="Ring center pixel coordinates cx,cy (e.g. 1020,1024); "
                              "if not given, the beam center of the selected config is used")
-    parser.add_argument("--outdir", default="outputs",
-                        help="Base output directory, default outputs/ (each file is saved into outputs/{filename}/)")
+    parser.add_argument("--outdir", default=None,
+                        help="Base output directory (default: the project's outputs/ folder; "
+                             "each file is saved into outputs/{filename}/)")
     parser.add_argument("--vmin", type=float, default=None,
                         help="Color scale lower limit; if not given, auto = 1st percentile of the image")
     parser.add_argument("--vmax", type=float, default=None,
@@ -202,7 +204,7 @@ def main() -> None:
     else:
         config_name = cfg = None
 
-    outdir = Path(args.outdir)
+    outdir = Path(args.outdir) if args.outdir else OUTPUTS_DIR
     outdir.mkdir(exist_ok=True)  # 不存在则创建；已存在不报错
 
     # ── 确定待处理的文件 ──

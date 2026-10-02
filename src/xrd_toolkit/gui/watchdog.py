@@ -23,10 +23,15 @@ import threading
 import time
 from pathlib import Path
 
+from xrd_toolkit import paths
+
 STALL_SECONDS = 8.0     # 停摆超过这么久才写现场（正常的大动作：开 2048² 面板 ~1.5 s）
 POLL_SECONDS = 0.5
 REDUMP_SECONDS = 30.0   # 一直没恢复 → 每这么久再补一份（栈可能在变，别只留第一帧）
-OUT_DIR = Path("outputs")   # 现场写到哪（测试在建窗口前把它换成临时目录）
+# 现场写到哪：钉在项目根 outputs（以前是相对路径，跟着进程工作目录跑——
+# PyCharm 把工作目录设成源码子目录时，现场文件会写进源码树，2026-10-02
+# 统一到 paths）。测试在建窗口前把它换成临时目录。
+OUT_DIR = paths.OUTPUTS_DIR
 _seq = 0                    # 窗口序号：同一进程里多个看门狗写不同文件（同秒也不撞）
 
 # 说明：心跳与"上次写现场时的停摆时长"都放在**每个窗口自己的 state dict** 里

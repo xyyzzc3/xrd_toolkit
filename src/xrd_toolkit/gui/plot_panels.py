@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMainWindow,
                                QMdiSubWindow, QPushButton, QToolButton,
                                QVBoxLayout, QWidget)
 
+from xrd_toolkit import paths
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panel_state import (_AUX_GID_PREFIX, _content,
                                             _log, _param_box_set,
@@ -501,7 +502,7 @@ def _save_panel(window: QMainWindow, key: str) -> None:
     if options is None:
         return   # 选项弹窗取消：不动已保存记账
     ext = options["fmt"]
-    default = str(Path("outputs") / f"{dock.windowTitle()}.{ext}")
+    default = str(paths.OUTPUTS_DIR / f"{dock.windowTitle()}.{ext}")
     name, _ = QFileDialog.getSaveFileName(
         window, f"保存 {dock.windowTitle()}", default,
         f"{ext.upper()} 图片 (*.{ext})")

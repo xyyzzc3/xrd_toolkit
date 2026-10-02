@@ -601,7 +601,18 @@ def check_processing_chain(window, lab6: str) -> None:
                "产物元数据里记着链", str(meta.get("chain"))[:60])
     else:
         report(False, "产物元数据里记着链", "没有批次")
-    # ④ 导出：裁剪点不写行、头里注明
+    # ④ 导出：单个数据集 = 平铺一个文件（2026-10-02 新布局）；
+    # 裁剪点不写行、头里注明类别/处理链/删除点数（纯 ASCII）
+    # 先勾好 lab6 的原始条目：③的批量处理刚生成了新产物，按"新产物 =
+    # 上一轮勾选清零"（2026-10-01 甲）规则，勾选已经被清了——这里不能
+    # 指望还有谁被勾着（同 ③ 的教训），否则导出只会记一句"未勾选任何项"
+    for i in range(window.file_list.count()):
+        item = window.file_list.item(i)
+        item.setCheckState(Qt.Checked
+                           if item.data(Qt.UserRole) == lab6 else Qt.Unchecked)
+    for g in window.file_list.groups():
+        g.setCheckState(Qt.Unchecked)
+    QApplication.processEvents()
     import tempfile
     from pathlib import Path as _P
     from xrd_toolkit.gui import plot_export as gui_export
@@ -610,14 +621,16 @@ def check_processing_chain(window, lab6: str) -> None:
                            return_value={"dir": outdir, "suffix": ".txt",
                                          "csv": False, "bg": True}):
         gui_export._run_export(window)
-    target = outdir / (lab6 and _P(lab6).stem) / "integrated_2th.txt"
+    stem = _P(lab6).stem if lab6 else ""
+    target = outdir / f"{stem}_处理产物.txt"
     ok = target.exists()
     report(ok, "导出落盘", str(target.name))
     if ok:
         text = target.read_text()
-        report("processed:" in text and "cut:" in text,
-               "文件头写明处理链与删除点数",
-               [ln for ln in text.splitlines()[:3] if ln.startswith("#")][-1:])
+        header = [ln for ln in text.splitlines() if ln.startswith("#")]
+        report("data category:" in text and "chain:" in text
+               and "cut:" in text and all(ln.isascii() for ln in header),
+               "文件头写明类别/处理链/删除点数（纯 ASCII）", header[:4])
         report("nan" not in text.lower(), "文件里没有 nan 行")
 
 

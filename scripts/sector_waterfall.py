@@ -37,6 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.cli import interactive_pick_files, parse_range_arg, pick_config  # 交互菜单（选文件 / 选配置）+ 区间解析
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, get_config  # 几何配置注册表（--config 指定 / 菜单选择）
+from xrd_toolkit.paths import OUTPUTS_DIR  # 输出根：钉在项目根 outputs（2026-10-02，从哪跑都一样）
+from xrd_toolkit.services import export as data_export  # 导出文件格式的唯一出处（与 GUI 同源）
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_sectors
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
@@ -64,7 +66,8 @@ def main() -> None:
                         help="material for the auto-range standard: "
                              "auto (detect from filename), lab6, or lmfp — the range "
                              "is then fixed by that material's known peak positions")
-    parser.add_argument("--outdir", default="outputs", help="output directory")
+    parser.add_argument("--outdir", default=None,
+                        help="output directory (default: the project's outputs/ folder)")
     args = parser.parse_args()
 
     # --config 名称先行校验：出错时以 argparse 风格退出（用法 + 错误行、
@@ -162,8 +165,10 @@ def main() -> None:
             print(f"Range: manual -> [{lo:.3f}, {hi:.3f}] deg")
 
         # ---- 保存 36 个两列 txt（输出按样品分文件夹：outputs/{数据名}/sectors/）----
-        # 完整版始终保存；选定区间时另存 *_auto.txt 裁剪版
-        outdir = Path(args.outdir)
+        # 完整版始终保存；选定区间时另存 *_auto.txt 裁剪版。表头走
+        # services/export（与 GUI 同源，2026-10-02），扇区自己的 chi 信息
+        # 用 extra_lines 插在第一行之后
+        outdir = Path(args.outdir) if args.outdir else OUTPUTS_DIR
         stem = path.stem
         sec_dir = outdir / stem / "sectors"
         sec_dir.mkdir(parents=True, exist_ok=True)
@@ -176,14 +181,18 @@ def main() -> None:
             tth_plot, I2d_plot = tth, I2d
         for k in range(n):
             c0 = chi[0] - width / 2.0 + width * k   # 扇区 k 的下边界（偏置摆法下非 −180°）
-            # np.savetxt 会自动给 header 每行加 "# "，这里不重复写
-            header = f"sector {k:02d}: chi = {chi[k]:.2f} deg (range [{c0:.0f}, {c0+width:.0f}))\n" \
-                     f"columns: 2theta(deg)  intensity"
-            np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg.txt",
-                       np.c_[tth, I2d[:, k]], fmt="%.6g", header=header)
+            extra = [f"sector {k:02d}: chi = {chi[k]:.2f} deg "
+                     f"(range [{c0:.0f}, {c0+width:.0f}))"]
+            data_export.write_curve(
+                sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg.txt",
+                tth, I2d[:, k], category=data_export.CATEGORY_ONED,
+                config=config_name, extra_lines=extra)
             if tth_trim is not None:
-                np.savetxt(sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg_auto.txt",
-                           np.c_[tth_trim, I2d_trim[:, k]], fmt="%.6g", header=header)
+                data_export.write_curve(
+                    sec_dir / f"sector_{k:02d}_chi{chi[k]:.0f}deg_auto.txt",
+                    tth_trim, I2d_trim[:, k],
+                    category=data_export.CATEGORY_ONED,
+                    config=config_name, extra_lines=extra)
         print(f"36 two-column txt files saved to: {sec_dir}/"
               + (", plus 36 *_auto.txt trimmed copies" if tth_trim is not None else ""))
 

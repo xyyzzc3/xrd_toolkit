@@ -9,9 +9,13 @@ product caching work, and the engineering notes behind the GUI. The short versio
 
 All four scripts accept `--file` to pick one dataset, or — without it — an interactive
 menu listing everything in `data/` (number selection, `1,2` multi-select, or `all`).
-Outputs land in `outputs/{dataset}/`. The three consuming scripts take `--config NAME`
-(default `lmfp1_lab6`); in interactive mode a second menu asks for the config after the
-files are chosen.
+Outputs land in `{outdir}/{dataset}/`, where `outdir` defaults to the **absolute
+project `outputs/` folder** (since 2026-10-02; it used to be a relative path that
+followed the process working directory — starting from elsewhere silently wrote
+elsewhere; passing `--outdir` explicitly behaves as before). The three consuming
+scripts take `--config NAME` (default `lmfp1_lab6`); in interactive mode a second menu
+asks for the config after the files are chosen. The txt files share one writer with the
+GUI export (`services/export.py`, see *Data file format* below).
 
 <details>
 <summary><b>View a diffraction image</b> — <code>scripts/view_diffraction.py</code></summary>
@@ -24,7 +28,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir output
 - `--center`: ring center `cx,cy` — defaults to the beam center of the selected config
 - `--config`: geometry config name from `config.py` (default `lmfp1_lab6`)
 - `--angle`: profile angle in degrees (default 0)
-- `--outdir`: PNG output directory (default `outputs/`)
+- `--outdir`: PNG output directory (default: the project's `outputs/` folder)
 
 ![Radial intensity profile through the beam centre](../showcase/lab6/radial_profile.png)
 
@@ -43,7 +47,7 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 - `--center`: initial ring center `cx,cy` in pixels (default: auto-localized, < 1 px accuracy). Pass it explicitly for off-center-beam (partial-ring) datasets: the auto-localizer needs full rings, and refinement is unreliable there — calibrate distance/tilt on a centered standard image instead
 - `--max-rings`: number of LaB₆ rings used for calibration (default 16)
 - `--range`: 2θ range — `full`, `auto` (default, per-material standard), or `lo,hi` degrees (e.g. 1.3,7.3); the full txt is always saved
-- `--outdir`: output directory (default `outputs/`)
+- `--outdir`: output directory (default: the project's `outputs/` folder)
 
 Pipeline: LaB₆ peak-position calibration (pyFAI `GeometryRefinement`) → azimuthal integration (2D → 1D) → writes `calibrated_2th.txt` + `calibrated.png` (red dashed lines = theoretical peak positions). Code in `xrd_toolkit/services/integrator.py`. After refinement, a copy-paste-ready `CONFIGS` entry is printed so the new batch can be registered in `src/xrd_toolkit/config.py` (the script never writes that file itself).
 
@@ -143,9 +147,9 @@ are intended:
 - the plot **shows a gap** there (matplotlib breaks the line at NaN) and the automatic y-range **skips it** —
   which is the whole point when one giant peak squashes everything else;
 - the processing product has the same gap, the exported txt/chi **omits those rows**, and the file header
-  records `processed: …` and `cut: N points removed`;
-- the CSV summary leaves those cells **blank** (not 0 — a zero would be read as real intensity) and names
-  the affected columns.
+  records `chain: …` and `cut: N points removed`;
+- the CSV summary leaves those cells **blank** (not 0 — a zero would be read as real intensity) and marks
+  the affected columns in its `# blank cells` line.
 
 **The product key = 1D product key + hash of the chain** (background, smoothing and cut together). With
 smoothing and cut off, that hash is **bit-identical** to the old background-only product, so upgrading
@@ -226,7 +230,21 @@ SNIP was implemented and measured as well, but it over-subtracts by 43–98 % on
 
 ## Batches, products and the file bar
 
-**Batching.** [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window), and any view button processes all checked files at once, with a live progress counter in the log and in a status-bar progress bar (completion lines end in （k/n）; opening the panels themselves reports progress every 8 panels and keeps the window responsive). Check more than **24** files and the batch draws **none** of them (the user's rule, 2026-09-26, "防爆图"): opening a panel is the one cost that grows with the count (136 ms for the first, 287 ms for the hundredth) and each costs ≈ 15 MB, so instead the whole batch is integrated in the background and stored, and the results land in the file bar's 1D 产物 group — **double-click an entry to open that one, or right-click the group for [打开整组]** (which asks first when the group is larger than 24). Batches of 24 or fewer draw every panel as before. Large batches merge their log lines (one line for the openings, a progress line every 8, one summary with the elapsed time and how many came from the cache) — 81 files used to print 162 lines. [导出数据] saves each file's 1D product as a two-column `integrated_2th.txt` or `.chi` under `outputs/{file}/` — byte-identical format to the CLI — with an optional `1d_summary.csv` (one intensity column per file; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch.
+**Batching.** [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window), and any view button processes all checked files at once, with a live progress counter in the log and in a status-bar progress bar (completion lines end in （k/n）; opening the panels themselves reports progress every 8 panels and keeps the window responsive). Check more than **24** files and the batch draws **none** of them (the user's rule, 2026-09-26, "防爆图"): opening a panel is the one cost that grows with the count (136 ms for the first, 287 ms for the hundredth) and each costs ≈ 15 MB, so instead the whole batch is integrated in the background and stored, and the results land in the file bar's 1D 产物 group — **double-click an entry to open that one, or right-click the group for [打开整组]** (which asks first when the group is larger than 24). Batches of 24 or fewer draw every panel as before. Large batches merge their log lines (one line for the openings, a progress line every 8, one summary with the elapsed time and how many came from the cache) — 81 files used to print 162 lines. [导出数据] saves each file's 1D product as a two-column txt / `.chi`: **a single dataset = one flat file** (no folder, e.g. `outputs/lab6-00024_处理产物.txt`), **two or more = one `导出_<timestamp>/` folder** containing the `全部数据.csv` collection plus a `txt/` subfolder with one file per curve (user, 2026-10-02). The collection is optional (checked by default; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch, and the log gets a start line and a completion line carrying the elapsed time and the full path.
+
+**Data file format (2026-10-02 standard).** The header states what the curve **is** and what was done to it — mirroring the GUI's 原始数据 / 1D 产物 / 处理产物 categories as `Raw` / `1D product` / `Processed` — and is **always pure ASCII**: `° – → 、` are exactly what Excel garbles when it opens BOM-less UTF-8 (the user's 2026-10-02 report of mojibake on CSV lines 2/3); chains are transliterated by `process.chain_ascii` (`°`→`deg`, `→`→`->`, `–`→`-`, `、`→`,`). Curve files (txt/chi; GUI and CLI share the single writer in `services/export.py`) look like:
+
+```text
+# 2theta(deg)  intensity
+# data category: Processed
+# chain: bg=auto/win=0.18 -> smooth=boxcar/0.15deg -> cut=2.7-3,2.7-3.1deg
+# cut: 171 points removed
+# points: 4245  range: 1.001-5.900 deg
+# config: lmfp1_lab6
+# exported: 2026-10-02 22:55:03
+```
+
+No processing is stated too (`chain: none` + `cut: 0 points removed`) — there is nothing left to guess. The `全部数据.csv` collection is written as utf-8-sig (BOM: column names may contain `_处理产物`, and without a BOM Excel garbles lines 1-2), keeps `2theta(deg),<names>` as line 1 (still readable by `np.loadtxt(skiprows=1)`), documents every column in `# column N: …` detail lines, and leaves cut cells blank. The output folder is pinned to the **project `outputs/`** (`xrd_toolkit.paths` is the single definition, overridable with `XRD_OUTPUTS`) — export / figure saving / `.poni` / the freeze watchdog used to resolve the relative `Path("outputs")` against the process working directory, and one PyCharm run (working directory = `src/xrd_toolkit/gui`) grew a second outputs folder inside the source tree; the two were merged back together on 2026-10-02. Old files on disk (`*_处理后/` folders, the old `1d_summary.csv`) are left as they are. Full spec: [UI_COPY.zh-CN.md](UI_COPY.zh-CN.md) §7.
 
 **Selecting what to process.** Imports start out unchecked (200 files should be your call, not the app's): one select-all / select-none toggle whose label spells out the scope of each direction (user, 2026-09-28 #3, who asked about the asymmetry: "全选只全选原始数据，全不选会包含产物") — **[全选（原始数据）]** checks the raw group (check product groups by clicking their own group row: the checked set is the input to plotting and batch processing, so sweeping products in would silently double it), **[全不选（全部条目）]** clears the whole tree (clearing is "back to zero", and zero should be thorough) — plus [按条件选…], which takes a range (from the i-th to the j-th), a stride (every n-th, with a start offset) and a case-insensitive name filter (substring; it intersects with the other two), optionally appending to the current selection so you can build one across several ranges. The dialog previews the count live.
 

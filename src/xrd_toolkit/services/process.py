@@ -13,7 +13,7 @@
   不一样（看不太出来，但结果不再可比）。
 
 裁剪**不删点**、只把区间内的强度标成"空"（NaN）：网格保持不变，各文件的
-2θ 轴仍然对齐（对比 / 热图 / CSV 总表都依赖这一点）。图上 matplotlib 遇到
+2θ 轴仍然对齐（对比 / 热图 / 全部数据总表都依赖这一点）。图上 matplotlib 遇到
 空值会自动断线，纵轴自动范围本来就会跳过无效值（`_auto_y_range` 第一步
 就筛掉非有限值）——"剪掉一段让其余看得清"因此不需要额外画图代码。
 
@@ -216,10 +216,35 @@ def chain_label(settings: dict) -> str:
     return "、".join(parts) if parts else "未做处理"
 
 
-def chain_desc(settings: dict) -> str:
+# 链描述 → 导出文件表头的 ASCII 转写表（2026-10-02 用户报 CSV 注释行在
+# Excel 里乱码：无 BOM 的 UTF-8 里 ° – → 、这些字符会被按别的编码猜）。
+# 只做字符级替换，不改结构——漂亮版什么形状，ASCII 版就什么形状。
+_CHAIN_ASCII_MAP = {"°": "deg", "–": "-", "—": "-", "−": "-",
+                    "→": "->", "、": ","}
+
+
+def chain_ascii(text: str) -> str:
+    """链描述 → 纯 ASCII（写进导出文件表头；空串归一成 none）。
+
+    导出文件里的链有两个来源：当下按设置新算的（chain_desc 现拼），和
+    老产物 npz 元数据里存的漂亮版——后者导出时也要在这里现场转写，
+    不追改缓存。
+    """
+    text = (text or "").strip()
+    if not text:
+        return "none"
+    for src, dst in _CHAIN_ASCII_MAP.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def chain_desc(settings: dict, *, ascii_only: bool = False) -> str:
     """机器可读的链描述（写进产物元数据/日志）：
 
         bg=anchor(n=5)/win=2° → smooth=0.15° → cut=2–3°、7–8°
+
+    ascii_only=True 时转成纯 ASCII（导出文件表头用，见 chain_ascii）；
+    默认输出逐字不变——npz 元数据、日志与既有测试都认它。
     """
     steps = []
     mode = settings.get("mode") or "off"
@@ -244,4 +269,5 @@ def chain_desc(settings: dict) -> str:
             if float(hi) > float(lo)]
     if cuts:
         steps.append(f"cut={_cut_text(cuts)}")
-    return " → ".join(steps) if steps else "none"
+    out = " → ".join(steps) if steps else "none"
+    return chain_ascii(out) if ascii_only else out

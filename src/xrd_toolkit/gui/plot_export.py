@@ -1,11 +1,18 @@
-"""导出：1D 数据（txt/chi + CSV 总表）+ 图片（PNG/TIF，可选 DPI）。
+"""导出：1D 数据（txt/chi + 全部数据总表）+ 图片（PNG/TIF，可选 DPI）。
 
 从 app.py 与 plot_views.py 拆出来（纯搬迁）：这一块是"把算好的东西
 写出去"——只读面板缓存（dock.last_tth / last_intensity）与背景扣除
 设置，不改任何计算状态。数据源统一走 _checked_1d_results：勾选文件
 的 1D 曲线（没算过的会提示先出图），背景扣除按需求叠加（导出原始
 还是扣过的由弹窗决定）。
+
+目录结构与文件格式（2026-10-02 用户定，规范见 docs/UI_COPY.zh-CN.md
+「导出文件规范」）：单个数据集 = 光一个 txt；两个及以上 = 一个
+`导出_时间戳/` 文件夹（里面 全部数据.csv + txt/ 子目录）。写文件的
+格式与写法全部在 services/export（唯一出处，CLI 共用）；本模块只管
+交互（弹窗、勾选、网格不一致的三选）与目录布局。
 """
+import time
 from pathlib import Path
 
 import numpy as np
@@ -16,9 +23,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSpinBox,
     QVBoxLayout, QWidget)
 
+from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (_content, _log, _proc_curve,
                                             _proc_settings)
+from xrd_toolkit.services import export as data_export
 from xrd_toolkit.services import process, stage_cache
 
 
@@ -85,7 +94,7 @@ def _save_figures(window: QMainWindow) -> bool:
     ext = options["fmt"]
     saved, skipped = 0, 0
     for dock in chosen:
-        default = str(Path("outputs") / f"{dock.windowTitle()}.{ext}")
+        default = str(paths.OUTPUTS_DIR / f"{dock.windowTitle()}.{ext}")
         name, _ = QFileDialog.getSaveFileName(
             window, f"保存 {dock.windowTitle()}", default,
             f"{ext.upper()} 图片 (*.{ext})")
@@ -141,7 +150,9 @@ def _choose_panels(window: QMainWindow, panels) -> list:
 
 def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                         quiet: bool = False, sources=None) -> list:
-    """收集勾选文件的 1D 积分结果：[(文件名, tth, intensity, 处理链), ...]。
+    """收集勾选文件的 1D 积分结果，每条 6 元：
+
+        (曲线名, tth, intensity, 处理链, 数据类别, 几何配置, )
 
     只认已经算好的 1D 面板缓存（last_tth / last_intensity），按文件
     列表顺序返回；勾选里没算过的文件跳过并记日志（提示先点 [1D]
@@ -149,8 +160,11 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
 
     want_bg=True 时跑整条处理链（背景 → 平滑 → 裁剪，锚点按文件路径取，
     与画图共用同一个 _proc_curve——导出与屏幕同一个口径）；全关时原样
-    返回。第 4 项是链的一句话描述（空 = 没做处理），写进导出文件的头里
-    ——文件自己说清它是怎么来的。
+    返回。第 4 项是链的一句话描述（空 = 没做处理）、第 5/6 项是文件头
+    要写的类别与几何配置名——文件自己说清它是怎么来的（规范见
+    docs/UI_COPY.zh-CN.md）。真要处理过的曲线（链非空）名字才带
+    `_处理产物` 尾缀，和产物条目一个叫法：文件名本身就说出它是什么——
+    三项全关时勾了"扣背景"导出的仍是原始值，名字与类别照实写 Raw。
     quiet=True 不记日志：导出要拿数量去填弹窗标题，之后再正式收一遍，
     两遍都记就会把"跳过 X"打两次。
     sources 给定一组来源（右键"导出这一条/这一组"那条路）时只处理这一组，
@@ -176,21 +190,37 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
             # 名字带阶段后缀：同一张图的原始结果与处理结果各存一份，
             # 不重名、不互相覆盖（导出文件名 = 这个名字）
             tail = gui_sources.KIND_TAIL.get(src.kind, src.kind)
+            meta = stage_cache.meta_by_key(src.kind, src.key)
+            category = (data_export.CATEGORY_ONED
+                        if src.kind == gui_sources.ONED
+                        else data_export.CATEGORY_PROCESSED)
             out.append((f"{Path(path).stem}_{tail}", got[0], got[1],
-                        stage_cache.meta_by_key(src.kind, src.key)
-                        .get("chain", "")))
+                        meta.get("chain", ""), category, meta.get("config")))
             continue
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
             if dock is not None and getattr(dock, "last_tth", None) is not None:
                 tth, intensity = dock.last_tth, dock.last_intensity
                 chain = ""
+                category = data_export.CATEGORY_RAW
+                stem = Path(path).stem
+                # 几何配置名取这张图的参数快照（开图/重算时拍的），没有就省
+                config = (getattr(dock, "params_snapshot", None) or {}).get(
+                    "config")
                 if want_bg:
                     settings = _proc_settings(window, dock, path)
                     tth, intensity, _ = _proc_curve(window, dock, path, tth,
                                                     intensity)
                     chain = process.chain_desc(settings)
-                out.append((Path(path).stem, tth, intensity, chain))
+                    if chain != "none":
+                        # 只有链真的做了事才叫"处理产物"：勾了"扣背景后的
+                        # 曲线"但三项都关着时，导出的就是原始值——照实写
+                        # Raw + chain: none，名字也不加 _处理产物 尾缀
+                        # （写着 Processed 是谎报，用户会按那个名字当扣过的用）
+                        category = data_export.CATEGORY_PROCESSED
+                        stem = (f"{stem}_"
+                                f"{gui_sources.KIND_TAIL[gui_sources.BG]}")
+                out.append((stem, tth, intensity, chain, category, config))
                 break
         else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
             if not quiet:
@@ -202,7 +232,12 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
 
 
 def _build_export_dialog(window: QMainWindow, n_results: int):
-    """导出设置弹窗：输出目录 + 后缀（.txt/.chi）+ CSV 总表开关。
+    """导出设置弹窗：输出目录 + 后缀（.txt/.chi）+ 全部数据总表开关。
+
+    输出目录默认是项目根 outputs 的**完整绝对路径**（2026-10-02 起；
+    以前是字面的 "outputs"，跟着进程工作目录跑，会写进意想不到的地方
+    ——用户机器上就这么攒出过第二个 outputs）。单个数据集只出曲线文件，
+    总表复选框禁用并说明原因。
 
     返回 dict（"dir"=Path / "suffix" / "csv"）或 None（取消）。测试
     可以 mock 本函数直接给 dict，也可以 patch QDialog.exec 走真实
@@ -210,7 +245,7 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     dlg = QDialog(window)
     dlg.setWindowTitle(f"导出 1D 数据（{n_results} 个文件）")
     lay = QFormLayout(dlg)
-    dir_edit = QLineEdit("outputs")
+    dir_edit = QLineEdit(str(paths.OUTPUTS_DIR))
     dir_edit.setObjectName("export_dir_edit")
     browse = QPushButton("浏览…")
     browse.setObjectName("export_browse_btn")
@@ -233,9 +268,16 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     suffix_combo.addItem(".txt（两列文本）", ".txt")
     suffix_combo.addItem(".chi（与 txt 同格式）", ".chi")
     lay.addRow("文件后缀", suffix_combo)
-    csv_check = QCheckBox("同时生成 CSV 总表（1d_summary.csv）")
+    csv_check = QCheckBox(f"同时生成全部数据总表（{data_export.CSV_NAME}）")
     csv_check.setObjectName("export_csv_check")
-    csv_check.setChecked(True)   # 默认顺手出一张总表
+    csv_check.setChecked(True)   # 默认顺手出一张大集合
+    if n_results == 1:
+        # 单个数据集就光一个曲线文件（用户 2026-10-02 定）；禁用而不是
+        # 藏起来——看得见才知道"为什么没有总表"
+        csv_check.setChecked(False)
+        csv_check.setEnabled(False)
+        csv_check.setToolTip("单个数据集只导出曲线文件（txt / chi）；"
+                             "两个及以上才生成全部数据总表")
     lay.addRow("", csv_check)
     # 扣背景的成果要能带走：默认关 = 导原始曲线（数据出口不该被显示
     # 参数悄悄改变——这是显示层的约定）
@@ -263,24 +305,23 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
             "csv": csv_check.isChecked(), "bg": bg_check.isChecked()}
 
 
-def _write_export(target: Path, tth, intensity, chain: str = "") -> None:
-    """写一个两列 1D 数据文件（头行与格式逐字镜像 CLI integrate_pattern）。
+def _write_export(target: Path, tth, intensity, chain: str = "", *,
+                  category: str = None, config: str = None,
+                  now=None) -> int:
+    """写一条两列 1D 曲线（窄口；格式与写法全在 services/export）。
 
-    **裁剪过的点不写行**：那些点在数据里是"空"（NaN），写出去就是字面
-    "nan"，别的软件读不了；跳过它们并在头里写明处理链——文件自己说清它
-    是怎么来的（用户 2026-09-25 定的"都存文件"）。
+    保留这个名字：GUI 内部、测试与探针都从这条口走。类别没给就按链
+    推断（none → Raw，否则 Processed）——只传链的老调用方也能工作。
+    裁剪过的点不写行（写出去就是字面 nan，别的软件读不了），头里用
+    cut 行写明删了多少点（用户 2026-09-25 定的"都存文件"）。
     """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tth = np.asarray(tth, dtype=float)
-    intensity = np.asarray(intensity, dtype=float)
-    keep = np.isfinite(intensity)
-    header = "2theta(deg)  intensity"
-    if chain:
-        header += f"\nprocessed: {chain}"
-    if not keep.all():
-        header += f"\ncut: {int((~keep).sum())} points removed"
-    np.savetxt(str(target), np.c_[tth[keep], intensity[keep]], fmt="%.6g",
-               header=header)
+    if category is None:
+        category = (data_export.CATEGORY_RAW
+                    if not chain or chain == "none"
+                    else data_export.CATEGORY_PROCESSED)
+    return data_export.write_curve(target, tth, intensity, category=category,
+                                   chain=chain or "none", config=config,
+                                   now=now)
 
 
 def _ask_csv_range(window: QMainWindow) -> str:
@@ -294,7 +335,7 @@ def _ask_csv_range(window: QMainWindow) -> str:
         return "skip"
     box = QMessageBox(window)
     box.setWindowTitle("2θ 网格不一致")
-    box.setText("这批文件的 2θ 网格不一致，CSV 总表怎么出？")
+    box.setText("这批文件的 2θ 网格不一致，全部数据总表怎么出？")
     b_common = box.addButton("取公共交集（重插值）", QMessageBox.AcceptRole)
     b_skip = box.addButton("跳过 2θ 网格不同的文件", QMessageBox.RejectRole)
     box.addButton("取消", QMessageBox.DestructiveRole)
@@ -307,35 +348,27 @@ def _ask_csv_range(window: QMainWindow) -> str:
     return "cancel"
 
 
-def _as4(row) -> tuple:
-    """结果行统一成 4 元组 (名, tth, 强度, 处理链)。
+def _write_csv_summary(window: QMainWindow, results,
+                       target_dir: Path) -> None:
+    """把一批 1D 结果汇总成一张全部数据总表（第一列 2θ，其后每文件一列强度）。
 
-    第 4 项是可选备注（老调用方与测试可能只给三元组）——写盘的两个函数
-    都从这里进，缺了就补空串。
+    所有结果的 2θ 网格一致（同 npt 同范围）时直接按列拼；网格不一致时
+    弹窗问用户（取公共交集重插值 / 跳过范围不同的文件 / 取消）。重插值
+    = 公共区间内按最大点数均匀取样，原数据 np.interp 上去。
+
+    写盘交给 services/export.write_csv（唯一格式出处）：每列一行来源
+    明细、BOM、空单元格——裁剪过的点在表里**留空**，不写 0（0 会被
+    当成真实强度参与后面的计算，空白才是"这里没有数据"的诚实表示）。
     """
-    return tuple(row) if len(row) == 4 else (*row, "")
-
-
-def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
-    """把一批 1D 结果汇总成一张 CSV：第一列 2θ，其后每文件一列强度。
-
-    所有结果的 2θ 网格一致（同 npt 同范围）时直接按列拼；网格不一
-    致时弹窗问用户（取公共交集重插值 / 跳过范围不同的文件 / 取消）。
-    重插值 = 公共区间内按最大点数均匀取样，原数据 np.interp 上去。
-
-    裁剪过的点是"空"：CSV 里那几格**留空**，不写 0——0 会被当成真实
-    强度参与后面的计算，空白才是"这里没有数据"的诚实表示。为此整张表
-    按字符串写（np.savetxt 的 %.6g 会把空值写成字面 nan）。
-    """
-    results = [_as4(r) for r in results]
-    grids = [tth for _, tth, _, _ in results]
+    results = [data_export.normalize_row(r) for r in results]
+    grids = [tth for _, tth, _, _, _, _ in results]
     ref = grids[0]
     same_grid = all(len(g) == len(ref) and np.allclose(g, ref, atol=1e-9)
                     for g in grids[1:])
     if not same_grid:
         choice = _ask_csv_range(window)
         if choice == "cancel":
-            _log(window, "已取消 CSV 总表")
+            _log(window, "已取消全部数据总表")
             return
         if choice == "intersect":
             lo = max(g.min() for g in grids)
@@ -343,57 +376,43 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
             npt = max(len(g) for g in grids)
             common = np.linspace(lo, hi, npt)
             results = [(stem, common, np.interp(common, tth, intensity),
-                        chain)
-                       for stem, tth, intensity, chain in results]
-            _log(window, f"CSV 总表取公共交集 2θ {lo:.3f}–{hi:.3f}°"
+                        chain, category, config)
+                       for stem, tth, intensity, chain, category, config
+                       in results]
+            _log(window, f"全部数据总表取公共交集 2θ {lo:.3f}–{hi:.3f}°"
                          f"（重插值到 {npt} 点）")
         else:   # "skip"：只保留与第一个文件同网格的
             kept = [r for r in results
                     if len(r[1]) == len(ref) and np.allclose(r[1], ref,
                                                              atol=1e-9)]
             if not kept:
-                _log(window, "CSV 总表已取消：没有 2θ 网格一致的文件")
+                _log(window, "全部数据总表已取消：没有 2θ 网格一致的文件")
                 return
-            _log(window, f"CSV 总表跳过 {len(results) - len(kept)} 个"
+            _log(window, f"全部数据总表跳过 {len(results) - len(kept)} 个"
                          f" 2θ 网格不同的文件")
             results = kept
-    grid = np.asarray(results[0][1], dtype=float)
-    columns = [np.asarray(intensity, dtype=float)
-               for _, _, intensity, _ in results]
-
-    def fmt(v):
-        return "" if not np.isfinite(v) else f"{v:.6g}"
-
-    rows = [",".join([fmt(x)] + [fmt(c[i]) for c in columns])
-            for i, x in enumerate(grid)]
-    header = "2theta(deg)," + ",".join(stem for stem, _, _, _ in results)
-    cut_cols = [stem for stem, _, inten, _ in results
-                if not np.isfinite(np.asarray(inten, dtype=float)).all()]
-    if cut_cols:
-        header += ("\n# 空单元格 = 该 2θ 段被裁剪（"
-                   + "、".join(cut_cols) + "）")
-    target = outdir / "1d_summary.csv"
+    target = Path(target_dir) / data_export.CSV_NAME
     try:
-        # comments=""：头行不带 # 前缀，读回时第一行就是列名
-        target.write_text(header + "\n" + "\n".join(rows) + "\n",
-                          encoding="utf-8")
+        data_export.write_csv(target, results)
     except OSError as err:
-        _log(window, f"CSV 总表写入失败（{err}）")
+        _log(window, f"全部数据总表写入失败（{err}）")
         return
-    _log(window, f"已生成 CSV 总表 → {target}"
+    cut_cols = [stem for stem, _, intensity, _, _, _ in results
+                if not np.isfinite(np.asarray(intensity, dtype=float)).all()]
+    _log(window, f"已生成全部数据总表（{len(results)} 列） → {target}"
                  + (f"（{len(cut_cols)} 列有裁剪区，空单元格表示无数据）"
                     if cut_cols else ""))
 
 
 def _run_export(window: QMainWindow, sources=None) -> None:
-    """[导出数据]：勾选文件（或指定的一组来源）的 1D 结果批量落盘。
+    """[导出数据]：勾选文件（或指定的一组来源）的 1D 结果批量写文件。
 
-    镜像 CLI 的 txt 格式；右键"导出这一条/这一组"走 sources 那条路。
-
-    输出路径 = {目录}/{文件名}/integrated_2th{suffix}（与命令行
-    integrate_pattern 同目录同格式）；可选 CSV 总表。单个文件写盘
-    失败只记日志、不中断批处理；没算过 1D 的文件跳过并提示先点
-    [1D] 出图。
+    目录结构（用户 2026-10-02 定，规范见 docs/UI_COPY.zh-CN.md）：
+    单个数据集 = 光一个 txt（不包文件夹）；两个及以上 = 一个
+    `导出_时间戳/` 文件夹（里面 全部数据.csv + txt/ 子目录）。文件格式
+    与 CLI 同源（services/export 唯一出处）；右键"导出这一条/这一组"
+    走 sources 那条路，同一套布局。单个文件写盘失败只记日志、不中断
+    批处理；没算过 1D 的文件跳过并提示先点 [1D] 出图。
     """
     # 先数一遍（确定"扣不扣背景"要等弹窗，但弹窗标题要个数量）——这一遍
     # 静默：否则"跳过 X：还没有 1D 结果"会在下面第二遍里再打一次
@@ -415,13 +434,24 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         # 而此处读到的控件值只反映当前编辑对象
         _log(window, "导出：按各面板自己的处理设置（背景/平滑/裁剪）")
     outdir, suffix = fields["dir"], fields["suffix"]
+    started = time.perf_counter()
+    if len(results) == 1:
+        # 单个数据集：光一个文件，不包文件夹
+        txt_dir = target_dir = outdir
+        landing = outdir / f"{results[0][0]}{suffix}"
+    else:
+        target_dir = data_export.batch_dir(outdir)
+        txt_dir = target_dir / data_export.TXT_DIR_NAME
+        landing = target_dir
+    _log(window, f"开始导出：{len(results)} 个文件 → {landing}")
     ok = dropped = 0
-    for stem, tth, intensity, chain in map(_as4, results):
-        target = outdir / stem / f"integrated_2th{suffix}"
-        if np.isfinite(np.asarray(intensity, dtype=float)).all() is False:
+    for stem, tth, intensity, chain, category, config in results:
+        target = txt_dir / f"{stem}{suffix}"
+        if not np.isfinite(np.asarray(intensity, dtype=float)).all():
             dropped += 1
         try:
-            _write_export(target, tth, intensity, chain)
+            _write_export(target, tth, intensity, chain, category=category,
+                          config=config)
         except OSError as err:
             _log(window, f"导出失败 {stem}（{err}）")
             continue
@@ -431,6 +461,8 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         _log(window, f"提示：{dropped} 个文件的裁剪区间没有写进文件"
                      f"（文件头注明删了多少点），空值行不写入文件")
     if ok:
-        _log(window, f"导出完成：{ok} 个文件")
-    if fields["csv"]:
-        _write_csv_summary(window, results, outdir)
+        _log(window, f"导出完成：{ok} 个文件，用时 "
+                     f"{time.perf_counter() - started:.1f} 秒 → {landing}")
+    # 单个数据集不出总表（用户 2026-10-02 定；弹窗里也禁用并说明了）
+    if fields.get("csv") and len(results) > 1:
+        _write_csv_summary(window, results, target_dir)

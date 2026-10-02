@@ -44,13 +44,14 @@ from pathlib import Path
 
 import numpy as np
 
+from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.background import BG_ALGO_VERSION
 from xrd_toolkit.services.integrator import INTEGRATION_VERSION
 from xrd_toolkit.services.process import chain_desc, chain_parts
 
-# 产物根目录：项目根下的 outputs/_stage（脚本与界面的 outputs 习惯一致）
-ROOT = Path(__file__).resolve().parents[3]
-CACHE_ROOT = Path(os.environ.get("XRD_STAGE_CACHE", ROOT / "outputs" / "_stage"))
+# 产物根目录：项目根下的 outputs/_stage（与导出/存图同一个 outputs，
+# 基准统一在 xrd_toolkit.paths——2026-10-02 起不再各算各的）
+CACHE_ROOT = Path(os.environ.get("XRD_STAGE_CACHE", OUTPUTS_DIR / "_stage"))
 
 
 def _cache_dir(kind: str) -> Path:
