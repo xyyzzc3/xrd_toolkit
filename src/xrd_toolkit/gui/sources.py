@@ -31,8 +31,9 @@ BG = "bg"          # 扣背景产物
 SOURCE_KIND_ROLE = Qt.UserRole + 1     # 条目属于哪个阶段
 SOURCE_KEY_ROLE = Qt.UserRole + 2      # 产物键（raw 条目为 None）
 
-KIND_TAIL = {ONED: "1D", BG: "处理后"}   # 产物条目的名字后缀（图例/标题里
-                                        # 分得清"这份是哪一阶段的结果"）
+KIND_TAIL = {ONED: "1D", BG: "处理产物"}   # 条目名后缀 = 导出文件名尾缀
+                                        # （2026-10-02 起与界面叫法一致；
+                                        # 旧文件仍叫 *_处理后.txt，不追改）
 
 # 日志里"这一条是从哪儿来的"的说法（与名字后缀分开：后缀要短，说明要清楚）
 KIND_TEXT = {ONED: "1D 产物", BG: "处理产物"}

@@ -1369,7 +1369,7 @@ def _proc_batch_label(settings: dict) -> tuple:
     下标 → 同号（幂等，重复点不会长出重复分组），换了设置就是另一批（两套
     参数的结果并存，正是拿来对比的用法）。
     """
-    label = (f"处理后 {time.strftime('%m-%d %H:%M')}"
+    label = (f"处理产物 {time.strftime('%m-%d %H:%M')}"
              f"（{process.chain_label(settings)}）")
     batch = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
              f"{stage_cache.proc_settings_hash(settings)[:6]}")

@@ -297,11 +297,11 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
     report(n_bg == 2, "两份扣背景产物都落盘了", f"{n_bg}/2")
     # 刚批量完 → 产物是新出现的 → 上一轮的勾选已按规矩清零（用户
     # 2026-10-01 第 8 条，方案"甲"：勾选集是出图/批量处理的输入）。
-    # 这里显式勾上「处理后」整组再点 [对比]，验的还是同一件事：
+    # 这里显式勾上「处理产物」整组再点 [对比]，验的还是同一件事：
     # 对比**直接读**那批产物而不是重算。
     groups = {g.text(0): g for g in window.file_list.groups()}
     bg_new = [t for t in groups if t.startswith("处理")]
-    report(bool(bg_new), "批量处理后文件栏长出「处理后」组", bg_new[:1])
+    report(bool(bg_new), "批量处理后文件栏长出「处理产物」组", bg_new[:1])
     if bg_new:
         for i in range(window.file_list.count()):
             window.file_list.item(i).setCheckState(Qt.Unchecked)
@@ -586,8 +586,8 @@ def check_processing_chain(window, lab6: str) -> None:
            [ln for ln in log.splitlines()
             if ln.startswith("批量处理完成")][-1:])
     group = next((g for g in window.file_list.groups()
-                  if g.text(0).startswith("处理后")), None)
-    report(group is not None, "文件栏里出现「处理后」分组",
+                  if g.text(0).startswith("处理产物")), None)
+    report(group is not None, "文件栏里出现「处理产物」分组",
            group.text(0) if group is not None else None)
     if group is not None:
         report("平滑 0.3°" in group.text(0) and "删 " in group.text(0),

@@ -2652,7 +2652,7 @@ class TestOpenRowMarks(unittest.TestCase):
             for src in gui_sources.all_sources(w):
                 if src.kind == gui_sources.BG:
                     item = src.item
-            self.assertIsNotNone(item, "前提：文件栏里有处理后条目")
+            self.assertIsNotNone(item, "前提：文件栏里有处理产物条目")
             self.assertFalse(self._marked(item))
             gui_views._open_product_panel(
                 w, gui_sources.make_source(files[0], kind=gui_sources.BG,
@@ -2894,13 +2894,13 @@ class TestProductGroups(unittest.TestCase):
                 label="处理后 01-01 00:00（自动基线）",
                 items=[(files[0], key)], config=w.config_name, npt=1000)
             w.refresh_groups()
-            group = _group_by_text(w, "处理后 01-01")
+            group = _group_by_text(w, "处理产物 01-01")
             self.assertIsNotNone(group, "前提：产物该露面")
             # 模拟"换了背景算法"：版本号 +1 → 已存的产物立刻变成旧的
             with mock.patch.object(stage_cache, "BG_ALGO_VERSION",
                                    stage_cache.BG_ALGO_VERSION + 1):
                 w.refresh_groups()
-                group = _group_by_text(w, "处理后 01-01")
+                group = _group_by_text(w, "处理产物 01-01")
                 self.assertIsNotNone(group, "旧产物也要照样列着（不藏）")
                 leaf = group.child(0)
                 self.assertIn("旧算法", leaf.text(0), "名字里要标出来")
@@ -3216,14 +3216,14 @@ class TestProductGroups(unittest.TestCase):
                                      settings={"mode": "blank"})
             w.refresh_groups()
             src = gui_sources.source_of(
-                _group_by_text(w, "处理后 09-25 05:00").child(0))
+                _group_by_text(w, "处理产物 09-25 05:00").child(0))
             outdir = Path(tempfile.mkdtemp())
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
                                                  "csv": False, "bg": False}):
                 gui_export._run_export(w, sources=[src])
-            target = outdir / f"{files[0].stem}_处理后" / "integrated_2th.txt"
+            target = outdir / f"{files[0].stem}_处理产物" / "integrated_2th.txt"
             self.assertTrue(target.exists(), "右键导出该落一份文件")
             data = np.loadtxt(str(target))
             self.assertEqual(list(data[:, 1]), [7.0, 8.0, 9.0])
@@ -3269,7 +3269,7 @@ class TestProductGroups(unittest.TestCase):
             QApplication.processEvents()
             out = gui_export._checked_1d_results(w)
             self.assertEqual(len(out), 1)
-            self.assertEqual(out[0][0], f"{files[0].stem}_处理后")
+            self.assertEqual(out[0][0], f"{files[0].stem}_处理产物")
         finally:
             w.close()
 
@@ -3740,8 +3740,8 @@ class TestProcessingChain(unittest.TestCase):
             self.assertIn("批量处理完成", log)
             self.assertIn("平滑 0.5°", log)
             self.assertIn("删 3.9–4.1°", log)
-            group = _group_by_text(w, "处理后")
-            self.assertIsNotNone(group, "文件栏该长出「处理后」分组")
+            group = _group_by_text(w, "处理产物")
+            self.assertIsNotNone(group, "文件栏该长出「处理产物」分组")
             self.assertIn("平滑 0.5°", group.text(0))
             # 产物本身：那一段是空的，元数据写明整条链
             batch = stage_cache.list_batches("bg")[0]
@@ -3876,9 +3876,9 @@ class TestProcessingPageExits(unittest.TestCase):
                             "产物真落盘")
             # 文件栏里立刻长出「处理后 …」分组，子项就是这一条
             self.assertTrue(_wait_until(
-                lambda: _group_by_text(w, "处理后") is not None),
-                "文件栏里该出现处理后分组")
-            group = _group_by_text(w, "处理后")
+                lambda: _group_by_text(w, "处理产物") is not None),
+                "文件栏里该出现处理产物分组")
+            group = _group_by_text(w, "处理产物")
             self.assertEqual(group.childCount(), 1)
             self.assertIn(path.stem, group.child(0).text(0))
             # 与 [批量处理] 落的是同一种东西：双击能打开（读盘不重算）
@@ -3954,9 +3954,9 @@ class TestProcessingPageExits(unittest.TestCase):
             QApplication.processEvents()
             w.proc_keep_btn.click()             # 先落一条处理产物
             self.assertTrue(_wait_until(
-                lambda: _group_by_text(w, "处理后") is not None))
+                lambda: _group_by_text(w, "处理产物") is not None))
             src = gui_sources.source_of(
-                _group_by_text(w, "处理后").child(0))
+                _group_by_text(w, "处理产物").child(0))
             self.assertEqual(src.kind, gui_sources.BG)
             key = gui_views._open_product_panel(w, src)
             dockp = w.plot_docks[key]
@@ -6961,8 +6961,8 @@ class TestBackgroundBatch(unittest.TestCase):
             # 批量刚产出「处理后」产物 → 上一轮的勾选已清零（第 8 条）。
             # 要接着 [对比]，就显式勾上刚出炉的那一组——这本来就是
             # "对比读的是处理产物"的前提
-            bg_group = _group_by_text(w, "处理后")
-            self.assertIsNotNone(bg_group, "批量完该有处理后分组")
+            bg_group = _group_by_text(w, "处理产物")
+            self.assertIsNotNone(bg_group, "批量完该有处理产物分组")
             gui_file_dock._set_checks(
                 w, [(s.item, False) for s in gui_sources.all_sources(w)])
             bg_group.setCheckState(0, Qt.Checked)

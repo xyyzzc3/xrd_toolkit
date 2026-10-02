@@ -1404,7 +1404,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_bg_keep = QPushButton("存成产物")
     btn_bg_keep.setObjectName("proc_keep_btn")
     btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果<b>存成产物</b>："
-                           "文件栏里长出一个「处理后 …」分组，对比 / 热图 / 导出"
+                           "文件栏里长出一个「处理产物 …」分组，对比 / 热图 / 导出"
                            "下次直接复用（与 [批量处理] 产出的是同一种东西）。"
                            "存的是数据；要存「这套设置」用下面的 [存成配方…]")
     btn_bg_keep.clicked.connect(lambda: _proc_keep_this(window))

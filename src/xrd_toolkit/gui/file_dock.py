@@ -1572,6 +1572,10 @@ def refresh_product_groups(window: QMainWindow) -> None:
             # 不同 = 两批），名字就一模一样——两个长得一样的组里各有一条同一
             # 文件的条目，删了哪一个都看不出来。重名的第二组起加尾注。
             label = str(node["label"])
+            # 旧缓存里存的是「处理后 …」（2026-10-02 改名前的批次）：
+            # 显示时归一到现名——同一批数据的组名不该新旧两套并存
+            if label.startswith("处理后"):
+                label = "处理产物" + label[len("处理后"):]
             seen_labels[label] = seen_labels.get(label, 0) + 1
             if seen_labels[label] > 1:
                 label = f"{label} · 第 {seen_labels[label]} 组"
@@ -1581,7 +1585,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
                 "整组勾上可去 [对比] / [热图]；右键删掉这一组。" + more)
             group.setData(0, GROUP_BATCH_ROLE, node["id"])   # 右键删这一组用
             for raw_item, meta, is_stale in kids:
-                tail = "处理后（旧算法，不可信）" if is_stale else "处理后"
+                tail = "处理产物（旧算法，不可信）" if is_stale else "处理产物"
                 leaf = add_leaf(group, raw_item, gui_sources.BG,
                                 meta.get("key"), tail)
                 if is_stale and leaf is not None:
