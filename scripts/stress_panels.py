@@ -43,8 +43,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(ROOT / "src"))
 
+# 默认 40 秒是旧机器上的余量；现在健康路径 10 轮 ≈ 41 s（每轮 4 s 上下），
+# 正好压在阈值上、把"跑得完"报成"卡住"（2026-10-03 实测两次误报，栈转储
+# 还会和解释器收尾抢 faulthandler 的锁，把自己也拖住）。放宽到 120 s：
+# 健康路径 3 倍余量，真卡住照样在 2 分钟内现形。
 faulthandler.dump_traceback_later(
-    float(os.environ.get("HANG_S", "40")), exit=True)
+    float(os.environ.get("HANG_S", "120")), exit=True)
 
 import numpy as np                                        # noqa: E402
 from PySide6.QtWidgets import QApplication                # noqa: E402

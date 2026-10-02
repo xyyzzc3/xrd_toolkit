@@ -140,11 +140,13 @@ class BackgroundTask(QObject):
       __init__        建 worker（归主线程）
       start()         worker moveToThread 到某条长驻线程，排队调用 run
       run 结束        done/error 信号排队回主线程 → 本对象发同名信号、
-                      调回调、把任务从 _live_tasks 放掉（此后可被回收）
+                      调回调，然后**延后销毁**（deleteLater，见 _finish）
       discard()       关窗口：丢弃回调 + 标记取消；正在跑的等它跑完
 
-    worker 的销毁发生在主线程（随本对象被回收时），所以"工作线程里销毁
-    Python 派生的 Qt 对象"这条死锁路径不会出现。
+    worker 的销毁发生在它**自己的线程**里（deleteLater 投递给它所在线程
+    的事件循环），所以两条禁忌路径都不存在："工作线程里同步销毁 Python
+    派生的 Qt 对象"（旧的死锁来路）与"主线程里跨线程同步析构"（2026-10-03
+    崩溃的来路）。
     """
 
     done = Signal(object)     # 转发 _Worker.done（测试监听用）
@@ -190,10 +192,32 @@ class BackgroundTask(QObject):
             cb(msg)
 
     def _finish(self):
+        """收尾：清回调 + **延后销毁**（2026-10-03 崩溃修复）。
+
+        为什么不能在这里直接"从 _live_tasks 放掉、随引用计数析构"：任务
+        恰恰是在**自己的槽回调正在执行时**丢掉最后引用的（本方法在
+        _on_worker_done 里跑，调用方的 done 回调紧接着还要从 window._tasks
+        里 remove 它）。引用计数析构会在 PySide 的 qtPythonMetacall 里
+        同步跑 ~QObject，而 ~QObject → disconnectNotify 要去查 Python
+        覆写——此时绑定层的状态是半销毁的，实测两次 SIGSEGV（2026-09-26、
+        2026-10-03，同一份调用栈：method_dealloc → subtype_dealloc →
+        ~QObject → Sbk_GetPyOverride → 崩）。
+        现在改成：deleteLater（销毁推迟到本次事件返回之后、由事件循环
+        处理），destroyed 之前由 _live_tasks 保活；worker 同样走 deleteLater
+        ——它住在工作线程里，让它在**自己的线程**里被销毁（跨线程同步
+        析构同样是 Qt 禁忌）。
+        """
         self._on_done_cb = None
         self._on_error_cb = None
         self._done = True
-        _live_tasks.discard(self)   # 线程已收尾：允许本对象被回收
+        self.deleteLater()
+        self.destroyed.connect(lambda *_: _live_tasks.discard(self))
+        worker = self._worker
+        if worker is not None:
+            self._worker = None
+            _live_tasks.add(worker)
+            worker.destroyed.connect(lambda *_: _live_tasks.discard(worker))
+            worker.deleteLater()
 
     def discard(self):
         """窗口关闭时调用：丢弃回调，必要时等后台函数返回。
@@ -207,8 +231,11 @@ class BackgroundTask(QObject):
         """
         self._on_done_cb = None
         self._on_error_cb = None
+        worker = self._worker
+        if worker is None:
+            return   # 已收尾（_finish 把 worker 交给 deleteLater 了）：没什么可丢弃
         # 无条件置位：正在跑的任务已经过了检查点（它照常跑完），
         # 还在排队的任务被调用时立刻放弃。
-        self._worker.cancelled = True
-        if self._started and self._worker.running:
-            self._worker.finished.wait()
+        worker.cancelled = True
+        if self._started and worker.running:
+            worker.finished.wait()

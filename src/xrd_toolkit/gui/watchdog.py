@@ -1,4 +1,14 @@
-"""卡死现场记录：界面线程停摆超过阈值就把**所有线程的栈**写进文件。
+"""卡死 / 崩溃现场记录：出事了让程序自己留证据，别靠猜。
+
+两套机制：
+  * **卡死**（本文件下半部）：界面线程停摆超过阈值 → 所有线程的栈写进
+    `outputs/hang-*.txt`；
+  * **崩溃**（install_crash_dump）：SIGSEGV/SIGABRT/SIGBUS/SIGFPE → 所有
+    线程的 Python 栈追加进 `outputs/crash-watch.txt`（2026-10-03 加：
+    用户在批量处理时闪退过一次，系统崩溃报告只有 C 栈，Python 那一层
+    是黑的）。
+
+卡死那套的由来：
 
 为什么要有（2026-10-01 用户："不点像素尺寸，点击这几个出图的按键会卡死"）：
 本地（离屏）把那条路径压了几十次都复现不出来，而"卡死"这种事**猜不得**
@@ -39,6 +49,43 @@ _seq = 0                    # 窗口序号：同一进程里多个看门狗写�
 # 写现场——测试套件里每个用例一个窗口，一踩一个准）。
 
 
+_crash_watch = None    # 崩溃现场的日志文件句柄（faulthandler 要求一直开着）
+
+
+def install_crash_dump() -> None:
+    """装上致命信号现场（进程内只装一次；由 start() 顺带调用）。
+
+    为什么要（2026-10-03）：用户在批量处理时闪退过一次（SIGSEGV，崩在
+    PySide 绑定层的对象析构里）；macOS 的崩溃报告只有 C 栈，Python 那一层
+    看不见。"卡死"那套现场已经证明有用，崩溃也照办——致命信号时把**所有
+    线程的 Python 栈**追加进 `outputs/crash-watch.txt`。
+
+    用 `faulthandler.enable(file=…)` 而不是 `register(…：SIGSEGV 这类
+    致命信号是 enable() 专用的，register 会直接 RuntimeError（第一版
+    踩到：异常被吞 → 每个窗口写一行头、还每次都漏一个文件句柄）。
+    enable 的处理器会链到默认处理——系统崩溃报告与进程终止照旧，这里
+    只是多加一份 Python 视角。
+
+    留现场失败不能挡住程序启动：整段吞异常，且无论成败都记下"已经装过"。
+    """
+    global _crash_watch
+    if _crash_watch is not None:
+        return
+    import faulthandler
+    try:
+        out = Path(OUT_DIR)
+        out.mkdir(parents=True, exist_ok=True)
+        fh = open(out / "crash-watch.txt", "a", encoding="utf-8")
+        fh.write(f"# ── 运行开始 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                 f"（PID {os.getpid()}）；本段之后若出现调用栈，就是这次"
+                 f"运行的崩溃现场\n")
+        fh.flush()
+        faulthandler.enable(file=fh, all_threads=True)
+        _crash_watch = fh        # 保活：文件在进程活着期间必须一直开着
+    except Exception:            # noqa: BLE001
+        _crash_watch = True      # 装不上也别每次重试、别反复写头
+
+
 def start(window, out_dir: Path = None) -> None:
     """挂上心跳与守护线程（window 建好后调一次）。
 
@@ -46,6 +93,7 @@ def start(window, out_dir: Path = None) -> None:
     闸就会在一个进程里堆出上百条看门狗线程——现场文件里 100 条栈全是看门狗
     自己，主线程反而被挤没了（用户报卡死时，那份文件毫无用处）。
     """
+    install_crash_dump()   # 进程级、幂等：致命信号也留一份 Python 视角的现场
     if getattr(window, "_hang_watchdog_on", False):
         return
     window._hang_watchdog_on = True
