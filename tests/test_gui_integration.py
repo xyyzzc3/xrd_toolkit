@@ -5664,6 +5664,30 @@ class TestCompare(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
 
+    def test_reclick_clears_the_stale_pending_label(self):
+        """重按 [对比] 后「未应用」灰字即时灭（用户 2026-10-03："灰字还在"）。
+
+        点按钮 = 这把 2θ/点数被用掉（_run_compare 开头的快照写回把差清零）；
+        但编辑对象没变，_set_focus 直接 return、不会刷新灰字——刷新要由取数
+        这条路自己补（_run_compare 里的 _refresh_pending_labels）。
+        """
+        w = create_window()
+        try:
+            self._plot_compare(w)      # 算完焦点落在对比面板上
+            lbl = w.pending_labels["数据"]
+            self.assertTrue(lbl.isHidden(), "一开始没有改动 → 灰字不该亮")
+            w.params["2θ 上限 (°)"].setValue(6.0)
+            QApplication.processEvents()
+            self.assertFalse(lbl.isHidden(), "改了 2θ → 灰字该亮")
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.compare_btn.click()
+                QApplication.processEvents()
+            self.assertTrue(lbl.isHidden(),
+                            "重按 [对比] 已经把值用掉 → 灰字该灭，不能留旧的")
+        finally:
+            w.close()
+
     def test_compare_is_a_single_slot_rebuilt_from_the_current_checks(self):
         """对比只有一张面板，永远按**当前**勾选重建——不留上一次的曲线。
 
@@ -11981,6 +12005,90 @@ class TestFolderImport(unittest.TestCase):
                                    return_value=""):
                 w.open_folder_action.trigger()
             self.assertEqual(w.file_list.count(), 0)
+        finally:
+            w.close()
+
+
+class TestRangeMemory(unittest.TestCase):
+    """甲方案（2026-10-03 用户定）：新开一张图默认用**该文件自己上次**的
+    2θ / 点数，坞顶那行"别处用过的值"不再漏给新图。
+
+    用户原话："2theta 的值现在全局统一，是不对的……我再次对原始数据进行
+    处理时，默认使用了刚才对比的 2theta 也是不对的"。
+    """
+
+    def _seed_product(self, w, path, lo, hi, npt):
+        """给文件落一份 2θ=[lo, hi]、npt 点数的 1D 产物（= 它"上次用过的"）。"""
+        kw = _kw_of(w)
+        kw.update(npt=npt, tth_min=lo, tth_max=hi)
+        tth = np.linspace(lo, hi, 5)
+        stage_cache.store_1d(path, tth, np.ones(5), **kw)
+
+    def _open_single(self, w, path):
+        """单张出图（勾一个文件点 [1D]），等面板出现。"""
+        w.add_files([str(path)], select=True)
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            w.view_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertTrue(_wait_until(
+                lambda: _dock(w, "1D", str(path)) is not None), "面板该开了")
+        return _dock(w, "1D", str(path))
+
+    def _set_boxes(self, w, lo, hi, npt):
+        """模拟"别处留下的值"（比如刚画完对比，盒子还停在那个范围）。"""
+        w.params["2θ 下限 (°)"].setValue(lo)
+        w.params["2θ 上限 (°)"].setValue(hi)
+        w.params["输出点数"].setValue(npt)
+        QApplication.processEvents()
+
+    def test_new_panel_uses_the_files_own_range(self):
+        """盒子里的遗留值（已被用掉）不外溢：新图用该文件上次的范围。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            self._seed_product(w, files[0], 2.0, 7.0, 1234)
+            self._set_boxes(w, 3.0, 6.0, 999)
+            w._pending_consumed = {"数据": True}   # 那把值是"别处用过的"
+            dock = self._open_single(w, files[0])
+            snap = dock.params_snapshot
+            self.assertAlmostEqual(snap["2θ 下限 (°)"], 2.0,
+                                   msg="该用文件自己上次的范围")
+            self.assertAlmostEqual(snap["2θ 上限 (°)"], 7.0)
+            self.assertEqual(snap["输出点数"], 1234)
+            self.assertAlmostEqual(w.params["2θ 上限 (°)"].value(), 7.0,
+                                   msg="盒子本身也该换成该文件的范围")
+        finally:
+            w.close()
+
+    def test_a_fresh_edit_still_wins(self):
+        """刚填、还没用掉的值是指令：填数出图照旧（甲不改这条）。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            self._seed_product(w, files[0], 2.0, 7.0, 1234)
+            self._set_boxes(w, 3.0, 6.0, 999)      # 刚填 → consumed=False
+            dock = self._open_single(w, files[0])
+            snap = dock.params_snapshot
+            self.assertAlmostEqual(snap["2θ 下限 (°)"], 3.0)
+            self.assertAlmostEqual(snap["2θ 上限 (°)"], 6.0)
+            self.assertEqual(snap["输出点数"], 999)
+        finally:
+            w.close()
+
+    def test_never_computed_file_falls_back_to_defaults(self):
+        """从没算过的文件：回到出厂默认，而不是继承盒子里的遗留值。"""
+        w = create_window()
+        try:
+            files = _tmp_files(1)
+            self._set_boxes(w, 3.0, 6.0, 999)
+            w._pending_consumed = {"数据": True}
+            dock = self._open_single(w, files[0])
+            from xrd_toolkit.gui.panel_state import DATA_PARAM_DEFAULTS as D
+            snap = dock.params_snapshot
+            self.assertAlmostEqual(snap["2θ 下限 (°)"], D["2θ 下限 (°)"])
+            self.assertAlmostEqual(snap["2θ 上限 (°)"], D["2θ 上限 (°)"])
+            self.assertEqual(snap["输出点数"], D["输出点数"])
         finally:
             w.close()
 

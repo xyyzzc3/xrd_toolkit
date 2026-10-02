@@ -98,6 +98,7 @@ from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _build_center, _close_panel, _FloatedWindow,
     _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
+    DATA_PARAM_DEFAULTS,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
@@ -574,7 +575,12 @@ def _connect_pending_hooks(window: QMainWindow) -> None:
         w = window.params.get(name)
         if w is None:
             continue
-        hook = lambda *_, win=window, n=name: _note_user_edit(win, n)   # noqa: E731
+        # 回放快照（切图）时程序在写控件——那不算"用户改动"，别把
+        # _pending_consumed 打成"没被用掉"（2026-10-03：甲方案拿这个标记
+        # 判"盒子里是不是用户刚填的指令"，回放误标会让别的图的范围当成指令）
+        hook = lambda *_, win=window, n=name: (                       # noqa: E731
+            None if getattr(win, "_param_replaying", False)
+            else _note_user_edit(win, n))
         if isinstance(w, QCheckBox):
             w.toggled.connect(hook)
         elif isinstance(w, QComboBox):
@@ -697,10 +703,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     dlay.setContentsMargins(0, 0, 0, 0)
     dlay.setSpacing(2)
     dlay.addWidget(QLabel("2θ"))
-    for key, value in (("2θ 下限 (°)", 1.0), ("2θ 上限 (°)", 8.0)):
+    for key in ("2θ 下限 (°)", "2θ 上限 (°)"):
         box = QDoubleSpinBox()
         box.setRange(0.0, 90.0)
-        box.setValue(value)
+        box.setValue(DATA_PARAM_DEFAULTS[key])   # 初值只有一处定义（见 panel_state）
         box.setDecimals(1)
         box.setSuffix("°")
         box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
@@ -711,7 +717,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     dlay.addWidget(window.params["2θ 上限 (°)"], 1)
     npt = QSpinBox()
     npt.setRange(100, 100000)
-    npt.setValue(3000)
+    npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
     npt.setMaximumWidth(72)
     npt.setToolTip("2θ 范围内的采样点数（所有分析页共用）")
     window.params["输出点数"] = npt

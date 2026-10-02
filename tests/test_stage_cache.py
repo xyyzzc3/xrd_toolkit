@@ -352,5 +352,50 @@ class TestProductLedger(unittest.TestCase):
         self.assertEqual(len(stage_cache.list_batches("bg")), 1)
 
 
+class TestLastRangeFor(unittest.TestCase):
+    """按文件取"上次用过的积分设置"（甲方案的数据来源，2026-10-03）。
+
+    新开一张图默认用**该文件自己上次**的 2θ/点数——来源 = 1D 产物 +
+    处理产物台账两个里更新的那条。
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xrd_rangemem_"))
+        self.f = self.dir / "sample.tif"
+        self.f.write_bytes(b"0" * 1024)
+
+    def test_returns_the_newest_1d_products_settings(self):
+        import time
+        stage_cache.store_1d(self.f, np.linspace(3.0, 12.0, 4),
+                             np.ones(4), config="c", npt=1000)
+        got = stage_cache.last_range_for(self.f)
+        self.assertAlmostEqual(got["tth_min"], 3.0)
+        self.assertAlmostEqual(got["tth_max"], 12.0)
+        self.assertEqual(got["npt"], 1000)
+        time.sleep(0.02)     # created 拉开一点，保证"更新的一条"有先后
+        stage_cache.store_1d(self.f, np.linspace(1.0, 8.0, 4),
+                             np.ones(4), config="c", npt=2000)
+        got = stage_cache.last_range_for(self.f)
+        self.assertEqual(got["npt"], 2000, "取更新的那条")
+        self.assertAlmostEqual(got["tth_min"], 1.0)
+
+    def test_ledger_batch_also_counts(self):
+        """处理产物批次（台账里带范围）同样算这个文件的"上次设置"。"""
+        import time
+        time.sleep(0.02)
+        stage_cache.record_batch(
+            "bg", "rm-batch", label="L", items=[(self.f, "k1")],
+            config="c", npt=800, tth_min=2.5, tth_max=9.5,
+            settings={"mode": "auto"})
+        got = stage_cache.last_range_for(self.f)
+        self.assertEqual(got["npt"], 800)
+        self.assertAlmostEqual(got["tth_min"], 2.5)
+        self.assertAlmostEqual(got["tth_max"], 9.5)
+
+    def test_unknown_file_is_empty(self):
+        self.assertEqual(stage_cache.last_range_for(self.dir / "nope.tif"),
+                         {})
+
+
 if __name__ == "__main__":
     unittest.main()

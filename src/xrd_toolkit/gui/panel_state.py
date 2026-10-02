@@ -84,6 +84,17 @@ def _snapshot_params(window: QMainWindow) -> dict:
 # 图像参数组的全部条目（"只看图不参与计算"的那一组）。快照里这两类
 # 参数按职责分开更新（见 _data_snapshot / _display_snapshot）：两个
 # [应用] 各管各的，互不串改。
+#
+# 数据参数组的出厂默认（坞顶第三行那三个控件的初值，缺一不可）：
+# 控件的初始值从这里取（app._build_param_dock），"从没算过的文件开新图
+# 时回到默认"（plot_views._apply_range_memory，甲方案）也用它——同一份
+# 数字两处读，别再各写一个字面量。
+DATA_PARAM_DEFAULTS = {
+    "2θ 下限 (°)": 1.0,
+    "2θ 上限 (°)": 8.0,
+    "输出点数": 3000,
+}
+
 _DISPLAY_DEFAULTS = {
     "自动对比度": True,
     "对比度下限": 1.0,

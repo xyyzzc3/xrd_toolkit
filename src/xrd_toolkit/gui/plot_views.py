@@ -46,6 +46,7 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
+    DATA_PARAM_DEFAULTS,
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
     _data_snapshot, _display_snapshot, _log, _note_params_consumed,
@@ -113,6 +114,38 @@ def _compute_waterfall(path_str: str, geom: dict, npt: int) -> tuple:
         poni2_m=geom["poni2_m"],
         rot1_deg=geom["rot1_deg"],
         rot2_deg=geom["rot2_deg"])
+
+
+def _apply_range_memory(window: QMainWindow, path) -> None:
+    """开一张**新**图前：把 2θ / 点数换成"这个文件自己上次用过的"（甲，2026-10-03）。
+
+    用户原话："2theta 的值现在全局统一，是不对的……我再次对原始数据进行
+    处理时，默认使用了刚才对比的 2theta 也是不对的"。坞顶那一行是"最后
+    一个动过的人"留下的值，新开图直接继承它，就会把别的图（比如对比）的
+    范围漏进来。现在的口径：
+      * 盒子里是"用户刚填、还没被用掉"的值（_pending_consumed["数据"] is
+        False；回放快照不会误标，见 app._connect_pending_hooks）→ **不动**：
+        那是指令（填数出图）；
+      * 否则 → 用该文件最近一条产物的范围 / 点数（stage_cache.last_range_for）；
+        从没算过 → 出厂默认（panel_state.DATA_PARAM_DEFAULTS）。
+    写控件时挂 _param_replaying：程序自己的改写不算"用户改动"。
+    """
+    if (getattr(window, "_pending_consumed", None) or {}).get("数据") is False:
+        return   # 刚填没被用掉 = 指令，照旧用盒子里的
+    mem = stage_cache.last_range_for(path)
+    lo = float(mem.get("tth_min") if mem.get("tth_min") is not None
+               else DATA_PARAM_DEFAULTS["2θ 下限 (°)"])
+    hi = float(mem.get("tth_max") if mem.get("tth_max") is not None
+               else DATA_PARAM_DEFAULTS["2θ 上限 (°)"])
+    npt = int(mem.get("npt") or DATA_PARAM_DEFAULTS["输出点数"])
+    prev = getattr(window, "_param_replaying", False)
+    window._param_replaying = True
+    try:
+        window.params["2θ 下限 (°)"].setValue(lo)
+        window.params["2θ 上限 (°)"].setValue(hi)
+        window.params["输出点数"].setValue(npt)
+    finally:
+        window._param_replaying = prev
 
 
 def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
@@ -1936,6 +1969,7 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
     path = Path(source.path)
     key, dock = _resolve_dock(window, name, source.item)
     if dock is None:
+        _apply_range_memory(window, path)   # 甲：新图用该文件自己的范围，不用盒子里的遗留值
         dock = _open_plot_panel(window, name, key, f"{name}_{source.display}")
         dock.panel_file = path
         dock.panel_item = source.item
@@ -2069,6 +2103,9 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
                          f"（按文件列表顺序）；{tail}")
     total_tasks = len(targets) + len(pending)
+    # 只开**一张**新图：2θ/点数默认用该文件自己上次的（甲，见 _apply_range_memory）；
+    # 批量（≥2 张）仍用坞顶那行当输入——一组图总得有一个共同范围
+    single_new = total_tasks == 1
     if total_tasks > 1:
         # 批量进度记账：这一批的总数/视图名/起算时刻；每个任务结束回调
         # 计数一次（k/n 后缀与进度条都靠它，批走完自动清账）
@@ -2094,6 +2131,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                 _progress_show(window, len(targets), i + 1)   # 开面板也有进度
                 _settle(window)
             title = f"{name}_{display}"
+            if single_new and source.kind == gui_sources.RAW:
+                _apply_range_memory(window, path)   # 甲：单张新图用该文件自己的范围
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
             dock = _open_plot_panel(window, name, key, title)
             dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）

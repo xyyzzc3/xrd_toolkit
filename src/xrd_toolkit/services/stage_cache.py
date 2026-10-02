@@ -53,6 +53,10 @@ from xrd_toolkit.services.process import chain_desc, chain_parts
 # 基准统一在 xrd_toolkit.paths——2026-10-02 起不再各算各的）
 CACHE_ROOT = Path(os.environ.get("XRD_STAGE_CACHE", OUTPUTS_DIR / "_stage"))
 
+# 写产物的代数：每写一条 +1。last_range_for 的惰性索引靠它判"要不要重建"
+# （别每次开图都扫一遍全部 npz）
+_write_gen = 0
+
 
 def _cache_dir(kind: str) -> Path:
     return CACHE_ROOT / kind
@@ -120,6 +124,7 @@ def _read_curve(target: Path):
 
 def _write_curve(target: Path, tth, intensity, meta: dict) -> Path:
     """写一条曲线产物（原子：先写 tmp 再 rename），1D 与 bg 共用。"""
+    global _write_gen
     tth = np.asarray(tth, dtype=float)
     intensity = np.asarray(intensity, dtype=float)
     if tth.shape != intensity.shape or tth.size == 0:
@@ -130,6 +135,7 @@ def _write_curve(target: Path, tth, intensity, meta: dict) -> Path:
     np.savez(tmp, tth=tth, intensity=intensity,
              meta=json.dumps(meta, ensure_ascii=False))
     tmp.replace(target)          # 原子：读者要么见旧的、要么见新的
+    _write_gen += 1              # 「按文件取上次范围」的索引跟着作废（见 last_range_for）
     return target
 
 
@@ -587,6 +593,68 @@ def list_products(kind: str) -> list:
         if isinstance(meta, dict):
             out.append((p.stem, meta, lo, hi))
     return out
+
+
+# ══ 按文件取"上次用过的积分设置"（甲，2026-10-03）══════════════
+# 用户："2theta 的值现在全局统一，是不对的……我再次对原始数据进行处理时，
+# 默认使用了刚才对比的 2theta 也是不对的"。新开一张图时，2θ/点数默认用
+# **该文件自己上次用过的**，坞顶盒子里"别处留下的值"不再漏过来。
+# 惰性索引：第一次查扫一遍（同文件栏刷新那条路），之后靠 _write_gen 判失效。
+_ranges_cache = {"gen": -1, "index": {}}
+
+
+def _ranges_index() -> dict:
+    """{文件绝对路径: {"tth_min","tth_max","npt","created"}}，取每个文件最新的一条。
+
+    两个来源合并（按 created 取新的）：
+      * 处理产物批次台账（index.json，一次小 JSON 读；范围是 None 的批次跳过）；
+      * 1D 产物（扫 npz：元数据给路径/点数/时间，范围取曲线端点——与
+        file_dock 刷新文件栏同一条路，坏文件跳过）。
+    """
+    global _ranges_cache
+    if _ranges_cache["gen"] == _write_gen:
+        return _ranges_cache["index"]
+    idx = {}
+    for batch in list_batches("bg"):
+        lo, hi = batch.get("tth_min"), batch.get("tth_max")
+        if lo is None or hi is None:
+            continue     # 全范围批次：范围没有显式记，交给 1D 产物那条路
+        created = float(batch.get("created") or 0)
+        for p in (batch.get("items") or {}):
+            cur = idx.get(p)
+            if cur is None or created > cur["created"]:
+                idx[p] = {"tth_min": float(lo), "tth_max": float(hi),
+                          "npt": int(batch.get("npt") or 0),
+                          "created": created}
+    for _key, meta, lo, hi in list_products("1d"):
+        p = meta.get("path")
+        if not p:
+            continue
+        # 1D 产物 meta 里存的是**未解析**的路径（store_1d 原样 str(path)），
+        # 而查询按 resolve() 归一——macOS 上 /var → /private/var 的软链不
+        # 归一就永远对不上（2026-10-03 实测：记忆查不到、退回默认值）
+        p = str(Path(p).resolve())
+        created = float(meta.get("created") or 0)
+        cur = idx.get(p)
+        if cur is None or created > cur["created"]:
+            idx[p] = {"tth_min": float(lo), "tth_max": float(hi),
+                      "npt": int(meta.get("npt") or 0), "created": created}
+    _ranges_cache = {"gen": _write_gen, "index": idx}
+    return idx
+
+
+def last_range_for(path) -> dict:
+    """这个文件**最近一次**积分用过的设置；从没算过 → {}。
+
+    返回 {"tth_min","tth_max","npt"}（不含 created）。开销：首次一次扫描，
+    之后零成本（写一条产物才重建，见 _write_gen）。
+    """
+    try:
+        p = str(Path(path).resolve())
+    except OSError:
+        return {}
+    got = _ranges_index().get(p)
+    return {k: got[k] for k in ("tth_min", "tth_max", "npt")} if got else {}
 
 
 def meta_by_key(kind: str, key: str) -> dict:

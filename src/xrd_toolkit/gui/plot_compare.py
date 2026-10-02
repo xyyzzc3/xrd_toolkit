@@ -328,6 +328,10 @@ def _run_compare(window: QMainWindow, key: str) -> None:
     # 数据参数 = 控件当前值（计算就用它），显示参数沿用面板自己的
     # 旧快照（重按 [对比] 刷新不改这张图的长相）
     dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
+    # 刚把控件值写进快照 = 这组值被用掉了：「未应用」灰字该灭。重按
+    # [对比] 时编辑对象没变，_set_focus 会直接 return、不再刷新，所以
+    # 这里自己刷一次（用户 2026-10-03："点了以后那个未应用的灰字还在"）
+    _refresh_pending_labels(window)
     dock.compare_gen += 1
     gen = dock.compare_gen
     epoch = window._panel_epoch.get(key, 0)   # 面板代数：关过重开旧代全作废
@@ -864,6 +868,9 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
     if dock is None:
         return   # 面板已关：迟到点击/重算不落地
     dock.params_snapshot = _data_snapshot(window, dock.params_snapshot)
+    # 同 _run_compare：值刚被用掉，灰字立即刷新（重按 [热图] 时编辑对象
+    # 没变、_set_focus 直接 return，没人刷新就会留着陈旧的"未应用"）
+    _refresh_pending_labels(window)
     dock.heat_gen += 1
     gen = dock.heat_gen
     epoch = window._panel_epoch.get(key, 0)
