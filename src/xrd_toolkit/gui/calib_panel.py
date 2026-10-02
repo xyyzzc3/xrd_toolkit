@@ -10,12 +10,12 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QMainWindow, QMdiSubWindow,
+from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
                                QPushButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
-    CP_COLOR, PANEL_SCALE, RING_COLOR, SNAP_TOL_DEG,
+    CP_COLOR, PANEL_SCALE, RING_COLOR, SELECT_COLOR, SNAP_TOL_DEG,
     _calib_state, _geom_px_keys, _metrics_dev, _result_by_name, _slot_label)
 from xrd_toolkit.gui.panels import _install_resize_grip, _settle
 from xrd_toolkit.gui.panel_state import (_auto_contrast_values,
@@ -373,20 +373,28 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
         _log(window, f"{head}，{how}，{tail}")
 
 
-def _new_marker_artists(ax, x, y, ring: int) -> list:
+def _new_marker_artists(ax, x, y, ring: int, selected: bool = False) -> list:
     """一个选点标记（青圈 + 环号）的 artist，**先设成不可见**。
 
     不可见是为了把它们**排除在整幅重画之外**：整幅画一次要给 2048² 图重过
     LogNorm（几百毫秒到十几秒），而标记只是几个圈——它们只在贴图时用
     `draw_artist` 单独画（draw_artist 不看可见性，见 _refresh_calib_markers）。
     这样底图永远是"干净的"（不含标记），撤销/清空只要贴回底图再画剩下的标记。
+
+    selected=True 再加一圈金黄高亮——右键选中的那个点要一眼看得出来
+    （2026-10-03：环号改成"选中 + 面板里改"，选中的是谁必须可见）。
     """
+    arts = []
+    if selected:
+        arts.append(ax.plot([x], [y], "o", mfc="none", mec=SELECT_COLOR,
+                            ms=15, mew=2.0)[0])
     ln = ax.plot([x], [y], "o", mfc="none", mec=RING_COLOR, ms=9, mew=1.5)[0]
     txt = ax.annotate(str(ring), (x, y), color=RING_COLOR, fontsize=8,
                       va="bottom", ha="left")
-    for art in (ln, txt):
+    arts += [ln, txt]
+    for art in arts:
         art.set_visible(False)
-    return [ln, txt]
+    return arts
 
 
 def _refresh_calib_markers(window: QMainWindow) -> None:
@@ -412,18 +420,22 @@ def _refresh_calib_markers(window: QMainWindow) -> None:
 
 
 def _rebuild_calib_markers(window: QMainWindow) -> None:
-    """按 state["points"] 重建全部标记并贴一次（撤销 / 清空 / 改环号后调）。"""
+    """按 state["points"] 重建全部标记并贴一次
+    （撤销 / 清空 / 选中 / 改环号后调）。"""
     ax = getattr(window, "calib_ax", None)
     if ax is None:
         return
+    state = _calib_state(window)
+    sel = state.get("selected")
     for art in getattr(window, "calib_marker_artists", None) or []:
         try:
             art.remove()
         except Exception:                                  # noqa: BLE001
             pass
     window.calib_marker_artists = []
-    for x, y, ring in _calib_state(window)["points"]:
-        window.calib_marker_artists += _new_marker_artists(ax, x, y, ring)
+    for i, (x, y, ring) in enumerate(state["points"]):
+        window.calib_marker_artists += _new_marker_artists(
+            ax, x, y, ring, selected=(i == sel))
     _refresh_calib_markers(window)
 
 
@@ -503,58 +515,79 @@ def _redraw_calib(window: QMainWindow) -> None:
                       ring_marks=state["points"])
 
 
-# LaB₆ 理论环序号上限（snap_lab6_ring 的 max_rings=16 → 0~15）：右键改环号
-# 的输入框拿它当上界
+# LaB₆ 理论环序号上限（snap_lab6_ring 的 max_rings=16 → 0~15）：手动小节的
+# 「选中点的环号」数字框拿它当上界（calib.py 建控件时 import 它）
 _LAB6_MAX_RING = 15
-# 右键改环号：落点离某个选点多近算"点中了这个点"（px）。选点标记是 9 px 的
+# 右键选中：落点离某个选点多近算"点中了这个点"（px）。选点标记是 9 px 的
 # 圆圈，12 px 给触控板留点余量
 _MARKER_PICK_PX = 12.0
 
 
-def _ask_ring_index(window: QMainWindow, old: int) -> int:
-    """问用户"这个点算第几环"。返回 -1 = 取消。
-
-    单独一层是为了测试能替身掉模态框（离屏测试里 QInputDialog 会挂住）。
-    """
-    val, ok = QInputDialog.getInt(
-        window, "改环号",
-        f"这个点现在判成环 {old}：改成第几环？\n"
-        f"（LaB₆ 理论环 0–{_LAB6_MAX_RING}；位置不动，拟合按新环号算）",
-        old, 0, _LAB6_MAX_RING, 1)
-    return int(val) if ok else -1
+def _normalize_selection(window: QMainWindow) -> None:
+    """选点列表变了以后把选中项修好：越界/没了就清空。"""
+    state = _calib_state(window)
+    i = state.get("selected")
+    if i is not None and not (0 <= i < len(state["points"])):
+        state["selected"] = None
 
 
-def _edit_ring_of_nearest(window: QMainWindow, x: float, y: float) -> bool:
-    """右键某个选点 → 改它的环号。返回 True = 改了（调用方整幅重画）。
+def _select_nearest(window: QMainWindow, x: float, y: float) -> bool:
+    """右键某个选点 → 选中它（改环号的前半步）。返回 True = 选中变了。
 
-    用户 2026-09-30 定：自动判环（含按尺度重判）都没救回来时的**后手**——
-    你自己知道这个点是第几环，直接改掉，比再点一遍碰运气可靠。
+    用户 2026-09-30 定的**后手**（自动判环含按尺度重判都没救回来时，
+    你自己知道它该是第几环）；2026-10-03 改成"选中 + 在「手动」小节里
+    改"。原版右键弹 QInputDialog——macOS 全屏下"对话框开着时切走再切回"
+    会把整个应用卡成收不到任何输入（AppKit 的模态窗口收尾没做完，
+    NSApp.modalWindow 一直挂着，实测复现）；改成两步之后模态窗口彻底
+    不存在，也顺带解决了离屏测试里这个对话框会挂住的问题。
     """
     state = _calib_state(window)
     pts = state["points"]
     if not pts:
-        _log(window, "还没有选点：先在图上点衍射环；右键用来改已有点的环号")
+        _log(window, "还没有选点：先在图上点衍射环；右键用来选中一个已有点")
         return False
     dists = [float(np.hypot(p[0] - x, p[1] - y)) for p in pts]
     i = int(np.argmin(dists))
     if dists[i] > _MARKER_PICK_PX:
         _log(window, f"右键要落在某个选点上：最近的点也在 {dists[i]:.0f} px 外")
         return False
+    state["selected"] = i
+    _log(window, f"已选中第 {i + 1} 个点（现在判成环 {int(pts[i][2])}）"
+                 f"——在「手动」小节里改它的环号")
+    return True
+
+
+def _apply_selected_ring(window: QMainWindow) -> None:
+    """[改]：把「选中点的环号」数字框的值应用到选中的那个点。
+
+    位置不动、只改环号（拟合按新环号算）——与老对话框版同一套语义，
+    只是"问数字"从弹窗换成了面板上的一行。
+    """
+    from xrd_toolkit.gui.calib import _calib_sync   # 破循环：见模块说明
+    state = _calib_state(window)
+    i = state.get("selected")
+    pts = state["points"]
+    if i is None or not (0 <= i < len(pts)):
+        _log(window, "还没有选中的点：右键图上某个选点来选它")
+        return
     old = int(pts[i][2])
-    new = _ask_ring_index(window, old)
-    if new < 0 or new == old:
-        return False
+    new = int(window.calib_ring_spin.value())
+    if new == old:
+        _log(window, f"第 {i + 1} 个点现在就是环 {old}，没改")
+        return
     pts[i] = (float(pts[i][0]), float(pts[i][1]), new)
     _log(window, f"第 {i + 1} 个点的环号：{old} → {new}（位置没动，拟合按新"
                  f"环号算——改完按 [用选点精修] 重跑）")
-    return True
+    _rebuild_calib_markers(window)
+    _calib_sync(window)
 
 
 def _on_calib_click(window: QMainWindow, key: str, event) -> None:
     """校准图点击：判环吸附 → 记录点 + 图上标记；吸不上 → 日志忽略。
 
-    **右键**落在某个已有点上 = 改那个点的环号（`_edit_ring_of_nearest`，
-    用户 2026-09-30 定的后手）——判环自动修不回来时，你知道它该是第几环。
+    **右键**落在某个已有点上 = **选中**它（`_select_nearest`，用户
+    2026-09-30 定的后手，2026-10-03 起不弹对话框）——选中后在「手动」
+    小节里改它的环号；判环自动修不回来时，你知道它该是第几环。
 
     判环用**屏幕上画青线的那套几何**（_calib_draw_geometry：最近一次
     校准结果覆盖面板初值）——与 _draw_calib_image 同源。用别的几何判，
@@ -571,9 +604,12 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
             or getattr(window, "calib_key", None) != key:
         return   # 面板已关/换过：迟到点击忽略
     if getattr(event, "button", None) == MouseButton.RIGHT:
-        # 后手：自动判环没救回来时，右键某个点直接改它的环号（用户 2026-09-30）
-        if _edit_ring_of_nearest(window, float(event.xdata), float(event.ydata)):
+        # 后手：自动判环没救回来时，右键选中那个点、在「手动」小节里改
+        # 环号（用户 2026-10-03 起不弹对话框——模态框在 macOS 全屏下有
+        # 卡死输入的前科，见 _select_nearest）
+        if _select_nearest(window, float(event.xdata), float(event.ydata)):
             _rebuild_calib_markers(window)      # 只重画标记（不整幅重画）
+        _calib_sync(window)                     # 面板那行（选中/数值）跟着变
         return
     g = _calib_draw_geometry(window)
     ring = snap_lab6_ring(
@@ -608,6 +644,7 @@ def _undo_calib_point(window: QMainWindow) -> None:
     if not state["points"]:
         return
     state["points"].pop()
+    _normalize_selection(window)      # 撤掉的正是选中那个 → 选中清空
     _log(window, f"已撤销最后一个点（剩 {len(state['points'])} 个）")
     _rebuild_calib_markers(window)
     _calib_sync(window)
@@ -621,6 +658,7 @@ def _clear_calib_points(window: QMainWindow) -> None:
     if not state["points"]:
         return
     state["points"] = []
+    _normalize_selection(window)      # 点都没了，选中自然清空
     _log(window, "已清空选点")
     _rebuild_calib_markers(window)
     _calib_sync(window)

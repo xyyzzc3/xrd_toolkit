@@ -61,7 +61,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMdiSubWindow, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget)
+    QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 
 # 常量都住在 calib_model（纯逻辑层）。这里把面板/表格用的几个也一并
 # 导入，保持『经 gui_calib 取用』的历史引用可用（同 app.py 的再导出惯例）。
@@ -75,10 +75,10 @@ from xrd_toolkit.gui.calib_model import (
 from xrd_toolkit.gui.calib_table import (
     _on_slot_changed, _refresh_table, _sync_slot_combos)
 from xrd_toolkit.gui.calib_panel import (
-    _CalibSubWindow, _calib_standard_path, _clear_calib_points,
-    _close_calib_panel, _geom_px_keys, _load_image, _open_calib_panel,
-    _redraw_calib, _redraw_calib_if_open, _undo_calib_point,
-    _warn_rings_off_image)
+    _CalibSubWindow, _LAB6_MAX_RING, _apply_selected_ring,
+    _calib_standard_path, _clear_calib_points, _close_calib_panel,
+    _geom_px_keys, _load_image, _open_calib_panel, _redraw_calib,
+    _redraw_calib_if_open, _undo_calib_point, _warn_rings_off_image)
 from xrd_toolkit.gui.config_ops import (
     _delete_config, _import_poni, _save_calib_config, _save_poni,
     _suggest_config_key, _sync_del_config_btn)
@@ -426,7 +426,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
       自动    定位环心并精修 / 在当前配置上再精修
-      手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 改环号）
+      手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
               一行 + 8 行数值 + 2 行 Δ（相对「当前配置」）
@@ -647,13 +647,32 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     ml = QVBoxLayout(manual_box)
     manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
                          "（±0.5°；判环可疑时会自动按尺度重判一遍）；"
-                         "<b>右键某个点可以改它的环号</b>；"
+                         "<b>右键某个点 = 选中它</b>，在下面把它的环号改掉；"
                          "至少 3 个点、覆盖 2 个不同的环")
     manual_hint.setWordWrap(True)
     ml.addWidget(manual_hint)
     points_label = QLabel("已选 0 个点 / 0 个环")
     points_label.setWordWrap(True)      # 不够格时它会写一长句原因（见 _calib_sync）
     ml.addWidget(points_label)
+    # 选中点的环号：右键选中 → 在这里改（2026-10-03 起不弹对话框——
+    # 模态框在 macOS 全屏下"开着切走再切回"会把应用卡成收不到输入）
+    sel_row = QHBoxLayout()
+    sel_lbl = QLabel("选中点：—（右键图上某个点来选）")
+    sel_lbl.setWordWrap(True)
+    sel_row.addWidget(sel_lbl, 1)
+    ring_spin = QSpinBox()
+    ring_spin.setObjectName("calib_ring_spin")
+    ring_spin.setRange(0, _LAB6_MAX_RING)
+    ring_spin.setToolTip(f"选中的点该算第几环（LaB₆ 理论环 0–{_LAB6_MAX_RING}）"
+                         f"——位置不动，拟合按新环号算")
+    ring_spin.setEnabled(False)
+    btn_ring = QPushButton("改")
+    btn_ring.setObjectName("calib_ring_apply_btn")
+    btn_ring.setToolTip("把选中点的环号改成左边这个数字")
+    btn_ring.setEnabled(False)
+    sel_row.addWidget(ring_spin)
+    sel_row.addWidget(btn_ring)
+    ml.addLayout(sel_row)
     row = QHBoxLayout()
     btn_undo = QPushButton("撤销一点")
     btn_clear = QPushButton("清空选点")
@@ -664,14 +683,19 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_manual.setObjectName("start_manual_calib")
     btn_manual.setToolTip(f"按你选的点反推几何。至少要 {MIN_POINTS} 个点、"
                           f"覆盖 {MIN_RINGS} 个<b>不同的环</b>才能点（灰着时看上面"
-                          f"那行说明；都判成同一个环号了就用右键改）")
+                          f"那行说明；都判成同一个环号了：右键选中那个点，"
+                          f"把环号改掉）")
     ml.addWidget(btn_manual)
     lay.addWidget(manual_box)
     lay.addWidget(table_box)      # 数据表放最下（用户 2026-09-30 定）
     window.calib_points_label = points_label
+    window.calib_selected_lbl = sel_lbl
+    window.calib_ring_spin = ring_spin
+    window.calib_ring_apply = btn_ring
     window.calib_undo_btn = btn_undo
     window.calib_clear_btn = btn_clear
     window.calib_start_manual = btn_manual
+    btn_ring.clicked.connect(lambda: _apply_selected_ring(window))
     btn_undo.clicked.connect(lambda: _undo_calib_point(window))
     btn_clear.clicked.connect(lambda: _clear_calib_points(window))
     btn_manual.clicked.connect(lambda: _start_manual_calib(window))
@@ -712,7 +736,7 @@ def _calib_sync(window: QMainWindow) -> None:
     enough = len(points) >= MIN_POINTS and n_rings >= MIN_RINGS
     # 不够格时**把原因写出来**（用户 2026-10-01："手选完了点击用选点精修无效"）：
     # 那时按钮是灰的，点下去 Qt 直接丢掉、一个字都不写——而最可能的原因正是
-    # 判环挤在一起（同一个环号好几个点），顺手把出路（右键改环号）也指出来
+    # 判环挤在一起（同一个环号好几个点），顺手把出路（右键选中改环号）也指出来
     # 只有"环数不够"才多嘴解释（那才是让人看不懂的那种：点明明点了一堆，
     # 按钮却灰着）。单纯点还不够多时保持简短——上方提示本来就写着"至少 3 个
     # 点"，计数也在眼前。一个点都没点时更不必解释。
@@ -721,7 +745,26 @@ def _calib_sync(window: QMainWindow) -> None:
         if (n_rings >= MIN_RINGS or not points) else
         f"已选 {len(points)} 个点 / {n_rings} 个环——至少要 {MIN_POINTS} 个点、"
         f"覆盖 {MIN_RINGS} 个不同的环才能精修（都判成同一个环号了？"
-        f"右键某个点可以改它的环号）")
+        f"右键选中那个点，把环号改掉）")
+    # 选中点的环号行：谁被选中、现在几环；没选中（或越界）就禁用
+    sel_lbl = getattr(window, "calib_selected_lbl", None)
+    if sel_lbl is not None:
+        sel = state.get("selected")
+        has_sel = sel is not None and 0 <= sel < len(points)
+        if has_sel:
+            sel_lbl.setText(f"选中点：第 {sel + 1} 个"
+                            f"（现在判成环 {int(points[sel][2])}）")
+            sel_key = (sel, int(points[sel][2]))
+            # 只在"换了选中点 / 环号变了"时回填数字框：后台任务随时会调
+            # _calib_sync，每次都回填会把用户正拨的数字打回去（2026-10-03）
+            if sel_key != getattr(window, "_calib_ring_loaded", None):
+                window.calib_ring_spin.setValue(int(points[sel][2]))
+            window._calib_ring_loaded = sel_key
+        else:
+            sel_lbl.setText("选中点：—（右键图上某个点来选）")
+            window._calib_ring_loaded = None
+        window.calib_ring_spin.setEnabled(has_sel)
+        window.calib_ring_apply.setEnabled(has_sel)
     window.calib_start_manual.setEnabled(enough)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
@@ -1059,7 +1102,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
         _log(window, f"手动校准至少需要 {MIN_POINTS} 个点、覆盖 {MIN_RINGS} 个"
                      f"不同的环——现在是 {len(_pts)} 个点 / "
                      f"{len({p[2] for p in _pts})} 个环；都挤在同一个环号上时，"
-                     f"右键某个点可以改它的环号")
+                     f"右键选中那个点，把环号改掉")
         return
     if not _initial_ready(window):
         return   # 像素尺寸没确认：只提示，不建任务

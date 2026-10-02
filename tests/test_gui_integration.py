@@ -10058,11 +10058,14 @@ class TestCalibration(unittest.TestCase):
         finally:
             w.close()
 
-    def test_right_click_edits_a_points_ring_index(self):
-        """右键某个选点 → 改它的环号（用户 2026-09-30 定的后手）。
+    def test_right_click_selects_then_panel_edits_the_ring(self):
+        """右键某个选点 = 选中它；环号在「手动」小节里改（2026-10-03 起不弹框）。
 
-        自动判环（含按尺度重判）都没救回来时，用户自己知道该是第几环——直接改，
-        比再点一遍碰运气可靠。环号改了要整幅重画（点上的标注跟着变）。
+        自动判环（含按尺度重判）都没救回来时，用户自己知道该是第几环——
+        右键选中 + 数字框改，比再点一遍碰运气可靠。原版右键直接弹
+        QInputDialog：macOS 全屏下"对话框开着时切走再切回"会把应用卡成
+        收不到任何输入（AppKit 模态收尾没做完，实测复现），改成两步后
+        模态窗口彻底不存在。
         """
         w = create_window()
         try:
@@ -10074,25 +10077,65 @@ class TestCalibration(unittest.TestCase):
             state = w.calib_state
             self.assertEqual([int(p[2]) for p in state["points"]], [2, 4, 6])
             x, y, _old = state["points"][1]
-            with mock.patch.object(gui_calib_panel, "_ask_ring_index",
-                                   return_value=5) as ask:
-                self._right_click_at(w, x, y)
-            self.assertEqual(ask.call_args[0][1], 4, "问的时候要带上当前环号")
+            self.assertFalse(w.calib_ring_spin.isEnabled(), "没选中时该是灰的")
+            self._right_click_at(w, x, y)
+            self.assertEqual(state["selected"], 1, "右键 = 选中这个点")
+            self.assertIn("已选中第 2 个点", self._logs(w))
+            self.assertTrue(w.calib_ring_spin.isEnabled())
+            self.assertEqual(w.calib_ring_spin.value(), 4, "回填当前环号")
+            self.assertIn("第 2 个", w.calib_selected_lbl.text())
+            # 在面板上改成 5 → 按 [改]
+            w.calib_ring_spin.setValue(5)
+            w.calib_ring_apply.click()
             self.assertEqual([int(p[2]) for p in state["points"]], [2, 5, 6])
             self.assertEqual((state["points"][1][0], state["points"][1][1]),
                              (x, y), "只改环号，位置不动")
             self.assertIn("环号：4 → 5", self._logs(w))
-            # 右键落在空处：不改、只提示
+            # 右键落在空处：选中不动、只提示
             self._right_click_at(w, x + 100.0, y + 100.0)
+            self.assertEqual(state["selected"], 1)
             self.assertEqual([int(p[2]) for p in state["points"]], [2, 5, 6])
             self.assertIn("右键要落在某个选点上", self._logs(w))
+            # 改成和现在一样：写明白"没改"，不静默
+            w.calib_ring_apply.click()
+            self.assertIn("现在就是环 5，没改", self._logs(w))
+            # 清空选点 → 选中自动失效、控件禁用
+            w.calib_clear_btn.click()
+            self.assertIsNone(state["selected"])
+            self.assertFalse(w.calib_ring_spin.isEnabled())
+            self.assertIn("—", w.calib_selected_lbl.text())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_undo_keeps_or_clears_the_selection(self):
+        """撤销不越界：撤掉的不是选中项 → 选中还在；撤掉它 → 选中清空。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            state = w.calib_state
+            x, y, _ = state["points"][0]
+            self._right_click_at(w, x, y)
+            self.assertEqual(state["selected"], 0)
+            w.calib_undo_btn.click()             # 撤掉第 3 个点：选中(第 1 个)不受影响
+            self.assertEqual(state["selected"], 0)
+            w.calib_undo_btn.click()             # 撤掉第 2 个点
+            self.assertEqual(state["selected"], 0)
+            w.calib_undo_btn.click()             # 撤掉选中的那个 → 清空
+            self.assertIsNone(state["selected"])
+            self.assertFalse(w.calib_ring_spin.isEnabled())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
                 w.close()
 
     def _right_click_at(self, w, x, y):
-        """在校准图 (x, y) 处发一次右键点击（改环号的入口）。"""
+        """在校准图 (x, y) 处发一次右键点击（选中选点的入口）。"""
         gui_calib_panel._on_calib_click(
             w, w.calib_key,
             SimpleNamespace(xdata=x, ydata=y, inaxes=w.calib_ax,

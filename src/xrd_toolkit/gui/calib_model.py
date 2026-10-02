@@ -32,6 +32,9 @@ def _calib_state(window: QMainWindow) -> dict:
 
     键：
       points        [(x, y, 环号), ...] 用户点的点
+      selected      右键选中的点下标（None = 没选）——「手动」小节里
+                    改它的环号用（2026-10-03：原先右键弹输入框改，模态
+                    对话框在 macOS 全屏下有卡死输入的前科，改成选中+面板改）
       results       累积的几何结果，按产生顺序：
                     [{"name": 原始/自动1/手动1/…, "kind": raw|auto|manual|
                      refined, "result": 几何 dict（带 metrics）}]
@@ -49,7 +52,7 @@ def _calib_state(window: QMainWindow) -> dict:
     state = getattr(window, "calib_state", None)
     if state is None:
         state = window.calib_state = {
-            "points": [], "results": [],
+            "points": [], "selected": None, "results": [],
             "slots": {"current": None, "A": None, "B": None},
             "pinned": {"A": False, "B": False}, "next_slot": "A",
             "current_geom": None, "current_from": None,
@@ -350,6 +353,9 @@ MIN_RINGS = 2           # 手动校准最低覆盖环数
 PANEL_SCALE = 560       # 校准图面板最长边（像素，图太大就按此缩小）
 
 RING_COLOR = "#00e5ff"  # 理论环 / 用户点标记色（青）
+
+SELECT_COLOR = "#ffd24d"  # 右键选中的那个选点的高亮圈（金黄）——
+                          # 与青色区分开，一眼看出"现在改的是它"
 
 CP_COLOR = "#3dff3d"    # pyFAI 控制点标记色（绿）
 
