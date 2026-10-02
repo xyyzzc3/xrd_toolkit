@@ -348,6 +348,19 @@ def calibrate_lab6(
         single = SingleGeometry("lab6", image, calibrant=cal,
                                 detector=det, geometry=geo)
         control_points = np.asarray(single.extract_cp(max_rings=max_rings).getList())
+        # 一个峰都没匹上时 getList() 是空的：np.asarray 得到一维 (0,)，
+        # 喂给 GeometryRefinement 只会得到 pyFAI 的原话
+        # "data is expected to be of shape (nb control-points, [3|4])"
+        # ——用户看不懂，也不知道下一步做什么（2026-10-03 用户报过来的
+        # 就是这句）。在这里拦下，把现状（现用初值）与出路写清楚。
+        if control_points.ndim != 2 or control_points.shape[0] == 0:
+            raise RuntimeError(
+                f"图像上找不到与 LaB₆ 理论环匹配的峰（控制点 0 个）——"
+                f"现用初值：束心 ({params['poni1'] / pixel_size_m:.0f}, "
+                f"{params['poni2'] / pixel_size_m:.0f}) px、距离 "
+                f"{params['dist'] * 1000:.0f} mm。请确认这是一张 LaB₆ "
+                f"标样图，且「几何配置」条目与它相符；束心明显偏离探测器"
+                f"中心的摆法，先在 [编辑…] 里把束心填对再试")
 
         # 2) 精修：距离 + 环心 + rot1/rot2（rot3 保持 0）
         ref = GeometryRefinement(

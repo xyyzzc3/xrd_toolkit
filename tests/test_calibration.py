@@ -287,6 +287,19 @@ class TestCalibrateLab6ControlPoints(unittest.TestCase):
         self.assertAlmostEqual(res["dist_m"] * 1000, 1595.8, delta=1.0)
         self.assertLess(res["residual_deg"], 0.02)
 
+    def test_empty_control_points_get_a_readable_error(self):
+        """一个峰都匹不上时报"看得懂"的错，不是 pyFAI 的形状术语（2026-10-03）。
+
+        用户报："校准失败（自动定位）：RuntimeError: data is expected to be
+        of shape (nb control-points, [3|4])"——空控制点（一维 (0,)）喂给
+        GeometryRefinement 时 pyFAI 的原话，看不懂也不知道怎么办。
+        """
+        with self.assertRaisesRegex(RuntimeError,
+                                    "找不到与 LaB₆ 理论环匹配的峰"):
+            calibrate_lab6(np.zeros((512, 512)), pixel_size_m=PIXEL_M,
+                           wavelength_m=WAVELENGTH_M, dist0_m=DIST_M,
+                           center0_px=(256.0, 256.0))
+
 
 class TestConfigEntryTemplate(unittest.TestCase):
     """CONFIGS 条目模板：与 CLI 输出逐字一致的关键行。"""
