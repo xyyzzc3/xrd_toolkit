@@ -127,8 +127,8 @@ def _fill_slot(state: dict, name: str) -> str:
         if not state["pinned"][slot]:
             state["slots"][slot] = name
             state["next_slot"] = order[(start + i + 1) % 2]
-            return f"填进 {slot} 槽"
-    return "A/B 槽都被你钉住了，只进列表"
+            return f"填进对比位 {slot}"
+    return "对比位 A、B 都已钉住，只进列表"
 
 
 def _adopt_decision(state: dict, name: str) -> tuple:
@@ -154,7 +154,7 @@ def _adopt_decision(state: dict, name: str) -> tuple:
     cur_dev = _metrics_dev(state.get("current_metrics"))
     cur_txt = state.get("current_from") or "当前配置"
     dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-    custom_tail = ("；你手输/手改的那份仍在结果列表里（自定义），"
+    custom_tail = ("；你手输或手改的那份仍在结果列表里（自定义），"
                    "随时能选回来" if state.get("custom") else "")
     if state["slots"]["current"] is None and not state.get("custom"):
         # 借来的出发点：它是在别的批次的图上量出来的，环位偏差在这张图上
@@ -165,7 +165,7 @@ def _adopt_decision(state: dict, name: str) -> tuple:
         return True, f"当前配置 → {name}（{dev_txt}）{custom_tail}"
     diff = cur_dev - dev
     if diff >= SOURCE_IMPROVE_MIN_PX:
-        verdict = f"优于 {cur_txt} 的 {cur_dev:.2f} px"
+        verdict = f"比 {cur_txt} 的 {cur_dev:.2f} px 好 {diff:.2f} px"
     elif diff <= -SOURCE_IMPROVE_MIN_PX:
         verdict = f"比 {cur_txt} 的 {cur_dev:.2f} px 差 {-diff:.2f} px"
     else:
@@ -281,7 +281,7 @@ def _verdict(ref_res, ref_name: str, others) -> str:
     是当前配置，A、B 各自报。
     """
     if ref_res is None:
-        return (f"结论：{ref_name} 还没有结果，判不了（先跑一次自动 / 手动"
+        return (f"结论：{ref_name} 还没有结果，判不了（先跑一次自动或手动"
                 f"校准，或把一条结果选进{ref_name}那一列）")
     ref_dev = _result_dev(ref_res)
     if ref_dev is None:
@@ -296,15 +296,15 @@ def _verdict(ref_res, ref_name: str, others) -> str:
         nums.append(f"{name} {dev:.2f} px")
         diff = dev - ref_dev
         if abs(diff) < SOURCE_IMPROVE_MIN_PX:
-            tell.append(f"{name} 与 {ref_name} 差不多（差 {abs(diff):.2f} px"
-                        f" < 门槛 {SOURCE_IMPROVE_MIN_PX:.2f}）")
+            tell.append(f"{name} 与 {ref_name} 差不多（差 {abs(diff):.2f} px，"
+                        f"小于 {SOURCE_IMPROVE_MIN_PX:.2f} px 视为持平）")
         elif diff < 0:
             tell.append(f"{name} 比 {ref_name} 好 {abs(diff):.2f} px")
         else:
             tell.append(f"{name} 比 {ref_name} 差 {abs(diff):.2f} px")
     if not tell:
         return (f"结论：{ref_name} 还没有可比的候选"
-                f"（把另一份结果放进 A / B 槽，或先跑一次自动校准）")
+                f"（把另一份结果放进对比位 A 或 B，或先跑一次自动校准）")
     return ("结论：" + "；".join(tell)
             + "（环位偏差 " + " ｜ ".join(nums) + "）")
 
@@ -326,8 +326,8 @@ def _geom_px_keys(g: dict) -> dict:
 # (行键, 行名, 显示缩放, 格式, 是否给 Δ 行)
 COMPARE_ROWS = (
     ("dist", "距离 (mm)", 1e3, ".2f", True),
-    ("center_r", "环心行 (px)", 1.0, ".2f", False),
-    ("center_c", "环心列 (px)", 1.0, ".2f", False),
+    ("center_r", "束心行 (px)", 1.0, ".2f", False),
+    ("center_c", "束心列 (px)", 1.0, ".2f", False),
     ("dev", "环位偏差 (px)", 1.0, ".2f", True),
     ("poni1", "PONI1 (px) ⚠", 1.0, ".2f", False),
     ("poni2", "PONI2 (px) ⚠", 1.0, ".2f", False),
@@ -336,8 +336,8 @@ COMPARE_ROWS = (
 )
 
 
-COMPARE_HINT = ("⚠ = 退化方向：距离与波长、PONI 与倾斜角近简并，差异大"
-                "不等于更准；判优劣只看环位偏差（以及你在图上看到的重合度）。")
+COMPARE_HINT = ("⚠ 表示退化方向：距离与波长、PONI 与倾斜角近简并，差异大"
+                "不等于更准；判优劣只看环位偏差（以及你在图上看到的重合度）")
 
 
 # ── 校准页与校准图面板共用的常量 ──────────────────────────

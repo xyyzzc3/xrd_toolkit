@@ -95,8 +95,8 @@ def _draw_compare_legend(window, dock, ax, labels) -> None:
     if n > LEGEND_MAX_CURVES:
         if getattr(dock, "_legend_off_n", None) != n:
             dock._legend_off_n = n
-            _log(window, f"对比图例：{n} 条曲线太多、挡住图了，默认不画；"
-                         "点热图某一行可隐藏/显示几条，曲线名看状态栏"
+            _log(window, f"对比图例：{n} 条曲线太多、挡住图了，默认不画。"
+                         "点热图某一行可隐藏/显示几条；曲线名看状态栏的"
                          "悬停读数（圆点颜色与曲线一致）")
         return
     dock._legend_off_n = None
@@ -117,8 +117,8 @@ def _sources_mix(files) -> str:
     for s in files:
         kinds[s.kind] = kinds.get(s.kind, 0) + 1
     return " ｜ ".join(f"{text} {kinds[kind]}" for kind, text in
-                      ((gui_sources.RAW, "原始"), (gui_sources.ONED, "1D 产物"),
-                       (gui_sources.BG, "处理后")) if kinds.get(kind))
+                      ((gui_sources.RAW, "原始数据"), (gui_sources.ONED, "1D 产物"),
+                       (gui_sources.BG, "处理产物")) if kinds.get(kind))
 
 
 def _compare_title(files) -> str:
@@ -129,7 +129,7 @@ def _compare_title(files) -> str:
     """
     displays = [s.display for s in files]
     if len(files) == 2:
-        base = f"对比_{displays[0]}_vs_{displays[1]}"
+        base = f"对比_{displays[0]}_与_{displays[1]}"
     else:
         base = f"对比_{displays[0]} 等 {len(files)} 个文件"
     kinds = len({s.kind for s in files})
@@ -245,7 +245,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 window.params["纵轴上限"].setValue(yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         if dock.compare_data and not stack:
-            # 堆叠下 y 刻度 = 样品名（曲线就躺在自己名字那行上），
+            # 堆叠下 y 刻度为样品名（曲线就躺在自己名字那行上），
             # 图例冗余（同瀑布）；平铺时按条数决定画不画（多了挡图）
             _draw_compare_legend(
                 window, dock, ax,
@@ -363,7 +363,7 @@ def _run_compare(window: QMainWindow, key: str) -> None:
                 or panel.compare_gen != gen):
             return
         panel.compare_pending -= 1
-        _log(window, f"对比：{display} 积分失败 — {msg}")
+        _log(window, f"对比：{display} 积分失败 —— {msg}")
         if panel.compare_pending == 0:
             _finish_compare(window, key)
 
@@ -380,7 +380,7 @@ def _run_compare(window: QMainWindow, key: str) -> None:
         if source.kind != gui_sources.RAW:
             got = gui_sources.load_product(source)
             if got is None:
-                fail_one(path, display, "产物读不到了（被删了？）")
+                fail_one(path, display, "产物不存在（可能已被删除），请重新计算")
                 continue
             dock.compare_sources[display] = gui_sources.describe_source(source)
             finish_one(path, display, got)
@@ -409,7 +409,7 @@ def _run_compare(window: QMainWindow, key: str) -> None:
     if dock.compare_pending <= 0:
         return          # 全部命中产物：finish_one 已经把图收尾了
     _log(window, f"开始对比 {len(dock.compare_files)} 个文件"
-                 f"（{n_cached} 个走产物，{dock.compare_pending} 个后台线程）")
+                 f"（{n_cached} 个已复用产物，{dock.compare_pending} 个在后台计算）")
 
 
 def _plot_compare(window: QMainWindow) -> None:
@@ -556,7 +556,7 @@ def _anchor_release(window: QMainWindow, key: str, event) -> None:
         px, py = ax.transData.transform((ax_, ay_))
         if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
             anchors.pop(i)
-            _anchor_changed(window, f"删除锚点：2θ = {ax_:.3f}°")
+            _anchor_changed(window, f"删除锚点：2θ {ax_:.3f}°")
             return
     # 取最近曲线上的最近真实数据点
     lines = [ln for ln in _data_lines(ax) if len(ln.get_xdata()) > 1]
@@ -579,7 +579,7 @@ def _anchor_release(window: QMainWindow, key: str, event) -> None:
     x = float(xd[i])
     y = _anchor_raw_y(window, dock, ax, xd, i, ln)
     anchors.append((x, y))
-    _anchor_changed(window, f"加锚点：2θ = {x:.3f}°（{len(anchors)} 个）")
+    _anchor_changed(window, f"加锚点：2θ {x:.3f}°（{len(anchors)} 个）")
 
 
 def _anchors_visible(window: QMainWindow, dock) -> bool:
@@ -620,7 +620,7 @@ def _anchor_right_click(window: QMainWindow, key: str, event) -> None:
         px, py = ax.transData.transform((ax_, ay_))
         if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
             anchors.pop(i)
-            _anchor_changed(window, f"删除锚点：2θ = {ax_:.3f}°（右键）")
+            _anchor_changed(window, f"删除锚点：2θ {ax_:.3f}°（右键）")
             return
 
 
@@ -842,11 +842,11 @@ def _finish_heatmap(window: QMainWindow, key: str) -> None:
         _log(window, f"热图提示：{n_blank} 个格子是空的（那几段被裁剪过）"
                      f"——显示为该行的一段空白带")
     if interp:
-        _log(window, "热图提示：各文件 2θ 网格不一致，已重插值到"
-                     "第一个文件的网格")
+        _log(window, "热图提示：各文件 2θ 网格不一致，已统一到"
+                     "第一个文件的 2θ 网格")
     _draw_heatmap(window, dock, tth, matrix, stems)
     _set_focus(window, key, dock.panel_display)
-    _log(window, f"热图完成：{len(stems)} 个样品 × {len(tth)} 点")
+    _log(window, f"热图完成：{len(stems)} 个文件 × {len(tth)} 点")
 
 
 def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
@@ -894,7 +894,8 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
             # 产物条目：直接读盘（不重算、不再扣背景），读不到当失败
             got = gui_sources.load_product(source)
             if got is None:
-                _log(window, f"热图：{display} 的产物读不到了（被删了？）——跳过")
+                _log(window, f"热图：{display} 的产物不存在（可能已被删除）"
+                             f"——跳过，请重新计算")
                 continue
             results[i] = (Path(path).stem, got[0], got[1])
             continue
@@ -948,7 +949,7 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
                             or panel.heat_gen != gen):
                         return
                     panel.heat_pending -= 1
-                    _log(window, f"热图：{display} 积分失败 — {msg}{suffix}")
+                    _log(window, f"热图：{display} 积分失败 —— {msg}{suffix}")
                     if panel.heat_pending == 0:
                         _finish_heatmap(window, key)
 
@@ -1007,7 +1008,7 @@ def _plot_heatmap(window: QMainWindow) -> None:
     key = "热图"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)
     if dock is None:
-        title = f"热图_{len(files)} 个样品"
+        title = f"热图_{len(files)} 个文件"
         dock = _open_plot_panel(window, "热图", key, title)
         dock.panel_display = title   # 标题/日志/默认存盘名用
         dock.figure_saved = False
@@ -1017,13 +1018,13 @@ def _plot_heatmap(window: QMainWindow) -> None:
         dock.heat_pending = 0
         dock.heat_data = None
         dock.params_snapshot = _data_snapshot(window)   # 新面板：显示参数从默认起步
-        _log(window, f"打开热图面板：{len(files)} 个样品拼一张强度图"
+        _log(window, f"打开热图面板：{len(files)} 个文件拼一张强度图"
                      f"（{_sources_mix(files)}）")
     else:
         # 复用面板：按当前勾选重绑（旧的 heat_data 由 _run_heatmap 清掉重画）
         dock.heat_files = files
         dock.heat_data = None
-        _log(window, f"热图面板按当前勾选重建：{len(files)} 个样品"
+        _log(window, f"热图面板按当前勾选重建：{len(files)} 个文件"
                      f"（{_sources_mix(files)}）")
     dock.setVisible(True)
     _run_heatmap(window, key)

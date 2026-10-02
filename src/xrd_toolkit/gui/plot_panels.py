@@ -348,14 +348,15 @@ class _SlimToolbar(QWidget):
     # 就是这些图。键名沿用 mpl 工具清单里的回调名（edit_parameters /
     # save_figure），既有调用点与测试不用改。
     ACTION_SPECS = (
-        ("home", "Home",
+        ("home", "复位视图",
          "回到这张图最初的视野（只动视野，不动设置）", "home"),
         ("zoom", "放大镜",
-         "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大；调好后直接 [Save]"
-         "（存的就是当前画面）", "zoom_to_rect"),
-        ("edit_parameters", "Customize", "编辑轴与曲线属性",
+         "<b>点亮</b> = 滚轮以光标为中心缩放、左键拖 = 框选放大；"
+         "<b>未点亮</b> = 滚轮滚动绘图区、左键拖 = 平移；"
+         "调好后用 [保存图片…] 存下的就是当前画面", "zoom_to_rect"),
+        ("edit_parameters", "外观…", "编辑标题、坐标轴与曲线属性",
          "qt4_editor_options"),
-        ("save_figure", "Save", "把这张图另存为图片", "filesave"),
+        ("save_figure", "保存图片…", "把这张图另存为图片", "filesave"),
     )
 
     def __init__(self, canvas, parent=None, window=None, key=None):
@@ -441,9 +442,9 @@ class _SlimToolbar(QWidget):
             from xrd_toolkit.gui.plot_views import _redraw_panel   # 破循环
             reason = _redraw_panel(window, self._panel_key)
             if reason:
-                _log(window, f"[Home] 暂时回不去：{reason}")
+                _log(window, f"[复位视图] 暂时回不去：{reason}")
             else:
-                _log(window, f"[Home] 已回到参数定义的视图：{title}")
+                _log(window, f"[复位视图] 已回到参数定义的视图：{title}")
             return
         (xlo, xhi), (ylo, yhi), yscale = home
         window._setting_limits = True
@@ -462,7 +463,7 @@ class _SlimToolbar(QWidget):
         if not _panel_param(window, dock, "纵轴自动", True):
             _on_ylim_changed(window, self._panel_key, ax)
         ax.figure.canvas.draw_idle()
-        _log(window, f"[Home] 已回到最初的样子：{title}")
+        _log(window, f"[复位视图] 已回到最初的样子：{title}")
 
     def _log_zoom_toggle(self, on: bool) -> None:
         """开关翻面时把"现在这套手势是什么"写进日志（与按钮 tooltip 同一句话）。
@@ -474,8 +475,8 @@ class _SlimToolbar(QWidget):
         if self._window is not None:
             _log(self._window,
                  f"放大镜已{'开启' if on else '关闭'}："
-                 + ("滚轮以光标为中心缩放，左键拖 = 框选放大" if on
-                    else "滚轮滚动绘图区，左键拖 = 平移"))
+                 + ("滚轮以光标为中心缩放，左键拖可框选放大" if on
+                    else "滚轮滚动绘图区，左键拖可平移"))
 
     def save_figure(self, *args):
         # 形参收下 QAction.triggered 的 checked 布尔
@@ -829,7 +830,7 @@ def _build_view_widget(window: QMainWindow, name: str, key: str,
     """
     builder = _VIEW_BUILDERS.get(name)
     if builder is None:
-        placeholder = QLabel(f"{title} — 尚未接线")
+        placeholder = QLabel(f"{title}（暂未开放）")
         placeholder.setAlignment(Qt.AlignCenter)
         widget = placeholder
     else:
@@ -924,7 +925,8 @@ def _build_slim_bar(window: QMainWindow, key: str, content) -> QWidget:
     close = QToolButton()
     close.setObjectName("panel_bar_close")
     close.setText("✕")
-    close.setToolTip("关闭面板（关闭即遗忘）")
+    close.setToolTip("关闭这张图面板（关闭后显示设置不保留"
+                     "——数据在文件栏里不受影响）")
     close.setAutoRaise(True)
     close.setFocusPolicy(Qt.NoFocus)
     close.clicked.connect(lambda: _close_panel(window, key))
@@ -1154,10 +1156,10 @@ def _hover_label(dock, name: str, x: float, y: float) -> str:
     """
     view = dock.panel_key.split("|", 1)[0]
     if view == "剖面":
-        return f"{name}　距离 = {x:.4g} px, 强度 = {y:.4g}"
+        return f"{name}：距离 {x:.4g} px，强度 {y:.4g}"
     if view == "瀑布":
-        return f"{name}　2θ = {x:.4g}°, 堆叠强度 = {y:.4g}"
-    return f"{name}　2θ = {x:.4g}°, 强度 = {y:.4g}"
+        return f"{name}：2θ {x:.4g}°，强度 {y:.4g}"
+    return f"{name}：2θ {x:.4g}°，强度 {y:.4g}"
 
 
 def _hover_motion(window: QMainWindow, key: str, event) -> None:

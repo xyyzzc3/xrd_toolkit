@@ -58,7 +58,7 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 # 列表不触发回退（Agg 可以），中文仍会变方框
 matplotlib.rcParams["font.family"] = [
     "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
-from PySide6.QtCore import QEvent, QObject, Qt, QSize
+from PySide6.QtCore import QEvent, QLibraryInfo, QObject, Qt, QSize, QTranslator
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
@@ -287,10 +287,10 @@ def _update_bg_count(window: QMainWindow) -> None:
         return
     anchors = (getattr(window, "bg_anchors", None) or {}).get(str(path), [])
     if not anchors:
-        lbl.setText("0 点")
+        lbl.setText("0 个锚点")
         return
     xs = sorted(float(x) for x, _ in anchors)
-    lbl.setText(f"{len(xs)} 点（覆盖 {xs[0]:.2f}–{xs[-1]:.2f}°）")
+    lbl.setText(f"{len(xs)} 个锚点（覆盖 {xs[0]:.2f}–{xs[-1]:.2f}°）")
 
 
 def _sync_bg_rows(window: QMainWindow) -> None:
@@ -370,7 +370,7 @@ def _recipe_combo_fill(window: QMainWindow) -> None:
     for name in recipe_store.names():
         combo.addItem(f"已保存：{name}", f"saved|{name}")
     if combo.count() == 0:
-        combo.addItem("（还没有配方：调好参数后点 [保存为配方…]）", "")
+        combo.addItem("（还没有配方：调好参数后点 [存成配方…]）", "")
     idx = combo.findData(keep) if keep else -1
     combo.setCurrentIndex(max(0, idx))
     combo.blockSignals(False)
@@ -400,7 +400,7 @@ def _apply_selected_recipe(window: QMainWindow) -> None:
     path = getattr(dock, "panel_file", None)
     if recipe is None:
         _log(window, "先在下拉里选一份配方，再点 [套用]"
-                     "（还没有就调好参数 [保存为配方…]）")
+                     "（还没有就调好参数 [存成配方…]）")
         return
     if dock is None or path is None:
         _log(window, "先把一张 1D 图设为编辑对象，再套配方")
@@ -442,14 +442,14 @@ def _save_recipe_dialog(window: QMainWindow) -> None:
                      "空扫图不在配方里（别的模式都能存）")
         return
     default = Path(path).stem
-    name, ok = QInputDialog.getText(window, "保存配方",
+    name, ok = QInputDialog.getText(window, "存成配方",
                                     "配方名（例如：LMFP 自动+锚点）：",
                                     text=f"{default} 配方")
     if not ok or not str(name).strip():
         return
     recipe_store.save(str(name).strip(), settings)
     _log(window, f"配方已保存：{name}（{chain_label_of(settings)}）"
-                 "——处理页下拉里可以给别的批次套用")
+                 "——「处理」页下拉里可以给别的批次套用")
     _recipe_combo_fill(window)
 
 
@@ -463,7 +463,7 @@ def _delete_selected_recipe(window: QMainWindow) -> None:
         return
     if is_local:
         _log(window, "「本图配方」删不掉——它跟着这个文件走；"
-                     "只有 [保存为配方…] 存下来的那些能删")
+                     "只有 [存成配方…] 存下来的那些能删")
         return
     name = str(data).split("|", 1)[1]
     if recipe_store.delete(name):
@@ -485,7 +485,7 @@ def _on_bg_mode(window: QMainWindow) -> None:
         _log(window, "背景扣除：空扫相减——还没选空扫图，先点 [选择空扫图]")
     elif mode == "anchor" and _bg_anchor_count(window) == 0:
         _log(window, "背景扣除：手动锚点——点 [拾取锚点] 后在 1D 图上"
-                     "左键点选只有背景的位置")
+                     "左键点选「只有背景」的位置")
     else:
         _log(window, f"背景扣除：{labels.get(mode, mode)}")
     _refresh_proc(window)
@@ -500,8 +500,8 @@ def _on_pick_anchor(window: QMainWindow, on: bool) -> None:
     if on:
         dock = _bg_edit_dock(window)
         name = Path(dock.panel_file).name if dock is not None else "（无 1D 面板）"
-        _log(window, f"开始拾取锚点：在 1D 图上左键点选纯背景位置"
-                     f"（对象 {name}，再点已有关键点可删除）")
+        _log(window, f"开始拾取锚点：在 1D 图上左键点选「只有背景」的位置"
+                     f"（对象 {name}，再点已有的锚点可删除）")
     else:
         _log(window, "已停止拾取锚点")
 
@@ -553,10 +553,10 @@ def _on_choose_blank(window: QMainWindow) -> None:
         window._bg_cover_warned = False
         _refresh_proc(window)
         _log(window, f"空扫积分完成：{Path(path_str).name}"
-                     f"（{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）")
+                     f"（{len(tth)} 个点，2θ {tth[0]:.3f}–{tth[-1]:.3f}°）")
 
     def error(msg):
-        _log(window, f"空扫积分失败：{Path(path_str).name} — {msg}")
+        _log(window, f"空扫积分失败：{Path(path_str).name}——{msg}")
 
     _spawn_task(window, key, _compute_integration, (path_str, geom, npt),
                 done, error)
@@ -678,10 +678,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 底部（窗口 1000 高时按钮落在内容 y=1236，要往下滚 434 px），
     # 用户 2026-09-26 报"没有退出校准的按钮了"。按下的效果与工具栏
     # [校准] 弹起同源（那条 toggled → _on_mode(False)）。
-    btn_exit = QPushButton("返回分析模式")
+    btn_exit = QPushButton("退出校准")
     btn_exit.setObjectName("exit_calib_btn")
     btn_exit.setToolTip("退出校准工作台，回到分析模式"
-                        "（选点与结果清零——关闭即遗忘）")
+                        "（选点与校准结果会一起清零）")
     btn_exit.clicked.connect(lambda: window.calib_btn.setChecked(False))
     btn_exit.setVisible(False)      # 只在校准模式显示（_enter/_exit_calib）
     geom_lay.addWidget(btn_exit)
@@ -702,20 +702,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setRange(0.0, 90.0)
         box.setValue(value)
         box.setDecimals(1)
-        box.setSuffix(" °")
+        box.setSuffix("°")
         box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
-        box.setToolTip("参与积分的衍射角区间（所有分析页共用；改了要重出图）")
+        box.setToolTip("参与积分的 2θ 范围（所有分析页共用；改了要重出图）")
         window.params[key] = box
     dlay.addWidget(window.params["2θ 下限 (°)"], 1)
-    dlay.addWidget(QLabel("~"))
+    dlay.addWidget(QLabel("–"))
     dlay.addWidget(window.params["2θ 上限 (°)"], 1)
     npt = QSpinBox()
     npt.setRange(100, 100000)
     npt.setValue(3000)
     npt.setMaximumWidth(72)
-    npt.setToolTip("2θ 区间内的采样点数（所有分析页共用）")
+    npt.setToolTip("2θ 范围内的采样点数（所有分析页共用）")
     window.params["输出点数"] = npt
-    dlay.addWidget(QLabel("点"))
+    dlay.addWidget(QLabel("点数"))
     dlay.addWidget(npt, 1)
     # 「未应用」灰字（用户 2026-09-30 的"丙"）：你改了这两项但还没按
     # [重算这张图] 时亮着——"图上还是按旧范围算的"一眼可见。切图/记住由
@@ -723,7 +723,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lbl_data_pending = QLabel("未应用")
     lbl_data_pending.setStyleSheet("color: gray;")
     lbl_data_pending.setToolTip("改的 2θ 范围 / 点数还没生效（图上仍是按旧"
-                                "范围算的）——按 1D 页或处理页的 [重算这张图]")
+                                "范围算的）——按「1D」页或「处理」页的 "
+                                "[重算这张图]")
     lbl_data_pending.setVisible(False)
     dlay.addWidget(lbl_data_pending)
     lay.addWidget(data_row)               # 固定第三行，不随页面滚动
@@ -842,7 +843,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(2)
         row.addWidget(lo_box, 1)   # 两框平分行宽
-        row.addWidget(QLabel("~"))
+        row.addWidget(QLabel("–"))
         row.addWidget(hi_box, 1)
         form.addRow(label, field)
         return lo_box, hi_box
@@ -858,9 +859,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
     # 我按自己的想法收尾）：整页空白看着像没做完
     page_hint = QLabel(
-        "本页只管出图：2θ 范围与点数在坞顶，显示参数（对数纵轴 / "
-        "纵轴范围）在 [绘图] 页。勾选超过 24 张时不再弹面板——"
-        "结果进文件栏「1D 产物」，双击看一张、右键整组打开。")
+        "本页只管出图：2θ 范围与点数在参数面板顶部，显示参数（对数纵轴 / "
+        "纵轴范围）在「绘图」页；勾选超过 24 项时不再弹面板——"
+        "结果进文件栏「1D 产物」，双击看一张、右键整组打开")
     page_hint.setWordWrap(True)
     page_hint.setStyleSheet("color: gray;")
     form_1d.addRow(page_hint)
@@ -875,21 +876,22 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_reset_data = QPushButton("恢复默认")
     btn_reset_data.setObjectName("reset_data_btn")
     btn_reset_data.setToolTip("把上面三项数据参数复位成初值（几何回到当前配置"
-                              "条目）——**只复位，不计算**，要算再点右边那个")
+                              "条目）——<b>只复位，不计算</b>，要算再点右边的"
+                              " [重算这张图]")
     # 名字按"对谁、算什么"写（用户 2026-09-27："1d 的应用和出图有点歧义"）：
     # 这个按钮只作用于**编辑对象**那一张（见 _apply_params），与下面那个
     # 对一批勾选文件出图的按钮是两件事
     btn_apply = QPushButton("重算这张图")
     btn_apply.setObjectName("apply_btn")
-    btn_apply.setToolTip("按上面的数据参数（2θ 范围 / 点数）重新积分，"
-                         "并重画**编辑对象**那张图（不是一批）")
+    btn_apply.setToolTip("按参数面板顶部的 2θ 范围 / 点数重新积分，"
+                         "并重画<b>编辑对象</b>那张图（不是一批）")
     btn_apply.clicked.connect(lambda: _apply_params(window))
 
     def reset_data():
         _apply_config(window, window.config_combo.currentIndex())
         for name, value in data_defaults.items():
             window.params[name].setValue(value)
-        _log(window, "数据参数已恢复默认（未计算，点 [应用] 生效）")
+        _log(window, "数据参数已恢复默认（未计算，点 [重算这张图] 生效）")
 
     btn_reset_data.clicked.connect(reset_data)
 
@@ -900,9 +902,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_col.addWidget(btn_apply, 1)
     btns_1d.addLayout(btn_col)   # 按钮固定在本页最下方（滚动区之外）
     # 本页产出：对勾选文件出 1D 图（常用循环不用切到「绘图」页）
-    btn_plot_1d = QPushButton("出图（未勾选）")
+    btn_plot_1d = QPushButton("出图（尚未勾选）")
     btn_plot_1d.setObjectName("plot_1d_btn")
-    btn_plot_1d.setToolTip("对**文件栏里勾选**的条目出 1D 图（勾了多少个，"
+    btn_plot_1d.setToolTip("对<b>文件栏里勾选</b>的条目出 1D 图（勾了多少项，"
                            "按钮上就写着多少）：勾原始文件 = 现场积分；"
                            "勾产物条目 = 直接读那一份，不重算")
     window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
@@ -921,13 +923,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 勾回自动 = 立刻按焦点图重算并填回（恢复默认对比度）。
     auto = QCheckBox("自动对比度")
     auto.setChecked(True)
-    auto.setToolTip("显示区间按图像 1%~99.9% 分位自动确定")
+    auto.setToolTip("显示区间按图像 1%–99.9% 分位自动确定")
     window.params["自动对比度"] = auto
     form_draw.addRow(auto)
 
     add_range(form_draw, "对比度下限", "对比度上限", 0.0, 1e9, 1.0, 100000.0,
               label="显示范围", decimals=1,
-              tooltip="取消自动对比度后手填的显示区间（下限 ~ 上限）")
+              tooltip="取消自动对比度后手填的显示区间（下限–上限）")
 
     def sync_contrast(checked, silent=False):
         window.params["对比度下限"].setEnabled(not checked)
@@ -939,7 +941,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     sync_contrast(True, silent=True)   # 初始状态：自动开 → 输入框置灰（不刷日志）
 
     angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
-                      label="剖面角度", suffix=" °",
+                      label="剖面角度", suffix="°",
                       tooltip="剖面线相对参考方向的角度")
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
 
@@ -957,7 +959,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # 看图参数：不参与计算，只影响图怎么显示；点 [应用] 落到编辑
     # 对象（快照跟着更新）
-    hint = QLabel("只看图不参与计算，点 [应用] 生效")
+    hint = QLabel("只看图不参与计算，点 [应用显示设置] 生效")
     hint.setStyleSheet("color: gray;")
     hint.setWordWrap(True)
     hint_row = QHBoxLayout()
@@ -986,13 +988,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     auto_y = QCheckBox("纵轴自动")
     auto_y.setChecked(True)
-    auto_y.setToolTip("按曲线 1%~99.9% 分位自动确定纵轴区间")
+    auto_y.setToolTip("按曲线 1%–99.9% 分位自动确定纵轴区间")
     window.params["纵轴自动"] = auto_y
     form_draw.addRow(auto_y)
 
     add_range(form_draw, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
               label="纵轴范围", decimals=1,
-              tooltip="取消自动后手填的纵轴区间（下限 ~ 上限）")
+              tooltip="取消自动后手填的纵轴区间（下限–上限）")
 
     # 对比归一化（下拉框三选一）——叠图时强度差很大的文件不归一会被
     # 强者压扁。三种模式（**都是全场统一的比例**）：
@@ -1012,7 +1014,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                         "全图最强峰 / 指定数据的最强峰 / 不归一化")
     window.params["对比归一化"] = cmp_norm
     norm_target = QComboBox()
-    norm_target.setToolTip("以哪个文件的最强峰归一化（列表 = 对比面板的文件）")
+    norm_target.setToolTip("以哪个文件的最强峰归一化（列表就是对比面板的文件）")
     window.params["归一化目标"] = norm_target
     norm_row = QWidget()
     norm_lay = QHBoxLayout(norm_row)
@@ -1035,7 +1037,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     for text, data in (("高对比（推荐）", "高对比"),
                        ("默认（matplotlib）", "默认")):
         curve_palette.addItem(text, data)
-    curve_palette.setToolTip("多曲线配色：高对比 = 色盲友好固定色序"
+    curve_palette.setToolTip("多曲线配色：高对比：色盲友好固定色序"
                              "（颜色跟着文件走）/ matplotlib 默认循环")
     window.params["曲线配色"] = curve_palette
     form_cmp.addRow(curve_palette)
@@ -1046,9 +1048,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 还写着"按自身峰高抬到自己的行上"——那是被否掉的那条，实现早改了，
     # 2026-10-02 顺出来的
     cmp_stack.setToolTip("瀑布式错开叠放：所有行同一个行高（按多数行的峰定，"
-                         "少数特别强的行会探进上一行），y 刻度 = 样品名；"
+                         "少数特别强的行会探进上一行），y 刻度为样品名；"
                          "堆叠下纵轴范围/对数不适用。勾上立刻重画，"
-                         "不用按 [应用]")
+                         "不用手动应用")
     window.params["对比堆叠"] = cmp_stack
     form_cmp.addRow(cmp_stack)
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
@@ -1076,13 +1078,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        ("手动锚点", "anchor")):
         bg_mode.addItem(text, data)
     bg_mode.setToolTip(
-        "背景 = 不含样品结构信息的加性信号（空气散射、非晶漫散射、"
+        "背景：不含样品结构信息的加性信号（空气散射、非晶漫散射、"
         "荧光、暗电流、直射束光晕）。\n"
-        "空扫相减 = 实测：先拍一张没有样品的图，从样品图里逐点减掉"
+        "空扫相减：实测——先拍一张没有样品的图，从样品图里逐点减掉"
         "（最干净，但必须真有空扫、曝光/几何一致）。\n"
-        "自动基线 = 算法猜：假设背景比峰宽且平滑，按窗口宽度估计"
+        "自动基线：自动估计——假设背景比峰宽且平滑，按窗口宽度估计"
         "（一键，无需额外数据）。\n"
-        "手动锚点 = 人判断：在图上点几个只有背景的位置连成底线"
+        "手动锚点：手动标定——在图上点几个只有背景的位置连成底线"
         "（最可控，适合宽鼓包样品）。")
     window.params["背景扣除模式"] = bg_mode
     form_bg.addRow(bg_mode)
@@ -1138,8 +1140,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_window_box.setSingleStep(0.1)
     bg_window_box.setValue(AUTO_WINDOW_DEG)
     bg_window_box.setMaximumWidth(84)
-    bg_window_box.setToolTip("窗口宽度：多宽的一段算\"背景\"而不是\"峰\"。"
-                             "取最宽峰宽的 3~10 倍（本数据峰宽约 0.1~0.3°，"
+    bg_window_box.setSuffix("°")
+    bg_window_box.setToolTip("窗口宽度 (°)：多宽的一段算「背景」而不是「峰」。"
+                             "取最宽峰宽的 3–10 倍（本数据峰宽约 0.1–0.3°，"
                              f"默认 {AUTO_WINDOW_DEG:g}°）；取小了峰会被"
                              "当背景扣掉，取大了跟不上背景自身的起伏")
     window.params["背景窗口 (°)"] = bg_window_box
@@ -1150,8 +1153,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_pick_btn = QPushButton("拾取锚点")
     bg_pick_btn.setObjectName("bg_pick_btn")
     bg_pick_btn.setCheckable(True)
-    bg_pick_btn.setToolTip("打开后在 1D 图上左键点选\"只有背景\"的位置；"
-                           "再点已有关键点即可删除。锚点按文件各记各的")
+    bg_pick_btn.setToolTip("打开后在 1D 图上左键点选「只有背景」的位置；"
+                           "再点已有的锚点即可删除。锚点按文件各记各的")
     bg_clear_btn = QPushButton("清空锚点")
     bg_clear_btn.setObjectName("bg_clear_btn")
     bg_clear_btn.setToolTip("清空当前 1D 面板所对应文件的全部锚点")
@@ -1167,11 +1170,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        ("折线（直线连锚点）", "linear"),
                        ("样条（可能过冲）", "spline")):
         bg_fit_combo.addItem(text, data)
-    bg_fit_combo.setToolTip("三种都严格过锚点，差别在锚点之间："
-                            "保单调平滑 = 光滑但不过冲（推荐）；"
-                            "折线 = 相邻锚点直线相连（实验室惯例、最透明，"
-                            "弯背景上会扣不干净）；样条 = 自然三次样条"
-                            "（更平滑，但可能在锚点之间冲到真值以下 = 扣过头）。"
+    bg_fit_combo.setToolTip("三种都严格过锚点，差别在锚点之间：\n"
+                            "保单调平滑：光滑但不过冲（推荐）；\n"
+                            "折线：相邻锚点直线相连（实验室惯例、最透明，"
+                            "弯背景上会扣不干净）；\n"
+                            "样条：自然三次样条（更平滑，但可能在锚点之间"
+                            "冲到真值以下，扣过头）。\n"
                             "锚点数：折线 2 个就能画；保单调平滑与样条至少 3 个，"
                             "不足时自动退回折线")
     window.params["锚点拟合方式"] = bg_fit_combo
@@ -1211,10 +1215,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     smooth_chk = QCheckBox("平滑曲线")
     smooth_chk.setToolTip("滑动平均：窗口内取平均。\n"
-                          "窗口按 **2θ** 给（不是点数），所以换输出点数重算"
-                          "之后「平滑了多宽」仍然一样。\n"
+                          "窗口按 <b>2θ</b> 宽度给（不是点数），所以改输出点数"
+                          "重算之后「平滑了多宽」仍然一样。\n"
                           "代价：峰会变矮变宽——窗口要远小于峰宽，"
-                          "旁边那个灰度提示会告诉你它折成几个点")
+                          "旁边那行灰字会告诉你它折成几个点")
     window.params["平滑曲线"] = smooth_chk
     form_bg.addRow(smooth_chk)
 
@@ -1224,9 +1228,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     smooth_box.setSingleStep(0.05)
     smooth_box.setValue(0.10)
     smooth_box.setMaximumWidth(84)
-    smooth_box.setToolTip("窗口宽度（度）：参与平均的 2θ 跨度。\n"
-                          "典型峰宽 0.1~0.3°，窗口取到峰宽量级就会明显削峰；"
-                          "先取 0.05~0.15° 试，看削掉多少再定")
+    smooth_box.setSuffix("°")
+    smooth_box.setToolTip("窗口宽度 (°)：参与平均的 2θ 跨度。\n"
+                          "典型峰宽 0.1–0.3°，窗口取到峰宽量级就会明显削峰；"
+                          "先取 0.05–0.15° 试，看削掉多少再定")
     window.params["平滑窗口 (°)"] = smooth_box
     smooth_pts_lbl = QLabel("")           # 折成几个点（刷新时按当前曲线填）
     smooth_pts_lbl.setStyleSheet("color: gray;")
@@ -1238,9 +1243,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        ("Savitzky–Golay", "savgol")):
         smooth_method.addItem(text, data)
     smooth_method.setToolTip(
-        "滑动平均 = 窗口内取平均（最简单，削峰明显）。\n"
-        "Savitzky–Golay = 窗口内拟合多项式再取中心值：**同样的窗口宽度削峰"
-        "少得多**、峰形保得更住，代价是接触陡边（低角鼓包）时可能压出轻微"
+        "滑动平均：窗口内取平均（最简单，削峰明显）。\n"
+        "Savitzky–Golay：窗口内拟合多项式再取中心值：<b>同样的窗口宽度削峰"
+        "少得多</b>、峰形保得更住，代价是接触陡边（低角鼓包）时可能压出轻微"
         "负值下冲。窄峰、要做峰形分析时用它。")
     window.params["平滑方法"] = smooth_method
 
@@ -1249,7 +1254,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     smooth_order.setValue(3)
     smooth_order.setMaximumWidth(60)
     smooth_order.setSuffix(" 阶")
-    smooth_order.setToolTip("Savitzky–Golay 的多项式阶数（2~3 常用：阶数越高"
+    smooth_order.setToolTip("Savitzky–Golay 的多项式阶数（2–3 常用：阶数越高"
                             "越贴合峰形，但也越容易跟着噪声抖）")
     window.params["平滑阶数"] = smooth_order
     form_bg.addRow(bg_row((smooth_method, 2), (smooth_order, 1)))
@@ -1263,11 +1268,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     add_caption(form_bg, "裁剪区间")
 
     cut_chk = QCheckBox("裁剪区间")
-    cut_chk.setToolTip("把指定 2θ 区间从曲线里挖掉：图上那一段空着，"
+    cut_chk.setToolTip("把指定 2θ 范围从曲线里挖掉：图上那一段空着，"
                        "纵轴自动范围也跟着跳过它。\n"
                        "典型用途：某个巨峰把其余部分压扁了，挖掉它让其余"
                        "看得清。\n"
-                       "**影响的是数据**：处理产物与导出文件里这段同样是空的"
+                       "<b>影响的是数据</b>：处理产物与导出文件里这段同样是空的"
                        "（导出文件头会写明删了哪一段）")
     window.params["裁剪区间"] = cut_chk
     form_bg.addRow(cut_chk)
@@ -1280,7 +1285,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setSingleStep(0.1)
         box.setValue(val)
         box.setMaximumWidth(84)
-        box.setSuffix(" °")
+        box.setSuffix("°")
         box.setToolTip("裁剪区间的起止 2θ（含两端）。起点 ≥ 终点时视为"
                        "不裁剪（不会出错）")
     window.params["裁剪起点 (°)"] = cut_lo
@@ -1290,12 +1295,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cut_add_btn.setStyleSheet("padding: 2px 5px;")
     cut_add_btn.setToolTip("把这一段的起止加进下面的清单——可以删好几段"
                            "（例如同时删 2–3° 和 7–8°）")
-    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("~"), 0), (cut_hi, 1),
+    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("–"), 0), (cut_hi, 1),
                           (cut_add_btn, 0)))
     cut_list_lbl = QLabel("清单：空")
     cut_list_lbl.setStyleSheet("color: gray;")
-    cut_list_lbl.setToolTip("当前要挖掉的全部区间（屏幕、产物与导出文件"
-                            "同一个口径）")
+    cut_list_lbl.setToolTip("当前要挖掉的全部区间（图上、处理产物与导出文件"
+                            "里同样生效）")
     window.cut_list_lbl = cut_list_lbl
     cut_clear_btn = QPushButton("清空")
     cut_clear_btn.setObjectName("cut_clear_btn")
@@ -1314,13 +1319,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 反着。挪到三节之后：先把整条链摆好，再存下来。
     add_caption(form_bg, "配方")
     recipe_combo = QComboBox()
-    recipe_combo.setToolTip("选一份配方：本图配方 = 这个文件上次处理用的那套；"
+    recipe_combo.setToolTip("选一份配方：本图配方：这个文件上次处理用的那套；"
                             "下面是已保存的命名配方。选好点 [套用] 才生效——"
                             "打开原始条目永远是原始曲线，不会自动扣。")
     window.recipe_combo = recipe_combo
     recipe_apply_btn = QPushButton("套用")
     recipe_apply_btn.setObjectName("recipe_apply_btn")
-    recipe_apply_btn.setToolTip("把选中的配方用到**编辑对象**这张图上："
+    recipe_apply_btn.setToolTip("把选中的配方用到<b>编辑对象</b>这张图上："
                                 "锚点位置照搬、强度按本图曲线重取，"
                                 "其余设置填进本页控件并立刻重画")
     recipe_apply_btn.clicked.connect(lambda: _apply_selected_recipe(window))
@@ -1330,14 +1335,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # "保存为配方" / "采用这份结果"都像"保存"，各改一个字把差别写在脸上
     recipe_save_btn = QPushButton("存成配方…")
     recipe_save_btn.setObjectName("recipe_save_btn")
-    recipe_save_btn.setToolTip("把**本页当前这套设置**（背景 / 平滑 / 裁剪）"
+    recipe_save_btn.setToolTip("把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）"
                                "存成一个命名配方，以后任何一批都能套用"
-                               "（存 outputs/recipes.json）。存的是设置；"
+                               "（配方文件：outputs/recipes.json）。存的是设置；"
                                "要把结果留下用下面的 [存成产物]")
     recipe_save_btn.clicked.connect(lambda: _save_recipe_dialog(window))
     recipe_del_btn = QPushButton("删除")
     recipe_del_btn.setObjectName("recipe_del_btn")
-    recipe_del_btn.setToolTip("删掉下拉里选中的那份**已保存**配方")
+    recipe_del_btn.setToolTip("删掉下拉里选中的那份<b>已保存</b>配方")
     recipe_del_btn.clicked.connect(lambda: _delete_selected_recipe(window))
     window.recipe_btns = (recipe_apply_btn, recipe_save_btn, recipe_del_btn)
     form_bg.addRow(bg_row((recipe_combo, 2)))
@@ -1383,9 +1388,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 复用 1D 页那支同名按钮（_apply_params），口径完全一样
     btn_bg_recalc = QPushButton("重算这张图")
     btn_bg_recalc.setObjectName("proc_recalc_btn")
-    btn_bg_recalc.setToolTip("按坞顶的 2θ 范围 / 点数**重新积分**编辑对象这张图"
-                             "（与 1D 页的同名按钮是同一个动作）；重算完处理链"
-                             "会自动按新曲线重画")
+    btn_bg_recalc.setToolTip("按参数面板顶部的 2θ 范围 / 点数<b>重新积分</b>"
+                             "编辑对象这张图（与「1D」页的同名按钮是同一个"
+                             "动作）；重算完处理链会自动按新曲线重画")
     btn_bg_recalc.clicked.connect(lambda: _apply_params(window))
     window.proc_recalc_btn = btn_bg_recalc
     btns_bg.addWidget(btn_bg_recalc)
@@ -1398,9 +1403,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 那个存**设置**（可套到别的批次）；旧名字太虚，两个都像"保存"
     btn_bg_keep = QPushButton("存成产物")
     btn_bg_keep.setObjectName("proc_keep_btn")
-    btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果**存成产物**："
+    btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果<b>存成产物</b>："
                            "文件栏里长出一个「处理后 …」分组，对比 / 热图 / 导出"
-                           "下次直接复用（与 [批量处理] 落的是同一种东西）。"
+                           "下次直接复用（与 [批量处理] 产出的是同一种东西）。"
                            "存的是数据；要存「这套设置」用下面的 [存成配方…]")
     btn_bg_keep.clicked.connect(lambda: _proc_keep_this(window))
     window.proc_keep_btn = btn_bg_keep
@@ -1429,7 +1434,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                        ("plasma", "plasma"), ("inferno", "inferno"),
                        ("gray", "gray")):
         heat_cmap.addItem(text, data)
-    heat_cmap.setToolTip("热图颜色映射（颜色 = 强度）；改完立刻重画")
+    heat_cmap.setToolTip("热图颜色映射（颜色表示强度）；改完立刻重画")
     window.params["热图色图"] = heat_cmap
     heat_cmap.currentIndexChanged.connect(lambda _i: _refresh_heat(window))
     form_cmp.addRow(heat_cmap)
@@ -1453,13 +1458,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     auto_heat = QCheckBox("热图自动范围")
     auto_heat.setChecked(True)
-    auto_heat.setToolTip("按显示矩阵 1%~99.9% 分位自动确定强度范围")
+    auto_heat.setToolTip("按显示矩阵 1%–99.9% 分位自动确定强度范围")
     window.params["热图自动范围"] = auto_heat
     form_cmp.addRow(auto_heat)
 
     add_range(form_cmp, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
               label="热图范围", decimals=1,
-              tooltip="取消自动后手填的强度范围（下限 ~ 上限）")
+              tooltip="取消自动后手填的强度范围（下限–上限）")
 
     def sync_heatlim(checked):
         window.params["热图下限"].setEnabled(not checked)
@@ -1577,8 +1582,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 把当前图像参数应用到编辑对象（见 _apply_image_params）
     btn_apply_img = QPushButton("应用显示设置")
     btn_apply_img.setObjectName("apply_image_btn")
-    btn_apply_img.setToolTip("把上面的**显示**参数（对数纵轴 / 纵轴范围 / 配色"
-                             "…）用到**编辑对象**那张图上——不重新积分")
+    btn_apply_img.setToolTip("把上面的<b>显示</b>参数（对数纵轴 / 纵轴范围 / 配色"
+                             "…）用到<b>编辑对象</b>那张图上——不重新积分")
     btn_apply_img.clicked.connect(lambda: _apply_image_params(window))
 
     btn_col2 = QHBoxLayout()
@@ -1592,10 +1597,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # （`plot_export._save_figures` 还在，只是不再占一个按钮）；[清空缓存]
     # 与文件栏右键「删除所有缓存…」是同一个功能的两处入口，留右键那处
     # ——它还多一次二次确认。（更早的 [只重画，不重算] 已于 2026-09-30 删）
-    btn_plot_now = QPushButton("出图（未勾选）")
+    btn_plot_now = QPushButton("出图（尚未勾选）")
     btn_plot_now.setObjectName("plot_now_btn")
-    btn_plot_now.setToolTip("按上面选中的类型，对**文件栏里勾选**的条目出图"
-                            "（勾了多少个，按钮上就写着多少）")
+    btn_plot_now.setToolTip("按上面选中的类型，对<b>文件栏里勾选</b>的条目出图"
+                            "（勾了多少项，按钮上就写着多少）")
     window.plot_now_btn = btn_plot_now
     btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
     btns_draw.addWidget(btn_plot_now)
@@ -1703,7 +1708,7 @@ def _build_status(window: QMainWindow) -> None:
     sep.setFrameShape(QFrame.Shape.VLine)
     sep.setFrameShadow(QFrame.Shadow.Sunken)
     window.statusBar().addPermanentWidget(sep)
-    window.file_label = QLabel("未打开文件")
+    window.file_label = QLabel("未打开任何文件")
     window.statusBar().addPermanentWidget(window.file_label)
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
@@ -1868,7 +1873,7 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
         # 退出即**回到开局那个"什么都没选"**：入口全熄灭 + 收起参数坞
         # （[参数] 按钮随时能再展开）；产物/图一张都不动。
         _clear_entrance(window)
-        _log(window, f"退出{name}（收起参数坞；[参数] 按钮可以再展开）")
+        _log(window, f"{_exit_text(name)}（收起参数面板；[参数] 按钮可以再展开）")
         return
     window.param_dock.setVisible(True)
     if name != "校准":
@@ -1891,14 +1896,19 @@ _ENTRANCE_TIPS = {
     "校准": ("进入校准工作台：标样数据定几何（束心 / 距离 / 倾斜角）",
              "退出校准工作台，回到分析模式"),
     "1D": ("1D 参数：积分范围 / 输出点数 / 曲线显示",
-           "再点一次退出 1D 页（收起参数坞）"),
+           "再点一次退出「1D」页（收起参数面板）"),
     "处理": ("处理参数：背景扣除 / 平滑 / 裁剪",
-           "再点一次退出处理页（收起参数坞）"),
+           "再点一次退出「处理」页（收起参数面板）"),
     "对比": ("对比参数：归一化 / 配色 / 堆叠",
-           "再点一次退出对比页（收起参数坞）"),
+           "再点一次退出「对比」页（收起参数面板）"),
     "绘图": ("绘图参数：视图类型 / 显示设置",
-           "再点一次退出绘图页（收起参数坞）"),
+           "再点一次退出「绘图」页（收起参数面板）"),
 }
+
+
+def _exit_text(name: str) -> str:
+    """退出态的入口文字：拉丁名两侧留空格（"退出 1D"），中文名不加（"退出校准"）。"""
+    return f"退出 {name}" if name.isascii() else f"退出{name}"
 
 
 def _highlight_entrance(window: QMainWindow, name: str) -> None:
@@ -1910,8 +1920,9 @@ def _highlight_entrance(window: QMainWindow, name: str) -> None:
     for key, btn in getattr(window, "entrance_buttons", {}).items():
         active = key == name
         btn.setChecked(active)
-        btn.setText(f"退出{key}" if active else key)
-        off_tip, on_tip = _ENTRANCE_TIPS.get(key, (key, f"再点一次退出{key}"))
+        btn.setText(_exit_text(key) if active else key)
+        off_tip, on_tip = _ENTRANCE_TIPS.get(
+            key, (key, f"再点一次{_exit_text(key)}"))
         btn.setToolTip(on_tip if active else off_tip)
 
 
@@ -1985,7 +1996,7 @@ def _build_check_summary(window: QMainWindow) -> QWidget:
     lbl.setObjectName("check_summary_lbl")
     lbl.setWordWrap(True)
     lbl.setStyleSheet("color: gray;")
-    lbl.setToolTip("点条目行 = 勾这一条；点组那一行 = 整组一起勾；"
+    lbl.setToolTip("点条目行：勾这一条；点组那一行：整组一起勾；"
                    "对号方块可以取消勾选。出图按钮只画勾选的条目。")
     window.check_summary_lbl = lbl
     return lbl
@@ -2262,8 +2273,21 @@ def create_window() -> QMainWindow:
     # 不干预——现场越干净越好（见 watchdog 模块说明）
     watchdog.start(window)
 
-    window.log("主框架已就绪")
+    window.log("程序已就绪")
     return window
+
+def _install_chinese_translations(app: QApplication) -> None:
+    """装入 Qt 内置中文翻译（docs/UI_COPY.zh-CN.md §4.5）。
+
+    标准按钮（确定/取消/是/否）与标准对话框由 Qt 自己画，不装翻译就是
+    英文。qtbase_zh_CN.qm 随 PySide6 发行；找不到就静默跳过（翻译文件
+    缺了不该让程序起不来）。translator 必须挂在 app 上活到进程结束。
+    """
+    translator = QTranslator(app)
+    path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    if translator.load("qtbase_zh_CN", path):
+        app.installTranslator(translator)
+
 
 def main() -> int:
     """程序入口：创建 QApplication → 建窗口 → 进入事件循环。
@@ -2272,6 +2296,7 @@ def main() -> int:
     不断接收鼠标/键盘/重绘事件并分发出去，直到窗口被关闭。
     """
     app = QApplication(sys.argv)
+    _install_chinese_translations(app)
     window = create_window()
     window.show()
     return app.exec()

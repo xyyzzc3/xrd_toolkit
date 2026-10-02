@@ -69,14 +69,14 @@ def _save_figures(window: QMainWindow) -> bool:
     panels = [d for d in window.plot_docks.values()
               if getattr(_content(d), "figure", None) is not None]
     if not panels:
-        _log(window, "没有已输出的图可保存")
+        _log(window, "没有可保存的图")
         return True
     chosen = _choose_panels(window, panels)
     if chosen is None:
         _log(window, "已取消保存")
         return False
     if not chosen:
-        _log(window, "没有勾选要保存的图")
+        _log(window, "未勾选任何要保存的图")
         return False
     options = _ask_save_options(window)
     if options is None:
@@ -160,7 +160,7 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                else list(sources))
     if not checked:
         if not quiet:
-            _log(window, "没有选中的文件")
+            _log(window, "未勾选任何项")
         return []
     out = []
     for src in checked:
@@ -194,10 +194,10 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                 break
         else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
             if not quiet:
-                _log(window, f"跳过 {display}：还没有 1D 结果"
+                _log(window, f"跳过 {display}：还没有 1D 曲线"
                              f"（先点 [1D] 出图）")
     if not out and not quiet:
-        _log(window, "没有可导出的 1D 结果")
+        _log(window, "没有可导出的 1D 曲线")
     return out
 
 
@@ -242,8 +242,8 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     bg_check = QCheckBox("导出扣除背景后的曲线")
     bg_check.setObjectName("export_bg_check")
     bg_check.setChecked(False)
-    bg_check.setToolTip("按当前\"背景扣除\"设置（模式/窗口/锚点/空扫）"
-                        "导出扣完背景的曲线；不勾 = 导出原始积分结果。"
+    bg_check.setToolTip("按当前「背景扣除」设置（模式/窗口/锚点/空扫图）"
+                        "导出扣完背景的曲线；不勾选则导出原始积分结果。"
                         "扣完可能出现负值（噪声地板），这是正常的")
     lay.addRow("", bg_check)
     btn_row = QWidget()
@@ -293,10 +293,10 @@ def _ask_csv_range(window: QMainWindow) -> str:
     if not window.isVisible():
         return "skip"
     box = QMessageBox(window)
-    box.setWindowTitle("2θ 范围不一致")
+    box.setWindowTitle("2θ 网格不一致")
     box.setText("这批文件的 2θ 网格不一致，CSV 总表怎么出？")
     b_common = box.addButton("取公共交集（重插值）", QMessageBox.AcceptRole)
-    b_skip = box.addButton("跳过范围不同的文件", QMessageBox.RejectRole)
+    b_skip = box.addButton("跳过 2θ 网格不同的文件", QMessageBox.RejectRole)
     box.addButton("取消", QMessageBox.DestructiveRole)
     box.exec()
     clicked = box.clickedButton()
@@ -345,7 +345,7 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
             results = [(stem, common, np.interp(common, tth, intensity),
                         chain)
                        for stem, tth, intensity, chain in results]
-            _log(window, f"CSV 总表取公共交集 2θ {lo:.3f}~{hi:.3f}°"
+            _log(window, f"CSV 总表取公共交集 2θ {lo:.3f}–{hi:.3f}°"
                          f"（重插值到 {npt} 点）")
         else:   # "skip"：只保留与第一个文件同网格的
             kept = [r for r in results
@@ -355,7 +355,7 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
                 _log(window, "CSV 总表已取消：没有 2θ 网格一致的文件")
                 return
             _log(window, f"CSV 总表跳过 {len(results) - len(kept)} 个"
-                         f" 2θ 范围不同的文件")
+                         f" 2θ 网格不同的文件")
             results = kept
     grid = np.asarray(results[0][1], dtype=float)
     columns = [np.asarray(intensity, dtype=float)
@@ -381,7 +381,7 @@ def _write_csv_summary(window: QMainWindow, results, outdir: Path) -> None:
         _log(window, f"CSV 总表写入失败（{err}）")
         return
     _log(window, f"已生成 CSV 总表 → {target}"
-                 + (f"（{len(cut_cols)} 列有裁剪区，空格 = 无数据）"
+                 + (f"（{len(cut_cols)} 列有裁剪区，空单元格表示无数据）"
                     if cut_cols else ""))
 
 
@@ -429,7 +429,7 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         _log(window, f"已导出 {stem} → {target}")
     if dropped:
         _log(window, f"提示：{dropped} 个文件的裁剪区间没有写进文件"
-                     f"（文件头注明删了多少点），空值行不落盘")
+                     f"（文件头注明删了多少点），空值行不写入文件")
     if ok:
         _log(window, f"导出完成：{ok} 个文件")
     if fields["csv"]:

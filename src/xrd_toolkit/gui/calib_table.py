@@ -52,7 +52,7 @@ def _on_slot_changed(window: QMainWindow, slot: str) -> None:
         if slot != "current" and state["slots"][slot] is not None:
             state["slots"][slot] = None
             state["pinned"][slot] = False
-            _log(window, f"{slot} 槽清空（取消钉住）")
+            _log(window, f"对比位 {slot} 已清空（取消钉住）")
             _calib_sync(window)
         return
     if slot == "current":
@@ -61,7 +61,7 @@ def _on_slot_changed(window: QMainWindow, slot: str) -> None:
     else:
         state["slots"][slot] = name
         state["pinned"][slot] = True
-        _log(window, f"{slot} 槽 → {name}（钉住：新结果不再覆盖它）")
+        _log(window, f"对比位 {slot} → {name}（钉住：新结果不再覆盖它）")
     _calib_sync(window)
 
 
@@ -86,7 +86,7 @@ def _refresh_table(window: QMainWindow) -> None:
                 window.calib_vals["delta"][key_][slot].setText(
                     # 基准列自身写"基准"而不是"—"：那个破折号看起来像
                     # "这格没数据"（用户 2026-09-27："表述不清"）
-                    "基准" if slot == base_slot
+                    "（基准）" if slot == base_slot
                     else _delta_text(base_res, res[slot], key_))
     # 结论逐个候选报"它 vs 当前配置"：A、B 都写全（用户 2026-09-30 把参照系
     # 钉死在当前配置——不再由用户选基准，也就不会出现"基准选着 A、结论在讲

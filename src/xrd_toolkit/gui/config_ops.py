@@ -45,7 +45,8 @@ def _import_poni(window: QMainWindow) -> None:
         ("pixel", getattr(ai, "pixel1", None) or getattr(ai, "pixel2", None)),
     ) if val is None]
     if missing:
-        _log(window, f".poni 缺少几何字段：{', '.join(missing)}，无法导入")
+        _log(window, f"这个 .poni 缺少几何字段：{'、'.join(missing)}"
+                     f"（pyFAI 字段名），无法导入")
         return
     pixel = float(ai.pixel1)   # 配置只有单一像素尺寸：非方像素取 pixel1
     if float(ai.pixel2) != pixel:
@@ -149,11 +150,11 @@ def _save_poni(window: QMainWindow) -> None:
         return
     _log(window, f"已保存几何参数 → {path_str}"
                  f"（{src_txt}：距离 {geom['dist_m'] * 1e3:.2f} mm，"
-                 f"中心 poni1={geom['poni1_m']:.6g} m, "
+                 f"中心点 poni1={geom['poni1_m']:.6g} m、"
                  f"poni2={geom['poni2_m']:.6g} m，"
                  f"像素 {geom['pixel_size_m'] * 1e6:.1f} µm，"
                  f"波长 {geom['wavelength_m'] * 1e10:.4f} Å，"
-                 f"倾斜 rot1={geom['rot1_deg']:.4f}°, "
+                 f"倾斜 rot1={geom['rot1_deg']:.4f}°、"
                  f"rot2={geom['rot2_deg']:.4f}°）")
 
 
@@ -179,10 +180,10 @@ def _sync_del_config_btn(window: QMainWindow) -> None:
     key = combo.itemData(idx) if idx >= 0 else None
     deletable = bool(key) and key not in config.BUILTIN_CONFIGS
     btn.setEnabled(deletable)
-    btn.setToolTip(f"删除坞顶「几何配置」里当前选中的用户条目「{key}」"
-                   f"（内置条目是人工登记的注册表，不可删）"
+    btn.setToolTip(f"删除参数面板「几何配置」里当前选中的用户条目「{key}」"
+                   f"（内置条目人工登记，不可删）"
                    if deletable else
-                   f"「{key}」是内置条目（config.py 人工登记），不可删")
+                   f"「{key}」是内置条目（人工登记），不可删")
 
 
 def _delete_config(window: QMainWindow) -> None:
@@ -269,16 +270,16 @@ def _save_calib_config(window: QMainWindow) -> None:
         return   # 只提示、不保存（消息由 _initial_ready 记进日志）
     key = window.calib_key_edit.text().strip()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-        _log(window, "key 无效：只允许字母/数字/下划线，且以字母或"
+        _log(window, "标识无效：只允许字母、数字、下划线，且以字母或"
                      "下划线开头（如 lmfp2_lab6）")
         return
     if key in config.BUILTIN_CONFIGS:
-        _log(window, f"key {key} 与内置条目重名（内置条目人工登记，"
+        _log(window, f"标识 {key} 与内置条目重名（内置条目人工登记，"
                      "不可覆盖），换一个名字")
         return
     label = window.calib_label_edit.text().strip()
     if not label:
-        _log(window, "请先填写批次备注（label）")
+        _log(window, "请先填写批次备注")
         return
     if key in config.USER_CONFIGS and not _confirm_overwrite(window, key):
         return

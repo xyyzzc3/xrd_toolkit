@@ -303,7 +303,7 @@ def _sync_open_figures(window: QMainWindow) -> None:
         if group is None:
             group = _make_group(
                 OPEN_FIGURES_TITLE,
-                "屏幕上开着的图（校准图不在内）。双击 = 提到最前面，"
+                "屏幕上开着的图（校准图不在内）。双击可提到最前面，"
                 "右键可以关掉这一张。", checkable=False)
             tree.insertTopLevelItem(1, group)
             group.setExpanded(True)
@@ -323,7 +323,7 @@ def _sync_open_figures(window: QMainWindow) -> None:
                 group.addChild(row)
             elif row.text(0) != title:
                 row.setText(0, title)
-            row.setToolTip(0, f"{key}\n双击 = 把这张图提到最前面；"
+            row.setToolTip(0, f"{key}\n双击可把这张图提到最前面；"
                               f"右键可以关掉这一张（不动数据与产物）")
             row.setBackground(0, QBrush(QColor(_OPEN_ROW_BG)))
         group.setToolTip(0, f"{OPEN_FIGURES_TITLE}（{len(wanted)} 张）："
@@ -482,7 +482,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     # 文件列最小宽度锁在 ≈ 3×80+间距（270），与参数列一致——别把它们
     # 砍成两个，文件列会收得比参数列窄
     btn_open = QPushButton("打开…")
-    btn_save = QPushButton("保存")
+    btn_save = QPushButton("保存图片…")
     btn_delete = QPushButton("删除")
     btn_export = QPushButton("导出数据")
     btn_open.setObjectName("open_btn")
@@ -490,13 +490,15 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_delete.setObjectName("delete_btn")
     btn_export.setObjectName("export_btn")
     btn_open.setToolTip("打开文件（可多选）或整个文件夹")
-    btn_export.setToolTip("把勾选文件的 1D 结果批量存成两列 txt/chi，"
+    btn_save.setToolTip("把打开的图存成图片（先勾选要存哪几张，"
+                        "再选格式与分辨率）")
+    btn_export.setToolTip("把勾选条目的 1D 产物批量存成两列 txt/chi，"
                           "可顺带生成 CSV 总表")
     open_menu = QMenu(btn_open)
     act_files = open_menu.addAction("打开文件…")
-    act_files.setToolTip("选择一个或多个衍射图像加入列表")
+    act_files.setToolTip("选择一个或多个衍射图像加入文件栏")
     act_folder = open_menu.addAction("打开文件夹…")
-    act_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入列表"
+    act_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入文件栏"
                           "（拖文件夹进窗口同样生效）")
     btn_open.setMenu(open_menu)
     window.open_files_action = act_files
@@ -523,13 +525,13 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     # 两个方向的作用范围不同（勾只勾原始数据、清清全部），标签已经写出来；
     # tooltip 再说一遍"为什么"（用户 2026-09-28 第 3 条问过）
     btn_all.setToolTip("按下去做哪件事、作用于谁，看按钮上的字：\n"
-                       "「全选（原始数据）」= 勾上原始数据整组"
+                       "[全选（原始数据）]：勾上原始数据整组"
                        "（产物分组请点组名自己勾——勾选集是出图/批量处理的"
                        "输入，顺手全勾会让输入集合翻倍）；\n"
-                       "「全不选（全部条目）」= 清掉全树的勾（含各产物分组）")
+                       "[全不选（全部条目）]：清掉全树的勾（含各产物分组）")
     window.select_all_btn = btn_all
     btn_pick.setToolTip("按区间（第几个到第几个）、间隔（每 N 个选 1 个）"
-                        "或名字包含来勾选，可叠加，可追加；"
+                        "或名称包含来勾选，可叠加，可追加；"
                         "只作用在「原始数据」上")
     row3 = QHBoxLayout()
     row3.addWidget(btn_all, 1)
@@ -557,9 +559,9 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
                 for i in range(item.childCount()):
                     item.child(i).setCheckState(0, item.checkState(0))
                 if item.checkState(0) == Qt.Checked:
-                    _log(window, f"已选中整组 {_group_title(item)}"
-                                 f"（{item.childCount()} 个；"
-                                 "点击视图按钮开始计算）")
+                    _log(window, f"已勾选整组 {_group_title(item)}"
+                                 f"（{item.childCount()} 项；"
+                                 "点视图按钮开始计算）")
             else:
                 parent = item.parent()
                 if parent is not None and is_group(parent) \
@@ -568,8 +570,8 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
                         parent.child(i).checkState(0)
                         for i in range(parent.childCount())))
                 if item.checkState(0) == Qt.Checked:
-                    _log(window, f"已选中 {item.text(0)}"
-                                 "（点击视图按钮开始计算）")
+                    _log(window, f"已勾选 {item.text(0)}"
+                                 "（点视图按钮开始计算）")
         finally:
             window._check_syncing = False
         _sync_current_to_checks(window)
@@ -653,14 +655,14 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         """
         total = window.file_list.count()
         if not total:
-            _log(window, "文件列表是空的")
+            _log(window, "文件栏是空的")
             return
         n = len(gui_sources.checked_sources(window))
         if _all_raw_checked() and n:
             # 已经全勾上 → 取消全部对号（含各产物分组）
             leaves = [s.item for s in gui_sources.all_sources(window)]
             _set_checks(window, [(it, False) for it in leaves])
-            _log(window, f"全不选：清掉全部 {n} 个条目的对号"
+            _log(window, f"全不选：清掉全部 {n} 项的对号"
                          "（原始数据 + 各产物分组）")
             return
         # [全选]：勾上「原始数据」整组（产物分组不自动勾——那要自己挑）
@@ -679,7 +681,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     def select_by_condition():
         total = window.file_list.count()
         if not total:
-            _log(window, "文件列表是空的")
+            _log(window, "文件栏是空的")
             return
         spec = _selection_dialog_spec(window, total)
         if spec is not None:
@@ -696,7 +698,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         products = [s for s in gui_sources.checked_sources(window)
                     if s.kind != gui_sources.RAW]
         if not raw and not products:
-            _log(window, "没有选中要删除的条目")
+            _log(window, "没有勾选要删除的条目")
             return
         if raw:
             _remove_from_list(window, raw)
@@ -704,7 +706,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             n = 0
             for src in products:
                 n += stage_cache.drop_keys(src.kind, [src.key])
-            _log(window, f"已删除 {len(products)} 条产物（{n} 份文件）")
+            _log(window, f"已删除 {len(products)} 条产物（{n} 个文件）")
             refresh_product_groups(window)
 
     # [打开…] 的点击由下拉菜单的两个动作负责（btn_open 自己只弹菜单）
@@ -739,13 +741,13 @@ def _ask_duplicate(window: QMainWindow, name: str) -> str:
         return "overwrite"
     box = QMessageBox(window)
     box.setWindowTitle("文件已存在")
-    box.setText(f"{name} 已经在文件列表里了。")
+    box.setText(f"{name} 已经在文件栏里了。")
     box.setInformativeText(
-        "覆盖 = 保留原条目；改名 = 弹输入框起个新名字（预填编号名，"
-        "可自己改）；取消 = 这次不加。")
-    btn_overwrite = box.addButton("覆盖", QMessageBox.AcceptRole)
-    btn_rename = box.addButton("改名", QMessageBox.ActionRole)
-    btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
+        "保留原条目 = 新文件这次不加；改名后加入 = 弹输入框起个新名字"
+        "（预填编号名，可自己改）；这次不加 = 跳过这个文件。")
+    btn_overwrite = box.addButton("保留原条目", QMessageBox.AcceptRole)
+    btn_rename = box.addButton("改名后加入", QMessageBox.ActionRole)
+    btn_cancel = box.addButton("这次不加", QMessageBox.RejectRole)
     box.setDefaultButton(btn_overwrite)
     box.exec()
     clicked = box.clickedButton()
@@ -807,7 +809,7 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
             if choice == "overwrite":
                 if select:
                     old.setCheckState(Qt.Checked)   # 老行为：保留并勾上
-                _log(window, f"{p.name} 已在列表中（覆盖：保留原条目）")
+                _log(window, f"{p.name} 已在文件栏中（保留原条目）")
             elif choice == "rename":
                 new_name = None
                 default_name = _unique_display_name(window, p.name)
@@ -832,7 +834,7 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
                 item.setCheckState(0, Qt.Checked if select else Qt.Unchecked)
                 added.append(item)
                 existing[p.resolve()] = item   # 同批再出现同路径时走本条目
-                _log(window, f"{p.name} 已在列表中（改名加入：{new_name}）")
+                _log(window, f"{p.name} 已在文件栏中（改名加入：{new_name}）")
             else:
                 _log(window, f"已跳过重复文件 {p.name}")
             continue
@@ -850,8 +852,8 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
         # Qt 会把当前项滚进视野，列表就停在最后一批（用户 2026-09-27：
         # "导入数据后，会一下跳到数据中间位置，应该是还在顶端"）
         _set_current_keeping_scroll(window.file_list, added[-1])
-        tail = ("（已全选）" if select
-                else "（未选中：点 [全选] 或 [按条件选…]，再点视图按钮出图）")
+        tail = ("（原始数据已勾选）" if select
+                else "（未勾选：点 [全选] 或 [按条件选…]，再点视图按钮出图）")
         _log(window, f"已添加 {len(added)} 个文件{tail}")
     _sync_group_states(window)   # 批量加是屏蔽信号做的：组态在这里补
     _sync_current_to_checks(window)
@@ -906,12 +908,12 @@ def _refresh_file_label(window: QMainWindow) -> None:
     checked = gui_sources.checked_sources(window)
     odd = [s for s in checked if s.kind != gui_sources.RAW]
     if not checked:
-        window.file_label.setText("未打开文件")
+        window.file_label.setText("未打开任何文件")
     elif len(checked) == 1:
         window.file_label.setText(checked[0].display)
     else:
-        tail = f"（含 {len(odd)} 个产物）" if odd else ""
-        window.file_label.setText(f"已选 {len(checked)} 个文件{tail}")
+        tail = f"（含 {len(odd)} 条产物）" if odd else ""
+        window.file_label.setText(f"已勾选 {len(checked)} 项{tail}")
 
 
 def _keys_of(item, kind: str = None) -> list:
@@ -943,13 +945,13 @@ def drop_product_group(window: QMainWindow, item) -> int:
     batch = item.data(0, GROUP_BATCH_ROLE)
     if batch:
         n = stage_cache.drop_batch("bg", batch)
-        tail = "（台账一并清掉）"
+        tail = "（记录一并清掉）"
     else:
         n = 0
         for kind, keys in _group_keys_by_kind(item).items():
             n += stage_cache.drop_keys(kind, keys)
         tail = ""
-    _log(window, f"已删除产物分组「{_group_title(item)}」：{n} 份产物{tail}")
+    _log(window, f"已删除产物分组「{_group_title(item)}」：{n} 条产物{tail}")
     refresh_product_groups(window)
     return n
 
@@ -970,7 +972,7 @@ def drop_product_item(window: QMainWindow, item) -> int:
     if src is None or not src.key:
         return 0    # 原始数据条目：那走 [删除] 按钮，不走这里
     n = stage_cache.drop_keys(src.kind, [src.key])
-    _log(window, f"已删除产物：{src.display}（{n} 份文件）")
+    _log(window, f"已删除产物：{src.display}（{n} 个文件）")
     refresh_product_groups(window)
     return n
 
@@ -1019,14 +1021,15 @@ def _entry_menu(window: QMainWindow, item) -> None:
                 f"打开整组 1D 图（{item.childCount()} 张）")] = "open_group"
             menu.addSeparator()
             actions[menu.addAction(
-                f"删除这一组产物（{item.childCount()} 个）")] = "drop_group"
+                f"删除这一组产物（{item.childCount()} 条）")] = "drop_group"
             actions[menu.addAction("导出这一组（txt / chi / CSV）")] = \
                 "export_group"
     elif src is None or src.kind == gui_sources.RAW:
-        actions[menu.addAction(f"打开 1D 图（{src.display if src else ''}）")] = \
-            "open_item"
+        shown = f"（{src.display}）" if src is not None else ""
+        tag = f" {src.display}" if src is not None else ""
+        actions[menu.addAction(f"打开 1D 图{shown}")] = "open_item"
         menu.addSeparator()
-        actions[menu.addAction(f"从列表移除 {src.display if src else ''}"
+        actions[menu.addAction(f"从文件栏移除{tag}"
                                f"（硬盘上的文件不动）")] = "remove_raw"
     else:
         actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
@@ -1082,7 +1085,7 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     """
     key = panel_key_of(item)
     if key is not None:
-        _raise_panel(window, key)   # 「打开的图」那些行：双击 = 提到最前面
+        _raise_panel(window, key)   # 「打开的图」那些行：双击可提到最前面
         return
     opener = getattr(window, "open_view_source", None)
     if opener is None or item is None or is_group(item):
@@ -1093,7 +1096,7 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     if src.kind == gui_sources.RAW and not explicit:
         _log(window, f"{src.display}：原始数据可以出多种图——先勾上它，再点 "
                      f"[2D] / [剖面] / [1D] / [瀑布]；只看 1D 用右键 →"
-                     f"「打开 1D 图」")
+                     f"[打开 1D 图]")
         return
     opener(src, "1D")
 
@@ -1112,16 +1115,31 @@ def _open_group_views(window: QMainWindow, item) -> None:
         _log(window, "这一组里没有可打开的条目")
         return
     if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
-        ans = QMessageBox.question(
-            window, "打开整组 1D 图",
-            f"要打开 {len(sources)} 张 1D 图吗？每张约占 15 MB 内存"
-            f"（合计约 {len(sources) * 15} MB），开完会占满面板区。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if ans != QMessageBox.Yes:
+        if not _confirm_open_many(
+                window, "打开整组 1D 图",
+                f"要打开 {len(sources)} 张 1D 图吗？每张约占 15 MB 内存"
+                f"（合计约 {len(sources) * 15} MB），开完会占满面板区。"):
             return
     opener = getattr(window, "open_view_group", None)
     if opener is not None:
         opener(sources, "1D")
+
+
+def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
+    """>24 张批量开图前的确认框：[打开] / [取消]（回车默认 [取消]）。
+
+    单独抽成一个函数是为了让测试能拦住它：这里直接 exec() 一个模态框，
+    离屏测试里没人去点它就会把测试挂死（2026-10-02 踩到：测试 mock 的
+    是旧的 QMessageBox.question，拦不住新写法）。
+    """
+    box = QMessageBox(window)
+    box.setWindowTitle(title)
+    box.setText(text)
+    btn_open = box.addButton("打开", QMessageBox.AcceptRole)
+    btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
+    box.setDefaultButton(btn_cancel)
+    box.exec()
+    return box.clickedButton() is btn_open
 
 
 def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
@@ -1138,12 +1156,10 @@ def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
         return
     from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
     if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
-        ans = QMessageBox.question(
-            window, f"打开勾选的 {len(sources)} 张图",
-            f"要打开 {len(sources)} 张 {name} 图吗？每张约占 15 MB 内存"
-            f"（合计约 {len(sources) * 15} MB），开完会占满面板区。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if ans != QMessageBox.Yes:
+        if not _confirm_open_many(
+                window, f"打开勾选的 {len(sources)} 张图",
+                f"要打开 {len(sources)} 张 {name} 图吗？每张约占 15 MB 内存"
+                f"（合计约 {len(sources) * 15} MB），开完会占满面板区。"):
             return
     opener = getattr(window, "open_view_group", None)
     if opener is not None:
@@ -1176,7 +1192,7 @@ def _remove_from_list(window: QMainWindow, items) -> None:
     _sync_current_to_checks(window)
     _refresh_file_label(window)
     refresh_product_groups(window)
-    _log(window, f"已从列表移除 {len(items)} 个文件（硬盘上的文件未改动）")
+    _log(window, f"已从文件栏移除 {len(items)} 个文件（硬盘上的文件未改动）")
 
 
 def ask_clear_cache(window: QMainWindow) -> None:
@@ -1187,7 +1203,7 @@ def ask_clear_cache(window: QMainWindow) -> None:
     from xrd_toolkit.services import stage_cache
     info = stage_cache.describe()
     if not info["files"]:
-        _log(window, "缓存本来就是空的（还没有落过产物）")
+        _log(window, "缓存本来就是空的（还没有生成过产物）")
         return
     n_prod = int(info["files"])
     if window.isVisible():
@@ -1195,7 +1211,8 @@ def ask_clear_cache(window: QMainWindow) -> None:
         box.setWindowTitle("删除所有缓存")
         box.setText(f"要删掉全部 {n_prod} 个缓存文件吗"
                     f"（约 {info['bytes'] / 1e6:.1f} MB）？")
-        box.setInformativeText("删掉的是处理产物与 1D 产物（outputs/_stage）。"
+        box.setInformativeText("删掉的是处理产物与 1D 产物（缓存目录 "
+                               "outputs/_stage）。"
                                "下次出图会重新积分——只慢一点，不会算错。")
         ok = box.addButton("删除", QMessageBox.DestructiveRole)
         box.addButton("取消", QMessageBox.RejectRole)
@@ -1205,7 +1222,7 @@ def ask_clear_cache(window: QMainWindow) -> None:
             return
     cleared = stage_cache.clear()
     window.refresh_groups()
-    _log(window, f"已删除所有缓存：{cleared} 个产物文件")
+    _log(window, f"已删除所有缓存：{cleared} 个缓存文件")
 
 
 def _oned_sig(meta, lo, hi) -> tuple:
@@ -1269,7 +1286,7 @@ def _oned_group_tip(sig, cur) -> str:
            f"2θ {_fmt_deg(lo)}–{_fmt_deg(hi)}°。\n整组勾上可去 [对比] / [热图]；"
            "点开读的就是这一份，不重算。")
     if not _oned_sig_is_current(sig, cur):
-        txt += (f"\n（当前设置是：几何 {cur['config']}、{cur['npt']} 点、"
+        txt += (f"\n（当前设置：几何 {cur['config']}、{cur['npt']} 点、"
                 f"2θ {_fmt_deg(cur['tth_min'])}–{_fmt_deg(cur['tth_max'])}°"
                 f"——要按当前设置再算一批，勾上文件点 [1D]）")
     return txt
@@ -1535,7 +1552,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
             # 2θ 范围可能没记（老台账、或批处理时没设范围）→ 别让
             # f-string 拿 None 去格式化：那会**在重建时抛异常**，整个文件栏
             # 建不起来（测试用最小台账记一批就复现了）
-            span = ("2θ 未记"
+            span = ("2θ 范围未记录"
                     if node.get("tth_min") is None
                     or node.get("tth_max") is None
                     else f"2θ {_fmt_deg(node['tth_min'])}–"
@@ -1561,7 +1578,7 @@ def refresh_product_groups(window: QMainWindow) -> None:
             group = _make_group(
                 label,
                 f"几何 {node.get('config')}、{node.get('npt')} 点、{span}\n"
-                "整组勾上可去 [对比]/[热图]；右键删掉这一组。" + more)
+                "整组勾上可去 [对比] / [热图]；右键删掉这一组。" + more)
             group.setData(0, GROUP_BATCH_ROLE, node["id"])   # 右键删这一组用
             for raw_item, meta, is_stale in kids:
                 tail = "处理后（旧算法，不可信）" if is_stale else "处理后"
@@ -1569,17 +1586,17 @@ def refresh_product_groups(window: QMainWindow) -> None:
                                 meta.get("key"), tail)
                 if is_stale and leaf is not None:
                     leaf.setToolTip(
-                        0, f"{leaf.toolTip(0)}\n这一份是按**旧的背景算法**"
+                        0, f"{leaf.toolTip(0)}\n这一份是按<b>旧的背景算法</b>"
                            "算的（曲线不可信）；要清掉就右键删这一条/这一组，"
-                           "或「删除所有缓存…」")
+                           "或[删除所有缓存…]")
             tree.addTopLevelItem(group)
         tree.expandAll()
         if stale:
             # 列出来、但标"不可信"：产物文件是用户的数据，删不删他说了算
-            _log(window, f"文件栏里有 {stale} 条**旧背景算法**算的处理产物"
-                         "（名字里标着「旧算法，不可信」）：扣背景的算法已"
+            _log(window, f"文件栏里有 {stale} 条旧背景算法算的处理产物"
+                         "（名字里标着“旧算法，不可信”）：扣背景的算法已"
                          "升级，那批曲线不再可信——要清掉就右键删那一组，"
-                         "或「删除所有缓存…」，然后重新批量处理")
+                         "或[删除所有缓存…]，然后重新批量处理")
         # 冒出新产物（基线见上面那段）= 上一轮的工作结束了：勾选
         # （出图/批量处理的输入）清零重来（用户 2026-10-01 第 8 条，
         # 方案"甲"）。清掉之后不能再叫 keep 把旧对号放回来——滚动/
@@ -1738,20 +1755,20 @@ def _check_summary(window: QMainWindow) -> str:
     """勾选集合的一句话说明：条数 + 构成（+ "同一条曲线画两遍"提醒）。"""
     checked = gui_sources.checked_sources(window)
     if not checked:
-        return ("勾选 0 条：点条目行 = 勾这一条，点组那一行 = 整组一起勾"
+        return ("已勾选 0 项：点条目行：勾这一条，点组那一行：整组一起勾"
                 "（对号方块可以取消）")
     kinds = {}
     for src in checked:
         kinds[src.kind] = kinds.get(src.kind, 0) + 1
     parts = [f"{text} {kinds[kind]}" for kind, text in
-             ((gui_sources.RAW, "原始"), (gui_sources.ONED, "1D 产物"),
-              (gui_sources.BG, "处理后")) if kinds.get(kind)]
-    out = f"勾选 {len(checked)} 条：" + " ｜ ".join(parts)
+             ((gui_sources.RAW, "原始数据"), (gui_sources.ONED, "1D 产物"),
+              (gui_sources.BG, "处理产物")) if kinds.get(kind)]
+    out = f"已勾选 {len(checked)} 项：" + " ｜ ".join(parts)
     dup = _duplicate_raw_paths(checked)
     if dup:
         # 同一文件的原始条目与它的 1D 产物是同一条曲线，两个都勾 = 画两遍
-        out += (f"　⚠ 其中 {len(dup)} 个文件同时勾了原始条目和它的 1D 产物"
-                "（同一条曲线，会画两遍）")
+        out += (f"；⚠ 其中 {len(dup)} 个文件同时勾了原始数据条目和它的 "
+                "1D 产物（同一条曲线，会画两遍）")
     return out
 
 
@@ -1765,7 +1782,7 @@ def _duplicate_raw_paths(checked) -> set:
 def _refresh_check_labels(window: QMainWindow) -> None:
     """把"勾了多少条"写到出图按钮上，并在绘图页刷新那句构成说明。"""
     n = len(gui_sources.checked_sources(window))
-    text = f"出图（勾选 {n} 个）" if n else "出图（未勾选）"
+    text = f"出图（已勾选 {n} 项）" if n else "出图（尚未勾选）"
     for attr in ("plot_1d_btn", "plot_now_btn"):
         btn = getattr(window, attr, None)
         if btn is not None:
@@ -1852,9 +1869,9 @@ def apply_selection(window: QMainWindow, spec: dict) -> list:
         what = f"第 {int(spec['start'])}–{int(spec['stop'])} 个"
     text = (spec.get("text") or "").strip()
     if text:
-        what += f" 且名字含“{text}”"
+        what += f" 且名称包含“{text}”"
     if picked:
-        _log(window, f"按条件选中 {len(picked)} 个文件（{what}"
+        _log(window, f"按条件勾选 {len(picked)} 项（{what}"
                      + ("，追加到已有对号）" if append else "）"))
     else:
         _log(window, f"没有命中任何文件（{what}）")
@@ -1925,7 +1942,7 @@ def _selection_dialog_spec(window: QMainWindow, total: int):
 
     edit_text = QLineEdit()
     edit_text.setObjectName("sel_text")
-    edit_text.setPlaceholderText("留空 = 不筛（不区分大小写）")
+    edit_text.setPlaceholderText("留空则不筛（不区分大小写）")
     form.addRow("名称包含", edit_text)
     chk_append = QCheckBox("追加到当前选择（不取消已勾的）")
     chk_append.setObjectName("sel_append")
@@ -1943,7 +1960,7 @@ def _selection_dialog_spec(window: QMainWindow, total: int):
 
     def refresh_preview(*_):
         n = len(_selection_matches(window, current_spec()))
-        preview.setText(f"预览：将选中 {n} 个文件（列表共 {total} 个）")
+        preview.setText(f"预览：将勾选 {n} 项（共 {total} 项）")
 
     for radio in (rb_range, rb_stride):
         radio.toggled.connect(refresh_preview)

@@ -641,7 +641,7 @@ def _auto_contrast_values(image) -> tuple:
     arr = np.asarray(image, dtype=float)
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
-        raise ValueError("图像没有有效数值")
+        raise ValueError("图没有有效数值")
     return float(np.percentile(finite, 1.0)), float(np.percentile(finite, 99.9))
 
 
@@ -673,8 +673,8 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
                 image = load_diffraction_image(str(path))
             except Exception as err:
                 if not silent:
-                    _log(window, f"自动对比度：读取 {path.name} 失败（{err}），"
-                                 f"恢复占位默认值")
+                    _log(window, f"自动对比度：读取 {path.name} 失败，"
+                                 f"已恢复默认值（原因：{err}）")
             else:
                 cache[str(path)] = image   # 路径键，改显示名不影响缓存
                 while len(cache) > 3:   # 上限 3 张：弹出最早的一张
@@ -689,12 +689,12 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
     window.params["对比度上限"].setValue(hi)
     if not silent:
         if loaded:
-            _log(window, f"自动对比度：按 {path.name} 算得 {lo:.1f} ~ {hi:.1f}")
+            _log(window, f"自动对比度：按 {path.name} 算得 {lo:.1f}–{hi:.1f}")
         elif window.focus_panel is None:
-            _log(window, "自动对比度：没有编辑对象，恢复占位默认值")
+            _log(window, "自动对比度：没有编辑对象，已恢复默认值")
         else:
             _log(window, "自动对比度：编辑对象不是 2D/剖面 视图，"
-                         f"恢复占位默认值")
+                         f"已恢复默认值")
 
 
 # 决定"先扣图再积分 ≡ 先积分再扣"能否成立的几何量（2θ 范围与点数不在
@@ -841,8 +841,8 @@ def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
             window._bg_geom_warned = bad_geom
             if bad_geom:
                 _log(window, "背景扣除提示：空扫图与当前几何不一致"
-                             "（像素/波长/距离/束心/倾斜有变化），"
-                             "空扫应重新按相同几何积分")
+                             "（像素/波长/距离/束心/倾斜有变化）。"
+                             "请按相同几何重新积分空扫图")
         # 空扫没覆盖到的 2θ 区间不扣（interp_onto_grid 在那里返回 0）——
         # 用户在覆盖范围外看到"没扣"却没有任何提示，会以为功能坏了
         b_tth = np.asarray(blank["tth"], dtype=float)
@@ -852,8 +852,8 @@ def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
         if uncovered != getattr(window, "_bg_cover_warned", False):
             window._bg_cover_warned = uncovered
             if uncovered and b_tth.size:
-                _log(window, f"背景扣除提示：空扫只覆盖 "
-                             f"{b_tth[0]:.3f}~{b_tth[-1]:.3f}°，"
+                _log(window, f"背景扣除提示：空扫图只覆盖 "
+                             f"{b_tth[0]:.3f}–{b_tth[-1]:.3f}°，"
                              f"该区间以外的数据未扣背景")
     out, base = process.apply_chain(tth, intensity, params,
                                     blank_curve=blank_curve)
@@ -1001,7 +1001,7 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
     window.params["纵轴下限"].setValue(ylo)
     window.params["纵轴上限"].setValue(yhi)
     if not silent and loaded:
-        _log(window, f"自动纵轴：编辑对象算得 {ylo:.4g} ~ {yhi:.4g}")
+        _log(window, f"自动纵轴：编辑对象算得 {ylo:.4g}–{yhi:.4g}")
 
 
 def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
@@ -1029,7 +1029,7 @@ def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
     window.params["热图下限"].setValue(lo)
     window.params["热图上限"].setValue(hi)
     if not silent and loaded:
-        _log(window, f"热图范围：编辑对象算得 {lo:.4g} ~ {hi:.4g}")
+        _log(window, f"热图范围：编辑对象算得 {lo:.4g}–{hi:.4g}")
 
 
 def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:

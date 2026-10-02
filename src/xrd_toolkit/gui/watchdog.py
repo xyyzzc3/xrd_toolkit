@@ -10,7 +10,9 @@
   * 一条守护线程每 0.5 s 看一眼计数：超过 STALL_SECONDS 没动 = 界面线程
     停摆 → 用 faulthandler 把所有线程的 Python 栈写进
     `outputs/hang-<时间>.txt`（同时打到 stderr，PyCharm 控制台也看得见）；
-  * 恢复正常后再写一条"停了多久"，同一段停摆只dump一次（不刷屏）。
+  * 恢复正常后再写一条"停了多久"，同一段停摆只dump一次（不刷屏）；
+  * 窗口真正关上（closeEvent 没被取消）或销毁 → 守护线程跟着退，不留
+    残留监控（测试套件每用例一个窗口，不退就会一起刷栈快照）。
 
 它**只记录、不干预**：不杀任务、不弹窗、不改任何状态——现场越干净越好。
 真正干活的库有没有释放 GIL、卡在 Qt 还是 numpy，栈里一眼能看出来。
@@ -45,7 +47,7 @@ def start(window, out_dir: Path = None) -> None:
     global _seq
     _seq += 1
     seq = _seq
-    from PySide6.QtCore import QObject, QTimer, Signal
+    from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 
     out = Path(out_dir) if out_dir is not None else Path(OUT_DIR)
 
@@ -76,6 +78,24 @@ def start(window, out_dir: Path = None) -> None:
     except Exception:                                        # noqa: BLE001
         pass
 
+    class _CloseWatcher(QObject):
+        """窗口真正关上（没被"存不存盘"对话框取消）→ 停表。
+
+        为什么要有（2026-10-02 实测）：关掉的窗口没有界面可停摆，但监控
+        线程还在；测试套件每个用例建一次窗口，残留监控越积越多，主线程
+        一卡，几百个监控就一起写全线程栈快照——一次全量测试写出 2000+
+        份，套件被拖到一小时都跑不完。singleShot 推迟一拍再看：closeEvent
+        被对话框取消时窗口仍然可见，这时不停，真程序继续有看门狗。
+        """
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.Close:
+                QTimer.singleShot(
+                    0, lambda: stop.set() if not window.isVisible() else None)
+            return False
+
+    window._hang_close_watcher = _CloseWatcher(window)
+    window.installEventFilter(window._hang_close_watcher)
+
     t = threading.Thread(target=_watch, args=(window, out, stop, state),
                          daemon=True, name="xrd-hang-watchdog")
     t.start()
@@ -102,8 +122,9 @@ def _watch(window, out: Path, stop: threading.Event, state: dict) -> None:
                 # 只有**够到阈值**的那次停顿才值得写一行（启动、开 2048² 面板
                 # 这类正常的大动作也会停 1 s 上下，逐条报就是刷屏）
                 if time.time() - stalled_since >= STALL_SECONDS:
-                    _note(window, out, f"[看门狗] 界面恢复了：停了 "
-                                       f"{time.time() - stalled_since:.1f} s")
+                    _note(window, out, f"界面无响应 "
+                                       f"{time.time() - stalled_since:.1f} "
+                                       "秒后已恢复")
                 stalled_since = None
             with state["lock"]:
                 state["dumped_at"] = None
@@ -124,15 +145,15 @@ def _watch(window, out: Path, stop: threading.Event, state: dict) -> None:
         try:
             out.mkdir(parents=True, exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(f"# 界面线程停摆 {stalled:.1f} s（阈值 "
-                         f"{STALL_SECONDS:g} s）\n"
-                         f"# 每个线程停在哪儿，都在这份栈里\n")
+                fh.write(f"# 界面无响应 {stalled:.1f} 秒（阈值 "
+                         f"{STALL_SECONDS:g} 秒）\n"
+                         f"# 每个线程停在哪儿，都在这份调用栈里\n")
                 faulthandler.dump_traceback(file=fh, all_threads=True)
         except Exception as err:                             # noqa: BLE001
-            _note(window, out, f"[看门狗] 写现场失败：{err}")
+            _note(window, out, f"卡死现场写入失败：{err}")
             continue
-        _note(window, out, f"[看门狗] 界面停摆 {stalled:.1f} s（还在数）——现场已"
-                           f"存到 {path}（所有线程的栈都在里面，发我就能定位）")
+        _note(window, out, f"界面无响应 {stalled:.1f} 秒——已把现场存到 {path}"
+                           f"（含各线程调用栈，可交给开发者定位）")
 
 
 def _note(window, out: Path, text: str) -> None:

@@ -311,12 +311,12 @@ def _build_center(window: QMainWindow) -> None:
         btn.clicked.connect(
             lambda checked=False, n=name: _arrange(window, n))
     # [全关]：一键关掉所有图面板（用户 2026-09-26："打开的子窗口全部关闭"）
-    btn_close_all = QPushButton("全关")
+    btn_close_all = QPushButton("全部关闭")
     btn_close_all.setObjectName("close_all_panels")
     btn_close_all.setFlat(True)
-    btn_close_all.setToolTip("关闭所有打开的图面板（弹出的独立窗口也一起关；"
-                             "与单个 × 一样不会问存不存盘，日志里会报几张"
-                             "没存过盘）")
+    btn_close_all.setToolTip("关闭所有图面板与弹出的独立窗口。"
+                             "未保存的图片不会另行提示；"
+                             "关闭后日志里会列出没存过盘的图")
     btn_close_all.clicked.connect(lambda: _close_all_panels(window))
     row.addWidget(btn_close_all)
     window.close_all_btn = btn_close_all
@@ -783,7 +783,7 @@ def _tile_panels(window: QMainWindow, subs, orient: str) -> None:
                 x += d.width() + 8
             y += row_h + 8
     _log(window, f"已{'竖排' if orient == 'column' else '横排'}"
-                 f" {len(subs)} 个面板（按类型分层，保持各自大小）")
+                 f" {len(subs)} 个面板（按类型分组排布，保持各自大小）")
 
 
 def _settle(window: QMainWindow) -> None:

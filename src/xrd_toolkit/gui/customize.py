@@ -30,7 +30,8 @@ _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
 # 各视图的默认外观（Customize [恢复默认] 与 plot_views 的
 # _apply_text_guards 共用；未知视图 = 1D 积分图默认）
 _VIEW_DEFAULTS = {
-    "2D": ("{display}: diffraction image", "横向 (px)", "纵向 (px)"),
+    "2D": ("{display}: diffraction image", "Horizontal (px)",
+           "Vertical (px)"),
     "剖面": ("{display}: line profile", "Distance from center (px)",
              "Intensity (a.u.)"),
     "瀑布": ("{display}: 36-sector waterfall", "2θ (deg)",
@@ -85,7 +86,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     """搭 Customize 对话框并预填当前轴状态（供 _open_customize_dialog
     与测试复用：测试可直改 _fields 再走 _apply_customize）。"""
     dlg = QDialog(window)
-    dlg.setWindowTitle(f"Customize — {dock.panel_display}")
+    dlg.setWindowTitle(f"外观：{dock.panel_display}")
     dlg.setMinimumWidth(460)
     root = QVBoxLayout(dlg)
     # 表单统一左对齐（用户点名要的）：macOS 风格默认把表单内容
@@ -124,7 +125,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     # 2D 色图（只对 2D 面板出现）：用户 2026-09-27"二维图颜色，customize里"
     cmap = None
     if dock.panel_key.split("|", 1)[0] == "2D":
-        cmap_box = QGroupBox("颜色")
+        cmap_box = QGroupBox("色图")
         cmap_form = QFormLayout(cmap_box)
         cmap_form.setLabelAlignment(label_align)
         cmap_form.setFormAlignment(form_align)
@@ -296,4 +297,4 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
         from xrd_toolkit.gui.plot_compare import _redraw_compare
         _redraw_compare(window, dock.panel_key)
     _content(dock).draw()
-    _log(window, f"已应用 Customize 设置：{dock.windowTitle()}")
+    _log(window, f"已应用外观设置：{dock.windowTitle()}")

@@ -338,10 +338,10 @@ def check_stage_folders(window, lab6: str) -> None:
     kids = [group.child(i) for i in range(group.childCount())]
     report(all(k.checkState() == Qt.Checked for k in kids),
            "勾组 = 组里全勾")
-    # 产物条目出 1D 图：读盘画线，日志里能看到"直接读盘不重算"
+    # 产物条目出 1D 图：读盘画线，日志里能看到"直接读取，不重算"
     before = len(window.log_text.toPlainText())
     window.view_buttons["1D"].click()
-    ok = wait_until(lambda: "直接读盘不重算" in window.log_text.toPlainText())
+    ok = wait_until(lambda: "直接读取，不重算" in window.log_text.toPlainText())
     report(ok, "产物条目出 1D 图（读盘，不重算）")
     tail = window.log_text.toPlainText()[before:]
     report("背景扣除已置「不扣」" in tail, "产物面板不再二次扣背景")
@@ -385,7 +385,7 @@ def check_one_d_product_background(window) -> None:
     group.setCheckState(Qt.Checked)
     QApplication.processEvents()
     window.view_buttons["1D"].click()             # 产物条目出图 = 读盘
-    ok = wait_until(lambda: "直接读盘不重算" in window.log_text.toPlainText())
+    ok = wait_until(lambda: "直接读取，不重算" in window.log_text.toPlainText())
     report(ok, "1D 产物条目出图（读盘）")
     # 编辑对象 = 产物面板；切手动锚点 + 放两个锚点
     key = next((k for k in window.plot_docks if k.startswith("1D|1d#")), None)

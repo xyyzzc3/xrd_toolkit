@@ -124,7 +124,7 @@ def _run_view(window: QMainWindow, name: str, path: Path, key: str) -> None:
     """
     runner = _VIEW_RUNNERS.get(name)
     if runner is None:
-        _log(window, f"{name} 视图尚未接线（面板占位）")
+        _log(window, f"{name} 视图暂不可用（面板暂无内容）")
         return
     # 开工前先刷新参数快照：数据参数 = 控件当前值（计算就用它），
     # 显示参数沿用面板自己的旧快照（重算不改长相）；新面板旧快照
@@ -166,9 +166,9 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
             batch["cached"] = batch.get("cached", 0) + 1   # 收尾汇总里报一句
         if not quiet:
             _log(window, f"复用缓存：{path.name}（几何 {window.config_name}，"
-                         f"{len(tth)} 点，2θ {tth[0]:.3f}~{tth[-1]:.3f}°）"
+                         f"{len(tth)} 点，2θ {tth[0]:.3f}–{tth[-1]:.3f}°）"
                          f"{suffix}")
-        window.status_text.setText(f"复用缓存 {path.name}"
+        window.status_text.setText(f"复用缓存：{path.name}"
                                    f"（{len(tth)} 点）")
         dock.last_tth, dock.last_intensity = tth, intensity
         dock._new_data = True        # 这份是新数据 → 面板 [Home] 的家跟着走
@@ -176,7 +176,7 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
         _set_focus(window, key, dock.windowTitle())
         return
     window.status_text.setText(f"正在积分 {path.name}…")
-    _log(window, f"开始积分 {path.name}（后台线程）")
+    _log(window, f"开始积分 {path.name}（后台运行）")
     _spawn(window, path, geom, npt, key)
 
 
@@ -184,7 +184,7 @@ def _run_2d(window: QMainWindow, path: Path, key: str,
             geom: dict, npt: int) -> None:
     """2D = 衍射图原图：后台读图，画布 imshow（对数色标 + 对比度参数）。"""
     window.status_text.setText(f"正在读取 {path.name}…")
-    _log(window, f"开始读取 {path.name}（后台线程）")
+    _log(window, f"开始读取 {path.name}（后台运行）")
     _spawn_task(window, key, _compute_image, (str(path),),
                 _on_image_done,
                 lambda msg: _on_view_error(window, path, key, "读取", msg))
@@ -204,7 +204,7 @@ def _run_profile(window: QMainWindow, path: Path, key: str,
     if dock is not None:
         dock.profile_angle = angle   # [应用] 比较用：角度没变只重画
     window.status_text.setText(f"正在计算剖面 {path.name}…")
-    _log(window, f"开始计算剖面 {path.name}（后台线程，角度 {angle:g}°）")
+    _log(window, f"开始计算剖面 {path.name}（后台运行，角度 {angle:g}°）")
     _spawn_task(window, key, _compute_profile, (str(path), center, angle),
                 _on_profile_done,
                 lambda msg: _on_view_error(window, path, key, "剖面计算", msg))
@@ -214,10 +214,10 @@ def _run_waterfall(window: QMainWindow, path: Path, key: str,
                    geom: dict, npt: int) -> None:
     """瀑布 = 36 扇区分区积分堆叠（对齐 CLI sector_waterfall）。"""
     window.status_text.setText(f"正在扇形积分 {path.name}…")
-    _log(window, f"开始扇形积分 {path.name}（后台线程，36 扇区）")
+    _log(window, f"开始扇形积分 {path.name}（后台运行，36 扇区）")
     _spawn_task(window, key, _compute_waterfall, (str(path), geom, npt),
                 _on_waterfall_done,
-                lambda msg: _on_view_error(window, path, key, "瀑布积分", msg))
+                lambda msg: _on_view_error(window, path, key, "扇形积分", msg))
 
 
 # 视图注册表：视图名 → 计算 runner（签名 window/path/key/geom/npt）。
@@ -268,7 +268,7 @@ def _apply_params(window: QMainWindow) -> None:
             dock.panel_display = f"1D_{Path(src.path).name}"
             dock.setWindowTitle(dock.panel_display)
             _log(window, f"这一条是 1D 产物（读的是 {src.display} 那一份）："
-                         "按新范围重算后它不再是那一份了，"
+                         "按当前设置重算后它不再是那一份了，"
                          "面板改为这个文件的一条 1D 曲线")
     # 这行要在**所有**分支之前（对比/热图也要它：用户点 [应用] 时日志必须
     # 说清重算的是谁）；摘身份之后再写，标题才是摘完的那个
@@ -383,7 +383,7 @@ def _redraw_panel(window: QMainWindow, key: str) -> str:
         dock.heat_data = data   # 与画的保持同一份：_apply_auto_heatlim 读它
         _draw_heatmap(window, dock, data[0], data[1], data[2])
     else:
-        return f"{view} 视图尚未接线"
+        return f"{view} 视图暂不可用"
     return ""
 
 
@@ -477,7 +477,7 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
             _log(window, f"已忽略 {dock.panel_display} 的过期结果"
-                         f"（同一面板已有更新的计算）")
+                         f"（该图面板已有更新的计算）")
         return
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -493,7 +493,7 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
         return          # 大批量：逐张那行不写（进度与汇总由 _batch_step 出）
     if len(tth):
         _log(window, f"积分完成：{dock.panel_display}（{len(tth)} 点，"
-                     f"2θ {tth.min():.3f}~{tth.max():.3f}°）{suffix}")
+                     f"2θ {tth.min():.3f}–{tth.max():.3f}°）{suffix}")
     else:
         _log(window, f"积分完成：{dock.panel_display}（0 点，无有效数据）"
                      f"{suffix}")
@@ -583,10 +583,10 @@ def _on_integration_error(window: QMainWindow, path: Path, key: str,
                           msg: str) -> None:
     """积分失败（主线程）：报错进日志区，不崩溃（批内带进度计数）。"""
     suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
-    _log(window, f"积分失败：{path.name} — {msg}{suffix}")
+    _log(window, f"积分失败：{path.name} —— {msg}{suffix}")
     dock = window.plot_docks.get(key)
     if dock is not None:
-        show_placeholder(dock, "计算失败——见右侧日志")
+        show_placeholder(dock, "计算失败，详见日志")
 
 
 def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
@@ -599,8 +599,8 @@ def _on_view_error(window: QMainWindow, path: Path, key: str, what: str,
     suffix, _ = _batch_step(window, key)   # 失败永远逐条写（不合并）
     dock = window.plot_docks.get(key)
     if dock is not None:
-        show_placeholder(dock, f"{what}失败——见右侧日志")
-    _log(window, f"{what}失败：{path.name} — {msg}{suffix}")
+        show_placeholder(dock, f"{what}失败，详见日志")
+    _log(window, f"{what}失败：{path.name} —— {msg}{suffix}")
 
 
 def _cache_image(window: QMainWindow, path_str: str, image) -> None:
@@ -627,7 +627,7 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
         dock = window.plot_docks.get(key)
         if dock is not None:   # 面板还开着才记日志；关了静默丢弃
             _log(window, f"已忽略 {dock.panel_display} 的过期结果"
-                         f"（同一面板已有更新的计算）")
+                         f"（该图面板已有更新的计算）")
         return
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -639,7 +639,7 @@ def _on_image_done(window: QMainWindow, key: str, task, result) -> None:
     _draw_2d(window, dock, image)
     if not quiet:
         _log(window, f"读取完成：{dock.panel_display}"
-                     f"（{image.shape[0]}×{image.shape[1]} 像素）{suffix}")
+                     f"（{image.shape[0]}×{image.shape[1]} px）{suffix}")
 
 
 def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
@@ -651,7 +651,7 @@ def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
         dock = window.plot_docks.get(key)
         if dock is not None:
             _log(window, f"已忽略 {dock.panel_display} 的过期结果"
-                         f"（同一面板已有更新的计算）")
+                         f"（该图面板已有更新的计算）")
         return
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -665,7 +665,7 @@ def _on_profile_done(window: QMainWindow, key: str, task, result) -> None:
         return          # 大批量：逐张那行不写（见 _batch_step 的说明）
     if len(t):
         _log(window, f"剖面完成：{dock.panel_display}（{len(t)} 点，"
-                     f"距离 {t.min():.0f}~{t.max():.0f} px）{suffix}")
+                     f"距离 {t.min():.0f}–{t.max():.0f} px）{suffix}")
     else:
         _log(window, f"剖面完成：{dock.panel_display}（0 点，无有效数据）"
                      f"{suffix}")
@@ -680,7 +680,7 @@ def _on_waterfall_done(window: QMainWindow, key: str, task, result) -> None:
         dock = window.plot_docks.get(key)
         if dock is not None:
             _log(window, f"已忽略 {dock.panel_display} 的过期结果"
-                         f"（同一面板已有更新的计算）")
+                         f"（该图面板已有更新的计算）")
         return
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -716,17 +716,17 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
     放宽了拾取与计算，忘了放宽画图）。
     """
     ax.plot(tth, base, linestyle=":", lw=1.0, color="#1baf7a",
-            gid=_AUX_GID_PREFIX + "baseline", label="基线")
+            gid=_AUX_GID_PREFIX + "baseline", label="Baseline")
     if _panel_param(window, dock, "背景显示原始", True):
         ax.plot(tth, intensity, linestyle="--", lw=0.6, color="#999999",
-                gid=_AUX_GID_PREFIX + "raw", label="原始")
+                gid=_AUX_GID_PREFIX + "raw", label="Raw")
     anchors = getattr(window, "bg_anchors", {}).get(str(path), [])
     if anchors and _panel_param(window, dock, "背景扣除模式",
                                 "off") in ("anchor", "auto"):
         xs = [p[0] for p in anchors]
         ys = [p[1] for p in anchors]
         ln = ax.plot(xs, ys, "o", ms=6, mfc="none", mec="#e34948", mew=1.4,
-                     gid=_AUX_GID_PREFIX + "anchor", label="锚点")[0]
+                     gid=_AUX_GID_PREFIX + "anchor", label="Anchors")[0]
         ln.set_zorder(6)
 
 
@@ -797,7 +797,7 @@ def _curve_source(window, path, kw: dict):
             return None, None, (f"面板里那条是按 2θ {float(lo):g}–{float(hi):g}° "
                                 f"算的，按当前设置还没算过{cur}")
         return None, None, "面板里那条是别的设置算的，按当前设置还没算过"
-    return None, None, "还没有 1D 结果（先点 [1D] 出图）"
+    return None, None, "还没有 1D 曲线（先点 [1D] 出图）"
 
 
 def _consume_data_params(window: QMainWindow) -> None:
@@ -870,7 +870,7 @@ def recipe_text(recipe: dict) -> str:
         return "本图还没处理过（本页参数只作用于当前这张图）"
     from_src = recipe.get("anchor_source")
     tail = f"（锚点来处：{from_src}）" if from_src else "（锚点本图手点）"
-    return f"本图配方：{recipe.get('chain') or '—'}{tail}"
+    return f"本图配方：{recipe.get('chain') or '未处理'}{tail}"
 
 
 def note_proc_recipe(window: QMainWindow, path, recipe: dict) -> None:
@@ -1100,7 +1100,7 @@ def _proc_keep_this(window: QMainWindow) -> None:
     dock = window.plot_docks.get(window.focus_panel)
     path = _bg_path_of(dock) if dock is not None else None
     if dock is None or path is None:
-        _log(window, "先点一张 1D 图（编辑对象），再点 [采用这份结果]")
+        _log(window, "先点一张 1D 图（编辑对象），再点 [存成产物]")
         return
     # 处理产物面板：先就地换成它底下的原始 1D 曲线（用户 2026-09-28 第 3 条），
     # 换成功就照常"采用"——存下来的是一份**重做**的产物，不是二次相减
@@ -1110,7 +1110,7 @@ def _proc_keep_this(window: QMainWindow) -> None:
     params0 = _proc_params(window, dock, path)
     if settings["mode"] == "off" and not process.chain_parts(settings):
         _log(window, "「处理」页里三项都关着（背景扣除 / 平滑 / 裁剪）——"
-                     "先开一项，再点 [采用这份结果]（否则存下来的与原始曲线一样）")
+                     "先开一项，再点 [存成产物]（否则存下来的与原始曲线一样）")
         return
     src = getattr(dock, "panel_source", None)
     source = src if src is not None else gui_sources.make_source(path)
@@ -1242,7 +1242,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
         return
     xs = [x for x, _ in settings["anchors"]]
     if settings["mode"] == "anchor" and not xs:
-        _log(window, "先在图上点几个锚点（背景扣除模式 = 手动锚点），"
+        _log(window, "先在图上点几个锚点（背景扣除模式为「手动锚点」），"
                      "再点 [批量处理]")
         return
     # 可处理的是原始数据 + 1D 产物 + 处理产物（后者按它底下的原始曲线重做，
@@ -1252,11 +1252,11 @@ def _proc_batch_apply(window: QMainWindow) -> None:
                if s.kind in (gui_sources.RAW, gui_sources.ONED, gui_sources.BG)]
     redone = [s for s in targets if s.kind == gui_sources.BG]
     if not targets:
-        _log(window, "没有选中的文件")
+        _log(window, "未勾选任何项")
         return
     if redone:
-        _log(window, f"其中 {len(redone)} 条是处理产物：按**它底下的原始 1D "
-                     f"曲线**重做（不是二次相减）")
+        _log(window, f"其中 {len(redone)} 条是处理产物：按它底下的原始 1D "
+                     f"曲线重做（不是二次相减）")
     geom = _collect_geometry(window)
     npt = int(window.params["输出点数"].value())
     kw = dict(config=window.config_name, npt=npt,
@@ -1469,7 +1469,7 @@ def _update_smooth_points(window: QMainWindow, dock) -> None:
         return
     from xrd_toolkit.services.background import _window_to_points
     n = _window_to_points(tth, deg)
-    lbl.setText(f"≈ {2 * n + 1} 点")
+    lbl.setText(f"≈ {2 * n + 1} 个采样点")
 
 
 def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
@@ -1944,7 +1944,8 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
         dock.params_snapshot = _data_snapshot(window)
         # 面板先建、数据后到（后台积分）——中间那段别让人对着一块空白
         show_placeholder(dock, "正在计算…")
-        _log(window, f"打开{name}面板：{source.display}")
+        view_word = f" {name} " if name.isascii() else name   # 中英混排：1D/2D 两侧留空格
+        _log(window, f"打开{view_word}面板：{source.display}")
     dock.setVisible(True)
     dock.raise_()          # 从文件栏点开的图，摆到最前面
     _run_view(window, name, path, key)
@@ -1958,7 +1959,8 @@ def _open_source_group(window: QMainWindow, name: str, sources) -> int:
     事件（同批量开图的老套路，界面不会闷住）；返回真开了几条。
     """
     sources = list(sources)
-    _log(window, f"打开整组{name}图：{len(sources)} 张…")
+    view_word = f" {name} " if name.isascii() else name   # 中英混排：1D/2D 两侧留空格
+    _log(window, f"打开整组{view_word}图：{len(sources)} 张…")
     for i, source in enumerate(sources):
         try:
             _open_source_view(window, name, source)
@@ -1968,7 +1970,7 @@ def _open_source_group(window: QMainWindow, name: str, sources) -> int:
         if i and (i + 1) % 8 == 0:
             _log(window, f"  已开 {i + 1}/{len(sources)}…")
             _settle(window)
-    _log(window, f"打开整组{name}图完成：{len(sources)} 张")
+    _log(window, f"打开整组{view_word}图完成：{len(sources)} 张")
     return len(sources)
 
 
@@ -2001,8 +2003,8 @@ def _open_product_panel(window: QMainWindow, source) -> str:
         if source.kind == gui_sources.BG:
             snap["背景扣除模式"] = "off"     # 已经扣过，别再扣（见上）
         dock.params_snapshot = snap
-        _log(window, f"打开1D面板：{source.display}"
-                     f"（{gui_sources.describe_source(source)}，直接读盘不重算"
+        _log(window, f"打开 1D 面板：{source.display}"
+                     f"（{gui_sources.describe_source(source)}，直接读取，不重算"
                      + ("；面板背景扣除已置「不扣」）"
                         if source.kind == gui_sources.BG else "）"))
     dock.setVisible(True)
@@ -2033,7 +2035,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     """
     checked = gui_sources.checked_sources(window)
     if not checked:
-        _log(window, "没有选中的文件")
+        _log(window, "未勾选任何项")
         return
     # 产物条目（"1D"/"扣背景"）是现成的 1D 曲线，没有"从原始图算"这一步：
     # 只有 1D 视图能出，其余视图点名跳过（不静默少画）
@@ -2055,13 +2057,13 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     pending = _pending_products(window, name, rest)
     if rest:
         why = (f"这批 {len(raw)} 张超过一次最多画的 {MAX_PANELS_PER_BATCH} 张"
-               "（每张 ≈15 MB、越开越慢）")
+               "（每张 ≈ 15 MB、越开越慢）")
         if not targets and name == "1D":
-            _log(window, f"{why}：**全部只算不画**——结果进文件栏"
+            _log(window, f"{why}：全部只算不画——结果进文件栏"
                          "「1D 产物」，双击看一张；想一次全开：右键文件栏"
                          "（或「原始数据」组）→「打开勾选的 N 张 1D 图」")
         else:
-            tail = ("其余 {n} 张后台算完入库、点开即看".format(n=len(rest))
+            tail = ("其余 {n} 张后台算完存入「1D 产物」、点开即看".format(n=len(rest))
                     if name == "1D"
                     else "要看全部：[热图] / [对比] 一张图看完整批")
             _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
@@ -2075,6 +2077,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         _progress_show(window, total_tasks)
     opened = []          # 新开的面板显示名（大批量时合并成一行）
     merged = total_tasks > BATCH_LOG_MERGE_AFTER
+    view_word = f" {name} " if name.isascii() else name   # 中英混排：1D/2D 两侧留空格
     # 产物条目先画：读盘画线（毫秒级）不需要排队等积分，也不进进度条
     for source in products:
         _open_product_panel(window, source)
@@ -2102,12 +2105,12 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             if merged:
                 opened.append(display)      # 大批量：攒着，循环后一行写完
             else:
-                _log(window, f"打开{name}面板：{display}")
+                _log(window, f"打开{view_word}面板：{display}")
         dock.setVisible(True)
         _run_view(window, name, path, key)
     if opened:
         head = "、".join(opened[:5]) + ("…" if len(opened) > 5 else "")
-        _log(window, f"打开{name}面板 {len(opened)} 张：{head}")
+        _log(window, f"打开{view_word}面板 {len(opened)} 张：{head}")
     if len(targets) + len(pending) > 1:
         _progress_show(window, len(targets) + len(pending))   # 进入计算阶段
     for path in pending:

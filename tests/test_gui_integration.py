@@ -447,7 +447,7 @@ class TestViewButtonRuns(unittest.TestCase):
             self.assertTrue(
                 _axes(w, "1D", "data/fake_b.tif").get_title()
                 .startswith("fake_b.tif"))
-            self.assertIn("打开1D面板：fake_b.tif", w.log_text.toPlainText())
+            self.assertIn("打开 1D 面板：fake_b.tif", w.log_text.toPlainText())
             self.assertIn("积分完成：fake_b.tif", w.log_text.toPlainText())
             # x 轴范围跟随参数坞的 2θ 上下限
             self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_xlim(),
@@ -545,7 +545,7 @@ class TestViewButtonRuns(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: all(f"1D|{p}" in w.plot_docks for p in files),
                     60000), "组里三条都该开出来")
-            self.assertIn("打开整组1D图完成：3 张", w.log_text.toPlainText())
+            self.assertIn("打开整组 1D 图完成：3 张", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -558,10 +558,10 @@ class TestViewButtonRuns(unittest.TestCase):
             w.add_files([str(p) for p in files], select=False)
             group = w.file_list.raw_group
             self.assertEqual(group.childCount(), len(files))
-            with mock.patch.object(gui_file_dock.QMessageBox, "question",
-                                   return_value=gui_file_dock.QMessageBox.No):
+            with mock.patch.object(gui_file_dock, "_confirm_open_many",
+                                   return_value=False):
                 gui_file_dock._open_group_views(w, group)
-            self.assertEqual(len(w.plot_docks), 0, "选 No 就不该开图")
+            self.assertEqual(len(w.plot_docks), 0, "选取消就不该开图")
         finally:
             w.close()
 
@@ -591,7 +591,7 @@ class TestViewButtonRuns(unittest.TestCase):
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=fake_ordered):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                self.assertEqual(w.file_label.text(), "已选 2 个文件")
+                self.assertEqual(w.file_label.text(), "已勾选 2 项")
                 _open_view(w, "1D")   # 批量：点一下，两个文件各开一张
                 drawn_b = _wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0)
@@ -961,9 +961,9 @@ class TestFileCheckSelection(unittest.TestCase):
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Unchecked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Unchecked)
             self.assertIsNone(w.file_list.currentItem())   # 没对号就不高亮
-            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
             self.assertIn("已添加 2 个文件", w.log_text.toPlainText())
-            self.assertIn("未选中", w.log_text.toPlainText())
+            self.assertIn("未勾选", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -975,7 +975,7 @@ class TestFileCheckSelection(unittest.TestCase):
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
             self.assertIs(w.file_list.currentItem(), w.file_list.item(1))
-            self.assertEqual(w.file_label.text(), "已选 2 个文件")
+            self.assertEqual(w.file_label.text(), "已勾选 2 项")
         finally:
             w.close()
 
@@ -998,7 +998,7 @@ class TestFileCheckSelection(unittest.TestCase):
             self.assertEqual(item_a.checkState(), Qt.Checked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
             self.assertIs(w.file_list.currentItem(), item_a)
-            self.assertEqual(w.file_label.text(), "已选 2 个文件")
+            self.assertEqual(w.file_label.text(), "已勾选 2 项")
         finally:
             w.close()
 
@@ -1024,7 +1024,7 @@ class TestFileCheckSelection(unittest.TestCase):
             item.setCheckState(Qt.Unchecked)   # Qt 在弹起时自动取消
             w.file_list.itemClicked.emit(item, 0)
             self.assertEqual(item.checkState(), Qt.Unchecked)
-            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
         finally:
             w.close()
 
@@ -1058,8 +1058,8 @@ class TestFileCheckSelection(unittest.TestCase):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 0)
-            self.assertEqual(w.file_label.text(), "未打开文件")
-            self.assertIn("已从列表移除 2 个文件", w.log_text.toPlainText())
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
+            self.assertIn("已从文件栏移除 2 个文件", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1090,15 +1090,15 @@ class TestFileCheckSelection(unittest.TestCase):
                                 for i in range(5)))
             self.assertEqual(btn.text(), "全不选（全部条目）",
                              "全勾上后标签该翻过来")
-            self.assertEqual(w.file_label.text(), "已选 5 个文件")
+            self.assertEqual(w.file_label.text(), "已勾选 5 项")
             self.assertIn("全选：勾上「原始数据」整组 5 个文件",
                           w.log_text.toPlainText())
             btn.click()                     # 同一个按钮：这次是"全不选"
             self.assertTrue(all(w.file_list.item(i).checkState() == Qt.Unchecked
                                 for i in range(5)))
             self.assertEqual(btn.text(), "全选（原始数据）")
-            self.assertEqual(w.file_label.text(), "未打开文件")
-            self.assertIn("全不选：清掉全部 5 个条目的对号",
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
+            self.assertIn("全不选：清掉全部 5 项的对号",
                           w.log_text.toPlainText())
         finally:
             w.close()
@@ -1145,7 +1145,7 @@ class TestFileCheckSelection(unittest.TestCase):
         w = create_window()
         try:
             w.findChild(QPushButton, "select_all_btn").click()
-            self.assertIn("文件列表是空的", w.log_text.toPlainText())
+            self.assertIn("文件栏是空的", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1160,8 +1160,8 @@ class TestFileCheckSelection(unittest.TestCase):
             got = [i + 1 for i in range(9)
                    if w.file_list.item(i).checkState() == Qt.Checked]
             self.assertEqual(got, [3, 4, 5, 6])
-            self.assertEqual(w.file_label.text(), "已选 4 个文件")
-            self.assertIn("按条件选中 4 个文件", w.log_text.toPlainText())
+            self.assertEqual(w.file_label.text(), "已勾选 4 项")
+            self.assertIn("按条件勾选 4 项", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1190,7 +1190,7 @@ class TestFileCheckSelection(unittest.TestCase):
             got = [i + 1 for i in range(9)
                    if w.file_list.item(i).checkState() == Qt.Checked]
             self.assertEqual(got, [1])   # s1.tif（s10 不存在）
-            self.assertIn("名字含“s1”", w.log_text.toPlainText())
+            self.assertIn("名称包含“s1”", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1222,7 +1222,7 @@ class TestFileCheckSelection(unittest.TestCase):
             gui_file_dock.apply_selection(
                 w, {"mode": "range", "start": 1, "stop": 3, "text": "没有这个词",
                     "append": False})
-            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
             self.assertIn("没有命中任何文件", w.log_text.toPlainText())
         finally:
             w.close()
@@ -1255,8 +1255,8 @@ class TestFileCheckSelection(unittest.TestCase):
             self.assertEqual(spec["mode"], "stride")
             self.assertEqual((spec["every"], spec["offset"]), (2, 1))
             self.assertEqual(spec["text"], "s")
-            self.assertIn("将选中 9 个文件（列表共 9 个）", seen["preview0"])
-            self.assertIn("将选中 5 个文件", seen["preview1"])   # 1,3,5,7,9
+            self.assertIn("预览：将勾选 9 项（共 9 项）", seen["preview0"])
+            self.assertIn("预览：将勾选 5 项", seen["preview1"])   # 1,3,5,7,9
         finally:
             w.close()
 
@@ -1289,7 +1289,7 @@ class TestSaveFigures(unittest.TestCase):
         try:
             add_checked(w, ["data/fake_b.tif"])   # 只选中没出图
             w.findChild(QPushButton, "save_btn").click()
-            self.assertIn("没有已输出的图可保存", w.log_text.toPlainText())
+            self.assertIn("没有可保存的图", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -1328,7 +1328,7 @@ class TestSaveFigures(unittest.TestCase):
             w.close()
 
     def test_ok_with_none_checked_is_not_cancel(self):
-        """确定但一张都没勾 → 提示"没有勾选"，不是"取消"（修前混为一谈）。"""
+        """确定但一张都没勾 → 提示"没有勾选"，不是"这次不加"（修前混为一谈）。"""
         w = create_window()
         try:
             _draw_one_1d(w)
@@ -1337,7 +1337,7 @@ class TestSaveFigures(unittest.TestCase):
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
                 self.assertFalse(gui_export._save_figures(w))
                 self.assertFalse(dlg.called)
-                self.assertIn("没有勾选要保存的图",
+                self.assertIn("未勾选任何要保存的图",
                               w.log_text.toPlainText())
         finally:
             w.close()
@@ -1660,7 +1660,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
 
     def test_stack_offsets_curves_like_waterfall(self):
         """堆叠：行距统一 = **第二高**的行峰 ×0.7（不按各条自己的峰值，
-        也不按全场最大），y 刻度 = 样品名，无图例；取消堆叠回到平铺 +
+        也不按全场最大），y 刻度为样品名，无图例；取消堆叠回到平铺 +
         图例回来。
 
         用户 2026-09-26："不要按照各自的最高峰归一化，所有的图"——
@@ -1922,7 +1922,7 @@ class TestDragDrop(unittest.TestCase):
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Unchecked)
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Unchecked)
             self.assertIsNone(w.file_list.currentItem())
-            self.assertEqual(w.file_label.text(), "未打开文件")
+            self.assertEqual(w.file_label.text(), "未打开任何文件")
             self.assertIn("已添加 2 个文件", w.log_text.toPlainText())
         finally:
             w.close()
@@ -2148,15 +2148,15 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             self.assertIsNotNone(group)
             tree.raw_group.setCheckState(0, Qt.Checked)     # 勾 3 条原始
             QApplication.processEvents()
-            self.assertEqual(w.plot_now_btn.text(), "出图（勾选 3 个）")
-            self.assertEqual(w.plot_1d_btn.text(), "出图（勾选 3 个）")
-            self.assertIn("原始 3", w.check_summary_lbl.text())
+            self.assertEqual(w.plot_now_btn.text(), "出图（已勾选 3 项）")
+            self.assertEqual(w.plot_1d_btn.text(), "出图（已勾选 3 项）")
+            self.assertIn("原始数据 3", w.check_summary_lbl.text())
             self.assertNotIn("⚠", w.check_summary_lbl.text(), "此时还没有重复")
             group.setCheckState(0, Qt.Checked)              # 再勾 3 条 1D 产物
             QApplication.processEvents()
-            self.assertEqual(w.plot_now_btn.text(), "出图（勾选 6 个）")
+            self.assertEqual(w.plot_now_btn.text(), "出图（已勾选 6 项）")
             txt = w.check_summary_lbl.text()
-            self.assertIn("原始 3", txt)
+            self.assertIn("原始数据 3", txt)
             self.assertIn("1D 产物 3", txt)
             self.assertIn("画两遍", txt, "同一文件的原始条目与 1D 产物都勾了")
         finally:
@@ -2759,7 +2759,7 @@ class TestOpenFiguresGroup(unittest.TestCase):
             w.focus_panel = None
             gui_file_dock._open_entry_view(w, self._rows(w)[0])
             self.assertEqual(w.focus_panel, "1D|data/fake_b.tif",
-                             "双击 = 提到最前面 + 成为编辑对象")
+                             "双击可提到最前面 + 成为编辑对象")
         finally:
             w.close()
 
@@ -2808,7 +2808,7 @@ class TestProductGroups(unittest.TestCase):
             QApplication.processEvents()
             states = [raw.child(i).checkState(0) for i in range(3)]
             self.assertEqual(states, [Qt.Checked] * 3, "勾组 = 组里全勾")
-            self.assertIn("已选中整组 原始数据", w.log_text.toPlainText())
+            self.assertIn("已勾选整组 原始数据", w.log_text.toPlainText())
             raw.child(0).setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
             self.assertEqual(raw.checkState(0), Qt.Unchecked,
@@ -2855,7 +2855,7 @@ class TestProductGroups(unittest.TestCase):
             self.assertEqual(group.childCount(), 2)
             leaf = group.child(0)
             self.assertIn("1D", leaf.text(0), "组内同名同类：范围由组名交代")
-            self.assertIn("当前设置是", group.toolTip(0),
+            self.assertIn("当前设置：", group.toolTip(0),
                           "悬停提示里写出当前设置，好知道该按什么重算")
             src = gui_sources.source_of(leaf)
             self.assertIn(src.key, keys, "挂着的是那一份产物的键（点开读它）")
@@ -2949,7 +2949,7 @@ class TestProductGroups(unittest.TestCase):
             lines = _axes(w, "1D", "1d#" + key).lines
             self.assertEqual(len(lines), 1)
             self.assertEqual(list(lines[0].get_ydata()), [7.0, 8.0, 9.0])
-            self.assertIn("直接读盘不重算", w.log_text.toPlainText())
+            self.assertIn("直接读取，不重算", w.log_text.toPlainText())
             # 1D 产物 = 那条原始积分曲线（不是"已完成"的东西）：不强制「不扣」，
             # 模式照默认起步，锚点/自动基线和原始文件一样能用
             self.assertNotIn("面板背景扣除已置「不扣」", w.log_text.toPlainText())
@@ -3053,7 +3053,7 @@ class TestProductGroups(unittest.TestCase):
             QApplication.processEvents()
             w.findChild(QPushButton, "delete_btn").click()
             self.assertEqual(w.file_list.count(), 0)
-            self.assertIn("已从列表移除 1 个文件", w.log_text.toPlainText())
+            self.assertIn("已从文件栏移除 1 个文件", w.log_text.toPlainText())
             self.assertIn("硬盘上的文件未改动", w.log_text.toPlainText())
         finally:
             w.close()
@@ -3183,7 +3183,7 @@ class TestProductGroups(unittest.TestCase):
             self.assertTrue(files[0].exists(), "原始文件必须还在")
             self.assertEqual(files[0].stat().st_size, size_before)
             log = w.log_text.toPlainText()
-            self.assertIn("已从列表移除 1 个文件", log)
+            self.assertIn("已从文件栏移除 1 个文件", log)
             self.assertIn("硬盘上的文件未改动", log)
         finally:
             w.close()
@@ -3307,7 +3307,7 @@ class TestProductGroups(unittest.TestCase):
         判"新产物"的地基必须是**上一次重建时看到的盘面**，不是文件栏里
         现在有什么——拿文件栏当地基时，这里会把导入后刚勾好的对号清掉，
         用户看到的是"点 [1D] 没反应"（2026-10-01 真数据探针当场抓到：
-        "没有选中的文件"）。
+        "未勾选任何项"）。
         """
         w = create_window()
         try:
@@ -3519,7 +3519,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
             w.proc_batch_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("按**它底下的原始 1D 曲线**重做", log)
+            self.assertIn("按它底下的原始 1D 曲线重做", log)
             self.assertIn("批量处理完成：1/1", log, "这条不再被跳过")
             self.assertIn("其中 1 条是处理产物", log)
             batches = self._mine(files[0])
@@ -4262,7 +4262,7 @@ class TestDuplicateFiles(unittest.TestCase):
             self.assertEqual(w.file_list.count(), 1)
             self.assertEqual(w.file_list.item(0).text(), "fake_a.tif")
             self.assertEqual(w.file_list.item(0).checkState(), Qt.Checked)
-            self.assertIn("覆盖", w.log_text.toPlainText())
+            self.assertIn("保留原条目", w.log_text.toPlainText())
             # 第二次加入没有新条目 → 不会再有第二条"已添加"
             self.assertEqual(w.log_text.toPlainText().count("已添加"), 1)
         finally:
@@ -4283,7 +4283,7 @@ class TestDuplicateFiles(unittest.TestCase):
             self.assertEqual(w.file_list.item(0).data(Qt.UserRole),
                              w.file_list.item(1).data(Qt.UserRole))
             self.assertEqual(w.file_list.item(1).checkState(), Qt.Checked)
-            self.assertEqual(w.file_label.text(), "已选 2 个文件")
+            self.assertEqual(w.file_label.text(), "已勾选 2 项")
             # 第三次加入 → 编号继续涨，不与 (1) 撞名
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
@@ -5130,7 +5130,8 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertEqual(btn.text(), name, "没选中时写入口名")
                 btn.click()
                 QApplication.processEvents()
-                self.assertEqual(btn.text(), f"退出{name}", "选中时写退出某某")
+                want = f"退出 {name}" if name.isascii() else f"退出{name}"
+                self.assertEqual(btn.text(), want, "选中时写退出某某")
                 self.assertTrue(w.param_dock.isVisibleTo(w))
                 self.assertEqual(w.param_stack.currentIndex(),
                                  w.PARAM_PAGES[name])
@@ -5141,7 +5142,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertFalse(w.param_dock.isVisibleTo(w),
                                  "退出 = 收起参数坞")
                 self.assertIsNone(w._last_entrance)
-                self.assertIn(f"退出{name}", w.log_text.toPlainText())
+                self.assertIn(want, w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -5152,9 +5153,9 @@ class TestParamDockSplitLayout(unittest.TestCase):
         try:
             # 几何三件（像素/波长/距离）的控件已撤（读数走悬停提示），
             # 剩下的输入框单位仍走 suffix
-            self.assertEqual(w.params["剖面角度 (°)"].suffix(), " °")
+            self.assertEqual(w.params["剖面角度 (°)"].suffix(), "°")
             for name in ("2θ 下限 (°)", "2θ 上限 (°)"):
-                self.assertEqual(w.params[name].suffix(), " °")
+                self.assertEqual(w.params[name].suffix(), "°")
             # 对比度/纵轴没有单位，后缀为空
             self.assertEqual(w.params["对比度下限"].suffix(), "")
             self.assertEqual(w.params["纵轴下限"].suffix(), "")
@@ -5212,7 +5213,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 i_lo, i_hi = row.indexOf(lo), row.indexOf(hi)
                 self.assertGreaterEqual(i_lo, 0)
                 self.assertLess(i_lo, i_hi, "下限在左、上限在右")
-                self.assertEqual(row.itemAt(i_lo + 1).widget().text(), "~")
+                self.assertEqual(row.itemAt(i_lo + 1).widget().text(), "–")
                 if alone:
                     self.assertEqual(row.count(), 3)
         finally:
@@ -6673,7 +6674,7 @@ class TestHomeView(unittest.TestCase):
             QApplication.processEvents()
             self.assertEqual(tuple(ax.get_xlim()), tuple(x0),
                              "清栈之后 Home 仍应回到最初的样子")
-            self.assertIn("[Home] 已回到最初的样子", w.log_text.toPlainText())
+            self.assertIn("[复位视图] 已回到最初的样子", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -6697,7 +6698,7 @@ class TestHomeView(unittest.TestCase):
             QApplication.processEvents()
             self.assertEqual(tuple(ax.get_xlim()), x0, "Home 键该复位这张图")
             self.assertEqual(tuple(ax.get_ylim()), y0, "纵轴也一起回")
-            self.assertIn("[Home] 已回到最初的样子", w.log_text.toPlainText())
+            self.assertIn("[复位视图] 已回到最初的样子", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -7482,8 +7483,8 @@ class TestHoverDot(unittest.TestCase):
             # 状态栏坐标 = 面板名 + 2θ + 强度
             text = w.coord_label.text()
             self.assertIn("fake_b.tif", text)
-            self.assertIn("2θ = 0.5°", text)
-            self.assertIn("强度 = 1", text)
+            self.assertIn("2θ 0.5°", text)
+            self.assertIn("强度 1", text)
         finally:
             w.close()
 
@@ -8457,10 +8458,10 @@ class TestGestures(unittest.TestCase):
         try:
             self._open_1d(w)
             self._magnifier(w, "data/fake_b.tif", True)
-            self.assertIn("放大镜已开启：滚轮以光标为中心缩放，左键拖 = 框选放大",
+            self.assertIn("放大镜已开启：滚轮以光标为中心缩放，左键拖可框选放大",
                           w.log_text.toPlainText())
             self._magnifier(w, "data/fake_b.tif", False)
-            self.assertIn("放大镜已关闭：滚轮滚动绘图区，左键拖 = 平移",
+            self.assertIn("放大镜已关闭：滚轮滚动绘图区，左键拖可平移",
                           w.log_text.toPlainText())
         finally:
             w.close()
@@ -9687,7 +9688,7 @@ class TestCalibration(unittest.TestCase):
                 gui_calib_panel._redraw_calib(w)
             self.assertIn("全部落在图像外", self._logs(w))
             # 图上红字在（说清楚为什么不画线），视野还是图像那一框
-            self.assertTrue(any("全部落在图像外" in t.get_text()
+            self.assertTrue(any("rings fall outside the image" in t.get_text()
                                 for t in w.calib_ax.texts))
             self.assertEqual((w.calib_ax.get_xlim(), w.calib_ax.get_ylim()),
                              view_before)
@@ -10123,9 +10124,9 @@ class TestCalibration(unittest.TestCase):
                 self.assertIn("新批次的第一条结果",
                               w.log_text.toPlainText())
                 d = w.calib_vals["delta"]
-                # 基准那一列自己写"基准"（用户 2026-09-27："表述不清"——
+                # 基准那一列自己写"（基准）"（用户 2026-09-27："表述不清"——
                 # 原来那个破折号看着像"这格没数据"）
-                self.assertEqual(d["dist"]["current"].text(), "基准")
+                self.assertEqual(d["dist"]["current"].text(), "（基准）")
                 self.assertEqual(d["dist"]["A"].text(), "+0.00")     # 就是它自己
                 # 再跑自动（环位偏差 0.20 < 手动 0.50）→ 轮换填 B 并采纳
                 w.calib_start_auto.click()
@@ -10297,7 +10298,7 @@ class TestCalibration(unittest.TestCase):
                                  "已选 0 个点 / 0 个环")
                 self.assertFalse(w.calib_start_manual.isEnabled())
                 self.assertFalse(w.calib_save_btn.isEnabled())
-                self.assertEqual(w.calib_save_hint.text(), "尚未有可保存的几何")
+                self.assertEqual(w.calib_save_hint.text(), "还没有可保存的几何")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -10398,7 +10399,7 @@ class TestSaveCalibConfig(unittest.TestCase):
             w.calib_key_edit.setText("lmfp 2")
             w.calib_label_edit.setText("某批次")
             w.calib_save_btn.click()
-            self.assertIn("key 无效", w.log_text.toPlainText())
+            self.assertIn("标识无效", w.log_text.toPlainText())
             # 内置重名
             w.calib_key_edit.setText("lmfp1_lab6")
             w.calib_save_btn.click()
@@ -10427,13 +10428,13 @@ class TestSaveCalibConfig(unittest.TestCase):
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 add_checked(w, ["data/fake_a.tif"])
-                w.calib_btn.click()          # 没勾"像素尺寸已确认"
+                w.calib_btn.click()          # 没勾"已核对像素尺寸"
             w.calib_key_edit.setText("lmfp9_lab6")
             w.calib_label_edit.setText("第 9 批")
             w.calib_save_btn.click()
             self.assertNotIn("lmfp9_lab6", config_mod.USER_CONFIGS)
             self.assertFalse(self._path.exists())
-            self.assertIn("请先确认", w.log_text.toPlainText())
+            self.assertIn("请先核对", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -10494,12 +10495,12 @@ class TestSaveCalibConfig(unittest.TestCase):
                 w.calib_btn.click()
             # 借到条目 → 可以存（借来的那份也是"当前配置"）
             self.assertTrue(w.calib_save_btn.isEnabled())
-            self.assertIn("借用 lmfp1_lab6", w.calib_save_hint.text())
+            self.assertIn("预填自 lmfp1_lab6", w.calib_save_hint.text())
             # 把几何清掉 → 置灰 + 直调拒绝
             gui_calib_model._calib_state(w)["current_geom"] = None
             gui_calib._calib_sync(w)
             self.assertFalse(w.calib_save_btn.isEnabled())
-            self.assertEqual(w.calib_save_hint.text(), "尚未有可保存的几何")
+            self.assertEqual(w.calib_save_hint.text(), "还没有可保存的几何")
             gui_config_ops._save_calib_config(w)   # 按钮置灰点不到：直调处理函数
             self.assertIn("还没有可保存的几何", w.log_text.toPlainText())
         finally:
@@ -10565,7 +10566,7 @@ class TestHangWatchdog(unittest.TestCase):
             files = sorted(folder.glob("hang-*.txt"))
             self.assertTrue(files, "停摆后该写出一个现场文件")
             text = files[0].read_text(encoding="utf-8")
-            self.assertIn("停摆", text)
+            self.assertIn("界面无响应", text)
             self.assertIn("Thread", text, "要带各线程的栈（faulthandler）")
 
     def test_a_busy_ui_thread_writes_nothing(self):
@@ -10577,7 +10578,7 @@ class TestHangWatchdog(unittest.TestCase):
             w = create_window()
             beat = w._hang_state
             # 打拍子交给**后台线程**：主线程在整套测试的负载下偶尔会被调度拖住，
-            # 而"停摆"是相对墙钟的——靠主线程打拍子会偶发误判（这条用例抖过两次）
+            # 而"界面无响应"是相对墙钟的——靠主线程打拍子会偶发误判（这条用例抖过两次）
             stop = threading.Event()
 
             def tick():
@@ -10600,6 +10601,32 @@ class TestHangWatchdog(unittest.TestCase):
                                  "界面活着就不该写现场")
             finally:
                 w.close()
+
+    def test_closing_the_window_stops_the_monitor(self):
+        """窗口关掉 → 监控线程自己退（防残留监控一起刷栈快照）。
+
+        2026-10-02 实测：窗口关了监控还在；全量测试每个用例一个窗口，
+        跑到后面几百个残留监控一起写全线程栈快照，套件被拖到一小时都
+        跑不完。修法：closeEvent 后一拍停表（对话框取消关窗时不停）。
+        """
+        folder = Path(tempfile.mkdtemp(prefix="xrd_hang_close_"))
+
+        def monitors():
+            return sum(1 for t in threading.enumerate()
+                       if t.name == "xrd-hang-watchdog")
+
+        with mock.patch.object(gui_watchdog, "STALL_SECONDS", 0.4), \
+             mock.patch.object(gui_watchdog, "POLL_SECONDS", 0.1), \
+             mock.patch.object(gui_watchdog, "OUT_DIR", folder):
+            w = create_window()
+            QApplication.processEvents()
+            before = monitors()
+            w.close()
+            deadline = time.time() + 3.0
+            while time.time() < deadline and monitors() >= before:
+                QApplication.processEvents()   # 让"停表那一拍"跑起来
+                time.sleep(0.02)
+            self.assertLess(monitors(), before, "关窗后监控线程该退出")
 
 
 class TestManualReindex(unittest.TestCase):
@@ -10788,9 +10815,9 @@ class TestCalibMetrics(unittest.TestCase):
     def test_metrics_note_formats_all_three_states(self):
         note = gui_calib._metrics_note(
             {"metrics": dict(self.METRICS), "metrics_initial": self.INITIAL})
-        self.assertIn("环位偏差中位 0.52 px（初值 3.14）", note)
+        self.assertIn("环位偏差中位 0.52 px（初值 3.14 px）", note)
         self.assertIn("完整环 16/16", note)
-        self.assertIn("a 离散 812 ppm", note)
+        self.assertIn("晶格常数 a 的离散度 812 ppm", note)
         # 无可用环信号：给证据（贴窗边比例）而不是数字
         nan = {"metrics": dict(self.METRICS, dev_px=float("nan"),
                                clip_frac=0.87, n_complete=0)}
@@ -10846,8 +10873,8 @@ class TestCalibMetrics(unittest.TestCase):
                                 for r in w.calib_state["results"]), 8000))
             logs = self._logs(w)
             self.assertIn("自动完成（自动1）", logs)
-            self.assertIn("环位偏差中位 0.52 px（初值 3.14）", logs)
-            self.assertIn("a 离散 812 ppm", logs)
+            self.assertIn("环位偏差中位 0.52 px（初值 3.14 px）", logs)
+            self.assertIn("晶格常数 a 的离散度 812 ppm", logs)
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -10874,7 +10901,7 @@ class TestCalibModel(unittest.TestCase):
               "pinned": {"A": False, "B": False}, "next_slot": "A",
               "current_geom": {"pixel_size_m": 200e-6,
                                "wavelength_m": 0.1223e-10, "dist_m": 1.5958},
-              "current_from": "借用 lmfp1_lab6",
+              "current_from": "预填自 lmfp1_lab6",
               "current_metrics": None, "current_error": None,
               "custom": False, "counters": {}}
         st.update(kw)
@@ -10958,7 +10985,7 @@ class TestCalibModel(unittest.TestCase):
         take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
         self.assertIn("自动2", note)
-        self.assertIn("优于", note)
+        self.assertIn("比 自动1 的 0.52 px 好 0.24 px", note)
 
     def test_marginally_better_is_adopted_and_says_so(self):
         """现在**一律采纳**（用户 2026-09-30："只要是用户操作的……都填入当前，
@@ -11061,7 +11088,7 @@ class TestCalibModel(unittest.TestCase):
 
     def test_slot_label_states(self):
         st = self._state()
-        self.assertEqual(gui_calib_model._slot_label(st, "current"), "借用 lmfp1_lab6")
+        self.assertEqual(gui_calib_model._slot_label(st, "current"), "预填自 lmfp1_lab6")
         self.assertEqual(gui_calib_model._slot_label(st, "A"), "—")
         st["custom"] = True
         self.assertEqual(gui_calib_model._slot_label(st, "current"), "自定义")
@@ -11084,10 +11111,10 @@ class TestCalibCurrent(unittest.TestCase):
             st = w.calib_state
             cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
             self.assertAlmostEqual(st["current_geom"]["dist_m"], cfg["dist_m"])
-            self.assertEqual(st["current_from"], "借用 lmfp1_lab6")
+            self.assertEqual(st["current_from"], "预填自 lmfp1_lab6")
             self.assertEqual([r["name"] for r in st["results"]], ["原始1"])
             self.assertFalse(st["custom"])
-            self.assertIn("借用 lmfp1_lab6", w.calib_current_lbl.text())
+            self.assertIn("预填自 lmfp1_lab6", w.calib_current_lbl.text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -11230,7 +11257,7 @@ class TestCalibCurrent(unittest.TestCase):
                 before = self._ring_lines(w)
                 with mock.patch.dict(config_mod.CONFIGS, {"test_geom": other}):
                     gui_calib._borrow_entry(w, "test_geom")
-                    self.assertIn("借用条目 test_geom", w.log_text.toPlainText())
+                    self.assertIn("预填自条目 test_geom", w.log_text.toPlainText())
                     after = self._ring_lines(w)
                     self.assertFalse(self._rings_equal(before, after),
                                      "借用了新几何而青线与借前逐点相同 = 没有重画")
@@ -11298,10 +11325,10 @@ class TestCalibCurrent(unittest.TestCase):
                 w.calib_btn.click()
                 w.calib_start_auto.click()
                 self.assertNotIn("calib_auto", w._latest_task)   # 没建校准任务
-                self.assertIn("请先确认「当前配置」的像素尺寸",
+                self.assertIn("请先核对「当前配置」的像素尺寸",
                               w.log_text.toPlainText())
                 w.calib_pixel_chk.setChecked(True)
-            self.assertIn("像素尺寸已确认：200.0 µm", w.log_text.toPlainText())
+            self.assertIn("已核对像素尺寸：200.0 µm", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -11504,7 +11531,7 @@ class TestCalibFlow(unittest.TestCase):
             st = w.calib_state
             self.assertEqual(st["slots"]["A"], "原始1")
             self.assertTrue(st["pinned"]["A"])
-            self.assertIn("A 槽 → 原始1（钉住", w.log_text.toPlainText())
+            self.assertIn("对比位 A → 原始1（钉住", w.log_text.toPlainText())
             # 在"当前配置"那一列选原始1 → 采纳（换图上的青线）
             combo_cur = w.calib_slot_combo["current"]
             combo_cur.setCurrentIndex(combo_cur.findData("原始1"))
@@ -11631,7 +11658,7 @@ class TestBatchProgress(unittest.TestCase):
             # 因机器负载翻转而红）。断言的是"两条都计数、且合计是 1/2
             # 与 2/2"，顺序交给调度。
             done = re.findall(r"积分完成：(fake_[ab]\.tif)（3 点，"
-                              r"2θ 0\.500~8\.500°）（(\d)/2）", log)
+                              r"2θ 0\.500–8\.500°）（(\d)/2）", log)
             self.assertEqual({name for name, _ in done},
                              {"fake_a.tif", "fake_b.tif"},
                              f"两个文件都该报完成：{done}")
@@ -11677,9 +11704,9 @@ class TestBatchProgress(unittest.TestCase):
             self.assertEqual(log.count("正在开面板："), 1,
                              "9 块只跨过 8 一次")
             # 9 张 > 合并阈值 → 开面板合并成一行（不再 9 行"打开面板"）
-            self.assertIn("打开1D面板 9 张：fake_n1.tif、fake_n2.tif、"
+            self.assertIn("打开 1D 面板 9 张：fake_n1.tif、fake_n2.tif、"
                           "fake_n3.tif、fake_n4.tif、fake_n5.tif…", log)
-            self.assertNotIn("打开1D面板：fake_n9.tif", log)
+            self.assertNotIn("打开 1D 面板：fake_n9.tif", log)
         finally:
             w.close()
 
@@ -11851,9 +11878,9 @@ class TestBatchProgress(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: not hasattr(w, "_batch")))
             log = w.log_text.toPlainText()
-            self.assertIn("积分失败：fake_a.tif — RuntimeError: 解码失败",
+            self.assertIn("积分失败：fake_a.tif —— RuntimeError: 解码失败",
                           log)
-            self.assertIn("积分完成：fake_b.tif（3 点，2θ 0.500~8.500°）"
+            self.assertIn("积分完成：fake_b.tif（3 点，2θ 0.500–8.500°）"
                           "（2/2）", log)
         finally:
             w.close()
@@ -11985,9 +12012,9 @@ class TestExportData(unittest.TestCase):
                 gui_export._run_export(w)
             dlg.assert_not_called()
             log = w.log_text.toPlainText()
-            self.assertIn("跳过 fake_a.tif：还没有 1D 结果", log)
-            self.assertIn("跳过 fake_b.tif：还没有 1D 结果", log)
-            self.assertIn("没有可导出的 1D 结果", log)
+            self.assertIn("跳过 fake_a.tif：还没有 1D 曲线", log)
+            self.assertIn("跳过 fake_b.tif：还没有 1D 曲线", log)
+            self.assertIn("没有可导出的 1D 曲线", log)
         finally:
             w.close()
 
@@ -12407,10 +12434,10 @@ class TestSavePoni(unittest.TestCase):
         w = create_window()
         try:
             self.assertEqual(w.findChild(QPushButton, "poni_btn").text(),
-                             "加载参数")
+                             "加载几何…")
             self.assertEqual(
                 w.findChild(QPushButton, "save_poni_btn").text(),
-                "保存参数")
+                "保存几何…")
         finally:
             w.close()
 
@@ -12436,7 +12463,7 @@ class TestSavePoni(unittest.TestCase):
             log = w.log_text.toPlainText()
             self.assertIn("已保存几何参数", log)
             self.assertIn("距离", log)
-            self.assertIn("中心 poni1", log)
+            self.assertIn("中心点 poni1", log)
             self.assertIn("倾斜 rot1", log)
         finally:
             w.close()
@@ -12602,7 +12629,7 @@ class TestHeatmap(unittest.TestCase):
             self.assertEqual(c.call_count, calls)   # 复用缓存：零新任务
             log = w.log_text.toPlainText()
             self.assertIn("复用已有 1D 结果，后台积分 0 个", log)
-            self.assertIn("热图完成：2 个样品 × 3 点", log)
+            self.assertIn("热图完成：2 个文件 × 3 点", log)
             # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
             dock = self._heat_dock(w)
             ax = gui_panel_state._content(dock).axes_heat
@@ -12633,7 +12660,7 @@ class TestHeatmap(unittest.TestCase):
             k = re.findall(r"热图：fake_[ab]\.tif 积分完成（3 点）（(\d)/2）",
                            log)
             self.assertEqual(set(k), {"1", "2"})
-            self.assertIn("热图完成：2 个样品 × 3 点", log)
+            self.assertIn("热图完成：2 个文件 × 3 点", log)
             self.assertFalse(hasattr(w, "_batch"),
                              "批走完应清账（之后零散任务不再计数）")
         finally:
@@ -12663,7 +12690,7 @@ class TestHeatmap(unittest.TestCase):
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
-            self.assertIn("热图：fake_a.tif 积分失败 — RuntimeError: 解码失败",
+            self.assertIn("热图：fake_a.tif 积分失败 —— RuntimeError: 解码失败",
                           log)
             self.assertIn("热图：fake_b.tif 积分完成（3 点）", log)
             # 完成/失败回调各跑在独立 QThread，谁先到主线程由调度决定
@@ -12672,7 +12699,7 @@ class TestHeatmap(unittest.TestCase):
             k = re.findall(r"热图：(?:fake_a|fake_b)\.tif 积分(?:完成|失败)"
                            r".*?（(\d)/2）", log)
             self.assertEqual(set(k), {"1", "2"})
-            self.assertIn("热图完成：1 个样品 × 3 点", log)
+            self.assertIn("热图完成：1 个文件 × 3 点", log)
         finally:
             w.close()
 
@@ -12691,8 +12718,8 @@ class TestHeatmap(unittest.TestCase):
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
-            self.assertIn("各文件 2θ 网格不一致，已重插值到"
-                          "第一个文件的网格", log)
+            self.assertIn("各文件 2θ 网格不一致，已统一到"
+                          "第一个文件的 2θ 网格", log)
             dock = self._heat_dock(w)
             self.assertEqual(dock.heat_data[1].shape, (2, 3))
         finally:
@@ -13154,7 +13181,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                                        sorted(a[1] for a in anchors))
             # 计数标签要带**覆盖范围**：锚点之外是推出来的，不让用户
             # 以为整条曲线都点过了
-            self.assertIn("2 点", w.bg_count_lbl.text())
+            self.assertIn("2 个锚点", w.bg_count_lbl.text())
             self.assertIn("覆盖", w.bg_count_lbl.text())
         finally:
             w.close()
@@ -13491,7 +13518,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.bg_blank = {"path": "b.tif", "tth": part,
                           "intensity": np.full(80, 5.0), "geom_sig": None}
             self._set_mode(w, "blank")
-            self.assertIn("空扫只覆盖", w.log_text.toPlainText())
+            self.assertIn("空扫图只覆盖", w.log_text.toPlainText())
             # 覆盖齐全时不提示
             w2 = create_window()
             try:
@@ -13509,7 +13536,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                                "intensity": np.full(len(tth2), 5.0),
                                "geom_sig": None}
                 self._set_mode(w2, "blank")
-                self.assertNotIn("空扫只覆盖", w2.log_text.toPlainText())
+                self.assertNotIn("空扫图只覆盖", w2.log_text.toPlainText())
             finally:
                 w2.close()
         finally:

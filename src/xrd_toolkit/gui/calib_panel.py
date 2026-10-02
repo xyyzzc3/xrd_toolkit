@@ -186,7 +186,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     # 条目时借不出来（current_geom 仍是 None），也不该留一块空图
     _ensure_current(window)
     _draw_calib_image(window, key, image, _calib_draw_geometry(window))
-    _log(window, f"打开校准面板：{path.name}（点击衍射环选点）")
+    _log(window, f"打开校准面板：{path.name}（点衍射环即可选点）")
     _calib_sync(window)
     _refresh_current_metrics(window)
 
@@ -276,17 +276,17 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     if ring_marks:
         for x, y, ring in ring_marks:
             window.calib_marker_artists += _new_marker_artists(ax, x, y, ring)
-    span = ("环半径 %.0f~%.0f px" % (paths["r_min_px"], paths["r_max_px"])
-            if np.isfinite(paths["r_min_px"]) else "环半径：无解")
-    ax.set_xlabel("横向 (px)")
-    ax.set_ylabel("纵向 (px)")
+    span = ("Ring radius %.0f–%.0f px" % (paths["r_min_px"], paths["r_max_px"])
+            if np.isfinite(paths["r_min_px"]) else "Ring radius: no solution")
+    ax.set_xlabel("Horizontal (px)")
+    ax.set_ylabel("Vertical (px)")
     # 标题里写明"青环是谁画的"（用户 2026-09-30："加一个图上的[说明]……让用户
     # 知道结果就是当前用的数据"）：青环 = 当前配置（哪条结果 + 它现在的环位
     # 偏差）——图上看到的东西和"现在用的几何"从此对得上号
     state = _calib_state(window)
     dev = _metrics_dev(state.get("current_metrics"))
-    dev_txt = f" · 环位偏差 {dev:.2f} px" if dev is not None else ""
-    ax.set_title(f"{window.calib_display}  ·  青环 = 当前配置："
+    dev_txt = f" · ring deviation {dev:.2f} px" if dev is not None else ""
+    ax.set_title(f"{window.calib_display}  ·  Cyan rings = current config: "
                  f"{_slot_label(state, 'current')}{dev_txt}  ·  {span}")
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
@@ -350,15 +350,21 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
     日志按几何指纹去重（撤销/清空选点的重画不重复刷屏）。
     """
     h, w = image.shape
+    fit = getattr(window, "calib_fit_rings", False)
     head = (f"当前几何下 {len(paths['rings'])} 条环全部落在图像外"
-            f"（环半径 {paths['r_min_px']:.0f}~{paths['r_max_px']:.0f} px）")
-    if getattr(window, "calib_fit_rings", False):
-        how = "视野已按 [看环全貌] 放大到看得见它们"
-    else:
-        how = "图上不会出现青线（想看环在哪：勾上面的 [看环全貌]）"
+            f"（环半径 {paths['r_min_px']:.0f}–{paths['r_max_px']:.0f} px）")
+    how = ("视野已按 [看环全貌] 放大到看得见它们" if fit
+           else "图上不会出现青线（想看环在哪：勾上面的 [看环全貌]）")
     tail = f"图像 {w}×{h} —— 请核对像素尺寸 / 波长 / 距离"
+    # 图上用英文（图内文字一律英文），日志保留同一句话的中文
+    fig_head = (f"{len(paths['rings'])} rings fall outside the image under the "
+                f"current geometry (ring radius "
+                f"{paths['r_min_px']:.0f}–{paths['r_max_px']:.0f} px)")
+    fig_how = ("view zoomed out to include them ([看环全貌] on)" if fit
+               else "no rings are drawn (turn on [看环全貌] to see them)")
+    fig_tail = f"image {w}×{h} — check pixel size / wavelength / distance"
     # 折行写：默认视野锁在图像那一框（不放大），一行写不下会被右边缘裁掉
-    ax.text(0.02, 0.98, "\n".join([f"⚠ {head}", how, tail]),
+    ax.text(0.02, 0.98, "\n".join([f"⚠ {fig_head}", fig_how, fig_tail]),
             transform=ax.transAxes, color="#ff6666", fontsize=8,
             va="top", ha="left")
     key = tuple(round(float(geometry[k]), 6) for k in sorted(geometry))
@@ -513,7 +519,7 @@ def _ask_ring_index(window: QMainWindow, old: int) -> int:
     val, ok = QInputDialog.getInt(
         window, "改环号",
         f"这个点现在判成环 {old}：改成第几环？\n"
-        f"（LaB₆ 理论环 0~{_LAB6_MAX_RING}；位置不动，拟合按新环号算）",
+        f"（LaB₆ 理论环 0–{_LAB6_MAX_RING}；位置不动，拟合按新环号算）",
         old, 0, _LAB6_MAX_RING, 1)
     return int(val) if ok else -1
 
