@@ -88,9 +88,14 @@ jobs:
       - name: 压包（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
-        run: >
-          Compress-Archive -Path "dist/XRD Toolkit/*"
-          -DestinationPath "${{ matrix.asset }}"
+        run: |
+          # 压**整个文件夹**（不是里面的散文件）：用户解压后得到一个干净的
+          # "XRD Toolkit" 文件夹，里面才是 exe 与 _internal\——和 RELEASE_NOTES
+          # 里"进入 XRD Toolkit 文件夹、双击 XRD Toolkit.exe"的步骤一字对应
+          # （2026-10-03：Mac 版同名文件夹+app 并列已经骗过用户一次，同类
+          # 混淆不能出现在包里）
+          Compress-Archive -Path "dist\XRD Toolkit" `
+                           -DestinationPath "${{ matrix.asset }}"
       - name: 单独传一份构建产物（调试用，每次都有）
         uses: actions/upload-artifact@v4
         with:
