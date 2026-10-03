@@ -105,9 +105,9 @@ jobs:
           Copy-Item "docs\使用说明.html" "dist\XRD Toolkit\"
           Compress-Archive -Path "dist\XRD Toolkit" `
                            -DestinationPath "${{ matrix.asset }}"
-      - name: 单独传一份构建产物（仅手动触发时——打 tag 时正式附件里
-              已经有同样三个 zip，重复上传既费时又占 runner 磁盘）
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: 上传构建产物（**Release 的附件就是从这里来的**，
+              rc8 曾把它在 tag 运行时关掉，结果发出去一个 0 附件的空版本——
+              留着调试副本的"冗余"是必要成本，别再砍）
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -131,6 +131,8 @@ jobs:
           files: assets/*
           # 试用版说明（中文，给试用同事看的：怎么装、怎么用、出问题怎么办）
           body_path: docs/RELEASE_NOTES.md
+          # 附件一个都没匹配上就报错（rc8 空版本的教训：静默比报错贵得多）
+          fail_on_unmatched_files: true
           # v0.1.0-rc1 这类**预发布**不抢 latest：README 的下载直链用
           # releases/latest，而 latest 会跳过预发布版——所以先推 -rc 验证
           # 流水线（不污染正式下载链接），再推 v0.1.0 正式版（自动成为
