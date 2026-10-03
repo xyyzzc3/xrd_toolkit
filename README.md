@@ -2,11 +2,12 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
 A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard, and integrates the 2D pattern into standard 1D powder spectra — as four CLI scripts and as a PySide6 desktop app over the same engine.
 
-中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Long version (calibration metrics, background subtraction, batching, engineering notes): [docs/NOTES.md](docs/NOTES.md)
+中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Quick start for trial users: [docs/使用说明.html](docs/使用说明.html) (in-app: Help → 使用说明, F1) · Long version: [docs/NOTES.md](docs/NOTES.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Citation: [CITATION.cff](CITATION.cff)
 
 ## Download & run (no Python needed)
 
@@ -133,6 +134,15 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 ├── environment.yml                # conda environment (one-command setup)
 └── pyproject.toml                 # package metadata & dependencies
 ```
+
+## Data, privacy & compliance
+
+All computation happens **on your machine**: the app never connects to the
+network, uploads nothing, and has no telemetry. It is a scientific tool —
+verify critical numbers before publication. Licensed MIT; the full license
+texts of the bundled third-party components (Qt/PySide6, pyFAI, NumPy,
+SciPy, Matplotlib, …) ship as `THIRD_PARTY_NOTICES.txt` inside the app
+(Help → About) and in [`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt).
 
 ## Author
 
