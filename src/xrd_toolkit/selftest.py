@@ -124,7 +124,16 @@ def run() -> int:
         / "qtbase_zh_CN.qm"
     _report(tr.exists(), "Qt 中文翻译文件", str(tr))
 
-    # ⑥ 随包文档与合规文件（帮助 → 使用说明 / 关于 → 第三方许可 靠它们；
+    # ⑥ 中文字体链（2026-10-04 试用反馈：Windows 上图内中文是方框——
+    #    字体列表原来只列了 Mac 字体。这里把 gui 的字体选择当成随包行为
+    #    一起验：三平台 CI 每次构建都会跑它）
+    import matplotlib
+    from xrd_toolkit.gui import app as gui_app        # noqa: F401（设 rcParams）
+    fams = matplotlib.rcParams["font.family"]
+    want = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei"
+    _report(want in fams, "中文字体链（图内文字）", f"{want} ∈ {list(fams)}")
+
+    # ⑦ 随包文档与合规文件（帮助 → 使用说明 / 关于 → 第三方许可 靠它们；
     #    丢了不崩、但客户就没有说明书和许可声明了——最会静默丢失的一类）
     manual = paths.shipped_file("使用说明.html", "docs/使用说明.html")
     notices = paths.shipped_file("THIRD_PARTY_NOTICES.txt",
