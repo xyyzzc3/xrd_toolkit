@@ -105,7 +105,9 @@ jobs:
           Copy-Item "docs\使用说明.html" "dist\XRD Toolkit\"
           Compress-Archive -Path "dist\XRD Toolkit" `
                            -DestinationPath "${{ matrix.asset }}"
-      - name: 单独传一份构建产物（调试用，每次都有）
+      - name: 单独传一份构建产物（仅手动触发时——打 tag 时正式附件里
+              已经有同样三个 zip，重复上传既费时又占 runner 磁盘）
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
