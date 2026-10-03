@@ -1,0 +1,27 @@
+# Changelog
+
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
+版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
+
+## [0.1.0] — 2026-10
+
+首个可下载的试用版（Windows / macOS，自带计算环境，免安装 Python）。
+
+**能用什么**
+
+- 二维衍射图（`.tif`/`.edf`/`.cbf`）→ 标准 1D 两列谱；LaB₆ 几何校准
+  （带环位偏差/完整环数等"残差量不到"的指标）；自动 2θ 区间
+- 背景扣除（空扫 / 自动基线 / 手动锚点，实时预览）、平滑、区间裁剪
+- 批量：整批积分 → 产物分组 → 对比图 / 热图；导 txt / chi / 全部数据总表
+- 导出：批量文件夹带内容标签（原始/1D产物/处理产物/混合）；同名文件
+  不覆盖（顺延 `_2`）；CSV 说明块在顶部、表头紧贴数据
+
+**分发与合规**
+
+- 三平台由 GitHub Actions 构建（Intel Mac / Apple Silicon / Windows）
+- 随包：`THIRD_PARTY_NOTICES.txt`（第三方许可全文）、
+  《使用说明.html》；程序内「帮助 → 使用说明 / 关于」
+- 未做系统签名：首次打开需按说明放行一次（Windows"仍要运行"、
+  macOS"右键 → 打开"）
+
+[0.1.0]: https://github.com/xyyzzc3/xrd_toolkit/releases

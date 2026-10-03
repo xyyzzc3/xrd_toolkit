@@ -20,7 +20,7 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 
 Unzip → double-click. The builds are unsigned, so the system blocks the first
 launch once: Windows *More info → Run anyway*; macOS *right-click → Open*.
-Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) — the zip also carries a Chinese quick-start (`使用说明.html`, also under Help → 使用说明, F1) and third-party license notices (`THIRD_PARTY_NOTICES.txt`, also under Help → 关于).
 Requires macOS 13+ / Windows 10+; ~110 MB download.
 
 ## Three steps

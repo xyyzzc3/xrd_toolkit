@@ -58,8 +58,10 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 # 列表不触发回退（Agg 可以），中文仍会变方框
 matplotlib.rcParams["font.family"] = [
     "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
-from PySide6.QtCore import QEvent, QLibraryInfo, QObject, Qt, QSize, QTranslator
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import (QEvent, QLibraryInfo, QObject, Qt, QSize,
+                            QTranslator, QUrl)
+from PySide6.QtGui import (QAction, QDesktopServices, QKeySequence,
+                            QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
@@ -69,7 +71,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget,
     QDockWidget, QApplication)
 
-from xrd_toolkit import config
+from xrd_toolkit import config, paths
 from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
 # ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
@@ -1720,6 +1722,80 @@ def _build_status(window: QMainWindow) -> None:
     window.statusBar().addPermanentWidget(window.file_label)
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
+def _open_with_system(window: QMainWindow, path, what: str,
+                      hint: str = "") -> None:
+    """用系统默认程序打开一个随包文件（使用说明进浏览器、许可进文本编辑器）。
+
+    path 为 None（随包文件缺失，理论上只会在手改过的包里发生）时记一行
+    日志并给出去哪找——不弹错误框吓人。
+    """
+    if path is None:
+        _log(window, f"{what}读不到（随包文件缺失）{hint}")
+        return
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def _open_manual(window: QMainWindow) -> None:
+    """[帮助 → 使用说明]：打开随包的《使用说明》HTML（系统浏览器）。"""
+    _open_with_system(
+        window, paths.shipped_file("使用说明.html", "docs/使用说明.html"),
+        "使用说明", "；项目主页 docs/ 下有一份")
+
+
+def _open_notices(window: QMainWindow) -> None:
+    """打开第三方许可声明（随包分发的那一份）。"""
+    _open_with_system(
+        window,
+        paths.shipped_file("THIRD_PARTY_NOTICES.txt",
+                           "packaging/THIRD_PARTY_NOTICES.txt"),
+        "第三方许可声明")
+
+
+def _show_about(window: QMainWindow) -> None:
+    """「关于 XRD Toolkit」：名称 / 版本 / 作者 / 许可 + 两个打开入口。
+
+    2026-10-03 加（用户："按照行业规范、市场规范来做"）：桌面软件都有
+    这个入口——版本号、许可、说明书从这找。macOS 上经 MenuRole 归入
+    应用菜单（顺带补齐 Cmd+Q 等原生项），Windows 上在 [帮助] 里。
+    """
+    from xrd_toolkit import __version__
+    box = QMessageBox(window)
+    box.setWindowTitle("关于 XRD Toolkit")
+    box.setText(f"<b>XRD Toolkit</b> {__version__}")
+    box.setInformativeText(
+        "二维 XRD 衍射数据处理：LaB₆ 几何校准、方位角积分、"
+        "背景扣除、批量对比与热图。\n\n"
+        "© 2026 Chenze Bian · MIT 许可\n"
+        "随附的第三方组件（Qt/PySide6、pyFAI、NumPy、SciPy、"
+        "Matplotlib 等）各按其许可分发")
+    manual_btn = box.addButton("使用说明", QMessageBox.ActionRole)
+    lic_btn = box.addButton("第三方许可", QMessageBox.ActionRole)
+    box.addButton(QMessageBox.Close)
+    box.exec()
+    if box.clickedButton() is manual_btn:
+        _open_manual(window)
+    elif box.clickedButton() is lic_btn:
+        _open_notices(window)
+
+
+def _build_menu(window: QMainWindow) -> None:
+    """菜单栏：帮助 → 使用说明 / 关于（2026-10-03，按桌面软件惯例）。
+
+    0.1 打包分发之后，"这是什么、哪一版、谁做的、许可怎么算、说明书在哪"
+    必须有地方可看；F1 开说明书是 Windows 侧的通用习惯（QKeySequence.
+    HelpContents），macOS 上系统还会给帮助菜单配搜索框。
+    """
+    help_menu = window.menuBar().addMenu("帮助")
+    act_manual = help_menu.addAction("使用说明")
+    act_manual.setShortcut(QKeySequence.HelpContents)      # F1
+    act_manual.triggered.connect(lambda: _open_manual(window))
+    act_about = help_menu.addAction("关于 XRD Toolkit")
+    # macOS：这句让系统把它挪进应用菜单的「关于」位（原生惯例）
+    act_about.setMenuRole(QAction.AboutRole)
+    act_about.triggered.connect(lambda: _show_about(window))
+    window.menu_actions = {"manual": act_manual, "about": act_about}
+
+
 def _build_toolbar(window: QMainWindow) -> None:
     """工具栏 = 五个入口 + 面板开关（文件/参数/日志）。
 
@@ -2233,6 +2309,7 @@ def create_window() -> QMainWindow:
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     _build_status(window)
+    _build_menu(window)
     _build_toolbar(window)
 
     # 点选文件 → 只登记当前文件（此时各坞已就绪，可安全接信号）

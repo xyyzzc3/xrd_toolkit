@@ -16,7 +16,7 @@ English: [README.md](../README.md) · 详细说明（校准指标、扣背景、
 
 解压 → 双击。应用没做系统签名，第一次打开会被系统拦一下（Windows：更多信息
 → 仍要运行；Mac：右键 → 打开），详细步骤见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
-macOS 13 起 / Windows 10 起，下载约 110 MB。
+macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.html》（程序内 帮助 → 使用说明，快捷键 F1）和第三方许可声明 `THIRD_PARTY_NOTICES.txt`（程序内 帮助 → 关于）。
 
 ## 三步上手
 

@@ -57,6 +57,8 @@ jobs:
           tests.test_data_export
           tests.test_frozen_paths
           tests.test_selftest
+          tests.test_packaging_assets
+          tests.test_help_menu
           tests.test_ui_copy_style
       - name: PyInstaller 打包
         run: pyinstaller packaging/xrd_toolkit.spec --noconfirm
@@ -82,9 +84,14 @@ jobs:
           }
       - name: 压包（macOS 用 ditto：保留 .app 的权限与符号链接）
         if: runner.os == 'macOS'
-        run: >
-          ditto -c -k --sequesterRsrc --keepParent
-          "dist/XRD Toolkit.app" "${{ matrix.asset }}"
+        run: |
+          # 说明书与 app 并排放进 zip（同事转发的就是 zip，文档得跟着走）
+          mkdir -p "dist/发布"
+          ditto "dist/XRD Toolkit.app" "dist/发布/XRD Toolkit.app"
+          cp "docs/使用说明.html" "dist/发布/"
+          mv "dist/发布" "dist/XRD-Toolkit"
+          ditto -c -k --sequesterRsrc --keepParent \
+                "dist/XRD-Toolkit" "${{ matrix.asset }}"
       - name: 压包（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
@@ -94,6 +101,8 @@ jobs:
           # 里"进入 XRD Toolkit 文件夹、双击 XRD Toolkit.exe"的步骤一字对应
           # （2026-10-03：Mac 版同名文件夹+app 并列已经骗过用户一次，同类
           # 混淆不能出现在包里）
+          # 说明书放进程序文件夹（解压后就在 exe 旁边）
+          Copy-Item "docs\使用说明.html" "dist\XRD Toolkit\"
           Compress-Archive -Path "dist\XRD Toolkit" `
                            -DestinationPath "${{ matrix.asset }}"
       - name: 单独传一份构建产物（调试用，每次都有）

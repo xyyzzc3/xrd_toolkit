@@ -54,5 +54,25 @@ def default_outputs_dir(frozen: bool = None, platform: str = None,
     return home / APP_DIR_NAME
 
 
+def shipped_file(name: str, dev_relative: str):
+    """随包数据文件的定位：打包后看包目录，开发时看仓库里的位置。
+
+    PyInstaller 把 datas 放进包目录（macOS 的 .app 里就是
+    Contents/Resources/xrd_toolkit/），开发时文件还在仓库里各就各位
+    （docs/使用说明.html、packaging/THIRD_PARTY_NOTICES.txt）。
+    两种模式都**先看包目录**——打包后绝不会误读开发机的路径；
+    都找不到返回 None（调用方记一行日志，不崩）。
+
+    为什么不用 sys._MEIPASS：macOS 的 .app 里 datas 落在 Resources/、
+    而 _MEIPASS 指向 Frameworks/，拼出来的路径是错的（PyInstaller 的
+    已知坑）；按包目录找在三种平台上都成立。
+    """
+    packaged = Path(__file__).resolve().parent / name
+    if packaged.is_file():
+        return packaged
+    dev = ROOT / dev_relative
+    return dev if dev.is_file() else None
+
+
 # 数据导出、图片保存、看门狗现场、.poni 默认都落这里
 OUTPUTS_DIR = Path(os.environ.get("XRD_OUTPUTS", default_outputs_dir()))

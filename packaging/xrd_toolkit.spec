@@ -55,6 +55,10 @@ datas += collect_data_files(
               "mpl-data/fonts/ttf/DejaVuSans*.ttf"])
 # ③ Qt 标准按钮的中文翻译
 datas += collect_data_files("PySide6", includes=["translations/qtbase_zh_CN.qm"])
+# ④ 随包的文档与合规文件（「帮助 → 使用说明」「关于 → 第三方许可」
+#    直接打开它们；放**包目录**下，paths.shipped_file 按此查找）
+datas += [(str(ROOT / "docs" / "使用说明.html"), "xrd_toolkit"),
+          (str(HERE / "THIRD_PARTY_NOTICES.txt"), "xrd_toolkit")]
 
 hiddenimports = []
 hiddenimports += collect_submodules("fabio")        # 动态注册的格式表

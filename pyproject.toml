@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xrd-toolkit"
-version = "0.1.0"
+# 版本号唯一出处 = src/xrd_toolkit/__init__.py 的 __version__（2026-10-03
+# 改成动态读：以前这里和「关于」对话框会各写一份，迟早对不上）
+dynamic = ["version"]
 description = "Modular Python toolkit for 2D X-ray diffraction analysis: ring-center localization, LaB6 geometric calibration, azimuthal integration, sector analysis"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,3 +16,6 @@ dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai", "PySide6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xrd_toolkit.__version__"}

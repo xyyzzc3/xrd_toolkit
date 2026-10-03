@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in academic work, please cite it as below. / 学术工作中使用本软件，请按下列信息引用。"
+title: "XRD Toolkit: 2D X-ray diffraction analysis — LaB6 geometric calibration, azimuthal integration, background subtraction, batch comparison"
+type: software
+authors:
+  - family-names: Bian
+    given-names: Chenze
+    affiliation: "City University of Hong Kong"
+version: 0.1.0
+date-released: 2026-10-03
+license: MIT
+repository-code: "https://github.com/xyyzzc3/xrd_toolkit"
+keywords:
+  - X-ray diffraction
+  - XRD
+  - pyFAI
+  - azimuthal integration
+  - LaB6 calibration
+  - background subtraction
