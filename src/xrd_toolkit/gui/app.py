@@ -56,11 +56,15 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 # macOS 中文字体，缺字形时逐字体回退，标题不会渲染成方框。
 # 注意要设 font.family 直接给列表：实测 qtagg 后端下 font.sans-serif
 # 列表不触发回退（Agg 可以），中文仍会变方框
-matplotlib.rcParams["font.family"] = [
-    "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS",
-    # Windows：前四个都装不上/没中文字形 → 中文会画成方框。
-    # matplotlib ≥3.6 按这个列表逐字回退，写上系统自带的中文字体即可
-    "Microsoft YaHei", "SimHei"]
+# 中文字体**按平台给**（2026-10-04 试用反馈：Windows 上图内中文是方框
+# ——原列表全是 Mac 字体 + DejaVu（无中文字形））。matplotlib ≥3.6 按
+# 这个列表逐字回退，所以只写"该系统一定有"的那几个；跨平台混着写会在
+# 另一个平台上白报 "Font family not found"。
+if sys.platform == "darwin":
+    _cjk_fonts = ["PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
+else:                                  # Windows（Linux 桌面同理可加 Noto）
+    _cjk_fonts = ["Microsoft YaHei", "SimHei"]
+matplotlib.rcParams["font.family"] = ["DejaVu Sans"] + _cjk_fonts
 from PySide6.QtCore import (QEvent, QLibraryInfo, QObject, Qt, QSize,
                             QTranslator, QUrl)
 from PySide6.QtGui import (QAction, QDesktopServices, QIcon, QKeySequence,
@@ -1755,13 +1759,19 @@ def _set_app_icon(window: QMainWindow) -> None:
     Windows 的任务栏/窗口用的是**运行时窗口的图标**：打包时设的 exe
     图标只在资源管理器里显示，运行起来仍是 Qt 的默认图标。这里显式设上
     （macOS 不受影响——它用 .app 里的 icns）。
+
+    **每个进程只设一次**（图标是 application 级属性）：第一版每建一个
+    窗口都调，而 setWindowIcon 会同步派发事件（走事件过滤器做枚举转换）
+    ——全套件几百个窗口，把测试套件从 29 分钟拖过看门狗线、连着误杀
+    两轮（2026-10-04 的转储拍到主线程就停在这条调用里）。
     """
+    app = QApplication.instance()
+    if app is None or not app.windowIcon().isNull():
+        return                     # 进程级属性：设过一次就不再设
     icon_path = paths.shipped_file("icon.png", "packaging/icon.png")
     if icon_path is None:
         return
-    app = QApplication.instance()
-    if app is not None:
-        app.setWindowIcon(QIcon(str(icon_path)))
+    app.setWindowIcon(QIcon(str(icon_path)))
 
 
 def _resync_docks(window: QMainWindow) -> None:

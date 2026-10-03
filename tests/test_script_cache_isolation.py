@@ -8,15 +8,29 @@
 """
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
-# 判定口径：脚本里出现 create_window（= 会开真界面、会算真数据）
-# 就要隔离。check_env.py 只 import 模块不建窗口，不在管辖内。
-OPEN_GUI_MARK = "create_window"
+def _imports_create_window(src: str) -> bool:
+    """脚本**真的 import 了** create_window 吗（AST 判定，不看注释）。
+
+    2026-10-04 实测：文本匹配会被散文误伤——run_tests.py 的一句注释里
+    提到这个词，就被判成"开真界面的脚本"。开真界面的判定必须是代码事实：
+    check_env.py 只是 import 模块、不建窗口，所以不在管辖内。
+    """
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(
+                a.name == "create_window" for a in node.names):
+            return True
+        if isinstance(node, ast.Import) and any(
+                a.name.split(".")[-1] == "create_window" for a in node.names):
+            return True
+    return False
 ANCHOR = "from xrd_toolkit"          # 第一次导入包的位置（注释里不会出现这串）
 NEEDED = ("XRD_STAGE_CACHE", "XRD_RECIPES")
 
@@ -26,7 +40,7 @@ class TestScriptsDoNotPolluteOutputs(unittest.TestCase):
         bad = []
         for path in sorted(SCRIPTS.glob("*.py")):
             text = path.read_text(encoding="utf-8")
-            if OPEN_GUI_MARK not in text:
+            if not _imports_create_window(text):
                 continue
             mark = text.find(ANCHOR)
             head = text[:mark] if mark >= 0 else ""

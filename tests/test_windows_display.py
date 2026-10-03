@@ -35,10 +35,13 @@ def setUpModule():
 
 
 class TestFontsCarryWindowsCJK(unittest.TestCase):
-    def test_matplotlib_family_lists_a_windows_cjk_font(self):
+    def test_matplotlib_family_lists_a_cjk_font_for_this_platform(self):
+        """字体链必须含**本平台**的中文字体（Windows 缺了就是方框）。"""
+        import sys
         fams = matplotlib.rcParams["font.family"]
-        self.assertIn("Microsoft YaHei", fams,
-                      "字体链缺 Windows 中文字体 → 图内中文会是方框")
+        want = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei"
+        self.assertIn(want, fams,
+                      f"字体链缺 {want} → 该平台图内中文会是方框")
 
     def test_status_bar_coordinate_label_falls_back_to_cjk(self):
         app = QApplication.instance() or QApplication([])

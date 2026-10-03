@@ -30,11 +30,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="带看门狗的全量测试")
-    # 默认 1800 秒（2026-09-28 从 1200 调上来）：全量已经要 1165 秒，20 分钟
-    # 只剩 35 秒余量——正常跑完就贴着上限，再添几条用例就会被误报成"卡住"。
-    # 看门狗宽了不会漏掉真死锁：真死锁的特征是 0% CPU，`ps -o %cpu` 一眼可辨
-    # （脚本自己也会打印全线程栈）。
-    ap.add_argument("-t", "--timeout", type=float, default=1800.0,
+    # 默认 2700 秒（2026-10-04 从 1800 再调上来）：套件已经涨到 734 条、
+    # 实测 1739 秒——30 分钟只剩 60 秒余量，当天连着两次"跑完 795 个点
+    # 但超时被杀"，两回转储都拍在 create_window 的正常构件路径上（不同
+    # 位置），是**误报**不是死锁。看门狗宽了不会漏掉真死锁：真死锁永远
+    # 跑不完、特征是 0% CPU（`ps -o %cpu` 一眼可辨，脚本也打印全线程栈）。
+    ap.add_argument("-t", "--timeout", type=float, default=2700.0,
                     help="看门狗秒数（默认 1800）")
     ap.add_argument("-p", "--pattern", default="test*.py",
                     help="文件名通配（默认 test*.py）")
