@@ -9,7 +9,8 @@ _checked_1d_results：勾选文件的 1D 曲线（没算过的会提示先出图
 
 目录结构与文件格式（2026-10-02 用户定，规范见 docs/UI_COPY.zh-CN.md
 「导出文件规范」）：单个数据集 = 光一个 txt；两个及以上 = 一个
-`导出_时间戳/` 文件夹（里面 全部数据.csv + txt/ 子目录）。写文件的
+`导出_时间戳_{内容标签}/` 文件夹（里面 全部数据.csv + txt/ 子目录；
+标签 = 原始/1D产物/处理产物/混合）。写文件的
 格式与写法全部在 services/export（唯一出处，CLI 共用）；本模块只管
 交互（弹窗、勾选、网格不一致的三选）与目录布局。
 """
@@ -436,10 +437,13 @@ def _run_export(window: QMainWindow, sources=None) -> None:
 
     目录结构（用户 2026-10-02 定，规范见 docs/UI_COPY.zh-CN.md）：
     单个数据集 = 光一个 txt（不包文件夹）；两个及以上 = 一个
-    `导出_时间戳/` 文件夹（里面 全部数据.csv + txt/ 子目录）。文件格式
-    与 CLI 同源（services/export 唯一出处）；右键"导出这一条/这一组"
-    走 sources 那条路，同一套布局。单个文件写盘失败只记日志、不中断
-    批处理；没算过 1D 的文件跳过并提示先点 [1D] 出图。
+    `导出_时间戳_{内容标签}/` 文件夹（里面 全部数据.csv + txt/ 子目录；
+    标签 = 原始/1D产物/处理产物/混合，2026-10-03 加）。**任何一份已存在
+    的曲线文件都不覆盖**——同名就顺延 _2 并把新名字记进日志（同一条
+    曲线两套参数各导一次，两份都要在）。文件格式与 CLI 同源
+    （services/export 唯一出处）；右键"导出这一条/这一组"走 sources
+    那条路，同一套布局。单个文件写盘失败只记日志、不中断批处理；
+    没算过 1D 的文件跳过并提示先点 [1D] 出图。
     """
     # 先数一遍（确定"扣不扣背景"要等弹窗，但弹窗标题要个数量）——这一遍
     # 静默：否则"跳过 X：还没有 1D 结果"会在下面第二遍里再打一次
@@ -467,13 +471,19 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         txt_dir = target_dir = outdir
         landing = outdir / f"{results[0][0]}{suffix}"
     else:
-        target_dir = data_export.batch_dir(outdir)
+        # 文件夹名带内容标签（原始 / 1D产物 / 处理产物 / 混合）：从外面
+        # 一眼看出这袋子里装的是什么（用户 2026-10-03）
+        target_dir = data_export.batch_dir(
+            outdir, tag=data_export.category_tag(results))
         txt_dir = target_dir / data_export.TXT_DIR_NAME
         landing = target_dir
     _log(window, f"开始导出：{len(results)} 个文件 → {landing}")
     ok = dropped = 0
     for stem, tth, intensity, chain, category, config in results:
-        target = txt_dir / f"{stem}{suffix}"
+        target = data_export.unique_path(txt_dir / f"{stem}{suffix}")
+        if target.name != f"{stem}{suffix}":
+            # 不覆盖已有文件：同一条曲线用两套参数各导一次时，两份都要留下
+            _log(window, f"{stem}{suffix} 已存在，这一份存为 {target.name}")
         if not np.isfinite(np.asarray(intensity, dtype=float)).all():
             dropped += 1
         try:

@@ -102,6 +102,66 @@ class TestBatchDir(unittest.TestCase):
                          "同秒第二次导出不覆盖上一批")
         self.assertTrue(first.is_dir() and second.is_dir())
 
+    def test_content_tag_in_folder_name(self):
+        """文件夹名带内容标签（2026-10-03）：从外面一眼看出装的是什么。"""
+        out = _tmpdir()
+        d = data_export.batch_dir(out, now=NOW, tag="处理产物")
+        self.assertEqual(d.name, "导出_2026-10-02_225503_处理产物")
+        self.assertTrue(d.is_dir())
+
+
+class TestCategoryTag(unittest.TestCase):
+    """内容标签按曲线**实际**类别判定（不猜、不美化）。"""
+
+    def _row(self, category):
+        return ("a", np.array([1.0]), np.array([1.0]), "none", category, None)
+
+    def test_all_raw(self):
+        self.assertEqual(
+            data_export.category_tag([self._row(data_export.CATEGORY_RAW)]),
+            "原始")
+
+    def test_all_processed_and_all_oned(self):
+        self.assertEqual(
+            data_export.category_tag(
+                [self._row(data_export.CATEGORY_PROCESSED)]), "处理产物")
+        self.assertEqual(
+            data_export.category_tag([self._row(data_export.CATEGORY_ONED)]),
+            "1D产物")
+
+    def test_mixed(self):
+        self.assertEqual(
+            data_export.category_tag([self._row(data_export.CATEGORY_RAW),
+                                      self._row(data_export.CATEGORY_PROCESSED)]),
+            "混合")
+
+    def test_old_shapes_normalize(self):
+        """3 元组（老调用方）→ 没做处理 → 原始。"""
+        self.assertEqual(
+            data_export.category_tag([("a", np.array([1.0]),
+                                      np.array([1.0]))]), "原始")
+
+
+class TestUniquePath(unittest.TestCase):
+    """不覆盖已有曲线（2026-10-03）：同名顺延 _2、_3…"""
+
+    def test_free_name_untouched(self):
+        target = _tmpdir() / "x.txt"
+        self.assertEqual(data_export.unique_path(target), target)
+
+    def test_existing_gets_suffix_then_next(self):
+        d = _tmpdir()
+        first = d / "x.txt"
+        first.write_text("第一份", encoding="utf-8")
+        second = data_export.unique_path(first)
+        self.assertEqual(second.name, "x_2.txt")
+        second.write_text("第二份", encoding="utf-8")
+        third = data_export.unique_path(first)
+        self.assertEqual(third.name, "x_3.txt")
+        # 两份都在，谁也没被盖掉
+        self.assertEqual(first.read_text(encoding="utf-8"), "第一份")
+        self.assertEqual(second.read_text(encoding="utf-8"), "第二份")
+
 
 class TestWriteCsv(unittest.TestCase):
     def _results(self):
@@ -111,41 +171,68 @@ class TestWriteCsv(unittest.TestCase):
                  "lmfp1_lab6"),
                 ("b", tth, np.array([1.0, 2.0, 3.0, 4.0]), "", "", None)]
 
-    def test_bom_first_line_and_details(self):
+    def test_meta_on_top_header_next_to_data(self):
+        """说明块在最上面；表头行**紧跟其后**就是数据（2026-10-03 定）。
+
+        用户原话："总的 csv，2theta 和名称跟数据不挨着，把无关信息放到
+        最上面"——以前说明夹在表头和数据之间（81 列 = 81 行），Excel 里
+        一滚名字和数据就错位。
+        """
         target = _tmpdir() / data_export.CSV_NAME
         data_export.write_csv(target, self._results(), now=NOW)
         self.assertEqual(target.read_bytes()[:3], b"\xef\xbb\xbf",
                          "CSV 必须带 BOM，Excel 才不乱码")
         lines = target.read_text(encoding="utf-8-sig").splitlines()
-        self.assertEqual(lines[0], "2theta(deg),a,b")
-        self.assertEqual(lines[1], "# exported: 2026-10-02 22:55:03")
+        self.assertEqual(lines[0], "# exported: 2026-10-02 22:55:03")
         self.assertIn("# column 2: a | category=Processed"
                       " | chain=bg=auto/win=0.18 | cut=1 points removed"
                       " | 4 points | 2theta=1.000-4.000 deg"
-                      " | config=lmfp1_lab6", lines[2])
+                      " | config=lmfp1_lab6", lines[1])
         self.assertIn("category=Raw | chain=none | cut=0 points removed",
-                      lines[3])
-        self.assertNotIn("config=", lines[3], "配置未知就不写这个 token")
-        self.assertEqual(lines[4],
+                      lines[2])
+        self.assertNotIn("config=", lines[2], "配置未知就不写这个 token")
+        self.assertEqual(lines[3],
                          "# blank cells = 2theta points inside a cut range"
                          " (no data)")
-        # 空值格留空，不写字面 nan
+        # 表头行紧挨着第一条数据
+        self.assertEqual(lines[4], "2theta(deg),a,b")
         self.assertEqual(lines[5], "1,10,1")
         self.assertEqual(lines[6], "2,,2")
         self.assertNotIn("nan", "\n".join(lines).lower())
 
-    def test_loadtxt_readback_and_no_blank_line_when_no_cut(self):
+    def test_readback_skips_comment_block(self):
+        """数据能读回来：跳过 # 注释块、拿第一行非注释当表头。
+
+        （pandas 的 `read_csv(comment="#")` 就是这个语义；原来的
+        `np.loadtxt(skiprows=1)` 已不适用——注释行数随列数变。）
+        """
         tth = np.array([1.0, 2.0, 3.0])
         target = _tmpdir() / data_export.CSV_NAME
         data_export.write_csv(
             target, [("a", tth, np.array([1.0, 2.0, 3.0])),
                      ("b", tth, np.array([4.0, 5.0, 6.0]))], now=NOW)
-        data = np.loadtxt(str(target), delimiter=",", skiprows=1)
+        body = [ln for ln in target.read_text(encoding="utf-8-sig")
+                .splitlines() if not ln.startswith("#")]
+        self.assertEqual(body[0], "2theta(deg),a,b")
+        data = np.loadtxt(body[1:], delimiter=",")
         self.assertEqual(data.shape, (3, 3))
         np.testing.assert_allclose(data[:, 2], [4.0, 5.0, 6.0])
         text = target.read_text(encoding="utf-8-sig")
         self.assertNotIn("blank cells", text,
                          "没有裁剪列就不写 blank 说明行")
+
+    def test_no_meta_line_between_header_and_data(self):
+        """回归护栏：表头行之后第一行必须是数据（不许再插入说明）。"""
+        tth = np.array([1.0, 2.0])
+        target = _tmpdir() / data_export.CSV_NAME
+        data_export.write_csv(
+            target, [("a", tth, np.array([1.0, 2.0])),
+                     ("b", tth, np.array([np.nan, 2.0]))], now=NOW)
+        lines = target.read_text(encoding="utf-8-sig").splitlines()
+        head = next(i for i, ln in enumerate(lines)
+                    if ln.startswith("2theta(deg),"))
+        self.assertTrue(lines[head + 1].startswith("1,"),
+                        f"表头下一行应当是数据：{lines[head + 1]!r}")
 
     def test_row_normalization(self):
         """3 元组（老调用方/测试的形状）→ 补成没做处理的诚实默认值。"""

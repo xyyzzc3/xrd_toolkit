@@ -12151,6 +12151,19 @@ class TestRangeMemory(unittest.TestCase):
             w.close()
 
 
+def _summary_csv(path) -> tuple:
+    """读全部数据.csv：返回 (列名列表, 数据数组)。
+
+    2026-10-03 起说明块在最**上面**（用户："把无关信息放到最上面"），
+    跳掉 `#` 注释、第一行非注释就是表头——等价于 pandas 的
+    `read_csv(path, comment="#")`；原来的 `np.loadtxt(skiprows=1)`
+    已不适用（注释行数随列数变）。
+    """
+    body = [ln for ln in Path(path).read_text(encoding="utf-8-sig")
+            .splitlines() if not ln.startswith("#")]
+    return body[0].split(","), np.loadtxt(body[1:], delimiter=",")
+
+
 def _only_batch_dir(outdir: Path) -> Path:
     """批量导出目录：outdir 下恰好一个 `导出_时间戳` 文件夹（按前缀找，
     不 mock 时间——顺带把命名规范也测进去）。"""
@@ -12175,6 +12188,41 @@ class TestExportData(unittest.TestCase):
                     is not None
                     for p in ("data/fake_a.tif", "data/fake_b.tif"))))
 
+    def _one_1d_result(self, w):
+        """勾一个文件出 1D（mock 计算），等结果进面板缓存。"""
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compute):
+            add_checked(w, ["data/fake_a.tif"])
+            _open_view(w, "1D")
+            self.assertTrue(_wait_until(
+                lambda: getattr(_dock(w, "1D", "data/fake_a.tif"),
+                                "last_tth", None) is not None))
+
+    def test_second_export_does_not_overwrite(self):
+        """同一条曲线导两次：第二份顺延 `_2`，绝不覆盖（2026-10-03）。
+
+        用户问过"同一条数据导出两次怎么区分"——原始/处理过那两份靠名字与
+        表头就能分；真正会丢数据的是**同一条曲线两套参数各导一次**（两次
+        同名），所以导出从这一版起不覆盖已有文件。
+        """
+        w = create_window()
+        try:
+            self._one_1d_result(w)
+            outdir = Path(tempfile.mkdtemp())
+            with mock.patch.object(gui_export, "_build_export_dialog",
+                                   return_value={"dir": outdir,
+                                                 "suffix": ".txt",
+                                                 "csv": False}):
+                gui_export._run_export(w)
+                gui_export._run_export(w)
+            self.assertTrue((outdir / "fake_a.txt").is_file())
+            self.assertTrue((outdir / "fake_a_2.txt").is_file(),
+                            "第二次导出不许覆盖第一份")
+            self.assertIn("已存在，这一份存为 fake_a_2.txt",
+                          w.log_text.toPlainText())
+        finally:
+            w.close()
+
     def test_export_writes_cli_format_files(self):
         """两个文件 → 一个批量文件夹：txt/ 里每条一个 + 开始/完成日志。"""
         w = create_window()
@@ -12187,6 +12235,9 @@ class TestExportData(unittest.TestCase):
                                                  "csv": False}):
                 gui_export._run_export(w)
             batch = _only_batch_dir(outdir)
+            # 文件夹名带内容标签（2026-10-03）：这批是原始曲线 → `_原始`
+            self.assertTrue(batch.name.endswith("_原始"),
+                            f"批量文件夹名要带内容标签：{batch.name}")
             target = batch / data_export.TXT_DIR_NAME / "fake_a.txt"
             self.assertTrue(target.is_file())
             lines = target.read_text(encoding="utf-8").splitlines()
@@ -12358,9 +12409,8 @@ class TestExportCsv(unittest.TestCase):
             target = outdir / data_export.CSV_NAME
             self.assertEqual(target.read_bytes()[:3], b"\xef\xbb\xbf",
                              "CSV 带 BOM，Excel 打开不乱码")
-            self.assertEqual(target.read_text(encoding="utf-8-sig")
-                             .splitlines()[0], "2theta(deg),a,b")
-            data = np.loadtxt(str(target), delimiter=",", skiprows=1)
+            names, data = _summary_csv(target)
+            self.assertEqual(names, ["2theta(deg)", "a", "b"])
             self.assertEqual(data.shape, (3, 3))
             np.testing.assert_allclose(data[:, 0], tth)
             np.testing.assert_allclose(data[:, 1], [1, 2, 3])
@@ -12404,8 +12454,7 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="intersect"):
                 gui_export._write_csv_summary(w, results, outdir)
-            data = np.loadtxt(str(outdir / data_export.CSV_NAME),
-                              delimiter=",", skiprows=1)
+            names, data = _summary_csv(outdir / data_export.CSV_NAME)
             # 公共交集 2~3° 按最大点数均匀取样，两列都重插到公共网格
             self.assertEqual(data.shape, (3, 3))
             np.testing.assert_allclose(data[:, 0], [2.0, 2.5, 3.0])
@@ -12426,8 +12475,7 @@ class TestExportCsv(unittest.TestCase):
             with mock.patch.object(gui_export, "_ask_csv_range",
                                    return_value="skip"):
                 gui_export._write_csv_summary(w, results, outdir)
-            data = np.loadtxt(str(outdir / data_export.CSV_NAME),
-                              delimiter=",", skiprows=1)
+            names, data = _summary_csv(outdir / data_export.CSV_NAME)
             self.assertEqual(data.shape, (3, 2))   # 只留网格一致的文件
             self.assertIn("跳过 1 个", w.log_text.toPlainText())
         finally:
@@ -12478,9 +12526,8 @@ class TestExportCsv(unittest.TestCase):
             self.assertTrue(
                 (batch / data_export.TXT_DIR_NAME / "fake_b.txt").is_file())
             csv = batch / data_export.CSV_NAME
-            self.assertEqual(csv.read_text(encoding="utf-8-sig")
-                             .splitlines()[0], "2theta(deg),fake_a,fake_b")
-            data = np.loadtxt(str(csv), delimiter=",", skiprows=1)
+            names, data = _summary_csv(csv)
+            self.assertEqual(names, ["2theta(deg)", "fake_a", "fake_b"])
             self.assertEqual(data.shape, (3, 3))
         finally:
             w.close()
