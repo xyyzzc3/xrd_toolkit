@@ -28,11 +28,19 @@ OUT = HERE / "THIRD_PARTY_NOTICES.txt"
 BUILD_ONLY = {"pip", "setuptools", "wheel", "pyinstaller",
               "pyinstaller-hooks-contrib", "altgraph", "macholib",
               "modulegraph", "pyinstaller-hooks", "git-filter-repo",
-              "filelock", "xrd-toolkit"}
+              "filelock", "markdown", "xrd-toolkit"}
 
 # 许可正文兜底：PySide6/Qt 的 wheel 不带任何许可文件 → 用官方文本
 QT_LICENSE_FILES = ("LGPL-3.0.txt", "GPL-3.0.txt")
 QT_PKGS = {"pyside6", "pyside6-essentials", "pyside6-addons", "shiboken6"}
+
+
+def _version() -> str:
+    """当前版本号（唯一出处 = 包的 __version__，别在声明里写死）。"""
+    import re
+    init = HERE.parent / "src" / "xrd_toolkit" / "__init__.py"
+    return re.search(r'__version__ = "([^"]+)"',
+                     init.read_text(encoding="utf-8")).group(1)
 
 
 def _license_files(dist) -> list:
@@ -85,7 +93,7 @@ def main() -> int:
     rows = collect()
     lines = [
         "=" * 72,
-        "THIRD-PARTY NOTICES — XRD Toolkit 0.1.0",
+        f"THIRD-PARTY NOTICES — XRD Toolkit {_version()}",
         "=" * 72,
         "",
         "本软件随附以下第三方组件。各组件版权归其各自作者所有，按各自的",

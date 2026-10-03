@@ -36,7 +36,12 @@ from PyInstaller.utils.hooks import (collect_data_files,
 HERE = Path(SPECPATH)              # packaging/（PyInstaller 注入的全局）
 ROOT = HERE.parent                 # 仓库根
 MAC = sys.platform == "darwin"
-VERSION = "0.1.0"
+# 版本号从包里读（唯一出处 = src/xrd_toolkit/__init__.py 的 __version__；
+# 写第二份字面量，下一个版本就会漂）
+import re
+VERSION = re.search(r'__version__ = "([^"]+)"',
+                    (ROOT / "src" / "xrd_toolkit" / "__init__.py")
+                    .read_text(encoding="utf-8")).group(1)
 
 datas = []
 # ① pyFAI 的整棵 resources/（≈1.8 MB，全收不亏）：
