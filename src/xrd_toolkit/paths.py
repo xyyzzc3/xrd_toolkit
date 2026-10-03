@@ -60,18 +60,26 @@ def shipped_file(name: str, dev_relative: str):
     PyInstaller 把 datas 放进包目录（macOS 的 .app 里就是
     Contents/Resources/xrd_toolkit/），开发时文件还在仓库里各就各位
     （docs/使用说明.html、packaging/THIRD_PARTY_NOTICES.txt）。
-    两种模式都**先看包目录**——打包后绝不会误读开发机的路径；
+    按顺序找：包目录 → 代码位置推算的仓库根 → 当前目录。
     都找不到返回 None（调用方记一行日志，不崩）。
 
     为什么不用 sys._MEIPASS：macOS 的 .app 里 datas 落在 Resources/、
     而 _MEIPASS 指向 Frameworks/，拼出来的路径是错的（PyInstaller 的
     已知坑）；按包目录找在三种平台上都成立。
+
+    为什么还要"当前目录"这一层：CI 与"装到 site-packages 但人在仓库里
+    跑测试"这种组合下，ROOT 指向 Python 安装目录、仓库根推算不出来——
+    2026-10-03 rc6 三平台快测试全红就是栽在这。打包后永远是第一层命中，
+    这一层碰不到。
     """
     packaged = Path(__file__).resolve().parent / name
     if packaged.is_file():
         return packaged
-    dev = ROOT / dev_relative
-    return dev if dev.is_file() else None
+    for base in (ROOT, Path.cwd()):
+        candidate = base / dev_relative
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 # 数据导出、图片保存、看门狗现场、.poni 默认都落这里
