@@ -63,14 +63,21 @@ jobs:
       - name: 打包冒烟自检（macOS：在打出来的 .app 里验证随包数据齐不齐）
         if: runner.os == 'macOS'
         run: XRD_SELFTEST=1 "dist/XRD Toolkit.app/Contents/MacOS/XRD Toolkit"
-      - name: 打包冒烟自检（Windows：报告在文件里，失败就打印出来）
+      - name: 打包冒烟自检（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # 窗口版 exe 是 GUI 子系统程序：PowerShell 直接 & 调用**不会等它**，
+          # $LASTEXITCODE 拿到的是上一条命令的残留（2026-10-03 rc3 就死在这，
+          # 报的错还指不到点上）。必须 Start-Process -Wait -PassThru 拿真实
+          # 退出码；报告顺手打出来，失败时日志里直接有原因。
           $env:XRD_SELFTEST = "1"
-          & "dist\XRD Toolkit\XRD Toolkit.exe"
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content "$env:USERPROFILE\Documents\XRD_Toolkit\selftest.txt"
+          $p = Start-Process -FilePath "dist\XRD Toolkit\XRD Toolkit.exe" `
+                             -Wait -PassThru
+          $report = "$env:USERPROFILE\Documents\XRD_Toolkit\selftest.txt"
+          if (Test-Path $report) { Get-Content $report }
+          if ($p.ExitCode -ne 0) {
+            Write-Error "打包冒烟自检失败（退出码 $($p.ExitCode)）"
             exit 1
           }
       - name: 压包（macOS 用 ditto：保留 .app 的权限与符号链接）
