@@ -23,11 +23,20 @@ def _tmpdir() -> Path:
 
 class TestPaths(unittest.TestCase):
     def test_outputs_dir_is_one_absolute_place(self):
-        """所有导出/存图/看门狗的基准目录 = 仓库根 outputs（唯一出处）。"""
+        """所有导出/存图/看门狗的基准目录 = ROOT/outputs（唯一出处）。
+
+        ROOT 由**代码位置**推算：源码树里 = 仓库根（editable 装法，开发
+        机一直如此）；pip 装进 site-packages 时 = Python 安装目录那一带。
+        所以这里钉的是不变量——OUTPUTS_DIR 就是 ROOT/outputs、且是绝对
+        路径；"ROOT 是仓库根"只在源码树里成立，用 pyproject.toml 在不在
+        来认（2026-10-03：CI 首次跑就栽在这条上——加 CI 之前没有任何
+        测试用非 editable 装法跑过）。
+        """
         self.assertEqual(paths.OUTPUTS_DIR, paths.ROOT / "outputs")
-        self.assertTrue((paths.ROOT / "src" / "xrd_toolkit").is_dir(),
-                        "ROOT 应当是仓库根")
         self.assertTrue(paths.OUTPUTS_DIR.is_absolute())
+        if (paths.ROOT / "pyproject.toml").exists():
+            self.assertTrue((paths.ROOT / "src" / "xrd_toolkit").is_dir(),
+                            "源码树里 ROOT 应当是仓库根")
 
 
 class TestWriteCurve(unittest.TestCase):
