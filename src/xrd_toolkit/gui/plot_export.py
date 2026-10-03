@@ -1,10 +1,11 @@
 """导出：1D 数据（txt/chi + 全部数据总表）+ 图片（PNG/TIF，可选 DPI）。
 
 从 app.py 与 plot_views.py 拆出来（纯搬迁）：这一块是"把算好的东西
-写出去"——只读面板缓存（dock.last_tth / last_intensity）与背景扣除
-设置，不改任何计算状态。数据源统一走 _checked_1d_results：勾选文件
-的 1D 曲线（没算过的会提示先出图），背景扣除按需求叠加（导出原始
-还是扣过的由弹窗决定）。
+写出去"——只读面板缓存（dock.last_tth / last_intensity）与处理设置
+（背景扣除 / 平滑 / 裁剪），不改任何计算状态。数据源统一走
+_checked_1d_results：勾选文件的 1D 曲线（没算过的会提示先出图），
+处理链按需求叠加（导出原始还是处理后的由弹窗决定；设置开着但实际
+没做成的照实写 Raw，见该函数）。
 
 目录结构与文件格式（2026-10-02 用户定，规范见 docs/UI_COPY.zh-CN.md
 「导出文件规范」）：单个数据集 = 光一个 txt；两个及以上 = 一个
@@ -160,11 +161,12 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
 
     want_bg=True 时跑整条处理链（背景 → 平滑 → 裁剪，锚点按文件路径取，
     与画图共用同一个 _proc_curve——导出与屏幕同一个口径）；全关时原样
-    返回。第 4 项是链的一句话描述（空 = 没做处理）、第 5/6 项是文件头
-    要写的类别与几何配置名——文件自己说清它是怎么来的（规范见
-    docs/UI_COPY.zh-CN.md）。真要处理过的曲线（链非空）名字才带
-    `_处理产物` 尾缀，和产物条目一个叫法：文件名本身就说出它是什么——
-    三项全关时勾了"扣背景"导出的仍是原始值，名字与类别照实写 Raw。
+    返回。第 4 项是链的一句话描述、第 5/6 项是文件头要写的类别与几何
+    配置名——文件自己说清它是怎么来的（规范见 docs/UI_COPY.zh-CN.md）。
+    判定"处理过没有"按链**实际做了的事**：真做了才叫"处理产物"、名字才带
+    `_处理产物` 尾缀；没做成的（三项全关，或背景开着但没生效——「手动
+    锚点」没点锚点、「空扫相减」没选空扫图）照实写 Raw + chain: none，
+    并在日志里说一声——标成 Processed 是谎报。
     quiet=True 不记日志：导出要拿数量去填弹窗标题，之后再正式收一遍，
     两遍都记就会把"跳过 X"打两次。
     sources 给定一组来源（右键"导出这一条/这一组"那条路）时只处理这一组，
@@ -209,14 +211,35 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                     "config")
                 if want_bg:
                     settings = _proc_settings(window, dock, path)
-                    tth, intensity, _ = _proc_curve(window, dock, path, tth,
-                                                    intensity)
+                    mode = str(settings.get("mode") or "off")
+                    tth, intensity, base = _proc_curve(window, dock, path, tth,
+                                                       intensity)
+                    # 判"真的处理了吗"看链**实际做了的事**，不看设置里写的
+                    # 模式：「手动锚点」没点锚点、「空扫相减」没选空扫图时
+                    # apply_chain 见 base=None 就原样返回——曲线一个点没动，
+                    # 设置里模式却还开着（2026-10-03 实测：锚点 0 个时链描述
+                    # 仍报 bg=anchor(n=0)）。拿设置当判据，没动过的数据会被
+                    # 标成 Processed——谎报，用户会按那个名字当扣过的用。
+                    # base=None = 背景那一步没发生 → 描述里按 off 写，
+                    # 判定与文件头就都是照实的
+                    bg_missing = base is None and mode != "off"
+                    if base is None:
+                        settings = {**settings, "mode": "off"}
                     chain = process.chain_desc(settings)
+                    if not quiet and bg_missing:
+                        why = {"anchor": "「手动锚点」模式但这条还没点锚点",
+                               "blank": "「空扫相减」模式但还没选空扫图",
+                               }.get(mode, "背景没有拟合出来")
+                        _log(window, f"{display}：没扣背景（{why}），"
+                                     + ("按原始值导出" if chain == "none"
+                                        else "这条只做了平滑/裁剪"))
+                    elif not quiet and chain == "none":
+                        _log(window, f"{display}：三项都关着"
+                                     f"（背景扣除/平滑/裁剪），按原始值导出")
                     if chain != "none":
-                        # 只有链真的做了事才叫"处理产物"：勾了"扣背景后的
-                        # 曲线"但三项都关着时，导出的就是原始值——照实写
-                        # Raw + chain: none，名字也不加 _处理产物 尾缀
-                        # （写着 Processed 是谎报，用户会按那个名字当扣过的用）
+                        # 链真的做了事才叫"处理产物"：上面的描述只写实际
+                        # 发生的步骤，没做事就是 none——照实写 Raw + chain:
+                        # none，名字也不加 _处理产物 尾缀
                         category = data_export.CATEGORY_PROCESSED
                         stem = (f"{stem}_"
                                 f"{gui_sources.KIND_TAIL[gui_sources.BG]}")
@@ -279,14 +302,18 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
         csv_check.setToolTip("单个数据集只导出曲线文件（txt / chi）；"
                              "两个及以上才生成全部数据总表")
     lay.addRow("", csv_check)
-    # 扣背景的成果要能带走：默认关 = 导原始曲线（数据出口不该被显示
-    # 参数悄悄改变——这是显示层的约定）
-    bg_check = QCheckBox("导出扣除背景后的曲线")
+    # 处理链的成果要能带走：默认关 = 导原始曲线（数据出口不该被显示
+    # 参数悄悄改变——这是显示层的约定）。名字必须写全三项：链跑的是
+    # 背景 + 平滑 + 裁剪，只写"扣背景"会让开着平滑的人把平滑过的文件
+    # 当没处理过的原始分辨率用（2026-10-03 讨论定）
+    bg_check = QCheckBox("导出处理后的曲线（背景/平滑/裁剪）")
     bg_check.setObjectName("export_bg_check")
     bg_check.setChecked(False)
-    bg_check.setToolTip("按当前「背景扣除」设置（模式/窗口/锚点/空扫图）"
-                        "导出扣完背景的曲线；不勾选则导出原始积分结果。"
-                        "扣完可能出现负值（噪声地板），这是正常的")
+    bg_check.setToolTip("按「处理」页当前设置（背景扣除/平滑/裁剪）导出"
+                        "处理后的曲线；只作用于勾选的「原始数据」，"
+                        "「1D 产物」「处理产物」条目原样导出。不勾选则"
+                        "导出原始积分结果。扣完可能出现负值（噪声地板），"
+                        "这是正常的")
     lay.addRow("", bg_check)
     btn_row = QWidget()
     btn_lay = QHBoxLayout(btn_row)

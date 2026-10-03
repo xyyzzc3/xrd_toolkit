@@ -13956,7 +13956,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.close()
 
     def test_export_bg_option_subtracts(self):
-        """[导出数据] 勾"导出扣除背景后的曲线"→ 取到的是扣完的值。"""
+        """[导出数据] 勾"导出处理后的曲线"→ 取到的是扣完的值。"""
         w = create_window()
         try:
             self._open_1d(w)
@@ -13974,7 +13974,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.close()
 
     def test_export_dialog_has_bg_checkbox(self):
-        """导出弹窗里有"导出扣除背景后的曲线"复选项（默认不勾）。"""
+        """导出弹窗里有"导出处理后的曲线"复选项（默认不勾；名字写全三项）。"""
         w = create_window()
         try:
             captured = {}
@@ -13989,6 +13989,69 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 self.assertIsNone(gui_export._build_export_dialog(w, 1))
             self.assertIsNotNone(captured.get("check"))
             self.assertFalse(captured["bg"], "默认不勾 = 导出原始曲线")
+            text = captured["check"].text()
+            # 链跑的是背景 + 平滑 + 裁剪，名字不许只写"扣背景"——开着
+            # 平滑的人会以为拿到的是没平滑过的曲线（2026-10-03 定）
+            self.assertIn("背景", text)
+            self.assertIn("平滑", text)
+            self.assertIn("裁剪", text)
+        finally:
+            w.close()
+
+    def test_export_bg_requested_but_no_anchors_stays_raw(self):
+        """「手动锚点」没点锚点时勾"导出处理后的曲线"：没动过的照实写 Raw。
+
+        回归护栏（2026-10-03）：判"处理过没有"按链**实际做了的事**——
+        锚点 0 个时 apply_chain 原样返回，但设置里模式还写着 anchor；
+        拿设置当判据会把原始数据标成 Processed（谎报）。
+        """
+        w = create_window()
+        try:
+            self._open_1d(w)
+            self._set_mode(w, "anchor")
+            got = gui_export._checked_1d_results(w, want_bg=True)
+            self.assertEqual(len(got), 1)
+            stem, _, intensity, chain, category, _ = got[0]
+            np.testing.assert_allclose(np.asarray(intensity, dtype=float),
+                                       _fake_bg_compute("", {}, 0)[1])
+            self.assertEqual(chain, "none", "没做事就不许写 bg=")
+            self.assertEqual(category, "Raw")
+            self.assertNotIn("_处理产物", stem)
+            self.assertIn("没扣背景", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_export_all_off_stays_raw_and_says_so(self):
+        """三项全关时勾"导出处理后的曲线"：照实写 Raw，日志里说一声。"""
+        w = create_window()
+        try:
+            self._open_1d(w)
+            got = gui_export._checked_1d_results(w, want_bg=True)
+            stem, _, _, chain, category, _ = got[0]
+            self.assertEqual(chain, "none")
+            self.assertEqual(category, "Raw")
+            self.assertNotIn("_处理产物", stem)
+            self.assertIn("三项都关着", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_export_bg_missing_with_smoothing_keeps_smoothing_honest(self):
+        """没扣成背景但开着平滑：平滑照做，链描述只写真的做了的平滑。"""
+        w = create_window()
+        try:
+            self._open_1d(w)
+            self._set_mode(w, "anchor")
+            w.params["平滑曲线"].setChecked(True)
+            w.params["平滑窗口 (°)"].setValue(0.5)
+            got = gui_export._checked_1d_results(w, want_bg=True)
+            stem, _, intensity, chain, category, _ = got[0]
+            self.assertIn("smooth=", chain)
+            self.assertNotIn("bg=", chain, "背景没发生，不许写进链描述")
+            self.assertEqual(category, "Processed")
+            self.assertIn("_处理产物", stem)
+            raw = np.asarray(_fake_bg_compute("", {}, 0)[1], dtype=float)
+            self.assertFalse(np.allclose(np.asarray(intensity, dtype=float),
+                                         raw), "平滑要真的生效")
         finally:
             w.close()
 
