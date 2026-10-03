@@ -8,6 +8,30 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Long version (calibration metrics, background subtraction, batching, engineering notes): [docs/NOTES.md](docs/NOTES.md)
 
+## Download & run (no Python needed)
+
+**v0.1.0 trial builds** — self-contained apps built from this repo by GitHub Actions:
+
+| Your machine | Download |
+|---|---|
+| Windows 10/11 | [XRD-Toolkit-windows.zip](https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-windows.zip) |
+| Mac, Apple Silicon (M1…M4) | [XRD-Toolkit-macos-apple-silicon.zip](https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-apple-silicon.zip) |
+| Mac, Intel | [XRD-Toolkit-macos-intel.zip](https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-intel.zip) |
+
+Unzip → double-click. The builds are unsigned, so the system blocks the first
+launch once: Windows *More info → Run anyway*; macOS *right-click → Open*.
+Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+Requires macOS 13+ / Windows 10+; ~110 MB download.
+
+## Three steps
+
+1. **Open** — `[打开…]` → pick your `.tif` / `.edf` / `.cbf` images (a whole folder works too)
+2. **Plot** — check the files → `[1D]` → `[出图（勾选文件）]`
+3. **Export** — `[导出数据]` → two-column txt / `.chi` / a combined CSV
+
+Geometry comes from a built-in config for the first LMFP batch; calibrate your
+own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
+
 ## At a glance
 
 <table>
@@ -43,27 +67,22 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
   </tr>
 </table>
 
-## What it does
+## Highlights
 
-- **2D → 1D integration** — full 0°–360° azimuthal integration into a standard two-column powder pattern (2θ(deg), intensity), ready for peak finding, profile fitting and PDF analysis.
-- **Geometric calibration on a LaB₆ standard** — pyFAI `GeometryRefinement` against NIST SRM 660 (a = 4.156 Å), starting from an FFT cross-correlation estimate of the direct-beam position (accuracy < 1 px). Example result: distance refined to 1595.80 mm (`lmfp1_lab6`). Every run reports **engine metrics the fit residual cannot**: median ring-position deviation, how many of the 16 rings came out complete, and the dispersion of the lattice constant back-solved ring by ring — a run can report a 0.0000° residual while the rings sit 10 px off the real ones.
-- **Automatic 2θ range** — `--range auto` (default) takes the lower bound from the material's standard and finds the upper bound where the data starts failing, judged by *relative arc coverage* (the ring's fraction of azimuth inside the detector falling below 50 % of its own maximum ≈ 7.9° for a centred beam) rather than a fixed threshold, so one criterion adapts to any beam placement.
-- **Sector-wise waterfall** — N azimuthal sectors (default 36) integrated separately; the stacked raw-intensity plot reveals preferred orientation and large-grain spotiness, and visualises the detector-clipping geometry. Every row shares one height (the overall peak × 0.7 — no per-sector rescaling, so a taller peak really is a stronger sector), and the GUI version runs the processing chain per sector: cut the giant peak that squashes everything else and the weak sectors become readable.
-- **Off-centre (partial-ring) beams** — datasets recorded with the beam at the detector edge or corner are handled end to end, including a built-in numpy integration that takes over where pyFAI's radial binning becomes unreliable (verified on synthetic rings).
-- **Background subtraction** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors, all previewed live with the raw curve (dashed) and baseline (dotted) drawn over the result. Negative values are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ. SNIP was implemented and measured, then deliberately left out of the GUI: it over-subtracts by 43–98 % on these patterns.
-- **Batches and staged products** — import a folder, integrate the batch (check more than 24 files and it draws none of them — everything is integrated and stored, then listed in the file bar, where a double-click opens one and a right-click opens the group), and compare or heat-map it in one figure. Integrated curves and background-subtracted curves are cached per stage under `outputs/_stage/` — keyed by file fingerprint + geometry + settings, reusable across sessions — and show up as **groups in the file bar**, so a background-subtracted batch goes to a comparison plot in two clicks instead of re-integrating.
-- **Desktop app** — MDI plot panels with pop-out and tiling, a live parameter panel, hover data readout, box zoom, per-curve styling, and PNG/TIF export:
+- **Calibrated 2D → 1D integration** — LaB₆ geometric refinement (NIST SRM 660, a = 4.156 Å) followed by full 0°–360° azimuthal integration into a standard two-column powder pattern `(2θ(deg), intensity)`, ready for peak finding, profile fitting and PDF analysis.
+- **Calibration metrics that catch what the fit residual cannot** — every run reports the median ring-position deviation, how many of the 16 rings came out complete, and the per-ring lattice-constant dispersion: a run can print a 0.0000° residual while its rings sit 10 px off the real ones.
+- **Background subtraction, live** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors that set the level while the auto baseline supplies the shape; smoothing (boxcar / Savitzky–Golay) and interval cuts on top. Negatives are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ.
+- **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
+- **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
+- **Desktop app over the same engine** — five stage entrances, a live parameter panel, hover readout, box zoom, per-curve styling, `.poni` in/out, PNG/TIF export.
 
-  ```bash
-  python -m xrd_toolkit.gui
-  ```
-
-## Install
+## Install (from source)
 
 ```bash
 conda env create -f environment.yml    # once
 conda activate XRD_Toolkit_Environment
-pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI come along
+pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI / PySide6 come along
+python -m xrd_toolkit.gui              # the desktop app
 ```
 
 > Sample data are not in the repository — point `--file` at your own diffraction images.
@@ -76,40 +95,15 @@ python scripts/integrate_pattern.py  --file data/xxx.tif
 python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
 ```
 
-Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). Outputs land in `outputs/{dataset}/` — the project's `outputs/` by default, from wherever you launch the script (the GUI exports to the same folder). Omit `--file` and each script shows an interactive menu of everything in `data/`; the three consuming scripts take `--config NAME` (default `lmfp1_lab6`) to pick a calibrated geometry. **Full flag list: [docs/NOTES.md](docs/NOTES.md#cli-flags).**
-
-| Script | What it does |
-|---|---|
-| `scripts/view_diffraction.py` | 2D image viewer (log scale, line profile, calibrated beam-centre mark) |
-| `scripts/calibrate_integrate.py` | LaB₆ geometric calibration (pyFAI) + azimuthal integration (2D → 1D) |
-| `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern |
-| `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plot + uniformity statistics |
-| `scripts/check_env.py` | Environment self-check — run this first when something "just won't run" |
-| `scripts/check_gui.py` | GUI link check — drives the interface with real data and real canvas events |
-| `scripts/show_gui.py` | Real-window peek — opens the app, walks three steps, leaves the window up |
-| `scripts/run_tests.py` | The full unit suite behind a watchdog |
-| `scripts/stress_panels.py` | Panel-stress probe — a regression check for two offscreen deadlocks |
-
-## GUI
-
-- **Five toolbar entrances** — `[校准] [1D] [扣背景] [对比] │ [绘图]`: each one turns the parameter panel to that stage's page, which carries only that stage's controls and its own produce button. Three rows stay pinned at the top of the panel no matter which page you are on — the edit target, the geometry entry in force, and the **data parameters (2θ integration range + point count)** so the range is changeable from any analysis stage, not just the 1D page (the calibration page hides that last row — calibration never reads a 2θ range). **The window opens with nothing selected and the parameter panel hidden** — an entrance shows its page when you pick it.
-- **Processing page** — three optional steps, each redrawing as you change it: background subtraction (empty scan / auto baseline — a rolling window whose local fit is a **line**, so a steeply decaying background is no longer over-subtracted at the low angles / manual anchors — joined by a monotone-preserving smooth by default, so the baseline cannot overshoot below the data). Anchors work in **auto** mode too: they set the **level**, the auto baseline supplies the **shape**. Outside the angles you marked, the baseline follows the auto curve shifted to the nearest anchor — never a straight line extrapolated from two nearly coincident anchors (that is exactly how a whole batch once came back tilted by thousands of counts), and the group name records the angles your anchors actually cover, so "which curves did I mark and which are inferred" is checkable at a glance. **smoothing** (rolling average or Savitzky–Golay — SG keeps far more peak height at the same window, measured 82 % vs 91 % of the strongest peak), and **cut** (blanks one or more 2θ intervals so a giant peak stops squashing the rest). While you tune the background the y axis holds still (it is framed by the un-subtracted curve) and only the curve moves inside it. Two exits sit at the foot of that page: **[重算这张图]** (2026-09-28, renamed 2026-09-30 to match the 1D page) re-integrates the edit target with the range / point count from the top of the panel, and **[存成产物]** stores the curve on screen as a product that appears in the file bar's 处理产物 … group — one file, one entry, no detour through the batch button. There is no [重画] button anywhere (deleted 2026-09-30): parameters redraw live, the view is the magnifier's business, and [保存图片…] stores the canvas as it stands. One click on [批量处理] applies the set to the whole batch, and each file's result becomes a 处理产物 … group in the file bar that Compare / Heatmap / export then read. **A 处理后 entry is not a dead end**: applying a recipe (or [存成产物]) on one redoes that file **from the 1D curve the product was derived from** — the panel is switched in place, so "try another parameter set" works without ever subtracting a background twice; [批量处理] treats checked 处理产物 entries the same way (user, 2026-09-28: "套用别的配方的处理图不能二次处理了，修正"). **Recipes travel** (and the button works — until 2026-09-28 [存成配方…] raised a NameError on every click, with nothing in the log: the imported name it needed was missing, which is why no recipes.json had ever been written): [存成配方…] stores the current set — mode, window, the anchor **positions**, smoothing, cuts — as a named entry (`outputs/recipes.json`), and [套用] puts it on whatever figure you point it at; anchor heights are always re-sampled on the target's own curve, so the same recipe works for a second batch of the same setup while its absolute levels stay each file's own business (anchors that fall outside a file's 2θ range are dropped and reported rather than silently clamped).
-- **One-click views** — [2D] [Profile] [1D] [Waterfall] plot every checked file at once, straight from the engine. [Compare] overlays several curves with three normalization modes (one shared scale in all of them — per-curve normalization is deliberately absent); [Heatmap] assembles the batch into one 2θ × sample map, and clicking a heatmap row toggles that sample's curve in the Compare panel. **Both are single-slot panels**: pressing [对比] or [热图] always rebuilds *that one* panel from what is checked **right now** — uncheck something and it is gone from the picture, and no older panel lingers with a previous selection (user, 2026-09-28: the rule is that every action uses the current checks and nothing from before). When the checked set mixes kinds, the panel's title says so (「对比_00029.tif 等 162 个文件（原始 81 ｜ 1D 产物 81）」).
-- **File bar** — a tree: the raw files at the top, then one group per stage product — **1D products grouped by their integration settings** ("1D 产物 2θ 1–8°（当前设置）", "1D 产物 2θ 3–12° · 1000 点 · 几何 lmfp2_lab6", the current set first), so two 2θ ranges of the same batch no longer sit in one pile (user, 2026-09-28), and one group per batch background run, named with its time and recipe. **Which plots are open has its own marker** — a light row tint plus a solid dot for entries with a live panel; checked / unchecked is shown only by the checkbox (Qt's selection fill is off), because the old dark row only meant "the row you last clicked" (user, 2026-09-28: "文件栏背景加深代表这个图正在打开，选中未选中仅用框内的标志表示"). Checking a group checks everything in it (two states: all-checked lights it up, anything else leaves it blank), so a batch of background-subtracted curves goes to a comparison plot in two clicks; double-clicking a **product** entry opens that one's 1D panel (a raw entry does not open: raw data can become any of the four views, so it goes through the view buttons — a double click just says so; the right-click [打开 1D 图] still opens one), and a group's right-click can open all of it **— raw files included, and a right-click on the bar itself offers "open the checked N as 1D panels", which has no 24-panel cap, only a confirmation**. One right-click handles both verbs: **delete** (raw entries leave the list only — the files on disk are never touched; products are really deleted, one entry or a whole group, ledger included) and **export** (a product entry goes straight to txt / chi — a group can also produce the CSV collection — without checking anything first), plus **delete all cache** with a confirmation. Imports start unchecked — select with one toggle whose label spells out each direction's scope, [全选（原始数据）] (raw group only; check product groups by their own row) / [全不选（全部条目）] (clears the whole tree), or [按条件选…] (range, stride, name filter, with a live count). **What is checked is what gets plotted**, and the plot buttons say how many that is (`出图（勾选 162 个）`), with a one-line summary of the mix above them ("原始 81 ｜ 1D 产物 81") that also warns when a raw file and *its own* 1D product are both checked — the same curve twice. **The bar mirrors the cache**: the 1D 产物 group is built by scanning what is on disk, so changing the 2θ range does not make it vanish — entries computed under other settings are listed and labelled ("· 1D（2θ 1–8°）"), and a product from an older background algorithm is flagged rather than hidden. Nothing in the bar disappears except when you delete it. The bar keeps its place: importing no longer scrolls to the newest file, a rebuild keeps the scroll/collapsed/checked state, and unchecking something no longer drags the list back to the top. Opening is one [打开…] button whose menu takes either files or a folder. **Raw entries always draw raw data**: a file that went through the batch remembers its *recipe* (`proc_recipes[path]`, shown on the processing page as “本图配方：…”), but the recipe is **not** re-applied when you open the file — apply it explicitly with [套用], or look at the result through its 处理产物 entry. A panel whose data is still being computed says “正在计算…” instead of showing an empty plot.
-- **Live parameter panel** — data and display parameters per panel, tooltips throughout, per-panel snapshots; zoom and pan write the view range back in real time.
-- **Panel chrome and gestures** — one self-drawn row per panel (复位视图 / 放大镜 / 外观… / 保存图片…, plus pop-out and close), left-drag to pan, box zoom when the magnifier is lit, hover readout in the status bar, resize grips on every edge; the drawing area's corner carries [横排] / [竖排] / [全部关闭] — close every panel at once. The **Home key** does what the [复位视图] button does, for the panel the cursor was last over — and it is a pure view verb: it puts the picture back to the view it was drawn with and changes no parameter. That view is the one the figure was **generated** with, and zooming or picking anchors cannot move it: a redraw that merely re-applies a zoomed window no longer redefines "home", so [复位视图] returns to the full picture however long you have been zoomed in. (Typing in a spin box is unaffected — Home there still means "go to line start".)
-- **Calibration workbench** — a three-column table (current geometry + slots A / B) over auto and manual calibration; every result accumulates under its own name, and **any result you pressed a button for becomes the current config** (the cyan rings move immediately; the figure title says which result the rings are showing and its ring deviation, and the log states how much better or worse it is — nothing is swapped in silently). One reference drives both comparisons on that page, and it is always the **current config**: the Δ rows read "that column − current config" (the current-config column itself is labelled 基准) and the verdict judges both candidates against it, naming each side with its numbers ("A 比 当前配置 好 0.32 px（环位偏差 当前配置 0.73 px ｜ A 0.41 px）"). A baseline dropdown used to sit here; it was removed on 2026-09-30 ("just delete the comparison baseline — report how the current config compares with A and with B, and let it follow the slots") so the page never has to explain two different pairs at once — swap what is pinned in A or B and the Δ rows and the verdict both move. "Should I adopt this?" is the decision the page exists for. Three rows pinned above every page carry the global controls: the edit target, the geometry entry in force, and the **data row** (2θ range and point count, shared by every analysis page). The panel always shows the **edit target's** parameters, and an edit that is not yet in force — the 2θ row needs [重算这张图], the display group needs [应用显示设置] — raises a grey **未应用** marker next to it and is remembered **per panel**: switch away and back and your value is still there (user, 2026-09-30: "参数页显示本图的参数……如果用户改了，添加一个灰字未应用来区分，切图再切回来保持") — pick an entry there from any page (hover it for pixel size / wavelength / distance; the calibration page adds a note that *it* works on the page's own current geometry), and in calibration mode the same row offers [退出校准], the way out. Details, including what the metrics can *not* catch, are in [docs/NOTES.md](docs/NOTES.md#calibration).
-- **Save / load .poni** — export the current geometry as a standard pyFAI `.poni` file, or import one as a named config entry that survives restarts and is usable from the CLI via `--config`.
+Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). Outputs land in `outputs/{dataset}/`. Omit `--file` and each script shows an interactive menu of everything in `data/`; the three consuming scripts take `--config NAME` (default `lmfp1_lab6`). **Script table and full flag list: [docs/NOTES.md](docs/NOTES.md#cli-scripts).**
 
 ## Tests
 
 ```bash
-python scripts/run_tests.py     # 617 tests, behind a watchdog
+python scripts/run_tests.py     # 700+ tests, behind a watchdog
 ```
 
-Synthetic-image unit tests (no sample data needed, plain `unittest`): arc-coverage failure criterion across beam placements, geometric failure-point values, the off-centre integration fallback, background estimators characterised against known synthetic backgrounds, and the GUI wiring — including live preview, per-file anchors and the raw/baseline overlay lines.
-
-`scripts/stress_panels.py` is the regression probe for two offscreen deadlocks (both fixed: the panel toolbar is ours, and background tasks run on long-lived worker threads); `scripts/run_tests.py` dumps every thread's Python stack and exits non-zero if a run ever stalls instead of hanging silently.
+Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
 
 ## Roadmap
 
@@ -126,7 +120,8 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`): arc-covera
 ├── data/                          # raw XRD images (.tif), not tracked by git
 ├── outputs/                       # script outputs + product cache (local, not tracked)
 ├── showcase/                      # curated example figures used in this README (tracked)
-├── scripts/                       # the four analysis scripts + five self-check tools
+├── packaging/                     # PyInstaller build (icons, spec, constraints)
+├── scripts/                       # the four analysis scripts + self-check tools
 ├── src/xrd_toolkit/
 │   ├── config.py                  # named geometry configs (one per batch; --config selects)
 │   ├── cli.py                     # shared interactive file-selection menu
