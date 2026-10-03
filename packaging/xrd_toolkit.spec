@@ -63,7 +63,9 @@ datas += collect_data_files("PySide6", includes=["translations/qtbase_zh_CN.qm"]
 # ④ 随包的文档与合规文件（「帮助 → 使用说明」「关于 → 第三方许可」
 #    直接打开它们；放**包目录**下，paths.shipped_file 按此查找）
 datas += [(str(ROOT / "docs" / "使用说明.html"), "xrd_toolkit"),
-          (str(HERE / "THIRD_PARTY_NOTICES.txt"), "xrd_toolkit")]
+          (str(HERE / "THIRD_PARTY_NOTICES.txt"), "xrd_toolkit"),
+          # 运行时窗口图标（Windows 任务栏用；见 app._set_app_icon）
+          (str(HERE / "icon.png"), "xrd_toolkit")]
 
 hiddenimports = []
 hiddenimports += collect_submodules("fabio")        # 动态注册的格式表

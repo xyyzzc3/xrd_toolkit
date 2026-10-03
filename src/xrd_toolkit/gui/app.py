@@ -57,10 +57,13 @@ matplotlib.use("qtagg")   # 必须在导入 FigureCanvasQTAgg 之前选定 Qt �
 # 注意要设 font.family 直接给列表：实测 qtagg 后端下 font.sans-serif
 # 列表不触发回退（Agg 可以），中文仍会变方框
 matplotlib.rcParams["font.family"] = [
-    "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS"]
+    "DejaVu Sans", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS",
+    # Windows：前四个都装不上/没中文字形 → 中文会画成方框。
+    # matplotlib ≥3.6 按这个列表逐字回退，写上系统自带的中文字体即可
+    "Microsoft YaHei", "SimHei"]
 from PySide6.QtCore import (QEvent, QLibraryInfo, QObject, Qt, QSize,
                             QTranslator, QUrl)
-from PySide6.QtGui import (QAction, QDesktopServices, QKeySequence,
+from PySide6.QtGui import (QAction, QDesktopServices, QIcon, QKeySequence,
                             QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
@@ -138,6 +141,16 @@ class _MainWindow(QMainWindow):
     ——一个入口覆盖整个窗口面。drop_callback / drop_folder 由
     create_window 接到 add_files / _scan_folder 上。
     """
+
+    def changeEvent(self, event):                 # noqa: N802（Qt 命名）
+        """从最小化/显示桌面回来的那次状态变化：对一次三个坞的显隐。
+
+        背景见 _resync_docks；只在"不再是最小化"时动手，别的状态变化
+        一律放行（幂等，正常路径零影响）。
+        """
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and not self.isMinimized():
+            _resync_docks(self)
 
     def __init__(self):
         super().__init__()
@@ -712,6 +725,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setDecimals(1)
         box.setSuffix("°")
         box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
+        # 显式小下限 = 允许被压窄而不是把整行撑出坞外：Windows 上
+        # 转盘的最小尺寸提示更大，不设的话窄坞里最右边的「点数」会被裁
+        # （2026-10-04 试用反馈："3000 点显示不全"）
+        box.setMinimumWidth(58)
         box.setToolTip("参与积分的 2θ 范围（1D / 处理 / 绘图页共用；"
                        "改了要重出图才生效）")
         window.params[key] = box
@@ -722,6 +739,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt.setRange(100, 100000)
     npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
     npt.setMaximumWidth(72)
+    npt.setMinimumWidth(56)
     npt.setToolTip("2θ 范围内的采样点数（1D / 处理 / 绘图页共用；"
                    "改了要重出图才生效）")
     window.params["输出点数"] = npt
@@ -1641,7 +1659,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     head_min = (max(window.focus_label.minimumSizeHint().width(),
                     window.geom_row.minimumSize().width()
                     + window.calib_exit_btn.sizeHint().width() + 8,
-                    window.data_row.minimumSize().width() + 8))
+                    window.data_row.minimumSize().width() + 8,
+                    # 「未应用」灰字平时隐藏（隐藏件不计入 minimumSize）：
+                    # 一亮就多占一行宽，坞的宽下限要预留它，否则它出现
+                    # 的那一刻把「点数」挤出可视区（2026-10-04 反馈）
+                    window.data_row.minimumSize().width()
+                    + window.pending_labels["数据"].sizeHint().width()
+                    + 8))
     form_min = max(form_min, head_min)
     # 壳：一页的滚动条宽度 + 那一页表单的左右边距（各页相同）
     # 壳 = 滚动条宽 + 表单左右边距 + 8（原来 QGroupBox 那圈 4 px 内边距，
@@ -1701,7 +1725,10 @@ def _build_status(window: QMainWindow) -> None:
     window.coord_label = QLabel("")   # 鼠标悬停时实时显示曲线坐标
     window.coord_label.setFrameShape(QFrame.Shape.StyledPanel)
     window.coord_label.setStyleSheet(
-        "font-family: Menlo, Consolas, monospace; padding: 1px 4px;")
+        # 等宽字体里也要有中文回退：Windows 的 Consolas 没有中文字形，
+        # 不写回退时"2θ 3.335°"里的中文会是方框（2026-10-04 试用反馈）
+        "font-family: Menlo, Consolas, 'Microsoft YaHei', "
+        "'PingFang SC', monospace; padding: 1px 4px;")
     window.statusBar().addPermanentWidget(window.coord_label)
     # 批量进度条（[1D] 等一次勾多张时出现）：开面板、后台积分、只算不画
     # 都走它（见 plot_views._progress_show/_batch_step）。平时藏起来，
@@ -1722,6 +1749,43 @@ def _build_status(window: QMainWindow) -> None:
     window.statusBar().addPermanentWidget(window.file_label)
 
 # ══ 顶部：工具栏 ═══════════════════════════════════════════
+def _set_app_icon(window: QMainWindow) -> None:
+    """把随包的 icon.png 设成应用图标（2026-10-04 试用反馈）。
+
+    Windows 的任务栏/窗口用的是**运行时窗口的图标**：打包时设的 exe
+    图标只在资源管理器里显示，运行起来仍是 Qt 的默认图标。这里显式设上
+    （macOS 不受影响——它用 .app 里的 icns）。
+    """
+    icon_path = paths.shipped_file("icon.png", "packaging/icon.png")
+    if icon_path is None:
+        return
+    app = QApplication.instance()
+    if app is not None:
+        app.setWindowIcon(QIcon(str(icon_path)))
+
+
+def _resync_docks(window: QMainWindow) -> None:
+    """把三个坞的显隐对齐到工具栏按钮（幂等；见 _MainWindow.changeEvent）。
+
+    2026-10-04 试用反馈：Windows 上"点右下角显示桌面"、再点任务栏图标
+    回来之后，文件/参数/日志三个坞都不见了，要再点一次才出来。本机复现
+    不了，这里做**防御**：窗口状态一变就把三个坞对回**用户意图**并重绘。
+
+    为什么不用按钮的勾选状态当依据：坞的显隐是**双向同步**的
+    （dock.visibilityChanged → btn.setChecked），坞被程序/系统藏起来时
+    按钮会跟着取消勾选——按按钮恢复等于"恢复成不显示"（写这版时测试
+    当场逮到）。所以意图只在用户**真点击**按钮时记录（clicked 信号；
+    setChecked 不触发它），系统把坞藏了也改不动它。
+    """
+    for name, dock in (("文件", window.file_dock),
+                       ("参数", window.param_dock),
+                       ("日志", window.log_dock)):
+        want = getattr(window, "_dock_intent", {}).get(name, True)
+        if dock.isVisible() != want:
+            dock.setVisible(want)
+    window.update()
+
+
 def _open_with_system(window: QMainWindow, path, what: str,
                       hint: str = "") -> None:
     """用系统默认程序打开一个随包文件（使用说明进浏览器、许可进文本编辑器）。
@@ -1850,16 +1914,22 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 击 → 坞显隐；坞被标题栏 × 关掉 → 按钮自动弹起（visibilityChanged
     # 信号），下次点按钮还能再展开
     window.panel_toggles = {}   # 登记按钮（测试用）
+    # 用户意图（见 _resync_docks）：只在**真点击**时记录；参数的初始状态
+    # 是收起（"开界面时右边参数栏是隐藏的"），所以它的默认意图是 False
+    window._dock_intent = {"文件": True, "参数": False, "日志": True}
     for name, dock in (("文件", window.file_dock),
                        ("参数", window.param_dock),
                        ("日志", window.log_dock)):
         btn = QPushButton(name)
         btn.setCheckable(True)
-        btn.setChecked(True)
+        btn.setChecked(window._dock_intent[name])
         tb.addWidget(btn)
         window.panel_toggles[name] = btn
         dock.visibilityChanged.connect(btn.setChecked)
         btn.toggled.connect(dock.setVisible)
+        btn.clicked.connect(          # 只认真点击：setChecked 不触发 clicked
+            lambda checked=False, n=name:
+            window._dock_intent.__setitem__(n, checked))
 
     # 开局谁都不选（参数坞建好才动得了，所以放在这里）：不点亮任何入口
     # + 收起参数坞。用户 2026-09-25 定：开界面时上面什么都不选、右边
@@ -2311,6 +2381,7 @@ def create_window() -> QMainWindow:
     _build_status(window)
     _build_menu(window)
     _build_toolbar(window)
+    _set_app_icon(window)
 
     # 点选文件 → 只登记当前文件（此时各坞已就绪，可安全接信号）
     window.file_list.currentItemChanged.connect(
