@@ -17,3 +17,7 @@ WEEKLY_REPORT.md
 # GUI 校准工作台 [保存为配置] 的落盘文件（个人标定记录，本地保留；
 # config.py 的内置条目仍走 CLI 模板人工复核登记）
 src/xrd_toolkit/config_user.json
+
+# PyInstaller 打包中间产物与成品（成品走 GitHub Release 附件，不进仓库）
+build/
+dist/

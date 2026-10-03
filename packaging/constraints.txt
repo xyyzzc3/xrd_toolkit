@@ -1,0 +1,18 @@
+# 0.1 试用版打包用的版本钉（2026-10-03）。
+#
+# 为什么钉：0.1 的 .app / .exe 要几年后还能复现——pyFAI 一年发好几个
+# 大版本，行为会漂（落盘格式、积分默认值都动过）。钉住的这组 = 开发机
+# 上实测跑通的版本（XRD_Toolkit_Environment，Python 3.12）。
+#
+# 用法（CI 与本地构建同一条命令）：
+#   pip install -c packaging/constraints.txt . pyinstaller
+# 不钉的（numpy/scipy 之外的传递依赖、PyInstaller 自身）随最新走——
+# 它们出问题会立刻在构建/冒烟里现形，不值得为 0.1 全量锁死。
+numpy==2.5.2
+scipy==1.18.1
+matplotlib==3.11.1
+pillow==12.3.0
+fabio==2026.6.0
+pyfai==2026.5.0
+silx==3.1.2
+PySide6==6.11.2

@@ -1,0 +1,110 @@
+# 打包发布：三平台构建（2026-10-03 定，0.1 试用版）
+#
+# 触发方式两种：
+#   * 推一个 tag（v0.1.0）→ 三平台构建 → 自动建 Release、把三个 zip 挂上去
+#   * Actions 页面手动 Run workflow → 只广播送产物（构建调试用，不发版）
+#
+# 为什么走 CI 而不是本机：作者的 Mac 是 Intel，Apple Silicon 与 Windows
+# 的包必须靠云端出；三个平台都只是 pip 装轮子 + 打包，不需要编译
+# （pyFAI/silx/PySide6 在三个平台都有 cp312 预编译轮子）。
+#
+# 构建只跑"快测试"（数据格式/文案/路径这些秒级模块）当烟雾报警——
+# 全量 700 条要 20 多分钟，而且是给代码合并把关的，不该堵发布的路；
+# 打包本身出问题会在这里 + 手工冒烟里现形。
+name: 打包发布
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # 建 Release 需要写权限
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false     # 一个平台挂了，其余平台的产物照样出（便于定位）
+      matrix:
+        include:
+          # Intel Mac。若这个标签哪天退役：换 macos-13，或删掉这行
+          # （作者本机是 Intel，可以本机打）
+          - os: macos-15-intel
+            asset: XRD-Toolkit-macos-intel.zip
+          - os: macos-14       # Apple Silicon
+            asset: XRD-Toolkit-macos-apple-silicon.zip
+          - os: windows-latest
+            asset: XRD-Toolkit-windows.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖（按 constraints 钉版本）与 PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints.txt . pyinstaller
+      - name: 快测试（数据格式 / 打包路径 / 自检 / 文案守卫）
+        run: >
+          python -m unittest
+          tests.test_data_export
+          tests.test_frozen_paths
+          tests.test_selftest
+          tests.test_ui_copy_style
+      - name: PyInstaller 打包
+        run: pyinstaller packaging/xrd_toolkit.spec --noconfirm
+      - name: 打包冒烟自检（macOS：在打出来的 .app 里验证随包数据齐不齐）
+        if: runner.os == 'macOS'
+        run: XRD_SELFTEST=1 "dist/XRD Toolkit.app/Contents/MacOS/XRD Toolkit"
+      - name: 打包冒烟自检（Windows：报告在文件里，失败就打印出来）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:XRD_SELFTEST = "1"
+          & "dist\XRD Toolkit\XRD Toolkit.exe"
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content "$env:USERPROFILE\Documents\XRD_Toolkit\selftest.txt"
+            exit 1
+          }
+      - name: 压包（macOS 用 ditto：保留 .app 的权限与符号链接）
+        if: runner.os == 'macOS'
+        run: >
+          ditto -c -k --sequesterRsrc --keepParent
+          "dist/XRD Toolkit.app" "${{ matrix.asset }}"
+      - name: 压包（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          Compress-Archive -Path "dist/XRD Toolkit/*"
+          -DestinationPath "${{ matrix.asset }}"
+      - name: 单独传一份构建产物（调试用，每次都有）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 收齐三个平台的产物
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: 建 Release 并挂附件
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          # 试用版说明（中文，给试用同事看的：怎么装、怎么用、出问题怎么办）
+          body_path: docs/RELEASE_NOTES.md
+          # v0.1.0-rc1 这类**预发布**不抢 latest：README 的下载直链用
+          # releases/latest，而 latest 会跳过预发布版——所以先推 -rc 验证
+          # 流水线（不污染正式下载链接），再推 v0.1.0 正式版（自动成为
+          # latest）。正式版故意不标 prerelease，否则直链会 404。
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}

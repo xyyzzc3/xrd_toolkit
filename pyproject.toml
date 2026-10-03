@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Modular Python toolkit for 2D X-ray diffraction analysis: ring-center localization, LaB6 geometric calibration, azimuthal integration, sector analysis"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai"]
+# PySide6 是 GUI 的主依赖（2026-10-03 补：以前漏了，只有开发机的手工
+# conda 环境装着它——陌生人 pip install 完根本起不来界面）
+dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai", "PySide6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,6 +1,9 @@
 import json
+import os
 import sys
 from pathlib import Path
+
+from xrd_toolkit import paths
 
 # 项目根目录：基于本文件位置定位，无论从哪里启动程序都能准确找到根目录
 # __file__ = "本文件自己的路径"；parents[2] = config.py → xrd_toolkit → src → 项目根目录
@@ -63,9 +66,24 @@ BUILTIN_CONFIGS = {
     },
 }
 
-# 用户配置文件：GUI 校准工作台 [保存为配置] 的落盘位置（config.py
-# 同目录，不进 git——个人标定记录本地保留，与内置人工登记表分开）。
-USER_CONFIG_PATH = Path(__file__).with_name("config_user.json")
+def _default_user_config_path() -> Path:
+    """用户配置文件的默认位置（拆成函数是为了可测：常量在 import 时
+    求值，进程里改不了 sys.frozen——见 tests/test_frozen_paths.py）。
+
+    开发模式 = config.py 同目录（现状不动：你的标定文件还在原地）；
+    打包后   = 用户数据目录（config.py 所在目录在 .app/安装目录**内部**，
+               只读、升级即换——写进去轻则白写、重则直接报错）。
+    """
+    if paths.FROZEN:
+        return paths.OUTPUTS_DIR / "config_user.json"
+    return Path(__file__).with_name("config_user.json")
+
+
+# 用户配置文件：GUI 校准工作台 [保存为配置] 的落盘位置（不进 git——
+# 个人标定记录本地保留，与内置人工登记表分开）。环境变量
+# XRD_USER_CONFIG 可整体覆盖（测试/脚本隔离用，与 XRD_OUTPUTS 同一套规矩）。
+USER_CONFIG_PATH = Path(os.environ.get(
+    "XRD_USER_CONFIG", _default_user_config_path()))
 
 # 条目 geometry 必须包含的 7 个键（与内置条目一致，单位见各键注释）
 _GEOMETRY_KEYS = ("pixel_size_m", "wavelength_m", "dist_m",
