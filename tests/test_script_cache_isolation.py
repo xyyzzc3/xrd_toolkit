@@ -1,0 +1,39 @@
+"""会开真界面的脚本不许往用户 outputs/ 里写产物（2026-10-03 用户定）。
+
+用户原话："不是用户自己操作的，就不应该出现在文件区，会困惑。"——
+一次真数据探针跑完，文件栏里冒出用户没做过的「处理产物」，根因是
+脚本用真实缓存跑真数据。规矩：脚本把产物缓存与配方指到系统临时目录，
+而且要在 **import xrd_toolkit 之前**设——那几个环境变量是模块导入时
+读的，写在导入后面等于没写。这条测试静态扫 scripts/，防回归。
+"""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+
+# 判定口径：脚本里出现 create_window（= 会开真界面、会算真数据）
+# 就要隔离。check_env.py 只 import 模块不建窗口，不在管辖内。
+OPEN_GUI_MARK = "create_window"
+ANCHOR = "from xrd_toolkit"          # 第一次导入包的位置（注释里不会出现这串）
+NEEDED = ("XRD_STAGE_CACHE", "XRD_RECIPES")
+
+
+class TestScriptsDoNotPolluteOutputs(unittest.TestCase):
+    def test_gui_scripts_isolate_product_cache(self):
+        bad = []
+        for path in sorted(SCRIPTS.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if OPEN_GUI_MARK not in text:
+                continue
+            mark = text.find(ANCHOR)
+            head = text[:mark] if mark >= 0 else ""
+            if any(name not in head for name in NEEDED):
+                bad.append(path.name)
+        self.assertEqual(
+            [], bad,
+            "这些脚本开真界面却不隔离产物缓存（要在 import xrd_toolkit 之前"
+            "把 XRD_STAGE_CACHE / XRD_RECIPES 指到临时目录，抄 check_gui.py"
+            "顶部那段）：" + "、".join(bad))

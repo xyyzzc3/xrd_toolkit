@@ -33,6 +33,7 @@
 import faulthandler
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from unittest import mock
@@ -42,6 +43,13 @@ ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(ROOT / "src"))
+
+# 压力探针不碰用户的文件区（用户 2026-10-03 定）：产物缓存与配方写进
+# 系统临时目录——假积分对着 data/s*.tif 这些不存在的路径也会落产物，
+# 别让它们进 outputs/。必须在 import xrd_toolkit 之前设。
+_SCRATCH = Path(tempfile.mkdtemp(prefix="xrd_stress_"))
+os.environ.setdefault("XRD_STAGE_CACHE", str(_SCRATCH / "stage"))
+os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
 
 # 默认 40 秒是旧机器上的余量；现在健康路径 10 轮 ≈ 41 s（每轮 4 s 上下），
 # 正好压在阈值上、把"跑得完"报成"卡住"（2026-10-03 实测两次误报，栈转储

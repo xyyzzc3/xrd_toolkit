@@ -18,11 +18,14 @@
 用法示例：
     python scripts/check_gui.py
     python scripts/check_gui.py --lab6 data/lab6-00024.tif --lmfp data/LMFP_1_atten0-00029.tif
+产物与配方写在系统临时目录（每次运行换一个），不碰 outputs/ 的文件区
+（用户 2026-10-03 定："不是用户自己操作的，就不应该出现在文件区"）。
 退出码 0 = 全过，1 = 有失败。
 """
 import argparse
 import os
 import sys
+import tempfile
 import time
 from unittest import mock
 from pathlib import Path
@@ -36,6 +39,15 @@ ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(ROOT / "src"))
+
+# 探测不碰用户的文件区（用户 2026-10-03："不是用户自己操作的，就不应该
+# 出现在文件区，会困惑"——一次探针跑完，文件栏里会冒出用户没做过的
+# 处理产物）。产物缓存与配方写进系统临时目录。必须在 import xrd_toolkit
+# 之前设：这几个环境变量是模块导入时读的。想跑真实缓存就显式设
+# XRD_STAGE_CACHE（setdefault 不覆盖显式值）。
+_SCRATCH = Path(tempfile.mkdtemp(prefix="xrd_probe_"))
+os.environ.setdefault("XRD_STAGE_CACHE", str(_SCRATCH / "stage"))
+os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
 
 import numpy as np                                       # noqa: E402
 from matplotlib.backend_bases import MouseEvent          # noqa: E402
@@ -656,7 +668,8 @@ def main() -> int:
             return 2
 
     print(f"项目根目录：{ROOT}")
-    print(f"样例数据：{lab6.name} + {lmfp.name}\n")
+    print(f"样例数据：{lab6.name} + {lmfp.name}")
+    print(f"产物缓存：{_SCRATCH}（临时目录——探测不往 outputs/ 里写东西）\n")
     app = QApplication.instance() or QApplication([])   # noqa: F841
     window = create_window()
     try:

@@ -22,10 +22,12 @@
 用法示例：
     python scripts/make_gui_shots.py              # 全部重拍
     python scripts/make_gui_shots.py gui_main gui_views
+产物缓存与配方写在系统临时目录，不碰 outputs/（2026-10-03 定）。
 """
 import argparse
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -34,8 +36,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("MPLBACKEND", "Agg")
 sys.path.insert(0, str(ROOT / "src"))
 
+# 重拍图不碰用户的文件区（用户 2026-10-03 定："不是用户自己操作的，
+# 就不应该出现在文件区"）：产物缓存与配方写进系统临时目录，必须在
+# import xrd_toolkit 之前设。图本身不受影响——每张都是当场算的
+# （重拍前先看配色的确定性规则：脚本头部的 MPLBACKEND=Agg 那条）。
+_SCRATCH = Path(tempfile.mkdtemp(prefix="xrd_shots_"))
+os.environ.setdefault("XRD_STAGE_CACHE", str(_SCRATCH / "stage"))
+os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
+
 from unittest import mock                                  # noqa: E402
 
+from PySide6.QtCore import Qt                              # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton    # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state       # noqa: E402
@@ -117,6 +128,25 @@ def add_all(window, paths, entrance: str = None) -> None:
     settle(200)
 
 
+def check_only(window, paths) -> None:
+    """只勾这组文件（其余全不勾）——点出图按钮之前要（重新）保证的事。
+
+    文件栏一冒出新产物，"新产物 = 上一轮勾选清零"（2026-10-01 甲）就把
+    对号清了。以前靠上一段留下的勾选、缓存又是热的（产物早就在、不算
+    "新"）；2026-10-03 起产物缓存被隔离到临时目录（见文件头部），
+    **每次都是冷缓存**——凡是"点一下 A、产物落下、再点 B"的段落都必须
+    自己重勾，否则 B 只记一句"未勾选任何项"，截图静默少一块。
+    """
+    want = set(paths)
+    for i in range(window.file_list.count()):
+        item = window.file_list.item(i)
+        item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in want
+                           else Qt.Unchecked)
+    for g in window.file_list.groups():
+        g.setCheckState(Qt.Unchecked)
+    QApplication.processEvents()
+
+
 # ══ 各场景 ══════════════════════════════════════════════════════
 def shot_main(window) -> None:
     """主窗口：LaB₆ 积到 1D，右侧参数坞停在 1D 页。"""
@@ -196,6 +226,9 @@ def shot_batch(window) -> None:
                          and getattr(window.plot_docks["1D|" + p],
                                      "last_tth", None) is not None) == 3,
              timeout_s=240)
+    # 上面这次积分落了新产物，勾选已被清（甲）；导出读的是勾选状态，
+    # 不重勾就会拍到一段"未勾选任何项"的空日志
+    check_only(window, LMFP)
     # 导出：弹窗换成脚本返回值（走真实的写盘链路）
     dialog_result = {"dir": Path(ROOT / "outputs"), "suffix": ".txt",
                      "csv": True, "bg": False}
@@ -218,6 +251,9 @@ def shot_heatmap(window) -> None:
         ax = content_of(window, hkey).axes_heat
         wait_for(lambda: len(ax.images) > 0
                  and ax.images[0].get_array() is not None, timeout_s=240)
+    # 热图那一步按各文件自己的设置补算了 1D（新产物 → 勾选清零，甲）：
+    # 不重勾这一步点 1D 只会静默少一块（图注要求的 parallel 1D）
+    check_only(window, LMFP)
     window.view_buttons["1D"].click()
     wait_for(lambda: "1D|" + LMFP[0] in window.plot_docks
              and len(content_of(window, "1D|" + LMFP[0]).axes_1d.lines) > 0,

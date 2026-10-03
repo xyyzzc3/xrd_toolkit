@@ -23,10 +23,13 @@
 
 退出码：0 = 三件事都成立；1 = 有一步没成立（图仍会存下来供查看）。
 图默认存 outputs/gui_shots/（outputs/ 不上传，隐私数据不进仓库）。
+产物与配方写在系统临时目录：这个窗口是"看一眼"的沙盘，不给用户的
+文件区留东西（2026-10-03 定；抓图照旧进 outputs/gui_shots）。
 """
 import argparse
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,10 +44,21 @@ if "--headless" in sys.argv:
 else:
     os.environ.pop("QT_QPA_PLATFORM", None)   # 别被外部继承的 offscreen 压住
 
+# 看一眼用的窗口是一个"沙盘"：产物缓存与配方写进系统临时目录，不碰
+# 用户的文件区（用户 2026-10-03："不是用户自己操作的，就不应该出现在
+# 文件区，会困惑"——脚本自动开的图，下次进真界面会变成用户没做过的
+# 产物条目）。必须在 import xrd_toolkit 之前设。想跑真实缓存就显式设
+# XRD_STAGE_CACHE（setdefault 不覆盖显式值）。
+_SCRATCH = Path(tempfile.mkdtemp(prefix="xrd_show_"))
+os.environ.setdefault("XRD_STAGE_CACHE", str(_SCRATCH / "stage"))
+os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
+
 import numpy as np                                       # noqa: E402
 from matplotlib.backend_bases import MouseEvent          # noqa: E402
+from PySide6.QtCore import Qt                            # noqa: E402
 from PySide6.QtWidgets import (QApplication,             # noqa: E402
                                QToolButton)
+from shiboken6 import isValid                            # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state     # noqa: E402
 from xrd_toolkit.gui import plot_views as gui_views      # noqa: E402
@@ -78,6 +92,16 @@ def pump(predicate, timeout_s: float = 180.0) -> bool:
 def content_of(window, key: str):
     """面板容器 → 面板内容（子窗口或弹出窗口都能取）。"""
     return gui_state._content(window.plot_docks[key])
+
+
+def alive(*objs) -> bool:
+    """对象背后的 C++ 实例还在吗。
+
+    "看一眼就关掉窗口"是最自然的用法（2026-10-03 实测：关掉之后脚本
+    继续跑，一碰 log_text 就是 shiboken 的 RuntimeError 回溯）——
+    每段演示开始前先问一句，窗口没了就干净收尾。
+    """
+    return all(isValid(o) for o in objs)
 
 
 def fire(canvas, name: str, x: float, y: float, **kw) -> None:
@@ -135,7 +159,8 @@ def main() -> int:
     print(f"项目根：{ROOT}")
     print(f"真数据：{len(files)} 个 —— {', '.join(Path(f).name for f in files)}")
     print(f"窗口模式：{'offscreen（无头）' if args.headless else '真窗口'}，"
-          f"上限演示：{args.cap_demo or '关'}\n")
+          f"上限演示：{args.cap_demo or '关'}")
+    print(f"产物缓存：{_SCRATCH}（临时目录——不往 outputs/ 里写产物）\n")
 
     app = QApplication.instance() or QApplication([])   # noqa: F841
     window = create_window()
@@ -172,10 +197,32 @@ def main() -> int:
     report(bool(reading), "状态栏出悬停读数", reading)
     grab(window, outdir, "2_hover_dot.png")
 
+    def closed() -> bool:
+        """窗口被用户关掉了？关了就干净收尾，别拿 shiboken 回溯吓人。"""
+        if alive(window):
+            return False
+        print("\n窗口已被关闭——后面的演示跳过（图已存到上面那些）")
+        return True
+
+    if closed():
+        return 1 if _failed else 0
+
     # ③ 批量上限提示：上限调小，再用**另一种**视图开（同视图会复用面板，
     #    不产生"新面板"，也就碰不到上限）
     if args.cap_demo:
         print(f"\n③ 批量上限提示（临时把上限调成 {args.cap_demo}）")
+        # ① 的 1D 产物是**新**产物：按"新产物 = 上一轮勾选清零"（2026-10-01
+        # 甲），对号已经被清掉了——冷缓存跑必然如此（缓存隔离之后每次都是
+        # 冷的，2026-10-03 实测：③ 点下去只记了"未勾选任何项"）。这里自己
+        # 重新勾上，与 check_gui 同款（它每个段落前都要重勾，同一个坑）。
+        want = set(files)
+        for i in range(window.file_list.count()):
+            item = window.file_list.item(i)
+            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in want
+                               else Qt.Unchecked)
+        for g in window.file_list.groups():
+            g.setCheckState(Qt.Unchecked)
+        QApplication.processEvents()
         other = "2D"
         orig = gui_views.MAX_PANELS_PER_BATCH
         gui_views.MAX_PANELS_PER_BATCH = args.cap_demo
@@ -184,6 +231,8 @@ def main() -> int:
             pump(lambda: len([k for k in window.plot_docks
                               if k.startswith(other + "|")]) == args.cap_demo,
                  args.timeout)
+            if closed():
+                return 1 if _failed else 0
             log = window.log_text.toPlainText()
             line = next((ln for ln in log.splitlines() if "先画前" in ln), "")
             report(bool(line), f"{other} 上限提示出现在日志", line[:60] + "…"
@@ -193,6 +242,8 @@ def main() -> int:
             gui_views.MAX_PANELS_PER_BATCH = orig   # 还原，别把上限留在小值
 
     # 面板标题栏那四个按钮（自绘工具栏）：读一眼 action 名单
+    if closed():
+        return 1 if _failed else 0
     bar = content.slim_bar
     names = [b.defaultAction().text() for b in bar.findChildren(QToolButton)
              if b.defaultAction() is not None]
@@ -201,7 +252,8 @@ def main() -> int:
 
     print(f"\n== {'全过' if not _failed else '有失败：' + '、'.join(_failed)}"
           f"；图在 {outdir} ==")
-    if not args.exit:
+    if not args.exit and not closed():
+        # 窗口已经没了就别进事件循环（没有窗口可等的 exec 会一直挂着）
         print("窗口留在屏幕上（关掉它即结束本脚本）")
         app.exec()
     return 1 if _failed else 0
