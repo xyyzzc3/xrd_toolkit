@@ -25,11 +25,21 @@ import numpy as np
 _LINES = []
 
 
+def _print(line: str) -> None:
+    """尽力打印：老式 Windows 控制台（cp1252）打不出中文时不许崩——
+    报告文件（UTF-8）才是排障的可靠通道（2026-10-03：CI 的 Windows
+    runner 就栽在这类编码上）。"""
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        pass
+
+
 def _report(ok: bool, name: str, detail: str = "") -> bool:
     line = f"[{'OK ' if ok else 'FAIL'}] {name}" + (f"（{detail}）" if detail
                                                     else "")
     _LINES.append(line)
-    print(line, flush=True)
+    _print(line)
     return ok
 
 
@@ -123,12 +133,12 @@ def _finish() -> int:
     failed = [ln for ln in _LINES if ln.startswith("[FAIL]")]
     tail = f"\n== {'全过' if not failed else '有失败'}（{len(_LINES)} 项）=="
     _LINES.append(tail)
-    print(tail, flush=True)
+    _print(tail)
     try:
         out = Path(paths.OUTPUTS_DIR)
         out.mkdir(parents=True, exist_ok=True)
         (out / "selftest.txt").write_text("\n".join(_LINES) + "\n",
                                           encoding="utf-8")
     except OSError as err:
-        print(f"（报告写盘失败：{err}）", file=sys.stderr)
+        _print(f"（报告写盘失败：{err}）")
     return 1 if failed else 0

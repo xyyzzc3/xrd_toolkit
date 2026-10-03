@@ -21,6 +21,12 @@ on:
 permissions:
   contents: write          # 建 Release 需要写权限
 
+env:
+  # Windows runner 的控制台默认不是 UTF-8：打印中文会 UnicodeEncodeError
+  # （2026-10-03：rc2 的 Windows 快测试死在这上面，Mac 两平台全绿）。
+  # 全局打开 UTF-8 模式，顺带让构建里所有文件的默认编码不再看系统区域。
+  PYTHONUTF8: "1"
+
 jobs:
   build:
     strategy:
