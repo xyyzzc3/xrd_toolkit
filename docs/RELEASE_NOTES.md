@@ -29,6 +29,7 @@
 1. 把 `XRD-Toolkit-windows.zip` 解压到任意文件夹（建议解压到桌面或 D 盘）
 2. 进入解压出来的 `XRD Toolkit` 文件夹，双击 **`XRD Toolkit.exe`**
 3. 如果出现蓝色窗口"Windows 已保护你的电脑" → 点 **更多信息** → 点 **仍要运行**
+   （万一没有"更多信息"按钮：右键 `XRD Toolkit.exe` → 属性 → 勾上底部「解除锁定」→ 确定 → 再运行）
 
 **Mac（Intel 或苹果芯片都一样）**
 1. 把 zip 解压，得到 **XRD Toolkit.app**（想放"应用程序"文件夹就拖进去）
