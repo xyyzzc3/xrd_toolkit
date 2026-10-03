@@ -124,6 +124,17 @@ def run() -> int:
         / "qtbase_zh_CN.qm"
     _report(tr.exists(), "Qt 中文翻译文件", str(tr))
 
+    # ⑥ 随包文档与合规文件（帮助 → 使用说明 / 关于 → 第三方许可 靠它们；
+    #    丢了不崩、但客户就没有说明书和许可声明了——最会静默丢失的一类）
+    manual = paths.shipped_file("使用说明.html", "docs/使用说明.html")
+    notices = paths.shipped_file("THIRD_PARTY_NOTICES.txt",
+                                 "packaging/THIRD_PARTY_NOTICES.txt")
+    _report(manual is not None and manual.is_file(), "随包使用说明",
+            str(manual))
+    _report(notices is not None and "LESSER GENERAL PUBLIC" in
+            notices.read_text(encoding="utf-8", errors="replace"),
+            "随包第三方许可声明（含 LGPL 全文）", str(notices))
+
     return _finish()
 
 
