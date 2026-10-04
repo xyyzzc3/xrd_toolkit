@@ -65,12 +65,14 @@ class TestNoticesContent(unittest.TestCase):
 
 
 class TestDocsVersion(unittest.TestCase):
-    """两份带版本的文档，标题必须写着当前 __version__（2026-10-04）。
+    """带版本号的发布文书，版本必须跟 __version__ 同步（2026-10-04）。
 
     用户："添加版本号，你不要再忘记了。"——发版正文（RELEASE_NOTES.md，
-    也就是 GitHub Release 页面的正文）和随包说明书（使用说明.md）的标题
-    都写成 "（v0.1.1 试用版）"；忘了改，页面上就会出现"0.1.1 里写着 0.1"
-    那种自相矛盾。这条测试进 CI 快测试（release.yml），打包前先拦住。
+    也就是 GitHub Release 页面的正文）、随包说明书（使用说明.md）的
+    标题都写成 "（vX.Y.Z 试用版）"，CITATION.cff 的 version 也得跟；
+    忘了改，页面上就会出现"0.1.1 里写着 0.1"那种自相矛盾（CITATION
+    在 0.1.1 时漏过一次，0.1.2 补进这条护栏）。这条测试进 CI 快测试
+    （release.yml），打包前先拦住。
     """
 
     def _title(self, rel: str) -> str:
@@ -85,6 +87,22 @@ class TestDocsVersion(unittest.TestCase):
         first = self._title("docs/使用说明.md")
         self.assertIn(f"v{__version__}", first,
                       f"使用说明.md 标题应含 v{__version__}（发版别忘改）")
+
+    def test_citation_carries_current_version(self):
+        text = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+        # 只认顶层的 version: 行（cff-version 是 CFF 格式版本，不是软件版本）
+        ver_lines = [ln for ln in text.splitlines()
+                     if ln.startswith("version:")]
+        self.assertEqual(len(ver_lines), 1, "CITATION.cff 应恰有一行 version:")
+        self.assertIn(f"version: {__version__}", ver_lines[0],
+                      f"CITATION.cff 的版本号应跟 __version__（0.1.1 时漏过）")
+
+    def test_third_party_notices_carry_current_version(self):
+        head = (ROOT / "packaging" / "THIRD_PARTY_NOTICES.txt").read_text(
+            encoding="utf-8").splitlines()[:3]
+        self.assertTrue(any(f"XRD Toolkit {__version__}" in ln for ln in head),
+                        "随包许可声明的头部版本应跟 __version__"
+                        "（改版本后要重跑 packaging/make_licenses.py）")
 
 
 if __name__ == "__main__":
