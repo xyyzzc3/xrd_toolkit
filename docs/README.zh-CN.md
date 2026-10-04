@@ -6,7 +6,7 @@ English: [README.md](../README.md) · 试用者上手图文：[使用说明.html
 
 ## 下载即用（不用装 Python）
 
-**0.1 试用版**——GitHub Actions 从本仓库构建的三平台独立应用：
+**最新试用版**——GitHub Actions 从本仓库构建的三平台独立应用（链接自动指向最新 Release）：
 
 | 你的电脑 | 下载 |
 |---|---|

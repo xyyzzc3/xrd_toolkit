@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+[![Version](https://img.shields.io/github/v/release/xyyzzc3/xrd_toolkit?color=blue)](https://github.com/xyyzzc3/xrd_toolkit/releases/latest)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
 A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard, and integrates the 2D pattern into standard 1D powder spectra — as four CLI scripts and as a PySide6 desktop app over the same engine.
@@ -11,7 +11,8 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 
 ## Download & run (no Python needed)
 
-**v0.1.0 trial builds** — self-contained apps built from this repo by GitHub Actions:
+**Latest trial builds** — self-contained apps built from this repo by GitHub
+Actions (the links below always point to the newest release):
 
 | Your machine | Download |
 |---|---|

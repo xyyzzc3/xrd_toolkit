@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from xrd_toolkit import paths
+from xrd_toolkit import __version__, paths
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +62,29 @@ class TestNoticesContent(unittest.TestCase):
                        "GNU LESSER GENERAL PUBLIC LICENSE",
                        "GNU GENERAL PUBLIC LICENSE"):
             self.assertIn(needle, text, f"许可声明里应当有 {needle}")
+
+
+class TestDocsVersion(unittest.TestCase):
+    """两份带版本的文档，标题必须写着当前 __version__（2026-10-04）。
+
+    用户："添加版本号，你不要再忘记了。"——发版正文（RELEASE_NOTES.md，
+    也就是 GitHub Release 页面的正文）和随包说明书（使用说明.md）的标题
+    都写成 "（v0.1.1 试用版）"；忘了改，页面上就会出现"0.1.1 里写着 0.1"
+    那种自相矛盾。这条测试进 CI 快测试（release.yml），打包前先拦住。
+    """
+
+    def _title(self, rel: str) -> str:
+        return (ROOT / rel).read_text(encoding="utf-8").splitlines()[0]
+
+    def test_release_notes_title_carries_current_version(self):
+        first = self._title("docs/RELEASE_NOTES.md")
+        self.assertIn(f"v{__version__}", first,
+                      f"RELEASE_NOTES.md 标题应含 v{__version__}（发版别忘改）")
+
+    def test_manual_title_carries_current_version(self):
+        first = self._title("docs/使用说明.md")
+        self.assertIn(f"v{__version__}", first,
+                      f"使用说明.md 标题应含 v{__version__}（发版别忘改）")
 
 
 if __name__ == "__main__":
