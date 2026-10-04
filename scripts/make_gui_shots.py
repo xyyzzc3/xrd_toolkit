@@ -310,6 +310,23 @@ def _press_at(ax, xdata: float, ydata: float):
                            xdata=xdata, ydata=ydata)
 
 
+def _scroll_calib_to_table(window) -> None:
+    """把校准页滚到「数据」组（三列 + Δ + 结论行）入镜的位置。
+
+    默认停在页顶，只看得见操作/自动/手动区——2026-10-04 重拍时发现旧图
+    一直没拍到图注承诺的结果区，一并修正。
+    """
+    scroll = getattr(window, "calib_scroll", None)
+    combo = getattr(window, "calib_slot_combo", {}).get("current")
+    if scroll is None or combo is None:
+        return
+    content = scroll.widget()
+    bar = scroll.verticalScrollBar()
+    y = combo.mapTo(content, combo.rect().topLeft()).y()
+    bar.setValue(max(bar.minimum(), y - 10))
+    settle(150)
+
+
 def shot_calib(window) -> None:
     """校准页：跑过 ① 自动 + ③ 二次精修（三列 + Δ + 结论）。"""
     add_all(window, [LAB6])
@@ -329,6 +346,8 @@ def shot_calib(window) -> None:
         wait_for(lambda: len(window.calib_state.get("results", [])) >= 2,
                  timeout_s=300)
         settle(600)
+    # 图注承诺的是结果区（三列 + 指标 + 结论行）——滚下去让它真的入镜
+    _scroll_calib_to_table(window)
     save(window, "gui_calib", size=(1500, 1000))
     # 把日志里的指标行打出来：README 图注引用那些数字，重拍后要跟着更新
     # （指标在**完整**结果里；state["results"] 存的是裁剪过的表格副本）
