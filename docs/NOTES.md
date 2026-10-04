@@ -30,7 +30,7 @@ python scripts/view_diffraction.py --file data/xxx.tif --angle 0 --outdir output
 - `--angle`: profile angle in degrees (default 0)
 - `--outdir`: PNG output directory (default: the project's `outputs/` folder)
 
-![Radial intensity profile through the beam centre](../showcase/lab6/radial_profile.png)
+![Intensity profile through the beam centre (horizontal slice)](../showcase/lab6/radial_profile.png)
 
 </details>
 
