@@ -608,6 +608,34 @@ def _connect_pending_hooks(window: QMainWindow) -> None:
             w.valueChanged.connect(hook)
 
 
+def _fit_max_width(box, old_cap=None) -> None:
+    """把数字框的上限设成"完整显示量程里最长文本"所需的宽度（= sizeHint）。
+
+    写死过的 84/72 是在某台机器、某个量程上量的：换平台（mac 转盘的
+    内边距更肥）或换量程（纵轴上限到 1e9，最长文本是 "1000000000.0"）
+    就不够。实测（2026-10-04）：点数缺 2px、对比度/热图/纵轴上下限各
+    缺 33px——上限一旦盖住，坞拖多宽都补不回来，用户看到的就是
+    "点数不全，拉伸参数栏也不动"。sizeHint 按**当前平台的字体与转盘
+    内边距**、按量程里最长的文本自己算，拿它当上限：坞够宽时任何可能
+    的值都能完整显示，也不会长过需要的宽度（坞再宽就是行内留白，
+    不是把数字框摊大）。
+
+    参数 old_cap = 这个框原来写死的上限。转盘的**有效下限**是
+    min(sizeHint, 上限)——上限抬到 sizeHint 就等于"压不窄了"，会把
+    坞的宽下限顶大（0.1.1 特意做过的"窄坞能压"不许丢）。所以原来被
+    旧上限压着的框（old_cap < sizeHint，正是会裁长值的那批）把旧上限
+    降级成显式下限：任何坞宽下都不比以前窄，宽出来的部分才用来"看全"。
+
+    用法：必须在 setRange / setDecimals / setSuffix 之后调用（后缀算
+    进文本宽度），得到的宽度随平台自适应，不写数字。
+    """
+    box.ensurePolished()
+    need = box.sizeHint().width()
+    if old_cap is not None and old_cap < need:
+        box.setMinimumWidth(max(old_cap, box.minimumWidth()))
+    box.setMaximumWidth(need)
+
+
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
     """参数坞：顶部两行固定件（"编辑对象"名 / "几何配置"条目）+ 五个
     入口页（校准 / 1D / 处理 / 对比 / 绘图），翻页由工具栏那五个入口
@@ -728,7 +756,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setValue(DATA_PARAM_DEFAULTS[key])   # 初值只有一处定义（见 panel_state）
         box.setDecimals(1)
         box.setSuffix("°")
-        box.setMaximumWidth(84)      # 同 add_range：mac 转盘内边距很肥
+        _fit_max_width(box)          # 上限 = 完整显示 "90.0°" 所需（随平台字体）
         # 显式小下限 = 允许被压窄而不是把整行撑出坞外：Windows 上
         # 转盘的最小尺寸提示更大，不设的话窄坞里最右边的「点数」会被裁
         # （2026-10-04 试用反馈："3000 点显示不全"）
@@ -742,7 +770,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt = QSpinBox()
     npt.setRange(100, 100000)
     npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
-    npt.setMaximumWidth(72)
+    _fit_max_width(npt)              # 上限 = 完整显示 "100000" 所需
     npt.setMinimumWidth(56)
     npt.setToolTip("2θ 范围内的采样点数（1D / 处理 / 绘图页共用；"
                    "改了要重出图才生效）")
@@ -841,18 +869,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
             box.setReadOnly(True)
             box.setButtonSymbols(QDoubleSpinBox.NoButtons)
             box.setStyleSheet("color: gray;")
+        _fit_max_width(box)          # 上限 = 完整显示量程最长文本所需
         window.params[name] = box
         form.addRow(label if label is not None else name, box)
         return box
 
     def add_range(form, lo_name, hi_name, lo, hi, lo_value, hi_value,
-                  label, suffix="", decimals=1, tooltip="", max_width=84):
+                  label, suffix="", decimals=1, tooltip=""):
         """成对的上下限并排一行：左框 ~ 右框，共用一个行标签。
 
         window.params 的键保持原来的 lo_name/hi_name 不动（快照回放、
-        测试都按这些键找控件），只改显示排版。max_width = 单框限宽：
-        mac 原生转盘内边距很肥（sizeHint 117px 且缩不小），两框并排
-        会把坞撑太宽；84 = "100000.0" 在编辑区完整显示的实测底限。
+        测试都按这些键找控件），只改显示排版。两框各自限宽到"量程最长
+        文本能完整显示"（_fit_max_width）——写死 84 时，上到 1e9 的量程
+        放不下（"1000000000.0" 要 117px），拉宽坞也补不回来。
         """
         lo_box = QDoubleSpinBox()
         lo_box.setRange(lo, hi)
@@ -867,7 +896,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                 box.setSuffix(suffix)
             if tooltip:
                 box.setToolTip(tooltip)
-            box.setMaximumWidth(max_width)
+            _fit_max_width(box, 84)
         window.params[lo_name] = lo_box
         window.params[hi_name] = hi_box
         field = QWidget()
@@ -1155,7 +1184,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_scale_box.setDecimals(2)
     bg_scale_box.setSingleStep(0.1)
     bg_scale_box.setValue(1.0)
-    bg_scale_box.setMaximumWidth(84)
+    _fit_max_width(bg_scale_box, 84)     # 旧上限 84 降为下限，上限 = 完整显示 "100.00"
     bg_scale_box.setToolTip("空扫归一化系数：样品与空扫的曝光时间/束流不一致"
                             "时填比值（样品÷空扫），一致就保持 1.0")
     window.params["空扫归一化"] = bg_scale_box
@@ -1171,8 +1200,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_window_box.setDecimals(2)
     bg_window_box.setSingleStep(0.1)
     bg_window_box.setValue(AUTO_WINDOW_DEG)
-    bg_window_box.setMaximumWidth(84)
     bg_window_box.setSuffix("°")
+    _fit_max_width(bg_window_box, 84)    # 旧上限 84 降为下限，上限 = 完整显示 "10.00°"
     bg_window_box.setToolTip("窗口宽度 (°)：多宽的一段算「背景」而不是「峰」。"
                              "取最宽峰宽的 3–10 倍（本数据峰宽约 0.1–0.3°，"
                              f"默认 {AUTO_WINDOW_DEG:g}°）；取小了峰会被"
@@ -1259,8 +1288,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     smooth_box.setDecimals(2)
     smooth_box.setSingleStep(0.05)
     smooth_box.setValue(0.10)
-    smooth_box.setMaximumWidth(84)
     smooth_box.setSuffix("°")
+    _fit_max_width(smooth_box, 84)       # 旧上限 84 降为下限，上限 = 完整显示 "2.00°"
     smooth_box.setToolTip("窗口宽度 (°)：参与平均的 2θ 跨度。\n"
                           "典型峰宽 0.1–0.3°，窗口取到峰宽量级就会明显削峰；"
                           "先取 0.05–0.15° 试，看削掉多少再定")
@@ -1284,8 +1313,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     smooth_order = QSpinBox()
     smooth_order.setRange(2, 6)
     smooth_order.setValue(3)
-    smooth_order.setMaximumWidth(60)
     smooth_order.setSuffix(" 阶")
+    _fit_max_width(smooth_order, 60)     # 旧上限 60 降为下限，上限 = 完整显示 "6 阶"
     smooth_order.setToolTip("Savitzky–Golay 的多项式阶数（2–3 常用：阶数越高"
                             "越贴合峰形，但也越容易跟着噪声抖）")
     window.params["平滑阶数"] = smooth_order
@@ -1316,8 +1345,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setDecimals(3)
         box.setSingleStep(0.1)
         box.setValue(val)
-        box.setMaximumWidth(84)
         box.setSuffix("°")
+        _fit_max_width(box, 84)      # 旧上限 84 降为下限，上限 = 完整显示 "180.000°"
         box.setToolTip("裁剪区间的起止 2θ（含两端）。起点 ≥ 终点时视为"
                        "不裁剪（不会出错）")
     window.params["裁剪起点 (°)"] = cut_lo
