@@ -88,7 +88,7 @@ from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
-from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.integrator import (
     calibrate_lab6, refine_lab6_from_points, snap_lab6_ring)
 from xrd_toolkit.services.ring_metrics import ring_metrics
@@ -829,7 +829,8 @@ def _attach_metrics(result: dict, image, geom: dict,
             result[key] = _one(src)      # 引擎结果本来不带指标，只管覆盖
         except Exception as exc:                      # noqa: BLE001
             result[key] = None
-            result["metrics_error"] = f"{type(exc).__name__}: {exc}"
+            # 措辞走统一出口：内部错误说明"不是你操作的问题"（2026-10-05）
+            result["metrics_error"] = user_error_text(exc)
 
 
 def _metrics_note(result: dict) -> str:
@@ -908,7 +909,9 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
 
     判环可疑时（同一环号被点在明显不同的半径上）先按尺度重判一遍再拟合
     ——见 _reindex_by_scale（用户 2026-09-30："第 0 青环里套了两个真实的环，
-    点它们都判成第 0 环"）。
+    点它们都判成第 0 环"）。重判赢了就连**赢家那套的起点距离**一起用
+    （dist0_m = 原距离 × 赢家尺度）：只换判环、起点还用原来那个错的，拟合
+    会落回另一支更差的解（真数据实测 0.31 vs 7.55 px，2026-10-05）。
     """
     image = None
     load_error = None
@@ -916,11 +919,11 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
         try:
             image = _load_image(path_str)
         except Exception as exc:                      # noqa: BLE001
-            load_error = f"{type(exc).__name__}: {exc}"
-    rings, note = _reindex_by_scale(points, rings, geom, center0_px, image)
+            load_error = user_error_text(exc)
+    rings, note, dist0_m = _reindex_by_scale(points, rings, geom, center0_px, image)
     result = refine_lab6_from_points(
         points, rings, pixel_size_m=geom["pixel_size_m"],
-        wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
+        wavelength_m=geom["wavelength_m"], dist0_m=dist0_m,
         center0_px=center0_px)
     result["beam_center_rc"] = (center0_px[1], center0_px[0])
     if note:
@@ -967,8 +970,14 @@ def _rings_look_suspicious(points, rings, center_px) -> bool:
 
 
 def _rings_at_scale(points, geom, center_px, scale) -> list:
-    """把距离乘 scale 后重新判环；有任何一点判不到环就返回空表（那套不能用）。"""
-    g = dict(geom)
+    """把距离乘 scale 后重新判环；有任何一点判不到环就返回空表（那套不能用）。
+
+    geom 的形状约定与 _attach_metrics 相同（GUI 交出来的是米制键
+    poni1_m/poni2_m），判环要的却是 px 键——先归一化再读，两种形状都收。
+    别忘了这一步（2026-10-05 踩过：只认 px 键 → 手动校准一触发尺度扫描
+    就 KeyError: 'poni1_px'，正好把这个兜底功能该干活的时候打死了）。
+    """
+    g = _geom_px_keys(geom) if "poni1_m" in geom else dict(geom)
     g["dist_m"] = float(geom["dist_m"]) * float(scale)
     px = float(g["pixel_size_m"])
     out = []
@@ -988,7 +997,10 @@ def _rings_at_scale(points, geom, center_px, scale) -> list:
 def _reindex_by_scale(points, rings, geom, center0_px, image):
     """判环可疑时：扫几个尺度重判环、各拟合一次，挑**环位偏差最小**的那套。
 
-    返回 (rings, 说明)；不需要扫 / 扫不动时返回 (rings, "")——不猜、不动。
+    返回 (rings, 说明, dist0_m)；不需要扫 / 扫不动时返回 (rings, "", 原距离)
+    ——不猜、不动。换了判环就**连赢家那套的起点距离一起交出来**：只换判环、
+    起点还用原来那个错的，重拟合会从错的初值出发落回另一支更差的解——真数据
+    实测 0.31 px vs 7.55 px，日志写的和最终拿到的对不上（2026-10-05 查修）。
 
     为什么扫尺度：判环是"拿当前几何把点击点换算成 2θ、再找最近的理论环"，
     而低角侧没有更低的环可判——距离错一个比例时最里面几个真实环全被压到
@@ -999,7 +1011,7 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
     换"同一个噪声口径（calib_model.SOURCE_IMPROVE_MIN_PX），免得在噪声里跳。
     """
     if image is None or not _rings_look_suspicious(points, rings, center0_px):
-        return rings, ""
+        return rings, "", float(geom["dist_m"])
 
     def _fit(scale, screen=True):
         cand = _rings_at_scale(points, geom, center0_px, scale)
@@ -1024,7 +1036,7 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
     # 基准（1.0）**不筛**：它就是"原判法"，得量出它的环位偏差当比较基准
     base = _fit(1.0, screen=False)
     if base is None:
-        return rings, ""      # 指标算不出来 = 没有判据：老实地不动
+        return rings, "", float(geom["dist_m"])   # 指标算不出来 = 没有判据：老实地不动
     best = base
     for s in _MANUAL_SCALE_PROBE:
         if abs(s - 1.0) < 1e-9:
@@ -1033,10 +1045,11 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
         if got is not None and got[0] <= best[0] - SOURCE_IMPROVE_MIN_PX:
             best = got
     if best[1] == base[1]:
-        return rings, ""
+        return rings, "", float(geom["dist_m"])
     dev, scale, cand = best
     return cand, (f"判环可疑（同一环号横跨了两个半径）：按距离尺度 {scale:g} 重判"
-                  f"更合理——环位偏差 {dev:.2f} px，原判法 {base[0]:.2f} px")
+                  f"更合理——环位偏差 {dev:.2f} px，原判法 {base[0]:.2f} px"), \
+        float(geom["dist_m"]) * float(scale)
 
 
 def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:

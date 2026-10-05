@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 from xrd_toolkit import config, paths
 from xrd_toolkit.gui.calib_model import _calib_state, _result_by_name
 from xrd_toolkit.gui.panel_state import _log, _reload_config_combo
+from xrd_toolkit.gui.tasks import user_error_text
 
 
 def _import_poni(window: QMainWindow) -> None:
@@ -35,7 +36,7 @@ def _import_poni(window: QMainWindow) -> None:
         import pyFAI
         ai = pyFAI.load(str(p))
     except Exception as err:
-        _log(window, f".poni 读取失败 {p.name}（{err}）")
+        _log(window, f".poni 读取失败 {p.name}（{user_error_text(err)}）")
         return
     # 必备几何字段缺一不可（探测器库不认识旧型号时 pixel 可能缺失）
     missing = [field for field, val in (
@@ -146,7 +147,7 @@ def _save_poni(window: QMainWindow) -> None:
         Path(path_str).parent.mkdir(parents=True, exist_ok=True)
         g.save(path_str)
     except Exception as err:
-        _log(window, f".poni 保存失败（{err}）")
+        _log(window, f".poni 保存失败（{user_error_text(err)}）")
         return
     _log(window, f"已保存几何参数 → {path_str}"
                  f"（{src_txt}：距离 {geom['dist_m'] * 1e3:.2f} mm，"

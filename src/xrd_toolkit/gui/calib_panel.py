@@ -20,6 +20,7 @@ from xrd_toolkit.gui.calib_model import (
 from xrd_toolkit.gui.panels import _install_resize_grip, _settle
 from xrd_toolkit.gui.panel_state import (_auto_contrast_values,
                                          _collect_geometry, _log)
+from xrd_toolkit.gui.tasks import user_error_text
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import (snap_lab6_ring,
                                              theoretical_ring_paths)
@@ -110,7 +111,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     try:
         image = _calib_image(window, path)
     except Exception as err:
-        _log(window, f"校准面板：读取 {path.name} 失败（{err}）")
+        _log(window, f"校准面板：读取 {path.name} 失败（{user_error_text(err)}）")
         return
     window.calib_gen = getattr(window, "calib_gen", 0) + 1   # 新面板新代
     _calib_state(window)   # 状态从空白起步（关闭即遗忘）

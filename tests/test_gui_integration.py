@@ -10773,6 +10773,11 @@ class TestManualReindex(unittest.TestCase):
     GEOM = {"pixel_size_m": 200e-6, "wavelength_m": 1.223e-11, "dist_m": 1.5958,
             "poni1_px": 1045.2, "poni2_px": 1022.0,
             "rot1_deg": 0.0, "rot2_deg": 0.0}
+    # 同一份几何的**米制键**形状——这才是 GUI 实际交给后台的形状
+    # （state["current_geom"] = 条目 geometry，poni1_m/poni2_m）
+    GEOM_M = {"pixel_size_m": 200e-6, "wavelength_m": 1.223e-11, "dist_m": 1.5958,
+              "poni1_m": 1045.2 * 200e-6, "poni2_m": 1022.0 * 200e-6,
+              "rot1_deg": 0.0, "rot2_deg": 0.0}
     CENTER = (1022.0, 1021.5)          # (列, 行) = 束心
     # 半径 190 / 220 / 400 px 的三个点：前两个在"同一个环号"上但半径差 16%
     PTS = [(1022.0, 1211.5), (1022.0, 1241.5), (1022.0, 1421.5)]
@@ -10809,12 +10814,37 @@ class TestManualReindex(unittest.TestCase):
                                side_effect=self._fake_refine), \
              mock.patch.object(gui_calib, "_attach_metrics",
                                side_effect=fake_attach):
-            got, note = gui_calib._reindex_by_scale(
+            got, note, dist0 = gui_calib._reindex_by_scale(
                 self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
         self.assertEqual(got, [0, 1, 2], "该换成尺度 0.9 那套判环")
         self.assertIn("尺度 0.9", note)
         self.assertIn("0.10 px", note)
         self.assertIn("原判法 0.40 px", note)
+        # 起点距离跟着赢家那套走（只换判环不换起点会落回另一支差解）
+        self.assertAlmostEqual(dist0, self.GEOM["dist_m"] * 0.9)
+
+    def test_metric_geometry_shape_survives_the_scale_search(self):
+        """GUI 实际形状（米制键 poni1_m）也要能扫尺度，且与 px 键形状同判。
+
+        回归（2026-10-05）：_rings_at_scale 曾经只认 px 键，而 GUI 交出的
+        是米制键——用户一触发尺度扫描（任一环号横跨两个半径，正是这个兜底
+        功能该干活的时候）就 KeyError: 'poni1_px'，日志写成"校准失败
+        （手动）"。上面的用例都用 px 键桩几何 + mock 掉 _rings_at_scale，
+        形状对不上也看不见。
+        """
+        def attach(res, img, g, initial=None):
+            res.update({"metrics": {"dev_px": 0.30}})   # 各尺度持平 → 不换
+
+        with mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               side_effect=self._fake_refine), \
+             mock.patch.object(gui_calib, "_attach_metrics", side_effect=attach):
+            got_m, note_m, d0_m = gui_calib._reindex_by_scale(
+                self.PTS, [0, 0, 1], self.GEOM_M, self.CENTER, object())
+            got_px, note_px, d0_px = gui_calib._reindex_by_scale(
+                self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
+        self.assertEqual(got_m, got_px, "两种几何形状的判环结果必须一致")
+        self.assertEqual(note_m, note_px)
+        self.assertAlmostEqual(d0_m, d0_px)
 
     def test_no_switch_without_a_clear_win(self):
         """所有尺度一样好（或更差）→ 原样不动、不给说明（不猜）。"""
@@ -10825,17 +10855,51 @@ class TestManualReindex(unittest.TestCase):
              mock.patch.object(gui_calib, "_attach_metrics",
                                side_effect=lambda res, img, g, initial=None:
                                res.update({"metrics": {"dev_px": 0.30}})):
-            got, note = gui_calib._reindex_by_scale(
+            got, note, dist0 = gui_calib._reindex_by_scale(
                 self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
         self.assertEqual(got, [0, 0, 1])
         self.assertEqual(note, "")
+        self.assertEqual(dist0, self.GEOM["dist_m"])   # 不动 = 原距离照旧
 
     def test_no_image_means_no_judgement(self):
         """没有图像（面板没开）→ 连扫都不扫（没有判据就不猜）。"""
-        got, note = gui_calib._reindex_by_scale(
+        got, note, dist0 = gui_calib._reindex_by_scale(
             self.PTS, [0, 0, 1], self.GEOM, self.CENTER, None)
         self.assertEqual(got, [0, 0, 1])
         self.assertEqual(note, "")
+        self.assertEqual(dist0, self.GEOM["dist_m"])
+
+    def test_worker_refits_from_the_winning_scale(self):
+        """尺度扫描赢了 → 最终重拟合的起点距离也用赢家那套（不是原来的）。
+
+        回归（2026-10-05）：曾经只把"判环"交出去、起点还用原距离，重拟合
+        从错的初值出发落回另一支更差的解——真数据实测 0.31 px vs 7.55 px，
+        日志里写"重判更合理——0.31 px"、拿到的却是 7.55 px 的几何。
+        """
+        seen = []
+
+        def fake_refine(points, rings, **kw):
+            seen.append(kw["dist0_m"])
+            return self._fake_refine(points, rings, **kw)
+
+        def attach(res, img, g, initial=None):
+            dev = 0.10 if res["rings_used"] == [0, 1, 2] else 0.40
+            res["metrics"] = {"dev_px": dev, "clip_frac": 0.0, "n_complete": 16,
+                              "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}
+
+        with mock.patch.object(
+                gui_calib, "_rings_at_scale",
+                side_effect=lambda p, g, c, s: ([0, 1, 2] if abs(s - 0.9) < 1e-9
+                                                else [0, 0, 1])), \
+             mock.patch.object(gui_calib, "refine_lab6_from_points",
+                               side_effect=fake_refine), \
+             mock.patch.object(gui_calib, "_attach_metrics", side_effect=attach), \
+             mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                               return_value=np.ones((64, 64))):
+            gui_calib._manual_calib_worker(
+                "data/fake_a.tif", self.PTS, [0, 0, 1], self.GEOM_M, self.CENTER)
+        self.assertAlmostEqual(seen[-1], self.GEOM_M["dist_m"] * 0.9,
+                               msg="最终重拟合该从赢家尺度出发")
 
 
 class TestCalibMetrics(unittest.TestCase):
@@ -10911,6 +10975,8 @@ class TestCalibMetrics(unittest.TestCase):
         self.assertIsNone(res["metrics"])
         self.assertIsNone(res["metrics_initial"])
         self.assertIn("KeyError", res["metrics_error"])
+        # 日志后缀里也不许裸异常（2026-10-05：报错要让用户看得懂）
+        self.assertIn("程序内部出错", res["metrics_error"])
 
     def test_worker_survives_engine_exception(self):
         """引擎抛异常 → 只丢指标；校准结果与束心完好（指标是显示器）。"""

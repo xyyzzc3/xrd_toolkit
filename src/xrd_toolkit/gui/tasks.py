@@ -94,6 +94,41 @@ def _shutdown_pool():
 atexit.register(_shutdown_pool)
 
 
+# ══ 用户看得懂的报错 ═════════════════════════════════════════
+# 用户 2026-10-05："GUI 报错的时候，不要让用户困惑"。点名的是校准页那次
+# "校准失败（手动）：KeyError: 'poni1_px'"——裸异常名 + 内部字段名，用户
+# 既看不懂、又会以为是自己操作错了。规则（docs/UI_COPY.zh-CN.md §4）：
+#   * 程序内部错误（下面的异常类型 = 代码写错了，用户不可能造成）→ 明说
+#     "不是你操作的问题"，异常类型与原文留在括号里（方便复制反馈）；
+#   * 其余异常（读文件失败、我们写给用户的规则提示）→ 原样"类型: 消息"，
+#     类型名是给开发者定位用的。
+# 所有用户可见的报错都从这里出口——改措辞只改这里，别各写各的。
+_INTERNAL_BUGS = (KeyError, AttributeError, TypeError, NameError,
+                  UnboundLocalError, ImportError, IndexError,
+                  ZeroDivisionError, AssertionError)
+
+
+def is_internal_bug(exc) -> bool:
+    """这个异常是不是"程序自己写错了"（而不是用户环境/操作造成的）。"""
+    return isinstance(exc, _INTERNAL_BUGS)
+
+
+def user_error_text(exc) -> str:
+    """异常 → 给用户看的报错诊断句（不含"怎么办"，怎么办由调用方按场景续写）。"""
+    detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    if is_internal_bug(exc):
+        return f"程序内部出错（{detail}，不是你操作的问题）"
+    return detail
+
+
+def _task_error_text(exc) -> str:
+    """后台任务的完整报错句：诊断 + （内部错误才有的）下一步建议。"""
+    text = user_error_text(exc)
+    if is_internal_bug(exc):
+        text += "——可以重试；若反复出现，请把这条提示发给开发者"
+    return text
+
+
 class _Worker(QObject):
     """在后台线程里跑一个函数；结果/报错通过信号送回主线程。"""
 
@@ -123,7 +158,7 @@ class _Worker(QObject):
             except Exception as exc:
                 # 后台线程里任何异常都转成信号，绝不直接在后台崩溃
                 result = None
-                err = f"{type(exc).__name__}: {exc}"
+                err = _task_error_text(exc)
         finally:
             self.running = False
             self.finished.set()

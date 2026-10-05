@@ -69,6 +69,25 @@ class TestBackgroundTask(unittest.TestCase):
         self.assertIn("ValueError: test boom", errors[0])
         self.assertTrue(_wait_until(task.is_done))
 
+    def test_internal_bug_error_explains_itself_to_the_user(self):
+        """程序内部错误（KeyError 这类）不许裸给用户看——要说明不是操作问题、
+        给出下一步，同时保留异常原文方便反馈（用户 2026-10-05："GUI 报错的
+        时候，不要让用户困惑"；当时日志原样是 "KeyError: 'poni1_px'"）。"""
+        def boom():
+            raise KeyError("poni1_px")
+
+        errors = []
+        task = BackgroundTask(boom, on_error=errors.append)
+        task.start()
+        self.assertTrue(_wait_until(lambda: errors), "报错应在 5 s 内送达")
+        text = errors[0]
+        self.assertIn("程序内部出错", text)
+        self.assertIn("不是你操作的问题", text)
+        self.assertIn("KeyError: 'poni1_px'", text)      # 原文保留，可复制反馈
+        self.assertIn("发给开发者", text)
+        self.assertFalse(text.startswith("KeyError"), "不许裸异常打头")
+        self.assertTrue(_wait_until(task.is_done))
+
     def test_arguments_passed_through(self):
         results = []
         task = BackgroundTask(lambda a, b: a + b, 2, 3, on_done=results.append)

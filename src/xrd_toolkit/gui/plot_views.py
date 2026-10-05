@@ -57,7 +57,7 @@ from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
-from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services import process, stage_cache
 from xrd_toolkit.services.stacking import row_step
 from xrd_toolkit.services.background import (compute_baseline,
@@ -1499,7 +1499,7 @@ def _refresh_proc(window: QMainWindow) -> None:
                     dock.heat_data = data   # 同 _apply_image_params：与画的同源
                     _draw_heatmap(window, dock, data[0], data[1], data[2])
         except Exception as err:                      # 重画失败不该拖垮整窗
-            _log(window, f"背景扣除重画失败：{type(err).__name__}: {err}")
+            _log(window, f"背景扣除重画失败：{user_error_text(err)}")
 
 
 def _update_smooth_points(window: QMainWindow, dock) -> None:
@@ -2016,7 +2016,7 @@ def _open_source_group(window: QMainWindow, name: str, sources) -> int:
             _open_source_view(window, name, source)
         except Exception as err:                       # 单张失败不拖垮整组
             _log(window, f"{source.display}：打开失败"
-                         f"（{type(err).__name__}: {err}）")
+                         f"（{user_error_text(err)}）")
         if i and (i + 1) % 8 == 0:
             _log(window, f"  已开 {i + 1}/{len(sources)}…")
             _settle(window)
