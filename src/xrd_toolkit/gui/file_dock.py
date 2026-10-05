@@ -1428,8 +1428,14 @@ def _uncheck_everything(window: QMainWindow) -> int:
     return changed
 
 
-def refresh_product_groups(window: QMainWindow) -> None:
+def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
     """重建文件栏里的产物分组：各组「1D 产物 …」+ 各组「处理后 …」。
+
+    quiet=True（单张 1D 算完的即时刷新）：产物**照常列出来**，但不走
+    "新产物 = 勾选清零"那一步、也不写"出现新产物"那行日志——清零是给
+    "一批活干完"（批量出图/批量处理）定的规矩；单张看一眼就把用户刚勾的
+    文件清掉，等于顺手废掉"再点一次 [1D] 看缓存"这条路（2026-10-05：
+    单张即时刷新上线时撞上，四条测试同时变红才发现的）。
 
     数据来源两处，各有各的道理：
       - 1D 产物**扫盘 + 按积分设置分组**：磁盘上有什么就显示什么（不许
@@ -1455,6 +1461,9 @@ def refresh_product_groups(window: QMainWindow) -> None:
     if seen_before is not None:
         newborn = now_on_disk - seen_before
     window._products_seen = now_on_disk
+    if quiet:
+        # 单张即时刷新：产物照常列出来，但不算"冒出新产物"（见 docstring）
+        newborn = set()
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""

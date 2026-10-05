@@ -257,18 +257,17 @@ def _save_calib_config(window: QMainWindow) -> None:
     refined/custom）、derived_from = 这一批的起点借自哪条、created =
     保存时间。
 
-    保存前查**像素尺寸确认**那道门（与开始校准同一道，见 calib.
-    _initial_ready）：条目会被别的批次、CLI 脚本原样拿去用，而像素
-    填错时拟合会把距离同比例凑回来——不确认就存，等于把一份"看着
-    正常、距离存疑"的几何发出去。
+    像素尺寸没核对时**只提醒、不拦**（用户 2026-10-05："改为提醒的样式，
+    不要求用户必须选择了"）：条目会被别的批次、CLI 脚本原样拿去用，所以
+    提醒里要说明"这条几何的距离可能存疑"，但保存照常进行。
     """
-    from xrd_toolkit.gui.calib import _initial_ready   # 破循环：见模块说明
+    from xrd_toolkit.gui.calib import (          # 破循环：见模块说明
+        _warn_pixel_unchecked)
     state = _calib_state(window)
     if state.get("current_geom") is None:
         _log(window, "还没有可保存的几何（先选一条配置或用 [编辑…] 填）")
         return
-    if not _initial_ready(window):
-        return   # 只提示、不保存（消息由 _initial_ready 记进日志）
+    _warn_pixel_unchecked(window, doing="保存")
     key = window.calib_key_edit.text().strip()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
         _log(window, "标识无效：只允许字母、数字、下划线，且以字母或"

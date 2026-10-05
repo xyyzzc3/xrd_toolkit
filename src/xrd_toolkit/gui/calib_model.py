@@ -19,7 +19,7 @@ if TYPE_CHECKING:      # 只为类型注解：本模块运行时零 Qt
 # custom = 手输/手改的几何（用户 2026-09-28 第 1 条：它也要进累积列表，
 # 否则"改完切走就找不回来、也不能放进 A/B 槽或当基准"），其余三个是
 # 校准动作产出的结果。
-KIND_LABELS = {"raw": "原始", "auto": "自动", "manual": "手动",
+KIND_LABELS = {"raw": "原始", "auto": "自动取点", "manual": "手动选点",
                "refined": "精修", "custom": "自定义"}
 SLOT_LABELS = {"current": "当前配置", "A": "A", "B": "B"}
 # "当前配置"的替换门槛（px）：新结果的环位偏差要比当前配置好**这么多**
@@ -36,8 +36,8 @@ def _calib_state(window: QMainWindow) -> dict:
                     改它的环号用（2026-10-03：原先右键弹输入框改，模态
                     对话框在 macOS 全屏下有卡死输入的前科，改成选中+面板改）
       results       累积的几何结果，按产生顺序：
-                    [{"name": 原始/自动1/手动1/…, "kind": raw|auto|manual|
-                     refined, "result": 几何 dict（带 metrics）}]
+                    [{"name": 原始/自动取点1/手动选点1/…, "kind":
+                     raw|auto|manual|refined, "result": 几何 dict（带 metrics）}]
       slots         {"current"/"A"/"B": 结果名 | None}——三个槽各指向一条
                     结果；A/B 默认空。current 为 None 时"当前配置"是手输/
                     手改的独立几何（显示"自定义"）
@@ -86,7 +86,7 @@ def _result_by_name(state: dict, name):
 
 
 def _next_name(state: dict, kind: str) -> str:
-    """累积命名：自动1、手动1、自动2…（每种各数各的）。"""
+    """累积命名：自动取点1、手动选点1、自动取点2…（每种各数各的）。"""
     n = state["counters"].get(kind, 0) + 1
     state["counters"][kind] = n
     return f"{KIND_LABELS[kind]}{n}"

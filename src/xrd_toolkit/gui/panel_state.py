@@ -155,6 +155,11 @@ _DISPLAY_DEFAULTS = {
     "裁剪区间": False,
     "裁剪起点 (°)": 2.0,
     "裁剪终点 (°)": 3.0,
+    # 堆叠行距（2026-10-05 用户："让用户自己改 y offset"）：默认自动 =
+    # 第二高的行峰 × 0.7（services/stacking.row_step）；勾"手动行距"后
+    # 按倍数微调。纯显示参数，改了立刻重画。
+    "手动行距": False,
+    "行距倍数": 1.0,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 

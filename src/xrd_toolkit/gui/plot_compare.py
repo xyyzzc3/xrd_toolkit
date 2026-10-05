@@ -178,6 +178,10 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
             peaks = [float(np.nanmax(c[1])) for c in curves
                      if len(c[1]) and np.isfinite(c[1]).any()]
             step = row_step(peaks)   # 行距口径见 services/stacking（第二高的行峰）
+            if _panel_param(window, dock, "手动行距", False):
+                # 用户自己定行距（2026-10-05："让用户自己改 y offset"）：
+                # 按倍数缩放自动行距——只动显示，1.00 = 与自动相同
+                step *= float(_panel_param(window, dock, "行距倍数", 1.0))
             offsets = [i * step for i in range(len(curves))]
             for (tth, shown, display, i, _ref), off in zip(curves, offsets):
                 color = overrides.get(display) or _curve_color(palette, i)

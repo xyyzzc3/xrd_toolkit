@@ -503,6 +503,15 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     情况是同一面板连点两次开了两个任务——先开的晚到会被丢弃
     （每面板只认最新任务，旧结果不得覆盖新图）。
     """
+    # 单张 1D 完成要刷文件栏（用户 2026-10-05 报的 bug：打开单张算完 1D，
+    # 文件栏不长「1D 产物」，再打开另一张才忽然出现——刷新原先只挂在
+    # 批量收尾里（_batch_step），单张走的这条路从来没人刷）。批内的交给
+    # 批收尾统一刷；放在最前：过期结果/面板已关这两条早退分支里，产物
+    # 已经在盘上，文件栏同样该更新。走 quiet 入口：单张不算"上一轮的活
+    # 干完了"，**不清勾选**（不清，用户才能再点一次 [1D] 看缓存——
+    # 2026-10-05 实测：非 quiet 会顺手把勾清掉，那条路直接断）。
+    if getattr(window, "_batch", None) is None and key.split("|", 1)[0] == "1D":
+        window.refresh_groups_quiet()
     # 批量进度：完成任务即计数（大批量时 quiet=True → 不写张张一条）
     suffix, quiet = _batch_step(
         window, key, getattr(window.plot_docks.get(key), "panel_display", ""))

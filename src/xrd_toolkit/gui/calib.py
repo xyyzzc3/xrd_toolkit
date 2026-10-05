@@ -185,14 +185,20 @@ def _set_pixel_ok(window: QMainWindow, on: bool) -> None:
                      f"（当前配置：{_slot_label(_calib_state(window), 'current')}）")
 
 
-def _initial_ready(window: QMainWindow) -> bool:
-    """能不能开跑校准：当前配置的像素尺寸必须确认过（否则只提示、不建任务）。"""
+def _warn_pixel_unchecked(window: QMainWindow, doing: str = "校准") -> None:
+    """像素尺寸没核对时写一条提醒（**不拦动作**）。
+
+    用户 2026-10-05："改为提醒的样式，不要求用户必须选择了"——原来这道门
+    是硬门禁（没勾按钮直接不干活）；现在照常继续，只把风险写清楚：像素
+    尺寸与波长、距离同比例缩放时环一模一样，填错时拟合会把距离凑回来，
+    环位偏差、a 离散度全都正常，只有报出来的距离是错的（还会写进 .poni
+    与配置条目）。界面上另有一行常显的橙色提示（calib_pixel_warn）。
+    """
     if _pixel_ok(window):
-        return True
-    _log(window, "请先核对「当前配置」的像素尺寸（勾上 [已核对像素尺寸]）"
-                 "——像素尺寸与波长、距离同比例缩放时环一模一样，填错时"
-                 "拟合会把距离凑回来：环位偏差看着正常，但报出来的距离是错的")
-    return False
+        return
+    _log(window, "提醒：像素尺寸还没核对（[已核对像素尺寸] 没勾）——"
+                 "像素填错时拟合会把距离同比例凑错：环位偏差看着正常，"
+                 f"报出来的距离是错的。这次{doing}照常进行，结果请自行核对")
 
 
 def _current_geom_text(window: QMainWindow) -> str:
@@ -425,7 +431,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
-      自动    定位环心并精修 / 在当前配置上再精修
+      自动取点  定位束心并精修 / 再精修
       手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
       三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
               配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
@@ -502,19 +508,31 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.addWidget(ops_box)
 
     # 像素尺寸确认：单独一行，钉在「操作」组下面（页面顶部区域）。
-    # 它是校准的**前置门禁**（没确认不让跑，见 _initial_ready），必须在
-    # 自动/手动按钮之前看得见。位置来回搬过三趟：原挤在「操作」按钮堆里
-    # （用户 2026-09-26 报"容易被忽视"，因为卡在参数坞可见区最下沿）→ 搬进
-    # 数据表上方 → 2026-09-30 数据表挪到页面最下，它又跟着沉下去了
-    # （用户 2026-10-01："把像素尺寸放上面，太下面了不方便"）→ 现在单独一行。
+    # **2026-10-05 起它只是提醒，不是门禁**（用户："改为提醒的样式，不要求
+    # 用户必须选择了"）：没勾也照常跑/照常存，只是这行旁边常显一条橙色
+    # 提示、动作开始时日志再提醒一句（见 _warn_pixel_unchecked）。
+    # 位置来回搬过三趟：原挤在「操作」按钮堆里（用户 2026-09-26 报"容易被
+    # 忽视"，因为卡在参数坞可见区最下沿）→ 搬进数据表上方 → 2026-09-30
+    # 数据表挪到页面最下，它又跟着沉下去了（用户 2026-10-01："把像素尺寸
+    # 放上面，太下面了不方便"）→ 现在单独一行。
     chk_pix = QCheckBox("已核对像素尺寸")
     chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
                        "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
-                       "是错的。只在像素值变了时才要求重新核对")
+                       "是错的。只在像素值变了时才清掉核对标记")
     chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
                                         _calib_sync(window)))
-    lay.addWidget(chk_pix)
+    # 短提醒（原因写在勾选框 tooltip 与动作时的日志里）：不把校准页撑宽
+    # ——参数坞宽度是按内容算的（_enter_calib），内容宽度关系到给绘图区
+    # 留的位置（CALIB_PANEL_RESERVE_PX），这行只当一个醒目的记号。
+    warn_pix = QLabel("⚠ 未核对，建议先核对")
+    warn_pix.setWordWrap(True)
+    warn_pix.setStyleSheet("color: #c0392b;")
+    pix_row = QHBoxLayout()
+    pix_row.addWidget(chk_pix)
+    pix_row.addWidget(warn_pix, 1)
+    lay.addLayout(pix_row)
     window.calib_pixel_chk = chk_pix
+    window.calib_pixel_warn = warn_pix
 
     key_edit = QLineEdit()
     key_edit.setPlaceholderText("条目标识（字母、数字、下划线，如 lmfp2_lab6）")
@@ -617,8 +635,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # 它在最后才 addWidget（见下），这里只留引用
     window.calib_verdict = verdict
 
-    # ── 自动 ───────────────────────────────────────────────
-    auto_box = QGroupBox("自动")
+    # ── 自动取点 ─────────────────────────────────────────────
+    auto_box = QGroupBox("自动取点")
     al = QVBoxLayout(auto_box)
     auto_hint = QLabel("从<b>当前配置</b>出发：定位束心（取点拟合，FFT 兜底）"
                        "→ pyFAI 精修；或在当前几何上再精修一遍。结果<b>直接"
@@ -629,7 +647,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_auto = QPushButton("定位束心并精修")
     btn_auto.setObjectName("start_auto_calib")
     btn_auto.clicked.connect(lambda: _start_auto_calib(window, "auto"))
-    btn_refined = QPushButton("在当前配置上再精修")
+    btn_refined = QPushButton("再精修")
     btn_refined.setObjectName("start_refined_calib")
     btn_refined.setToolTip("不重新定位束心，直接以当前配置的束心与距离为初值再"
                            "精修一轮——已有解比重新定位更可信；首轮初值偏时，"
@@ -642,8 +660,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     window.calib_start_refined = btn_refined
     # （数据表在手动区之后才加进布局——见本函数末尾，用户要求放最下）
 
-    # ── 手动 ───────────────────────────────────────────────
-    manual_box = QGroupBox("手动")
+    # ── 手动选点 ─────────────────────────────────────────────
+    manual_box = QGroupBox("手动选点")
     ml = QVBoxLayout(manual_box)
     manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
                          "（±0.5°；判环可疑时会自动按尺度重判一遍）；"
@@ -771,12 +789,15 @@ def _calib_sync(window: QMainWindow) -> None:
     window.calib_start_refined.setEnabled(state["current_geom"] is not None)
     window.calib_start_auto.setEnabled(state["current_geom"] is not None)
     window.calib_current_lbl.setText(_current_geom_text(window))
-    # 像素确认：只在像素值变了才要求重确认（规则 (b)）
+    # 像素确认：标记只在像素值真的变了时才被清掉（规则 (b)）；
+    # 没核对时那行橙色提醒常显（不拦动作，2026-10-05 起）
     cur_px = (state["current_geom"] or {}).get("pixel_size_m")
     window.calib_pixel_chk.setText(
         f"已核对像素尺寸（{(cur_px or 0) * 1e6:.1f} µm）"
         if cur_px is not None else "已核对像素尺寸")
     window.calib_pixel_chk.setChecked(_pixel_ok(window))
+    window.calib_pixel_warn.setVisible(
+        cur_px is not None and not _pixel_ok(window))
     # 保存区
     has_cur = state["current_geom"] is not None
     window.calib_save_btn.setEnabled(has_cur)
@@ -1053,7 +1074,7 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
 
 
 def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
-    """[定位环心并精修]（target="auto"）与 [在当前配置上再精修]（"refined"）。
+    """[定位束心并精修]（target="auto"）与 [再精修]（"refined"）。
 
     auto     从当前配置出发：自动定位环心（取点拟合，FFT 兜底）→ 精修
     refined  不重新定位环心，直接以**当前配置**的环心与距离为初值再精修
@@ -1066,11 +1087,10 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
     _open_calib_panel(window, path)   # 面板关了/没开过：重开
     if getattr(window, "calib_dock", None) is None:
         return   # 图像读取失败（_open_calib_panel 已记日志）
-    if not _initial_ready(window):
-        return   # 像素尺寸没确认：只提示，不建任务
+    _warn_pixel_unchecked(window)     # 没核对像素只提醒，不拦（2026-10-05）
     geom = dict(_calib_state(window).get("current_geom") or {})
     center0 = None
-    label = "自动定位" if target == "auto" else "在当前配置上再精修"
+    label = "定位束心并精修" if target == "auto" else "再精修"
     if target == "refined":
         bc = geom.get("beam_center_rc")
         # beam_center_rc 是 (行, 列)；引擎的 center0_px 要 (列, 行)
@@ -1117,8 +1137,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
                      f"{len({p[2] for p in _pts})} 个环；都挤在同一个环号上时，"
                      f"右键选中那个点，把环号改掉")
         return
-    if not _initial_ready(window):
-        return   # 像素尺寸没确认：只提示，不建任务
+    _warn_pixel_unchecked(window)     # 没核对像素只提醒，不拦（2026-10-05）
     geom = dict(state.get("current_geom") or {})
     beam = window.config["beam_center"]   # (行, 列) = 直射束落点 B
     center0_px = (beam[1], beam[0])       # (列, 行) 换序
@@ -1148,7 +1167,7 @@ def _start_manual_calib(window: QMainWindow) -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return
-        _log(window, f"校准失败（手动）：{msg}")
+        _log(window, f"校准失败（手动选点）：{msg}")
 
     path = getattr(window, "calib_path", None)   # 指标要图像；没面板时为 None
     task = BackgroundTask(_manual_calib_worker, str(path) if path else None,
@@ -1202,7 +1221,7 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
 def _enter_calib(window: QMainWindow) -> None:
     """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
 
-    没勾文件只记日志提示（不崩）——用户勾好文件后点 [定位环心并精修]
+    没勾文件只记日志提示（不崩）——用户勾好文件后点 [定位束心并精修]
     也能开面板。宽度只在够得着时拉：给绘图区留 CALIB_PANEL_RESERVE_PX
     （点环选点是在图上做的，坞太宽就没法点了）。
     """

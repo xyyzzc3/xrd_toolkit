@@ -225,6 +225,7 @@ def recheck_all(w):
     return w
 
 
+
 def _dock(w, view, path_str):
     """按面板键取坞（键 = f"{视图}|{路径}"，路径与 add_files 入参一致）。"""
     return w.plot_docks[f"{view}|{path_str}"]
@@ -457,6 +458,32 @@ class TestViewButtonRuns(unittest.TestCase):
             # 计算完成的图自动成为编辑对象（指向具体面板）
             self.assertEqual(w.focus_panel, "1D|data/fake_b.tif")
             self.assertIn("1D_fake_b.tif", w.focus_label.text())
+        finally:
+            w.close()
+
+    def test_single_1d_completion_refreshes_the_file_bar(self):
+        """单张 1D 算完，文件栏**当场**长出「1D 产物」。
+
+        回归（用户 2026-10-05）：刷新文件栏原先只挂在"批量（≥2 张）收尾"
+        里（_batch_step），单张算完从来不刷——要等下一次别的动作（比如再
+        打开一张文件）才"忽然出现"。用户原话："打开单张进行 1d 处理后
+        在文件栏不显示，如果再打开另一张，就显示了"。
+        """
+        w = create_window()
+        try:
+            folder = Path(tempfile.mkdtemp(prefix="xrd_1d_single_"))
+            p = folder / "single-00001.tif"
+            p.write_bytes(b"x" * 2048)          # 真文件：产物要真落盘才列得出来
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, [str(p)])
+                _open_view(w, "1D")
+                drawn = _wait_until(
+                    lambda: len(_axes(w, "1D", str(p)).lines) > 0)
+                self.assertTrue(drawn, "点 1D 后应画出曲线")
+                self.assertIsNotNone(
+                    _group_by_text(w, "1D 产物"),
+                    "单张算完，文件栏该当场出现「1D 产物」组")
         finally:
             w.close()
 
@@ -1698,6 +1725,35 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             gui_plot_compare._redraw_compare(w, key)
             np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
             self.assertIsNotNone(ax.get_legend())
+        finally:
+            w.close()
+
+    def test_manual_row_step_multiplies_the_offset(self):
+        """[手动行距]：勾上后行距 = 自动行距 × 倍数（用户 2026-10-05）。
+
+        用户原话："对比的堆叠添加让用户自己改 y off"。纯显示参数：
+        改了立刻重画（与归一化/配色同一套即改即画），不勾 = 原来的
+        自动口径（第二高的行峰 × 0.7）不动。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
+            w.params["对比堆叠"].setChecked(True)     # 即改即画
+            step_auto = float(np.asarray(ax.lines[1].get_ydata())[0]
+                              - y_flat[1][0])
+            self.assertFalse(w.params["行距倍数"].isEnabled(),
+                             "自动行距下倍数框置灰")
+            w.params["手动行距"].setChecked(True)
+            self.assertTrue(w.params["行距倍数"].isEnabled())
+            w.params["行距倍数"].setValue(2.0)
+            y2 = float(np.asarray(ax.lines[1].get_ydata())[0] - y_flat[1][0])
+            self.assertAlmostEqual(y2, step_auto * 2.0, places=6,
+                                   msg="行距该按倍数放大")
+            w.params["手动行距"].setChecked(False)    # 回到自动口径
+            y3 = float(np.asarray(ax.lines[1].get_ydata())[0] - y_flat[1][0])
+            self.assertAlmostEqual(y3, step_auto, places=6)
         finally:
             w.close()
 
@@ -3591,6 +3647,41 @@ class TestProcessingChain(unittest.TestCase):
             self.assertTrue(_wait_until(
                 lambda: len(_axes(w, "1D", str(files[0])).lines) > 0))
         return files[0], w.plot_docks["1D|" + str(files[0])]
+
+    def test_processing_page_points_at_double_click(self):
+        """处理页顶部常显指路行：双击文件栏「1D 产物」= 把它选成处理对象。
+
+        用户 2026-10-05："没选中面板就显示没选中——改为双击文件栏 1d 产出
+        进行处理，让用户看明白"。这条钉住两件事：指路行在页面上；双击产物
+        真的把它选成「编辑对象」（打开面板 + 焦点切过去）。
+        """
+        w = create_window()
+        try:
+            path, _dock = self._panel(w)          # 算出一份真 1D 产物
+            # 指路行在「处理」页（param_stack 第 2 页）顶部
+            labels = [lbl.text() for lbl in
+                      w.param_stack.widget(2).findChildren(QLabel)]
+            self.assertTrue(
+                any("双击「1D 产物」" in t for t in labels),
+                f"处理页该有指路行：{labels[:6]}")
+            # 关掉刚才那张图（关闭即遗忘）→ 再从文件栏双击产物打开
+            dock0 = w.plot_docks.get("1D|" + str(path))
+            if dock0 is not None:
+                dock0.close()
+                QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group, "得先有产物组")
+            leaf = group.child(0)
+            gui_file_dock._open_entry_view(w, leaf)
+            dock = w.plot_docks.get(w.focus_panel)
+            self.assertIsNotNone(dock, "双击产物该打开一张面板并聚焦")
+            self.assertIsNotNone(getattr(dock, "panel_source", None),
+                                 "聚焦的该是产物面板")
+            self.assertNotEqual(dock.panel_source.kind, gui_sources.RAW)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
     def _enable(self, w, smooth=False, cut=False):
         """按界面上的路径打开处理项（改控件 → 实时重画）。"""
@@ -9733,17 +9824,17 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(fake.call_args.kwargs["center0_px"],
                              (self.FAKE_CENTER["cx"], self.FAKE_CENTER["cy"]))
             self.assertAlmostEqual(fake.call_args.kwargs["dist0_m"], 1.5958)
-            # 结果累积：原始1（借来的起点）+ 自动1，并填进 A 槽
+            # 结果累积：原始1（借来的起点）+ 自动取点1，并填进 A 槽
             self.assertEqual([r["name"] for r in w.calib_state["results"]],
-                             ["原始1", "自动1"])
-            self.assertEqual(w.calib_state["slots"]["A"], "自动1")
+                             ["原始1", "自动取点1"])
+            self.assertEqual(w.calib_state["slots"]["A"], "自动取点1")
             vals = w.calib_vals["A"]
             self.assertEqual(vals["dist"].text(), "1595.80")
             self.assertEqual(vals["poni1"].text(), "1045.20")
             self.assertEqual(vals["poni2"].text(), "1022.00")
             # 白名单：自洽残差不入对比表
             self.assertNotIn("resid", vals)
-            self.assertIn("自动完成（自动1）", self._logs(w))
+            self.assertIn("自动取点完成（自动取点1）", self._logs(w))
             # 图按新几何重画：控制点绿点（一条 2 点散点线）画上
             self.assertTrue(any(len(line.get_xdata()) == 2
                                 for line in w.calib_ax.lines))
@@ -9915,7 +10006,7 @@ class TestCalibration(unittest.TestCase):
                              (1022.3, 1022.0))
             # 手动列 + 点数少的可信度提示
             self.assertEqual(w.calib_vals["A"]["dist"].text(), "1596.20")
-            self.assertIn("手动完成（手动1）", self._logs(w))
+            self.assertIn("手动选点完成（手动选点1）", self._logs(w))
             self.assertIn("点数较少", self._logs(w))
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -9958,12 +10049,12 @@ class TestCalibration(unittest.TestCase):
                    "rot1_deg": 0.0, "rot2_deg": 0.0, "residual_deg": 0.004,
                    "beam_center_rc": (1021.5, 1022.0), "metrics": None}
             gui_calib._add_result(state, "auto", res)
-            state["slots"]["current"] = "自动1"
+            state["slots"]["current"] = "自动取点1"
             gui_calib._sync_slot_combos(w)
             combo = w.calib_slot_combo["current"]
             texts = [combo.itemText(i) for i in range(combo.count())]
-            self.assertEqual(texts.count("自动1"), 1, f"不许重复：{texts}")
-            self.assertEqual(combo.currentText(), "自动1",
+            self.assertEqual(texts.count("自动取点1"), 1, f"不许重复：{texts}")
+            self.assertEqual(combo.currentText(), "自动取点1",
                              "选中的那条就是列表里它自己")
             # 没指向结果时（手输的自定义）首项照旧要有：它显示的东西不在列表里
             state["slots"]["current"] = None
@@ -10115,12 +10206,13 @@ class TestCalibration(unittest.TestCase):
                 w.close()
 
     def test_pixel_confirmation_sits_above_the_action_sections(self):
-        """像素尺寸确认住在页面**顶部**（操作组下面、自动/手动之前）。
+        """像素尺寸确认住在页面**顶部**（操作组下面、自动取点/手动选点之前）。
 
-        它是校准的前置门禁（没确认不让跑），搬过三趟：挤在「操作」按钮堆里
-        被忽视（2026-09-26）→ 数据表上方 → 2026-09-30 数据表挪到最下之后它
-        跟着沉底（用户 2026-10-01："把像素尺寸放上面，太下面了不方便"）。
-        这条钉住位置，别再沉下去。
+        它现在只是一条**提醒**（2026-10-05 起不拦动作，见
+        `_warn_pixel_unchecked`），但仍要待在顶部看得见——搬过三趟：挤在
+        「操作」按钮堆里被忽视（2026-09-26）→ 数据表上方 → 2026-09-30
+        数据表挪到最下之后它跟着沉底（用户 2026-10-01："把像素尺寸放上面，
+        太下面了不方便"）。这条钉住位置，别再沉下去。
         """
         w = create_window()
         try:
@@ -10128,14 +10220,17 @@ class TestCalibration(unittest.TestCase):
             layout = page.layout()
             names = []
             for i in range(layout.count()):
-                wid = layout.itemAt(i).widget()
-                if wid is w.calib_pixel_chk:
-                    names.append("像素确认")
+                item = layout.itemAt(i)
+                wid = item.widget()
+                if wid is w.calib_pixel_chk or (
+                        wid is None and item.layout() is not None
+                        and item.layout().indexOf(w.calib_pixel_chk) >= 0):
+                    names.append("像素确认")   # 勾选框和橙色提醒同住一行
                 elif isinstance(wid, QGroupBox):
                     names.append(wid.title())
             self.assertIn("像素确认", names, "像素确认框该在页面布局里")
-            self.assertLess(names.index("像素确认"), names.index("自动"))
-            self.assertLess(names.index("像素确认"), names.index("手动"))
+            self.assertLess(names.index("像素确认"), names.index("自动取点"))
+            self.assertLess(names.index("像素确认"), names.index("手动选点"))
             self.assertLess(names.index("像素确认"), names.index("数据"))
         finally:
             w.close()
@@ -10248,10 +10343,10 @@ class TestCalibration(unittest.TestCase):
                 # → 第一条结果**总是采纳**（新批次规则）
                 w.calib_start_manual.click()
                 self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["A"] == "手动1", 8000))
+                    lambda: w.calib_state["slots"]["A"] == "手动选点1", 8000))
                 self.assertEqual([r["name"] for r in w.calib_state["results"]],
-                                 ["原始1", "手动1"])
-                self.assertEqual(w.calib_state["current_from"], "手动1")
+                                 ["原始1", "手动选点1"])
+                self.assertEqual(w.calib_state["current_from"], "手动选点1")
                 self.assertIn("新批次的第一条结果",
                               w.log_text.toPlainText())
                 d = w.calib_vals["delta"]
@@ -10262,10 +10357,10 @@ class TestCalibration(unittest.TestCase):
                 # 再跑自动（环位偏差 0.20 < 手动 0.50）→ 轮换填 B 并采纳
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["B"] == "自动1", 8000))
-                self.assertEqual(w.calib_state["slots"]["A"], "手动1")
-                self.assertEqual(w.calib_state["current_from"], "自动1")
-                # Δ = 该列 − 基准（基准 = 当前配置 = 自动1）
+                    lambda: w.calib_state["slots"]["B"] == "自动取点1", 8000))
+                self.assertEqual(w.calib_state["slots"]["A"], "手动选点1")
+                self.assertEqual(w.calib_state["current_from"], "自动取点1")
+                # Δ = 该列 − 基准（基准 = 当前配置 = 自动取点1）
                 self.assertEqual(d["dist"]["A"].text(), "+0.40")     # 手动−自动
                 self.assertEqual(d["dev"]["A"].text(), "+0.30")      # 0.50−0.20
                 self.assertEqual(d["dist"]["B"].text(), "+0.00")
@@ -10273,8 +10368,8 @@ class TestCalibration(unittest.TestCase):
                 # 2026-09-30："直接把对比基准删了，直接出结论当前配置和
                 # a、b 对比分别怎么样，随着用户选择 ab 当前进行变化"）。
                 # 候选按**槽名**报（与表头 当前配置/A/B 对齐）：此时
-                # 当前配置 = 自动1（dev 0.20）、A = 手动1（dev 0.50）、
-                # B = 自动1（同一条结果，差 0.00）
+                # 当前配置 = 自动取点1（dev 0.20）、A = 手动选点1（dev 0.50）、
+                # B = 自动取点1（同一条结果，差 0.00）
                 self.assertIn("A 比 当前配置 差 0.30 px",
                               w.calib_verdict.text())
                 self.assertIn("B 与 当前配置 差不多",
@@ -10282,14 +10377,14 @@ class TestCalibration(unittest.TestCase):
                 # "随着用户选择 ab 变化"：把 A 槽换成另一条结果 → Δ 与结论
                 # 立刻跟着变（不再需要先挑"对比基准"）
                 combo_a = w.calib_slot_combo["A"]
-                combo_a.setCurrentIndex(combo_a.findData("自动1"))
+                combo_a.setCurrentIndex(combo_a.findData("自动取点1"))
                 QApplication.processEvents()
                 self.assertEqual(d["dist"]["A"].text(), "+0.00",
-                                 "A 换成了自动1：Δ 跟着变")
-                self.assertNotIn("手动1", w.calib_verdict.text(),
-                                 "结论里不该再提手动1（它已经不在 A/B 槽里）")
-                # 保存对象 = 当前配置（此时是被采纳的 自动1）
-                self.assertIn("自动1", w.calib_save_hint.text())
+                                 "A 换成了自动取点1：Δ 跟着变")
+                self.assertNotIn("手动选点1", w.calib_verdict.text(),
+                                 "结论里不该再提手动选点1（它已经不在 A/B 槽里）")
+                # 保存对象 = 当前配置（此时是被采纳的 自动取点1）
+                self.assertIn("自动取点1", w.calib_save_hint.text())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -10546,12 +10641,13 @@ class TestSaveCalibConfig(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_save_refused_without_pixel_confirmation(self):
-        """没确认像素尺寸 → 不落盘、只提示。
+    def test_save_warns_but_proceeds_without_pixel_confirmation(self):
+        """没核对像素尺寸 → **照常保存** + 日志里醒目提醒。
 
-        与开始校准同一道门（calib._initial_ready）：条目会被别的批次和
-        CLI 脚本原样拿去用，而像素填错时拟合会把距离同比例凑回来——
-        不确认就存，等于把一份"看着正常、距离存疑"的几何发出去。
+        用户 2026-10-05："改为提醒的样式，不要求用户必须选择了"——原来
+        这里是一道硬门禁（不确认就拒绝落盘）；现在只是把风险说明白：条目
+        会被别的批次和 CLI 脚本原样拿去用，像素填错时拟合会把距离同比例
+        凑回来（看着正常、距离存疑）。
         """
         w = create_window()
         try:
@@ -10563,9 +10659,37 @@ class TestSaveCalibConfig(unittest.TestCase):
             w.calib_key_edit.setText("lmfp9_lab6")
             w.calib_label_edit.setText("第 9 批")
             w.calib_save_btn.click()
-            self.assertNotIn("lmfp9_lab6", config_mod.USER_CONFIGS)
-            self.assertFalse(self._path.exists())
-            self.assertIn("请先核对", w.log_text.toPlainText())
+            self.assertIn("lmfp9_lab6", config_mod.USER_CONFIGS)
+            self.assertTrue(self._path.exists())
+            self.assertIn("像素尺寸还没核对", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calibration_runs_with_warning_without_pixel_confirmation(self):
+        """没核对像素尺寸 → 校准照常跑（不再被拦），日志里醒目提醒。
+
+        与上面那条同一个口径（用户 2026-10-05："不要求用户必须选择了"）。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=TestCalibration.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=dict(self.FAKE_AUTO)):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+                # 故意不勾"已核对像素尺寸"
+                w.calib_start_auto.click()
+                self.assertTrue(_wait_until(
+                    lambda: any(r["name"].startswith("自动")
+                                for r in w.calib_state["results"]), 8000),
+                    "没核对像素尺寸也该照常跑出结果")
+            self.assertIn("像素尺寸还没核对", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -11069,7 +11193,7 @@ class TestCalibMetrics(unittest.TestCase):
                     lambda: any(r["name"].startswith("自动")
                                 for r in w.calib_state["results"]), 8000))
             logs = self._logs(w)
-            self.assertIn("自动完成（自动1）", logs)
+            self.assertIn("自动取点完成（自动取点1）", logs)
             self.assertIn("环位偏差中位 0.52 px（初值 3.14 px）", logs)
             self.assertIn("晶格常数 a 的离散度 812 ppm", logs)
         finally:
@@ -11112,11 +11236,11 @@ class TestCalibModel(unittest.TestCase):
     def test_names_accumulate_per_kind(self):
         st = self._state()
         self.assertEqual(self._with(st, "raw"), "原始1")
-        self.assertEqual(self._with(st, "auto"), "自动1")
-        self.assertEqual(self._with(st, "manual"), "手动1")
-        self.assertEqual(self._with(st, "auto"), "自动2")
+        self.assertEqual(self._with(st, "auto"), "自动取点1")
+        self.assertEqual(self._with(st, "manual"), "手动选点1")
+        self.assertEqual(self._with(st, "auto"), "自动取点2")
         self.assertEqual([r["name"] for r in st["results"]],
-                         ["原始1", "自动1", "手动1", "自动2"])
+                         ["原始1", "自动取点1", "手动选点1", "自动取点2"])
 
     # ── 槽：轮换 + 钉住 ───────────────────────────────────
     def test_slots_fill_a_then_b(self):
@@ -11132,17 +11256,17 @@ class TestCalibModel(unittest.TestCase):
 
     def test_pinned_slot_is_skipped(self):
         st = self._state()
-        st["slots"]["A"] = "手动1"
+        st["slots"]["A"] = "手动选点1"
         st["pinned"]["A"] = True
-        note = gui_calib_model._fill_slot(st, "自动1")
+        note = gui_calib_model._fill_slot(st, "自动取点1")
         self.assertIn("B", note)
-        self.assertEqual(st["slots"]["A"], "手动1")   # 钉住的没被覆盖
-        self.assertEqual(st["slots"]["B"], "自动1")
+        self.assertEqual(st["slots"]["A"], "手动选点1")   # 钉住的没被覆盖
+        self.assertEqual(st["slots"]["B"], "自动取点1")
 
     def test_both_slots_pinned_keeps_result_only_in_list(self):
         st = self._state()
         st["pinned"] = {"A": True, "B": True}
-        note = gui_calib_model._fill_slot(st, "自动1")
+        note = gui_calib_model._fill_slot(st, "自动取点1")
         self.assertIn("只进列表", note)
         self.assertIsNone(st["slots"]["A"])
         self.assertIsNone(st["slots"]["B"])
@@ -11153,15 +11277,15 @@ class TestCalibModel(unittest.TestCase):
         name = self._with(st, "auto", dev=0.30)
         take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
-        self.assertIn("当前配置 → 自动1", note)
+        self.assertIn("当前配置 → 自动取点1", note)
 
     def _from_result(self, dev, **kw):
         """当前配置 = 某条跑出来的结果（这时才用得上 0.05 px 门槛）。"""
         st = self._state(**kw)
-        st["slots"]["current"] = "自动1"
-        st["current_from"] = "自动1"
+        st["slots"]["current"] = "自动取点1"
+        st["current_from"] = "自动取点1"
         st["current_metrics"] = {"dev_px": dev}
-        # 走 _add_result：计数器要跟着推进，否则下一条又命名成"自动1"
+        # 走 _add_result：计数器要跟着推进，否则下一条又命名成"自动取点1"
         gui_calib_model._add_result(st, "auto", self._res(dev=dev))
         return st
 
@@ -11181,8 +11305,8 @@ class TestCalibModel(unittest.TestCase):
         name = self._with(st, "auto", dev=0.28)
         take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
-        self.assertIn("自动2", note)
-        self.assertIn("比 自动1 的 0.52 px 好 0.24 px", note)
+        self.assertIn("自动取点2", note)
+        self.assertIn("比 自动取点1 的 0.52 px 好 0.24 px", note)
 
     def test_marginally_better_is_adopted_and_says_so(self):
         """现在**一律采纳**（用户 2026-09-30："只要是用户操作的……都填入当前，
@@ -11191,7 +11315,7 @@ class TestCalibModel(unittest.TestCase):
         name = self._with(st, "auto", dev=0.28)
         take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take, "用户按钮跑出来的结果一律进当前配置")
-        self.assertIn("当前配置 → 自动2", note)
+        self.assertIn("当前配置 → 自动取点2", note)
         self.assertIn("差不多", note)
 
     def test_worse_result_is_adopted_and_says_how_much_worse(self):
@@ -11200,7 +11324,7 @@ class TestCalibModel(unittest.TestCase):
         name = self._with(st, "manual", dev=0.31)
         take, note = gui_calib_model._adopt_decision(st, name)
         self.assertTrue(take)
-        self.assertIn("当前配置 → 手动1", note)
+        self.assertIn("当前配置 → 手动选点1", note)
         self.assertIn("差 0.07 px", note)
 
     def test_hand_edited_geometry_is_replaced_but_kept_in_the_list(self):
@@ -11289,8 +11413,8 @@ class TestCalibModel(unittest.TestCase):
         self.assertEqual(gui_calib_model._slot_label(st, "A"), "—")
         st["custom"] = True
         self.assertEqual(gui_calib_model._slot_label(st, "current"), "自定义")
-        st["slots"]["A"] = "自动1"
-        self.assertEqual(gui_calib_model._slot_label(st, "A"), "自动1")
+        st["slots"]["A"] = "自动取点1"
+        self.assertEqual(gui_calib_model._slot_label(st, "A"), "自动取点1")
 
 
 class TestCalibCurrent(unittest.TestCase):
@@ -11512,19 +11636,28 @@ class TestCalibCurrent(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_calibration_is_blocked_until_pixels_are_confirmed(self):
+    def test_calibration_warns_but_runs_without_pixel_confirmation(self):
+        """没核对像素尺寸 → 照常跑，只提醒（用户 2026-10-05："改为提醒的
+        样式，不要求用户必须选择了"；原来这里是硬门禁，不建任务）。"""
         w = create_window()
         try:
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
-                                   return_value=np.ones((256, 256)) * 10):
+                                   return_value=np.ones((256, 256)) * 10), \
+                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                                   return_value=TestCalibration.FAKE_CENTER), \
+                 mock.patch.object(gui_calib, "calibrate_lab6",
+                                   return_value=dict(TestCalibration.FAKE_AUTO)):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
+                self.assertTrue(w.calib_pixel_warn.isVisible(),
+                                "没核对该亮着橙色提醒")
                 w.calib_start_auto.click()
-                self.assertNotIn("calib_auto", w._latest_task)   # 没建校准任务
-                self.assertIn("请先核对「当前配置」的像素尺寸",
-                              w.log_text.toPlainText())
+                self.assertIn("calib_auto", w._latest_task)   # 任务照常建了
+                self.assertIn("像素尺寸还没核对", w.log_text.toPlainText())
                 w.calib_pixel_chk.setChecked(True)
+                self.assertFalse(w.calib_pixel_warn.isVisible(),
+                                 "核对后提醒该灭")
             self.assertIn("已核对像素尺寸：200.0 µm", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -11640,13 +11773,13 @@ class TestCalibFlow(unittest.TestCase):
                             w.calib_state["current_metrics"] is not None, 8000)
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["A"] == "自动1", 8000))
+                    lambda: w.calib_state["slots"]["A"] == "自动取点1", 8000))
             st = w.calib_state
             self.assertEqual([r["name"] for r in st["results"]],
-                             ["原始1", "自动1"])
-            self.assertEqual(st["slots"]["current"], "自动1")   # 0.20 < 0.60
+                             ["原始1", "自动取点1"])
+            self.assertEqual(st["slots"]["current"], "自动取点1")   # 0.20 < 0.60
             self.assertFalse(st["custom"])
-            self.assertIn("当前配置 ← 自动1", w.log_text.toPlainText())
+            self.assertIn("当前配置 ← 自动取点1", w.log_text.toPlainText())
             self.assertEqual(w.calib_vals["current"]["dev"].text(), "0.20")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -11654,7 +11787,7 @@ class TestCalibFlow(unittest.TestCase):
                 w.close()
 
     def test_refined_starts_from_the_current_geometry(self):
-        """②[在当前配置上再精修]：初值 = 当前配置的环心与距离（不重新定位）。"""
+        """②[再精修]：初值 = 当前配置的环心与距离（不重新定位）。"""
         w = create_window()
         try:
             w.show()
@@ -11715,13 +11848,13 @@ class TestCalibFlow(unittest.TestCase):
                 w.calib_pixel_chk.setChecked(True)
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["A"] == "自动1", 8000))
+                    lambda: w.calib_state["slots"]["A"] == "自动取点1", 8000))
                 # 再来一条：A 被钉住 → 进 B（仍在 mock 生效范围内）
                 w.calib_slot_combo["A"].setCurrentIndex(
                     w.calib_slot_combo["A"].findData("原始1"))
                 w.calib_start_auto.click()
                 self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["B"] == "自动2", 8000))
+                    lambda: w.calib_state["slots"]["B"] == "自动取点2", 8000))
             # 手动把 A 切回"原始1" → 钉住（对比位不动当前配置）
             combo = w.calib_slot_combo["A"]
             combo.setCurrentIndex(combo.findData("原始1"))
@@ -11735,7 +11868,7 @@ class TestCalibFlow(unittest.TestCase):
             self.assertEqual(st["slots"]["current"], "原始1")
             self.assertFalse(st["custom"])
             self.assertIn("当前配置 ← 原始1", w.log_text.toPlainText())
-            self.assertEqual(st["slots"]["B"], "自动2")   # 新结果没覆盖 A
+            self.assertEqual(st["slots"]["B"], "自动取点2")   # 新结果没覆盖 A
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):

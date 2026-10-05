@@ -1114,6 +1114,38 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                          "不用手动应用")
     window.params["对比堆叠"] = cmp_stack
     form_cmp.addRow(cmp_stack)
+
+    # 行距（2026-10-05 用户："对比的堆叠添加让用户自己改 y off"）：默认
+    # 自动 = 第二高的行峰 × 0.7（services/stacking.row_step，少数特别强
+    # 的行会探进上一行）；勾上 [手动行距] 后按倍数微调。纯显示参数，
+    # 改了立刻重画（与上面那组同一个来由）。
+    step_chk = QCheckBox("手动行距")
+    step_chk.setToolTip("默认自动：行距 = 第二高的行峰 × 0.7；勾上后按倍数"
+                        "手动定（只影响显示，不动数据）")
+    window.params["手动行距"] = step_chk
+    step_mult = QDoubleSpinBox()
+    step_mult.setRange(0.1, 10.0)
+    step_mult.setSingleStep(0.1)
+    step_mult.setDecimals(2)
+    step_mult.setValue(1.0)
+    step_mult.setEnabled(False)
+    step_mult.setToolTip("行距 = 自动行距 × 这个倍数（1.00 = 与自动相同）")
+    window.params["行距倍数"] = step_mult
+    step_row = QWidget()
+    step_lay = QHBoxLayout(step_row)
+    step_lay.setContentsMargins(0, 0, 0, 0)
+    step_lay.setSpacing(2)
+    step_lay.addWidget(step_chk, 1)
+    step_lay.addWidget(step_mult, 1)
+    form_cmp.addRow(step_row)
+
+    def sync_step_mult(*_):
+        step_mult.setEnabled(step_chk.isChecked())
+
+    step_chk.toggled.connect(sync_step_mult)
+    sync_step_mult()   # 初始：自动行距 → 倍数框置灰
+    step_chk.toggled.connect(lambda _on: _refresh_compare(window))
+    step_mult.valueChanged.connect(lambda _v: _refresh_compare(window))
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「绘图」页，够不着）。照热图那组的老做法
@@ -1130,6 +1162,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     #   手动锚点 = 人判断：用户指出"这几处是纯背景"
     # 锚点列表与空扫曲线不是快照参数（快照只认 QCheckBox/QComboBox/
     # spinbox 三种控件），放窗级属性 window.bg_anchors / window.bg_blank。
+    # 处理对象怎么选（用户 2026-10-05："没选中面板就显示没选中——改为
+    # 双击文件栏 1D 产出进行处理，让用户看明白"）：页顶常显这行指路，
+    # 空态不再是干巴巴一句"没选中"。双击 1D 产物本来就打开面板并把它
+    # 设为编辑对象（plot_views._open_product_panel → _set_focus）。
+    proc_hint = QLabel("处理对象就是上面的「编辑对象」：在文件栏双击「1D 产物」"
+                       "（或点开一张 1D 图）即可选定；本页参数改完立刻重画")
+    proc_hint.setWordWrap(True)
+    proc_hint.setStyleSheet("color: gray;")
+    form_bg.addRow(proc_hint)
     add_caption(form_bg, "背景扣除")
 
     bg_mode = QComboBox()
@@ -1570,6 +1611,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "归一化目标": "",
         "曲线配色": "高对比",
         "对比堆叠": False,
+        "手动行距": False,
+        "行距倍数": 1.0,
         "热图色图": "magma",
         "热图归一化": "off",
         "热图对数": False,
@@ -1600,6 +1643,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["曲线配色"].setCurrentIndex(
             window.params["曲线配色"].findData(img_defaults["曲线配色"]))
         window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
+        window.params["手动行距"].setChecked(img_defaults["手动行距"])
+        window.params["行距倍数"].setValue(img_defaults["行距倍数"])
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
         window.params["热图色图"].setCurrentIndex(
@@ -2408,6 +2453,12 @@ def create_window() -> QMainWindow:
     # 算完 / 清空缓存之后要重建。挂成窗口回调而不是让 plot_views 反向
     # import 文件坞（同 _bg_count_refresh 的老规矩）
     window.refresh_groups = lambda: refresh_product_groups(window)
+    # 单张 1D 算完的即时刷新（plot_views._on_integration_done）：产物照常
+    # 列出，但**不**触发"新产物 = 勾选清零"——那条规矩是给"一批活干完"
+    # （批量出图/批量处理）定的；单张看一眼就把勾选清掉，用户连"再点一次
+    # [1D] 看缓存"都做不了（2026-10-05 实测撞上，见 plot_views 那处注释）
+    window.refresh_groups_quiet = (
+        lambda: refresh_product_groups(window, quiet=True))
     # 文件栏按需开图（双击条目 / 右键 [打开 1D 图] / [打开整组]）：
     # 勾选超过上限的那批只算不画，看哪张点哪张。挂回调而不是让
     # file_dock 反向 import plot_views（同 refresh_groups 的老规矩）
