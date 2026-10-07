@@ -105,9 +105,9 @@ from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
 from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _build_center, _close_panel, _ElideLabel,
-    _FloatedWindow, _PlotSubWindow, _toggle_pop_out)
+    _FloatedWindow, _FocusElideLabel, _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
-    DATA_PARAM_DEFAULTS,
+    DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
     _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
@@ -658,7 +658,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 更新；[应用] 作用在它身上。名字可能很长：_ElideLabel 单行缩略，
     # 中间打省略号保留首尾（重名条目的区分后缀在尾部），悬停看全名，
     # 不撑宽参数坞
-    window.focus_label = _ElideLabel("编辑对象：未选中图面板",
+    window.focus_label = _FocusElideLabel(FOCUS_EMPTY_TEXT,
                                      Qt.ElideMiddle)
     window.focus_label.setStyleSheet("color: gray;")
     lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
@@ -1286,11 +1286,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     add_caption(form_bg, "背景扣除")
 
     bg_mode = QComboBox()
-    for text, data in (("关闭", "off"),
+    # 顺序按常用程度（用户 2026-10-07："把自动基线放第一个"）：最常用的
+    # 自动基线打头，"关闭"垫底。**默认值显式点回 off**——不能靠插入顺序
+    # 默认第一项，不然重排顺序会把默认模式悄悄改成自动基线
+    for text, data in (("自动基线（推荐）", "auto"),
                        ("空扫相减", "blank"),
-                       ("自动基线（推荐）", "auto"),
-                       ("手动锚点", "anchor")):
+                       ("手动锚点", "anchor"),
+                       ("关闭", "off")):
         bg_mode.addItem(text, data)
+    bg_mode.setCurrentIndex(bg_mode.findData("off"))
     bg_mode.setToolTip(
         "背景：不含样品结构信息的加性信号（空气散射、非晶漫散射、"
         "荧光、暗电流、直射束光晕）。\n"
@@ -1375,14 +1379,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     ])
     form_bg.addRow(anchor_row)
 
-    # 处理来处（用户 2026-09-27："在双击查看这些选图时，在扣背景的参数栏
-    # 可以显示这个图是以 a 的锚点为基准进行扣除的。按文件。"）
-    bg_prov_lbl = QLabel("")
-    bg_prov_lbl.setStyleSheet("color: gray;")
-    bg_prov_lbl.setWordWrap(True)
-    window.bg_prov_lbl = bg_prov_lbl
-    form_bg.addRow(bg_prov_lbl)
-
     bg_show_raw = QCheckBox("显示原始曲线对比")
     bg_show_raw.setToolTip("实时预览：把未扣背景的原始曲线（虚线）与基线"
                            "（点线）一起画出来，看清扣掉了什么。\n"
@@ -1432,6 +1428,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     for text, data in (("滑动平均", "boxcar"),
                        ("Savitzky–Golay", "savgol")):
         smooth_method.addItem(text, data)
+    # 默认 SG（用户 2026-10-07："平滑默认选择SG方法"）——同样窗口削峰
+    # 少得多、峰形保得住；与 panel_state._DISPLAY_DEFAULTS 同一口径
+    smooth_method.setCurrentIndex(smooth_method.findData("savgol"))
     smooth_method.setToolTip(
         "滑动平均：窗口内取平均（最简单，削峰明显）。\n"
         "Savitzky–Golay：窗口内拟合多项式再取中心值：<b>同样的窗口宽度削峰"
@@ -1464,6 +1463,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 只管背景——而且你在它下面改的平滑/裁剪其实也会被存进去，顺序跟含义
     # 反着。挪到三节之后：先把整条链摆好，再存下来。
     add_caption(form_bg, "配方")
+    # 处理来处（用户 2026-09-27 立项："在扣背景的参数栏可以显示这个图是以 a
+    # 的锚点为基准进行扣除的。按文件。"；2026-10-07 用户："配方详细内容的
+    # 灰字位置改一下，和配方放一起"——它讲的本来就是配方，挪到配方标题下）
+    bg_prov_lbl = QLabel("")
+    bg_prov_lbl.setStyleSheet("color: gray;")
+    bg_prov_lbl.setWordWrap(True)
+    window.bg_prov_lbl = bg_prov_lbl
+    form_bg.addRow(bg_prov_lbl)
     recipe_combo = QComboBox()
     recipe_combo.setToolTip("选一份配方：本图配方：这个文件上次处理用的那套；"
                             "下面是已保存的命名配方。选好点 [套用] 才生效——"

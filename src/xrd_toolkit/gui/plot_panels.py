@@ -1164,13 +1164,18 @@ def _hover_label(dock, name: str, x: float, y: float) -> str:
 
     剖面 x = 到束心的像素距离；瀑布 y = 堆叠后的强度（已加行偏移）。
     其余（1D/对比）维持 2θ/强度。
+
+    **name 为空就不带"某某："前缀**（2026-10-07 用户："坐标现在显示不完全，
+    框变大到能完全展示"）：单曲线面板（1D/剖面）的曲线没有自己的名字，
+    原来回退成面板标题（"1D_LMFP_…tif：2θ …"），前缀把读数拉长到 ~400px、
+    框里只能省略——而那条曲线就是眼前这张图，前缀是废话。对比（多条曲线）
+    与瀑布（各扇区）的曲线自带标签（文件名 / χ），照旧带着认曲线。
     """
     view = dock.panel_key.split("|", 1)[0]
+    prefix = f"{name}：" if name else ""
     if view == "剖面":
-        return f"{name}：距离 {x:.4g} px，强度 {y:.4g}"
-    if view == "瀑布":
-        return f"{name}：2θ {x:.4g}°，强度 {y:.4g}"
-    return f"{name}：2θ {x:.4g}°，强度 {y:.4g}"
+        return f"{prefix}距离 {x:.4g} px，强度 {y:.4g}"
+    return f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
 
 
 def _hover_motion(window: QMainWindow, key: str, event) -> None:
@@ -1237,10 +1242,11 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
         dock._blit = _blit_take(dock, ax)
     _blit_box(dock, ax, marker)
     # 坐标前缀 = 曲线名（对比图 = 文件名）；1D 没设图例名时
-    # matplotlib 会默认给 _childN，不算数 → 回退面板标题
+    # matplotlib 会默认给 _childN，不算数 → 视作"没有名字"（读数不带前缀，
+    # 见 _hover_label 的说明；单曲线面板的曲线本来就没有标签）
     name = line.get_label()
     if not name or name.startswith("_child"):
-        name = dock.panel_display
+        name = ""
     window.coord_label.setText(_hover_label(dock, name, x, y))
 
 

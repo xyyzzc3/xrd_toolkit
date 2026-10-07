@@ -46,7 +46,7 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
-    DATA_PARAM_DEFAULTS,
+    DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
     _data_snapshot, _display_snapshot, _log, _note_params_consumed,
@@ -279,7 +279,7 @@ def _apply_params(window: QMainWindow) -> None:
     if dock is None:
         _log(window, "编辑对象的面板已不存在")
         window.focus_panel = None
-        window.focus_label.setText("编辑对象：未选中图面板")
+        window.focus_label.setText(FOCUS_EMPTY_TEXT)
         return
     view = key.split("|", 1)[0]
     # 产物面板重算前先摘掉"产物身份"（用户 2026-09-30："本功能的范围只影响
@@ -339,7 +339,7 @@ def _apply_image_params(window: QMainWindow) -> None:
     if dock is None:
         _log(window, "编辑对象的面板已不存在")
         window.focus_panel = None
-        window.focus_label.setText("编辑对象：未选中图面板")
+        window.focus_label.setText(FOCUS_EMPTY_TEXT)
         return
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
     # 快照刚被写成控件当前值 → 图像组的「未应用」灰字该灭了（与 _apply_params
@@ -2190,6 +2190,18 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     # 只有 1D 视图能出，其余视图点名跳过（不静默少画）
     raw = [s for s in checked if s.kind == gui_sources.RAW]
     products = [s for s in checked if s.kind != gui_sources.RAW]
+    if name == "1D" and raw:
+        # 重复条目（同一条数据以 xxx.tif / xxx (1).tif 加了两次）：产物按
+        # **数据**只存一份（键 = 文件指纹），几个条目共用它——[1D] 这条路
+        # 以前一个字都不说，只看见"勾了两条、文件栏只长出 1 条"（用户
+        # 2026-10-07："重复的原始数据生成产物时会只生成一个，在日志里
+        # 提到这个事情"）。[批量处理] 那条路已有逐条"同一文件只扣一份"
+        # 的日志（_proc_batch_run 的 seen），这里给 1D 补一句汇总。
+        paths = [str(Path(s.path)) for s in raw]
+        n_dupe = len(paths) - len(set(paths))
+        if n_dupe:
+            _log(window, f"注意：勾选里有 {n_dupe} 条是同一文件的重复条目"
+                         "——产物按数据只存一份，这几个条目共用它")
     if products and name != "1D":
         _log(window, f"跳过 {len(products)} 个产物条目：{name} 要从原始图像"
                      "算（产物是 1D 曲线，只能出 1D 图 / 对比 / 热图）")

@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMdiArea,
     QMdiSubWindow, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
-from xrd_toolkit.gui.panel_state import _content, _log, _set_focus
+from xrd_toolkit.gui.panel_state import (
+    FOCUS_EMPTY_TEXT, _content, _log, _set_focus)
 
 # 面板状态属性的白名单：弹出/收回时整体搬家的"行李清单"。
 # 不能用 vars() 整体拷：PySide6 包装对象 vars() 里混着信号实例
@@ -258,7 +259,7 @@ def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
             _set_focus(window, next_key, next_dock.windowTitle())
             break
         if window.focus_panel is None:
-            window.focus_label.setText("编辑对象：未选中图面板")
+            window.focus_label.setText(FOCUS_EMPTY_TEXT)
 
 
 class _ElideLabel(QLabel):
@@ -301,14 +302,15 @@ class _ElideLabel(QLabel):
             self._full, self._mode, self.width()))
 
 
-# 横带里坐标读数的槽宽（px）：偏好 180（单文件读数"2θ 3.335°  I 48230"
-# 放得下；带文件名的对比读数超出部分中部省略、悬停看全），空间紧时允许
-# 压到 50。**下限必须留得低**：横带最小宽会顶大"窗口的最小宽度"——
+# 横带里坐标读数的槽宽（px）：偏好 230（2026-10-07 用户"坐标现在显示不完全"
+# 后从 180 加大：单曲线读数去掉冗余的"面板名："前缀后约 150px，瀑布的
+# "165°：2θ …" 也放得下；**带文件名的对比读数**仍可能中部省略、悬停看全），
+# 空间紧时允许压到 50。**下限必须留得低**：横带最小宽会顶大"窗口的最小宽度"——
 # 实测下限 180 时整个窗口最小宽涨到能堵住"进校准拉宽参数坞"（1200 默认
 # 宽时参数坞要能到 ~335=校准页内容宽；50 是量出来的：60 还差 4px，
 # 见 calib.CALIB_PANEL_RESERVE_PX 与 TestCalibFlow 两条；2026-10-07
 # 全量套件逮到 280 vs 335）
-_COORD_SLOT_W = 180
+_COORD_SLOT_W = 230
 _COORD_MIN_W = 50
 
 
@@ -331,6 +333,21 @@ class _CoordReadout(_ElideLabel):
 
     def minimumSizeHint(self):
         return QSize(_COORD_MIN_W, super().minimumSizeHint().height())
+
+
+class _FocusElideLabel(_ElideLabel):
+    """坞顶"编辑对象"那一行用的省略号标签：
+
+    比 _ElideLabel 多一条——**minimumSizeHint 封顶**。QLabel 的
+    minimumSizeHint 会按全文宽度要地方，而参数坞的最小宽度是照它量的：
+    2026-10-07 空态文案加了"双击文件栏…"指路（31 字）后，坞最小宽从
+    ~280 跳到 405，两条"最小宽 < 320"的测试当场红。它按设计会自己打
+    省略号（坞拖宽自动多显示几个字，悬停看全），不需要全文宽度。
+    """
+
+    def minimumSizeHint(self):
+        base = super().minimumSizeHint()
+        return QSize(min(base.width(), 160), base.height())
 
 
 def _build_center(window: QMainWindow) -> None:

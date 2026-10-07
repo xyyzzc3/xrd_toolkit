@@ -3801,6 +3801,23 @@ class TestProcessingChain(unittest.TestCase):
         finally:
             w.close()
 
+    def test_processing_defaults_match_the_users_picks(self):
+        """处理页两处默认（用户 2026-10-07 拍板）：背景模式下拉=自动基线
+
+        打头、默认仍"关闭"（开图先看原始曲线）；平滑方法默认 SG。"""
+        w = create_window()
+        try:
+            combo = w.params["背景扣除模式"]
+            self.assertEqual(
+                [combo.itemData(i) for i in range(combo.count())],
+                ["auto", "blank", "anchor", "off"],
+                "自动基线放第一个、关闭垫底")
+            self.assertEqual(combo.currentData(), "off", "默认模式仍是不扣")
+            self.assertEqual(w.params["平滑方法"].currentData(), "savgol",
+                             "平滑默认 SG")
+        finally:
+            w.close()
+
     def test_page_order_is_cut_then_bg_then_smooth(self):
         """处理页从上到下 = 裁剪 → 扣背景 → 平滑（用户 2026-10-07）。
 
@@ -3997,7 +4014,11 @@ class TestProcessingChain(unittest.TestCase):
             w.close()
 
     def test_batch_writes_the_whole_chain_into_the_product(self):
-        """[批量处理]：平滑 + 裁剪进产物，组名写清这一组做过什么。"""
+        """[批量处理]：平滑 + 裁剪进产物，组名写清这一组做过什么。
+
+        平滑方法 2026-10-07 起默认 SG（用户："平滑默认选择SG方法"），
+        链的措辞跟着变成 "SG 0.5°/3阶"（原来是"平滑 0.5°"）。
+        """
         w = create_window()
         try:
             path, dock = self._panel(w)
@@ -4009,11 +4030,11 @@ class TestProcessingChain(unittest.TestCase):
             QApplication.processEvents()
             log = w.log_text.toPlainText()
             self.assertIn("批量处理完成", log)
-            self.assertIn("平滑 0.5°", log)
+            self.assertIn("SG 0.5°/3阶", log)
             self.assertIn("删 3.9–4.1°", log)
             group = _group_by_text(w, "处理产物")
             self.assertIsNotNone(group, "文件栏该长出「处理产物」分组")
-            self.assertIn("平滑 0.5°", group.text(0))
+            self.assertIn("SG 0.5°/3阶", group.text(0))
             # 产物本身：那一段是空的，元数据写明整条链
             batch = stage_cache.list_batches("bg")[0]
             meta = batch["items"][str(path.resolve())]
@@ -4021,7 +4042,7 @@ class TestProcessingChain(unittest.TestCase):
                          / f"{meta['key']}.npz") as data:
                 stored = np.asarray(data["intensity"], dtype=float)
                 stored_meta = json.loads(str(data["meta"]))
-            self.assertIn("smooth=boxcar/0.5°", stored_meta["chain"])
+            self.assertIn("smooth=savgol/0.5°", stored_meta["chain"])
             self.assertIn("cut=3.9–4.1°", stored_meta["chain"])
             self.assertGreater(int(np.isnan(stored).sum()), 0)
         finally:
@@ -4554,6 +4575,34 @@ class TestDuplicateFiles(unittest.TestCase):
             self.assertIn("保留原条目", w.log_text.toPlainText())
             # 第二次加入没有新条目 → 不会再有第二条"已添加"
             self.assertEqual(w.log_text.toPlainText().count("已添加"), 1)
+        finally:
+            w.close()
+
+    def test_duplicate_entries_share_one_product_with_a_note(self):
+        """重复条目出 1D：产物按数据只存一份，日志要说这件事（2026-10-07）。
+
+        用户："重复的原始数据生成产物时会只生成一个，在日志里提到这个事情"
+        ——以前一个字都不说，只看见"勾了两条、文件栏只长出 1 条"。"""
+        w = create_window()
+        try:
+            add_checked(w, ["data/fake_b.tif"])
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
+                                   return_value="rename"):
+                add_checked(w, ["data/fake_b.tif"])     # 同一文件第二条条目
+            self.assertEqual(w.file_list.count(), 2)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: w.log_text.toPlainText().count("积分完成") >= 2))
+            self.assertIn("是同一文件的重复条目", w.log_text.toPlainText())
+            self.assertIn("产物按数据只存一份", w.log_text.toPlainText())
+            # 产物台账真的一份（键 = 文件指纹，两条条目共用）
+            from xrd_toolkit.services import stage_cache
+            keys = [k for k in stage_cache._read_index().get("1d", {})
+                    ] if hasattr(stage_cache, "_read_index") else []
+            if keys:      # 老实现细节变了也不误伤：至少不崩
+                self.assertLessEqual(len(keys), 1)
         finally:
             w.close()
 
@@ -6554,7 +6603,8 @@ class TestArrangeModeClose(unittest.TestCase):
             QApplication.processEvents()
             self.assertEqual(len(w.plot_docks), 0, "该一张不剩")
             self.assertIsNone(w.focus_panel)
-            self.assertIn("未选中图面板", w.focus_label.text())
+            self.assertIn("未选中", w.focus_label.text())
+            self.assertIn("双击文件栏「1D 产物」", w.focus_label.text())
             log = w.log_text.toPlainText()
             self.assertIn("已关闭全部 2 张图", log)
             self.assertIn("没存过盘", log)
@@ -7884,11 +7934,38 @@ class TestHoverDot(unittest.TestCase):
             # 吸附最近真实数据点：假积分 x=[0.5, 1.0, 8.5] → 0.6 归 0.5
             self.assertEqual(list(marker.get_xdata()), [0.5])
             self.assertEqual(list(marker.get_ydata()), [1.0])
-            # 状态栏坐标 = 面板名 + 2θ + 强度
+            # 底部横带读数 = 2θ + 强度（2026-10-07 起单曲线不再带面板名
+            # 前缀——见下一条；"1D_fake_b.tif：…" 那种长文本放不进框）
             text = w.coord_label.text()
-            self.assertIn("fake_b.tif", text)
             self.assertIn("2θ 0.5°", text)
             self.assertIn("强度 1", text)
+        finally:
+            w.close()
+
+    def test_hover_readout_has_no_redundant_panel_name(self):
+        """单曲线面板的读数不带"面板名："前缀（2026-10-07 用户："坐标现在
+        显示不完全，框变大到能完全展示"）。
+
+        1D 的曲线没有自己的标签，原来回退成面板标题（"1D_fake_b.tif：2θ
+        …"），前缀把读数拉长到框里放不下；那条曲线就是眼前这张图，前缀是
+        废话。带标签的（对比的文件名 / 瀑布的扇区号）照旧带着认曲线。
+        """
+        w = create_window()
+        try:
+            self._open_1d(w)
+            key = "1D|data/fake_b.tif"
+            ax = _axes(w, "1D", "data/fake_b.tif")
+            gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.6))
+            text = w.coord_label.text()
+            self.assertIn("2θ", text)
+            self.assertIn("强度", text)
+            self.assertNotIn("1D_", text, "1D 读数不该带面板名前缀")
+            # 直接钉格式化函数：空 name → 无前缀；有 name → 照旧带着
+            dock = w.plot_docks[key]
+            bare = gui_plot_panels._hover_label(dock, "", 3.3, 100.0)
+            self.assertTrue(bare.startswith("2θ"), bare)
+            named = gui_plot_panels._hover_label(dock, "a.tif", 3.3, 100.0)
+            self.assertTrue(named.startswith("a.tif：2θ"), named)
         finally:
             w.close()
 
@@ -9733,7 +9810,9 @@ class TestPanelClose(unittest.TestCase):
             QApplication.processEvents()
             self.assertFalse(w.plot_docks)
             self.assertIsNone(w.focus_panel)
-            self.assertEqual(w.focus_label.text(), "编辑对象：未选中图面板")
+            self.assertEqual(
+                w.focus_label.text(), gui_state.FOCUS_EMPTY_TEXT,
+                "空态文案（含双击指路）来自 panel_state 的唯一一份")
         finally:
             w.close()
 

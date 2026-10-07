@@ -150,7 +150,9 @@ _DISPLAY_DEFAULTS = {
     # 不需要重新积分。默认都关着——不勾就是没做处理（产物键也因此不变）。
     "平滑曲线": False,
     "平滑窗口 (°)": 0.10,
-    "平滑方法": "boxcar",
+    # 平滑默认法=SG（用户 2026-10-07："平滑默认选择SG方法"）：同样窗口
+    # 削峰少得多、峰形保得住；"滑动平均"仍在下拉里可选
+    "平滑方法": "savgol",
     "平滑阶数": 3,
     "裁剪区间": False,
     "裁剪起点 (°)": 2.0,
@@ -605,6 +607,13 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
     bg_sync = getattr(window, "_bg_rows_sync", None)
     if bg_sync is not None:
         bg_sync(window)
+
+
+# 未选中编辑对象时坞顶灰字的文案（2026-10-07 用户："最上方灰字在未选中时
+# 添加双击某某产物的提示，在同一行不要分段"）。**四处复位点共用这一份**：
+# app 建标签、panels 关面板、plot_views 两处清焦点——各写一份必然漂移。
+# 单行显示（_ElideLabel：坞窄时尾部省略、悬停看全），绝不撑宽参数坞。
+FOCUS_EMPTY_TEXT = "编辑对象：未选中（双击文件栏「1D 产物」或点开一张图即可选定）"
 
 
 def _set_focus(window: QMainWindow, key: str, title: str) -> None:

@@ -568,21 +568,24 @@ def check_processing_chain(window, lab6: str) -> None:
     gui_views._refresh_proc(window)
     QApplication.processEvents()
     shown = np.asarray(ax.lines[0].get_ydata(), dtype=float)
-    report(np.nanmax(shown) < raw_peak * 0.95, "平滑削峰（真数据）",
+    report(np.nanmax(shown) < raw_peak * 0.95, "平滑削峰（真数据，默认 SG）",
            f"{raw_peak:.0f} → {np.nanmax(shown):.0f}")
     report(len(shown) == len(raw), "平滑不改变点数")
-    # ①b 换 Savitzky–Golay：同一个窗口，峰该比滑动平均**高**（保峰）
+    # ①b 换回滑动平均：同一个窗口，峰该比 SG **低**（SG 保峰）。
+    # 2026-10-07 起平滑默认就是 SG（用户："平滑默认选择SG方法"），所以
+    # 对照方向反过来：刚才那步量的就是 SG，这里切 boxcar 看削得更狠。
     w_avg = 0.30
     cb = window.params["平滑方法"]
-    cb.setCurrentIndex(cb.findData("savgol"))
+    cb.setCurrentIndex(cb.findData("boxcar"))
     gui_views._refresh_proc(window)
     QApplication.processEvents()
-    shown_sg = np.asarray(ax.lines[0].get_ydata(), dtype=float)
-    report(np.nanmax(shown_sg) > np.nanmax(shown),
+    shown_box = np.asarray(ax.lines[0].get_ydata(), dtype=float)
+    report(np.nanmax(shown_box) < np.nanmax(shown),
            "同样的窗口下 SG 比滑动平均保峰",
-           f"滑动平均 {np.nanmax(shown):.0f} vs SG {np.nanmax(shown_sg):.0f}"
+           f"滑动平均 {np.nanmax(shown_box):.0f} vs SG {np.nanmax(shown):.0f}"
            f"（窗口 {w_avg:g}°，原始 {raw_peak:.0f}）")
-    report(bool(window.params["平滑阶数"].isEnabled()), "SG 下阶数可编辑")
+    report(not window.params["平滑阶数"].isEnabled(),
+           "滑动平均下阶数框置灰")
     cb.setCurrentIndex(cb.findData("boxcar"))     # 后面的检查回到默认方法
     gui_views._refresh_proc(window)
     QApplication.processEvents()
