@@ -1877,6 +1877,11 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         i_pos = np.clip(i2d, 0.0, None)
         i_pos = np.where(np.isfinite(i_pos), i_pos, 0.0)
         step = row_step(i_pos.max(axis=0))
+        if _panel_param(window, dock, "瀑布手动行距", False):
+            # 用户自己定行距（2026-10-05："对比的堆叠添加让用户自己改
+            # y off 还有瀑布图也是"）：按倍数缩放自动行距——只动显示，
+            # 1.00 = 与自动相同（对比堆叠那对是同一口径，键各管各的）
+            step *= float(_panel_param(window, dock, "瀑布行距倍数", 1.0))
         offsets = np.arange(n, dtype=float) * step
         for t_cut, v_cut, k in curves:
             ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],
@@ -1897,6 +1902,37 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"
     _refresh_home(dock, ax)
     dock.figure_saved = False
+
+
+def _refresh_waterfalls(window: QMainWindow) -> None:
+    """瀑布的行距控件（[手动行距] + 倍数）改了 → 各瀑布面板就地重画。
+
+    与 plot_compare._refresh_compare 同套路（那是用户 2026-10-02 报
+    "堆叠显示无效"时定的：显示参数改了就该立刻看见，不能"够不着"）：
+    把控件值写进各瀑布面板的快照，再用已有数据重画——纯显示、不重算。
+
+    只写这两个键，**不整包套用别的显示参数**：控件是所有面板共用的
+    一份，控件值可能正显示着别的图（编辑对象）的设置，整包写过去会把
+    那张图的配色等串到所有瀑布上。
+    """
+    if getattr(window, "_param_replaying", False):
+        return   # 回放快照期间控件值正被程序改写，不是用户改动
+    chk = window.params.get("瀑布手动行距")
+    mult = window.params.get("瀑布行距倍数")
+    if chk is None or mult is None:
+        return   # 裸窗口（测试里没建这对控件）
+    for key, dock in list(window.plot_docks.items()):
+        if not key.startswith("瀑布"):
+            continue
+        data = getattr(dock, "last_waterfall", None)
+        if data is None:
+            continue     # 还没算完：等它自己画
+        snap = getattr(dock, "params_snapshot", None)
+        if snap is not None:
+            snap["瀑布手动行距"] = bool(chk.isChecked())
+            snap["瀑布行距倍数"] = float(mult.value())
+        tth, i2d, chi = data
+        _draw_waterfall(window, dock, tth, i2d, chi)
 
 
 # 一次批量作图最多画**前多少张**（按文件列表顺序，2026-09-24 用户"图一多

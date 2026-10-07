@@ -881,6 +881,53 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
+    def test_waterfall_manual_row_step_multiplies_the_offset(self):
+        """瀑布 [手动行距]：勾上后行距 = 自动行距 × 倍数（用户 2026-10-05：
+        "对比的堆叠添加让用户自己改 y off 还有瀑布图也是"）。
+
+        纯显示参数：改了立刻重画（同对比那对即改即画），不勾 = 自动
+        口径（第二高的行峰 × 0.7）不动；只重画、不重新扇形积分。
+        """
+        w = create_window()
+        try:
+            tth = np.linspace(1.0, 8.0, 60)
+            i2d = np.full((60, 4), 10.0)
+            i2d[(tth >= 1.0) & (tth <= 2.0), 0] = 100.0   # 巨峰（不该定行高）
+            i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0    # 第二高 = 12
+            chi = np.linspace(-175.0, 175.0, 4)
+            i_mid = int(np.argmin(np.abs(tth - 4.0)))     # 两峰之间：全是基线
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "integrate_sectors",
+                                   return_value=(tth, i2d, chi)) as fake_sectors:
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "瀑布")
+                dock = _dock(w, "瀑布", "data/fake_b.tif")
+                ax = gui_panel_state._content(dock).axes_waterfall
+                self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
+
+                def row1_offset():
+                    """1 号扇区行的基线（中段 = 基线 10 + 偏移）"""
+                    return float(np.asarray(ax.lines[1].get_ydata())[i_mid]) - 10.0
+
+                step_auto = 12.0 * 0.7
+                self.assertAlmostEqual(row1_offset(), step_auto, places=5)
+                self.assertFalse(w.params["瀑布行距倍数"].isEnabled(),
+                                 "自动行距下倍数框置灰")
+                w.params["瀑布手动行距"].setChecked(True)    # 即改即画
+                self.assertTrue(w.params["瀑布行距倍数"].isEnabled())
+                w.params["瀑布行距倍数"].setValue(2.0)
+                QApplication.processEvents()
+                self.assertAlmostEqual(row1_offset(), step_auto * 2.0,
+                                       places=5, msg="行距该按倍数放大")
+                self.assertEqual(fake_sectors.call_count, 1,
+                                 "改行距只重画，不重新扇形积分")
+                w.params["瀑布手动行距"].setChecked(False)   # 回到自动口径
+                QApplication.processEvents()
+                self.assertAlmostEqual(row1_offset(), step_auto, places=5)
+        finally:
+            w.close()
+
     def test_waterfall_apply_redraws_without_recompute(self):
         """瀑布面板图像 [应用]：只重画已有结果，不重新扇形积分。"""
         w = create_window()
@@ -1754,6 +1801,27 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             w.params["手动行距"].setChecked(False)    # 回到自动口径
             y3 = float(np.asarray(ax.lines[1].get_ydata())[0] - y_flat[1][0])
             self.assertAlmostEqual(y3, step_auto, places=6)
+        finally:
+            w.close()
+
+    def test_view_boxes_crop_compare_without_recompute(self):
+        """「视图 2θ」框也作用于对比面板（裁剪窗口、不重算，2026-10-07）。
+
+        框住在「热图显示」小节（热图与对比同页、同一对窗口键）——
+        填数即把两张图的横轴裁到同一段，数据一份不动。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute) as c:
+                key, ax = self._plot_compare(w)
+                calls = c.call_count
+            w.params["视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["视图 2θ 上限 (°)"].setValue(4.0)
+            QApplication.processEvents()
+            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, places=2)
+            self.assertAlmostEqual(ax.get_xlim()[1], 4.0, places=2)
+            self.assertEqual(c.call_count, calls, "只换窗口，不许重算")
         finally:
             w.close()
 
@@ -8508,9 +8576,13 @@ class TestViewLimitSync(unittest.TestCase):
             snap = dock.params_snapshot
             self.assertAlmostEqual(snap["视图 2θ 下限 (°)"], 2.0, places=4)
             self.assertAlmostEqual(snap["视图 2θ 上限 (°)"], 3.0, places=4)
-            # 焦点面板 → 参数坞视图范围框同步显示
-            # 控件已撤（显示范围不再摆输入框）→ 只查快照
-            self.assertNotIn("视图 2θ 下限 (°)", w.params)
+            # 焦点面板 → 「热图显示」小节那对视图窗口框同步显示
+            # （2026-10-07 加回：热图"2θ 改变视图"用；1D 页上仍不摆框，
+            # 键全局唯一，焦点是谁就显示谁的窗口）
+            self.assertAlmostEqual(
+                w.params["视图 2θ 下限 (°)"].value(), 2.0, places=4)
+            self.assertAlmostEqual(
+                w.params["视图 2θ 上限 (°)"].value(), 3.0, places=4)
             # 纯 x 缩放没动纵轴 → 自动仍开着
             self.assertTrue(snap["纵轴自动"])
         finally:
@@ -8569,14 +8641,37 @@ class TestViewLimitSync(unittest.TestCase):
             self.assertIsNone(snap.get("视图 2θ 下限 (°)"),
                               "恢复默认后应回到跟随积分范围")
             self.assertIsNone(snap.get("视图 2θ 上限 (°)"))
-            # 输入框已撤（显示范围不再摆控件）→ 查快照 + 下一次重画的实际窗口
-            self.assertNotIn("视图 2θ 下限 (°)", w.params)
+            # 视图窗口框回填成"跟随"的显示值（= 积分范围）；真实窗口看下一行
+            self.assertAlmostEqual(
+                w.params["视图 2θ 下限 (°)"].value(),
+                w.params["2θ 下限 (°)"].value(), delta=0.05)
             # [恢复默认] 本身只复位参数、不重画（设计如此）→ 点 [应用] 看效果
             w.findChild(QPushButton, "apply_image_btn").click()
             QApplication.processEvents()
             self.assertAlmostEqual(
                 ax.get_xlim()[0], w.params["2θ 下限 (°)"].value(), delta=0.05,
                 msg="恢复默认后重画该回到跟随积分范围")
+        finally:
+            w.close()
+
+    def test_apply_keeps_follow_view_unpinned(self):
+        """[应用显示设置] 不把"跟随积分范围"钉成显式窗口（2026-10-07）。
+
+        「热图显示」那对视图框显示的是"跟随"折算出来的数（该面板的
+        积分范围）；[应用] 若把它采集进快照，"跟随"就被钉成显式窗口
+        ——之后改积分范围重算，旧窗口会把新曲线裁错。
+        """
+        w = create_window()
+        try:
+            dock = self._open_1d(w)
+            self.assertIsNone(dock.params_snapshot.get("视图 2θ 下限 (°)"),
+                              "新面板默认跟随积分范围")
+            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
+            self.assertIsNone(
+                dock.params_snapshot.get("视图 2θ 下限 (°)"),
+                "[应用] 不该把跟随的视图钉成显式窗口")
+            self.assertIsNone(dock.params_snapshot.get("视图 2θ 上限 (°)"))
         finally:
             w.close()
 
@@ -13176,6 +13271,42 @@ class TestHeatmap(unittest.TestCase):
             QApplication.processEvents()
             self.assertAlmostEqual(float(ax.images[0].get_array().max()), 1.0,
                                    places=6, msg="全图归一化该立刻重画")
+        finally:
+            w.close()
+
+    def test_heatmap_view_boxes_crop_without_recompute(self):
+        """「视图 2θ」框：填数 → 立刻裁剪重画（重看，不是重算）。
+
+        用户 2026-10-05："热图添加回 2theta 改变视图的功能，就是重看，
+        不是重算"。框绑缩放/平移那对老键，双向：填数 → 裁剪重画 +
+        写回快照；图上缩放 → 实时写回框。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute) as c:
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+                calls = c.call_count
+            ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
+            self.assertAlmostEqual(ax.get_xlim()[0], 0.5, places=2)  # 初始 = 数据范围
+            w.params["视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["视图 2θ 上限 (°)"].setValue(4.0)
+            QApplication.processEvents()
+            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, places=2)
+            self.assertAlmostEqual(ax.get_xlim()[1], 4.0, places=2)
+            self.assertEqual(c.call_count, calls, "只换窗口，不许重新积分")
+            snap = self._heat_dock(w).params_snapshot
+            self.assertAlmostEqual(snap["视图 2θ 下限 (°)"], 2.0, places=1)
+            self.assertAlmostEqual(snap["视图 2θ 上限 (°)"], 4.0, places=1)
+            # 反方向：图上的缩放实时写回这两个框（热图是焦点面板）
+            ax.set_xlim(1.5, 3.5)
+            QApplication.processEvents()
+            self.assertAlmostEqual(
+                w.params["视图 2θ 下限 (°)"].value(), 1.5, places=1)
+            self.assertAlmostEqual(
+                w.params["视图 2θ 上限 (°)"].value(), 3.5, places=1)
         finally:
             w.close()
 

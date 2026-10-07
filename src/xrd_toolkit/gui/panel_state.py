@@ -160,8 +160,22 @@ _DISPLAY_DEFAULTS = {
     # 按倍数微调。纯显示参数，改了立刻重画。
     "手动行距": False,
     "行距倍数": 1.0,
+    # 瀑布的行距（2026-10-07）：与上面那对同口径，但键独立——对比那对
+    # 控件住在「对比」页、瀑布这对住在「绘图」页；一个键只挂一个控件，
+    # 共用就没法两页各摆一个（在瀑布边上改不着对比的框，反之亦然）。
+    "瀑布手动行距": False,
+    "瀑布行距倍数": 1.0,
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
+
+# 视图窗口的两个键：None = 跟随积分范围，缩放/平移后写回显式值（见
+# plot_panels._on_xlim_changed）。控件（「热图显示」小节那对框）只是
+# **展示与输入**：快照采集**不从这里拿控件值**——框里显示的往往是
+# "跟随"折算出来的数（该面板的积分范围），采集会把"跟随"钉成显式窗口，
+# 之后改积分范围重算，旧窗口就把新曲线裁错了（[应用显示设置] →
+# _display_snapshot 这条路）。用户真填进框里的值由
+# plot_compare._refresh_heat_view 显式写回快照。
+_VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)")
 
 # 曲线配色表：分类色固定顺序、颜色跟着文件走不跟排序走（第一个
 # 文件永远是蓝，过滤/增删文件不会把幸存者重涂）。"高对比" 8 槽按
@@ -229,10 +243,15 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
         # 给了 base 而 base 里没这个键 = 这张图**故意不管**这个键（对比/热图
         # 的 2θ/点数，2026-10-03）：保持缺省，别从控件把它救回来——救回来
         # 就等于"看一眼对比就把坞顶那行染上了"
-    # 没有控件的键从旧快照原样带过来：视图 2θ 范围这两个键现在就是这样
-    # （用户 2026-09-27 撤了那对输入框，"显示范围用户自己放大就行了"——
-    # 但缩放/平移仍在写它们）。上面那圈按控件重建，带不过来的话 [应用]
-    # 一次就把显式视图范围丢掉、悄悄退回"跟随积分范围"。
+    # 视图窗口不从控件采集（理由见 _VIEW_WINDOW_KEYS）：沿用 base 里的旧值，
+    # 没旧值 = 跟随积分范围
+    for name in _VIEW_WINDOW_KEYS:
+        snap[name] = base[name] if name in base else _DISPLAY_DEFAULTS[name]
+    # 没有控件的键从旧快照原样带过来：通用兜底——上面那圈按控件重建，
+    # 带不过来的话 [应用] 一次就把显式值丢掉。视图 2θ 那两个键
+    # 2026-09-27～10-07 控件撤掉的那段时期就靠这条活着（缩放/平移仍在
+    # 写它们）；10-07 那对框在「热图显示」小节回来之后，由上面那条
+    # "不从控件采集"专门接管。
     for name, value in base.items():
         snap.setdefault(name, value)
     return snap
@@ -244,11 +263,20 @@ def _param_box_set(window: QMainWindow, name: str, value) -> None:
     2026-09-27：用户要求撤掉「显示 2θ 范围」那一行（"显示范围用户自己
     放大就行了"）。但视图范围这两个键仍然活着——缩放/平移写回它们、[恢复
     默认] 复位它们；写回时**快照才是权威**，控件只是顺带刷新的只读展示，
-    没有控件就静默跳过。
+    没有控件就静默跳过（2026-10-07 那对框在「热图显示」小节回来了）。
+
+    写控件时挂 `_param_box_sync` 旗标：接线到这些框的"即改即画"路径
+    （_refresh_heat_view）靠它分辨程序同步和用户输入——缩放写回同样走
+    本函数，不挂旗标的话每格滚轮都会触发一次整图重画。
     """
     box = window.params.get(name)
     if box is not None:
-        box.setValue(value)
+        prev = getattr(window, "_param_box_sync", False)
+        window._param_box_sync = True
+        try:
+            box.setValue(value)
+        finally:
+            window._param_box_sync = prev
 
 
 def _panel_param(window: QMainWindow, dock, name: str,

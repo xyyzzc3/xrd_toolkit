@@ -808,6 +808,12 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         if not zoomed:
             xlo, xhi = float(tth[0]), float(tth[-1])
         ax.set_xlim(xlo, xhi)
+        if window.plot_docks.get(window.focus_panel) is dock:
+            # 焦点面板 → 「热图显示」那对视图窗口框同步显示（同
+            # _redraw_compare；程序写控件挂 _param_box_sync 旗标，
+            # 不会被即改即画那条路当成用户输入）
+            _param_box_set(window, "视图 2θ 下限 (°)", xlo)
+            _param_box_set(window, "视图 2θ 上限 (°)", xhi)
         # y 是**样品行号**，没有强度语义 → 走通用键"视图 y 范围"
         # （见 plot_panels._INTENSITY_Y_VIEWS 的说明）；x 是 2θ，走语义键
         zoomed = _apply_plain_view(window, dock, ax) or zoomed
@@ -1023,6 +1029,54 @@ def _refresh_heat(window: QMainWindow) -> None:
         touched += 1
     if touched:
         _apply_auto_heatlim(window)      # 对数/自动范围改了 → 置灰框跟着更新
+
+
+def _refresh_heat_view(window: QMainWindow) -> None:
+    """「视图 2θ」框改了 → 各热图（与对比）面板按新窗口就地裁剪重画。
+
+    用户 2026-10-05："热图添加回 2theta 改变视图的功能，就是重看，
+    不是重算"。两个框绑的是缩放/平移写回的那对老键（见
+    plot_panels._on_xlim_changed），这里走反方向：把框里的数写进各面板
+    快照再重画——换的只是 xlim，数据一份都不碰，谁也不用重新积分。
+    超过某个文件自己算过的范围时那一段就是空白：画不出来也不重算，
+    正是"重看"的含义。
+
+    只动这一个窗口键，**不整包套用别的显示参数**（_refresh_heat 那套
+    的写法在这里是错的）：这些控件是所有面板共用的一份，控件值可能
+    正显示着别的图（编辑对象）的设置，整包写过去会串台。
+    """
+    if getattr(window, "_param_replaying", False) \
+            or getattr(window, "_param_box_sync", False) \
+            or getattr(window, "_setting_limits", False):
+        return   # 程序在写控件（回放/缩放同步/[恢复默认]）或正在画图
+    lo_w = window.params.get("视图 2θ 下限 (°)")
+    hi_w = window.params.get("视图 2θ 上限 (°)")
+    if lo_w is None or hi_w is None:
+        return   # 裸窗口（测试里没建这对框）：无框可读
+    lo, hi = float(lo_w.value()), float(hi_w.value())
+    if lo >= hi:
+        return   # 还没填好（如先改了上限）：画个空窗口不如不动
+    for key, dock in list(window.plot_docks.items()):
+        view = key.split("|", 1)[0]
+        if view not in ("热图", "对比"):
+            continue
+        snap = getattr(dock, "params_snapshot", None)
+        if not snap:
+            continue
+        if view == "热图":
+            data = _heat_data(window, dock)
+            if data is None:
+                continue         # 还没算完：等它自己画
+            snap["视图 2θ 下限 (°)"] = lo
+            snap["视图 2θ 上限 (°)"] = hi
+            dock.heat_data = data   # 与画的同源（同 _refresh_heat）
+            _draw_heatmap(window, dock, data[0], data[1], data[2])
+        else:
+            if not getattr(dock, "compare_data", None):
+                continue
+            snap["视图 2θ 下限 (°)"] = lo
+            snap["视图 2θ 上限 (°)"] = hi
+            _redraw_compare(window, key)
 
 
 def _plot_heatmap(window: QMainWindow) -> None:

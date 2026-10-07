@@ -198,6 +198,21 @@ def check_single_views(window, lab6: str) -> None:
     wait_until(lambda: len(axw.lines) > 0)
     report(len(axw.lines) == 36, "瀑布出图（36 扇区）", len(axw.lines))
 
+    # 瀑布行距的手动倍数（2026-10-07）：勾上 [手动行距] + 倍数 ×2 →
+    # y 刻度（= 各行基线）间距翻倍，即改即画
+    ticks0 = [float(t) for t in axw.get_yticks()]
+    step0 = (ticks0[1] - ticks0[0]) if len(ticks0) > 1 else 0.0
+    window.params["瀑布手动行距"].setChecked(True)
+    window.params["瀑布行距倍数"].setValue(2.0)
+    QApplication.processEvents()
+    ticks1 = [float(t) for t in axw.get_yticks()]
+    step1 = (ticks1[1] - ticks1[0]) if len(ticks1) > 1 else 0.0
+    report(step0 > 0 and abs(step1 - 2.0 * step0) <= step0 * 0.02,
+           "瀑布 [手动行距] ×2：行距翻倍（即改即画）",
+           f"{step0:.1f} → {step1:.1f}")
+    window.params["瀑布手动行距"].setChecked(False)
+    QApplication.processEvents()
+
 
 def check_multi_views(window, lab6: str, lmfp: str) -> None:
     """多文件视图：整个在 plot_compare 里（对比 + 热图）。"""
@@ -237,6 +252,22 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
            "热图有图像矩阵")
     report(getattr(dock, "_heat_colorbar", None) is not None,
            "热图带颜色条")
+
+    # 视图 2θ 框（2026-10-07）：填数 → 立刻裁剪重画（重看，不是重算）；
+    # 反方向——图上的缩放实时写回这两个框
+    lo0, hi0 = axh.get_xlim()
+    window.params["视图 2θ 下限 (°)"].setValue(2.0)
+    window.params["视图 2θ 上限 (°)"].setValue(4.0)
+    QApplication.processEvents()
+    lo1, hi1 = axh.get_xlim()
+    report(abs(lo1 - 2.0) < 0.05 and abs(hi1 - 4.0) < 0.05,
+           "热图 视图 2θ 框裁剪窗口（重看，不重算）",
+           f"{lo0:.2f}–{hi0:.2f} → {lo1:.2f}–{hi1:.2f}")
+    axh.set_xlim(2.5, 3.5)
+    QApplication.processEvents()
+    report(abs(window.params["视图 2θ 下限 (°)"].value() - 2.5) < 0.06,
+           "热图缩放写回 视图 2θ 框",
+           window.params["视图 2θ 下限 (°)"].value())
 
 
 def check_batch_background(window, lab6: str, lmfp: str) -> None:

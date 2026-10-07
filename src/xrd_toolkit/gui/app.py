@@ -114,7 +114,8 @@ from xrd_toolkit.gui.panel_state import (
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
-    _plot_compare, _plot_heatmap, _refresh_compare, _refresh_heat)
+    _plot_compare, _plot_heatmap, _refresh_compare, _refresh_heat,
+    _refresh_heat_view)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _home_key_reset, _hover_leave, _hover_motion, _magnifier_on,
@@ -123,7 +124,8 @@ from xrd_toolkit.gui.plot_panels import (
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _proc_keep_this,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
-    _plot_view, _refresh_proc, _retarget_product_panel_to_source, _spawn_task,
+    _plot_view, _refresh_proc, _refresh_waterfalls,
+    _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import watchdog
@@ -1057,6 +1059,43 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
               label="纵轴范围", decimals=1,
               tooltip="取消自动后手填的纵轴区间（下限–上限）")
 
+    # ── 瀑布显示（小节）── 瀑布 = 36 个扇区的堆叠曲线，行距口径与
+    # 对比堆叠同源（services/stacking：第二高的行峰 × 0.7）。控件单开
+    # 一对（键带「瀑布」前缀）：对比那对住「对比」页、这里住「绘图」页
+    # ——瀑布的面板就是从本页开出去的，用户在哪儿出图就在哪儿调。
+    # 纯显示参数、即改即画（同对比那对），不勾 = 自动口径。
+    add_caption(form_draw, "瀑布显示")
+
+    wf_step_chk = QCheckBox("手动行距")
+    wf_step_chk.setToolTip("默认自动：行距 = 第二高的行峰 × 0.7（各扇区同一个"
+                           "行高，强弱能横向比）；勾上后按倍数手动定（只影响"
+                           "显示，不动数据）。对比的 [手动行距] 用同一条规则，"
+                           "两边各管各的图")
+    window.params["瀑布手动行距"] = wf_step_chk
+    wf_step_mult = QDoubleSpinBox()
+    wf_step_mult.setRange(0.1, 10.0)
+    wf_step_mult.setSingleStep(0.1)
+    wf_step_mult.setDecimals(2)
+    wf_step_mult.setValue(1.0)
+    wf_step_mult.setEnabled(False)
+    wf_step_mult.setToolTip("行距 = 自动行距 × 这个倍数（1.00 = 与自动相同）")
+    window.params["瀑布行距倍数"] = wf_step_mult
+    wf_row = QWidget()
+    wf_lay = QHBoxLayout(wf_row)
+    wf_lay.setContentsMargins(0, 0, 0, 0)
+    wf_lay.setSpacing(2)
+    wf_lay.addWidget(wf_step_chk, 1)
+    wf_lay.addWidget(wf_step_mult, 1)
+    form_draw.addRow(wf_row)
+
+    def sync_wf_step_mult(*_):
+        wf_step_mult.setEnabled(wf_step_chk.isChecked())
+
+    wf_step_chk.toggled.connect(sync_wf_step_mult)
+    sync_wf_step_mult()   # 初始：自动行距 → 倍数框置灰
+    wf_step_chk.toggled.connect(lambda _on: _refresh_waterfalls(window))
+    wf_step_mult.valueChanged.connect(lambda _v: _refresh_waterfalls(window))
+
     # 对比归一化（下拉框三选一）——叠图时强度差很大的文件不归一会被
     # 强者压扁。三种模式（**都是全场统一的比例**）：
     #   global 全图最强峰：所有曲线除以全部曲线里最高的峰
@@ -1577,6 +1616,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     auto_heat.toggled.connect(sync_heatlim)
     sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
 
+    # 视图 2θ：热图（与对比）横轴只看这一段（用户 2026-10-05："热图添加
+    # 回 2theta 改变视图的功能，就是重看，不是重算"）。绑的是缩放/平移
+    # 那对老键（视图 2θ 下限/上限）：图上缩放/平移实时写回这两个框，
+    # 反过来在框里填数 → 立刻裁剪重画（_refresh_heat_view）——换的只是
+    # 窗口，数据一份不动。超出某文件自己算过的范围的那一段就是空白：
+    # 画不出来也不重算，正是"重看"的含义。初始值 = 积分范围出厂默认，
+    # 焦点面板一回放就被它的窗口（或"跟随"的折算值）覆盖。
+    wv_lo, wv_hi = add_range(
+        form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
+        DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
+        label="视图 2θ", suffix="°", decimals=1,
+        tooltip="热图 / 对比横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
+                "图上的缩放/平移会实时写回这两个框。数据按各文件自己的积分"
+                "范围算——超出已算范围的那一段是空白")
+    wv_lo.valueChanged.connect(lambda _v: _refresh_heat_view(window))
+    wv_hi.valueChanged.connect(lambda _v: _refresh_heat_view(window))
+
     # 对比页产出：多文件才成立的两种图（对比叠图 / 批量热图）
     cmp_row = QHBoxLayout()
     cmp_row.setSpacing(4)
@@ -1613,6 +1669,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "对比堆叠": False,
         "手动行距": False,
         "行距倍数": 1.0,
+        "瀑布手动行距": False,
+        "瀑布行距倍数": 1.0,
         "热图色图": "magma",
         "热图归一化": "off",
         "热图对数": False,
@@ -1645,6 +1703,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
         window.params["手动行距"].setChecked(img_defaults["手动行距"])
         window.params["行距倍数"].setValue(img_defaults["行距倍数"])
+        window.params["瀑布手动行距"].setChecked(img_defaults["瀑布手动行距"])
+        window.params["瀑布行距倍数"].setValue(img_defaults["瀑布行距倍数"])
         if window.params["纵轴自动"].isChecked():
             _apply_auto_ylim(window)   # 已勾着 toggled 不响，手动重算填回
         window.params["热图色图"].setCurrentIndex(
