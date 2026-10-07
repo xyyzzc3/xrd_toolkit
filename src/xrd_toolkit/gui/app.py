@@ -1968,6 +1968,14 @@ def _build_menu(window: QMainWindow) -> None:
     0.1 打包分发之后，"这是什么、哪一版、谁做的、许可怎么算、说明书在哪"
     必须有地方可看；F1 开说明书是 Windows 侧的通用习惯（QKeySequence.
     HelpContents），macOS 上系统还会给帮助菜单配搜索框。
+
+    **Windows/Linux 上这条菜单栏是隐藏的**（2026-10-07 用户："windows 是在
+    功能栏的上方多出一行，仅有帮助一个选项"——它只装一个「帮助」，白占
+    窗口里一整条）。帮助全走工具栏的 [帮助▾]（同一批 QAction，见
+    _build_toolbar）。**macOS 保留**：那里的菜单栏是系统级的（屏幕顶部
+    全局那条），不占窗口，也是 Apple 惯例里「关于」该住的地方
+    （AboutRole 靠它搬到应用菜单）。隐藏后 F1 照常生效（动作显式挂到
+    窗口上保底，离屏实测过）。
     """
     help_menu = window.menuBar().addMenu("帮助")
     act_manual = help_menu.addAction("使用说明")
@@ -1978,6 +1986,11 @@ def _build_menu(window: QMainWindow) -> None:
     act_about.setMenuRole(QAction.AboutRole)
     act_about.triggered.connect(lambda: _show_about(window))
     window.menu_actions = {"manual": act_manual, "about": act_about}
+    if sys.platform != "darwin":
+        window.menuBar().setVisible(False)
+        # F1 保底：动作既在（隐藏的）菜单里、也在 [帮助▾] 菜单里，这里再
+        # 挂到窗口这一级——实测"隐藏菜单栏"后它仍能触发
+        window.addAction(act_manual)
 
 
 def _build_toolbar(window: QMainWindow) -> None:

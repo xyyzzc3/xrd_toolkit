@@ -13,6 +13,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt                              # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox    # noqa: E402
 
 from xrd_toolkit import __version__                        # noqa: E402
@@ -42,6 +43,33 @@ class TestHelpMenu(unittest.TestCase):
         acts = self.w.menu_actions
         self.assertEqual(acts["manual"].text(), "使用说明")
         self.assertIn("关于", acts["about"].text())
+
+    def test_menu_bar_hidden_off_macos(self):
+        """菜单栏平台分叉（用户 2026-10-07："windows 是在功能栏的上方多出
+        一行，仅有帮助一个选项"）：Windows/Linux 上隐藏那条窗口内横条
+        （帮助全走工具栏 [帮助▾]）；macOS 的系统菜单保留（不占窗口，
+        Apple 惯例的「关于」位）。CI 两个平台都会真跑到各自的分支。"""
+        import sys
+        if sys.platform == "darwin":
+            self.assertFalse(self.w.menuBar().isHidden(),
+                             "macOS 上菜单栏该保留（系统级、不占窗口）")
+        else:
+            self.assertTrue(self.w.menuBar().isHidden(),
+                            "Windows/Linux 上那条只装「帮助」的横条该隐藏")
+            self.assertIn(self.w.menu_actions["manual"], self.w.actions(),
+                          "F1 的动作要挂到窗口上保底")
+
+    def test_f1_still_works_with_the_menu_bar_hidden(self):
+        """菜单栏隐藏后 F1 照常开说明书（真按键事件，实测过的组合）。"""
+        from PySide6.QtTest import QTest
+        self.w.show()
+        self.w.menuBar().setVisible(False)   # 模拟 Windows/Linux 侧
+        self.w.addAction(self.w.menu_actions["manual"])
+        QApplication.processEvents()
+        with mock.patch.object(gui_app, "_open_manual") as opened:
+            QTest.keyClick(self.w, Qt.Key_F1)
+            QApplication.processEvents()
+        opened.assert_called_once()
 
     def test_toolbar_help_button_shares_the_same_actions(self):
         """[帮助] 按钮挨着 [日志]（用户 2026-10-07："把帮助放到日志旁边"）。
