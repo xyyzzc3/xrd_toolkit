@@ -185,6 +185,40 @@ class TestSlidingBaseline(unittest.TestCase):
                         "过大窗口应扣不足，而不是过扣")
         self.assertLess(float(wide[i]), float(narrow[i]), "仍应比小窗口低")
 
+    def test_guard_keeps_baseline_out_of_narrow_valleys(self):
+        """(b) 护栏（2026-10-07）：基线不许高于数据的局部下包络。
+
+        两个窄峰之间的谷比拟合窗口窄——窗内直线会从两翼的背景下穿过去、
+        架在谷底数据上方（本节合成实测残差 −13；真数据上更狠：lab6 环间谷
+        −13~−15、LMFP 右峰翼 −4.9）。护栏 = 夹到窄窗（0.05°）滑动中位：
+        谷里压回 ≈0，峰顶与平背景段不动（实测峰顶基线仍 ≈峰高的 2%）。
+        """
+        bg = 100.0 + 2000.0 * np.exp(-TTH / 1.2)
+        y = _with_peaks(bg, peaks=((2.2, 30000.0), (2.7, 30000.0)),
+                        sigma=0.05)
+        base = estimate_baseline_sliding(TTH, y, 1.0)
+        resid = y - base
+        m_valley = np.abs(TTH - 2.45) <= 0.03
+        self.assertGreater(float(resid[m_valley].min()), -5.0,
+                           "窄谷不该被架高的基线压出深负值（护栏前实测 −13）")
+        i = int(np.argmin(np.abs(TTH - 2.2)))
+        self.assertLess(float(base[i]), 0.1 * float(y[i]),
+                        "护栏不该把峰顶也夹下来")
+        m_flat = (TTH >= 4.5) & (TTH <= 6.5)
+        self.assertGreater(float(resid[m_flat].min()), -5.0,
+                           "远处平背景段照旧不许过扣")
+
+    def test_guard_is_gentle_on_flat_noise(self):
+        """纯噪声平背景：护栏只让基线往"少扣一点"方向偏几 counts。
+
+        实测（σ噪声 = 5）：基线上夹前均值 499.3 → 上夹后 498.8、波动
+        0.34 → 1.0——不会把噪声下沿当上限（那会变成系统性过扣）。"""
+        rng = np.random.default_rng(7)
+        y = np.full_like(TTH, 500.0) + rng.normal(0.0, 5.0, TTH.size)
+        base = estimate_baseline_sliding(TTH, y, 1.0)
+        self.assertAlmostEqual(float(base.mean()), 500.0, delta=3.0)
+        self.assertLess(float(base.std()), 3.0)
+
     def test_auto_with_anchors_lands_on_them(self):
         """自动 + 锚点校正：基线在锚点处**等于**点到的值，形状仍是自动那份。
 

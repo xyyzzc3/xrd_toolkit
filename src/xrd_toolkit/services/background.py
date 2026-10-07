@@ -51,6 +51,11 @@ AUTO_FLOOR_PERCENTILE = 20.0
 # 阶段 2 迭代次数与噪声带宽度 k（掩掉"高于局部下限 + kσ"的峰点）。
 AUTO_ITER = 2
 AUTO_NOISE_K = 2.0
+# 护栏包络的窗口宽度（度，2026-10-07 用户 (b)："基线不许高于局部下包络"）：
+# 收尾把基线夹到"窄窗滑动中位"以下（实现与实测见 estimate_baseline_sliding
+# 收尾）。0.05° 是实测选的——细到跟得上环间窄谷（lab6 环距 ~0.1°）、
+# 粗到不被单点噪声摆布；与拟合窗口无关（它的职责是"防空架"，不是配尺度）
+GUARD_ENV_WINDOW_DEG = 0.05
 
 # 背景**算法**版本号：算法本身（不是设置）改了就必须 +1。
 #
@@ -64,7 +69,10 @@ AUTO_NOISE_K = 2.0
 # fit_anchor_baseline 的"锚点定电平、自动定形状"）。1 → 2 这次作废掉了
 # 一批**真的算错了**的产物：用户 15:35 那批 81 个文件里 68 个被外推失控
 # 压到 −3000（详见 _correct_with_anchors 的 docstring）。
-BG_ALGO_VERSION = 2
+# 3（2026-10-07）：自动基线加了"不许高于局部下包络"的护栏（同一天的
+# 用户 (b)）——窄谷处不再被架高的基线压出负值；同一套设置算出的曲线
+# 与 2 不同，旧产物随之作废（实测对照见 estimate_baseline_sliding 收尾）。
+BG_ALGO_VERSION = 3
 
 
 def _dtth_median(tth) -> float:
@@ -322,6 +330,20 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
                          (sy - slope * st) / safe + slope * tth[idx],
                          np.where(cnt > 0, sy / safe, base[idx]))
         base = np.interp(tth, tth[idx], level)
+    # ── 护栏（2026-10-07 用户 (b)）：基线不许高于数据的局部下包络 ─────
+    # 两阶段的局部直线在**窄谷**处会架高：窗宽跨过两个峰时，直线从两翼
+    # 的背景下穿过去，会落在谷底数据的上方（实测 lab6 环间谷残差 −13~−15、
+    # LMFP 右峰翼 −4.9；扣过头把谷压成负值——比"扣不够"更危险的方向，
+    # 见上面"已知偏差"的说明）。下包络 = 窄窗滑动中位（GUARD_ENV_WINDOW_DEG）：
+    # 平背景上它 ≈ 数据本身，护栏几乎不动（实测背景区残差中位 +0.6 → +1.5，
+    # 往"少扣一点"的安全方向偏）；峰顶/坡上它跟着数据走高，不会误夹。
+    # 夹到中位而不是更低的分位：分位会把噪声下沿也当上限，平背景上变成
+    # 系统性过扣——那是拿一个错误换另一个。
+    env_half = max(1, int(round(GUARD_ENV_WINDOW_DEG / 2.0
+                                / max(_dtth_median(tth), 1e-9))))
+    env_pad = np.pad(y, env_half, mode="edge")
+    env = np.median(sliding_window_view(env_pad, 2 * env_half + 1), axis=1)
+    base = np.minimum(base, env)
     return np.clip(base, 0.0, None)
 
 
