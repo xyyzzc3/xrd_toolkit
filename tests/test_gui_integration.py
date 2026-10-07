@@ -4399,17 +4399,22 @@ class TestPendingEdits(unittest.TestCase):
             w.close()
 
     def test_auto_owned_values_are_not_pending(self):
-        """自动模式填进控件的展示值不算改动；取消自动 + 填值 → 亮，[应用] → 灭。"""
+        """自动模式填进控件的展示值不算改动；取消自动 + 填值 → 亮，[应用] → 灭。
+
+        代表键 2026-10-07 换成「自动对比度」：原来的代表「纵轴自动」随
+        「1D 显示」小节搬回 1D 页时改成了即改即画，从"未应用"名单里除名
+        ——留在名单里的是对比度这组（2D 的看图参数，仍走 [应用显示设置]）。
+        """
         w = create_window()
         try:
             self._two_panels(w)
             lbl = w.pending_labels["图像"]
             self.assertTrue(lbl.isHidden(),
-                            "自动纵轴算出来的上下限不算用户改动")
-            w.params["纵轴自动"].setChecked(False)
+                            "自动对比度算出来的上下限不算用户改动")
+            w.params["自动对比度"].setChecked(False)
             QApplication.processEvents()
             self.assertFalse(lbl.isHidden(), "取消自动 = 用户改动 → 该亮")
-            w.params["纵轴上限"].setValue(5000.0)
+            w.params["对比度上限"].setValue(5000.0)
             QApplication.processEvents()
             self.assertFalse(lbl.isHidden())
             w.findChild(QPushButton, "apply_image_btn").click()
@@ -5541,7 +5546,15 @@ class TestParamDockSplitLayout(unittest.TestCase):
             self.assertNotIn("标定几何（只读：由几何配置决定）", captions)
             # 积分设置搬去坞顶第三行（所有分析页共用），不再是 1D 页的小标题
             self.assertNotIn("积分设置", captions)
-            self.assertIn("2D/剖面视图", captions)
+            # 原图页的参数小节按类型行的三个功能分节（2026-10-07：
+            # "绘图页的参数分别对应功能，现在太乱了"）：2D 视图 / 剖面 /
+            # 瀑布；「1D 显示」已搬回 1D 页（这里不再出现）
+            self.assertIn("2D 视图", captions)
+            self.assertIn("剖面", captions)
+            self.assertIn("瀑布", captions)
+            self.assertNotIn("2D/剖面视图", captions)
+            # （"1D 显示" 仍在这个集合里——它现在住「1D」页，本断言
+            # 收集的是整个参数坞所有页的文本，不做"不在原图页"的推断）
             # 归一化三选一下拉框（键仍是"对比归一化"，快照回放认 data
             # 不认字面）：全图最强峰 / 指定数据… / 不归一化。
             # "各自最强峰"已删（用户 2026-09-26 的规矩：不许按各自最高
@@ -5877,18 +5890,25 @@ class TestImageApply(unittest.TestCase):
                              "log")
             self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_xlim(),
                              (1.0, 8.0))
-            # 再改显示（对数关）只点数据 [应用] → 数据生效、显示仍是
-            # 面板自己的旧设置（对数开）
-            w.params["对数纵轴"].setChecked(False)
+            # 再改一个**仍要走 [应用显示设置]** 的显示参数（剖面角度，
+            # 2026-10-07 起 1D 那四个已即改即画，代表键换它），只点数据
+            # [应用] → 数据生效、剖面角度仍是面板自己的旧设置
+            w.params["剖面角度 (°)"].setValue(45.0)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
                     lambda: w.log_text.toPlainText().count("积分完成") >= 2))
             self.assertEqual(dock.params_snapshot["2θ 上限 (°)"], 7.0)
-            self.assertTrue(dock.params_snapshot["对数纵轴"])
+            self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 0.0,
+                             "数据 [应用] 不该把显示参数捎带生效")
+            # 而「1D 显示」那几个是**即改即画**（2026-10-07 随小节搬回
+            # 1D 页改的）：关对数 → 立刻写进快照、图立刻回线性
+            w.params["对数纵轴"].setChecked(False)
+            self.assertFalse(dock.params_snapshot["对数纵轴"],
+                             "即改即画：控件一动快照就跟上")
             self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_yscale(),
-                             "log")
+                             "linear")
         finally:
             w.close()
 

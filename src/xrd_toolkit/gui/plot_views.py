@@ -1927,6 +1927,37 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     dock.figure_saved = False
 
 
+def _refresh_1d_display(window: QMainWindow) -> None:
+    """「1D 显示」参数（对数纵轴 / 纵轴自动 / 纵轴范围）改了 → 就地重画。
+
+    2026-10-07 这一小节从「原图」页搬回「1D」页时从"要按 [应用显示设置]"
+    改成**即改即画**：那个按钮住在「原图」页，搬过来就够不着了（这个应用
+    反复在修的"够不着"病；对照 10-02 对比四参数、10-07 瀑布行距的同款处理）。
+
+    作用域 = **编辑对象这一个面板**（显示参数每张图各记各的，10-02 起的
+    规矩）：不学 _refresh_compare 的"所有同类面板"——1D 面板可以同时开
+    很多张，每张各有各的缩放/刻度，改了这张不该顺带改其它张。对比面板
+    非堆叠时也读这几个键 → 焦点是它时同样就地重画。
+    """
+    if getattr(window, "_param_replaying", False) \
+            or getattr(window, "_param_box_sync", False):
+        return   # 回放快照 / 程序同步写控件（缩放写回等）都不是用户改动
+    dock = window.plot_docks.get(window.focus_panel)
+    if dock is None:
+        return   # 没有编辑对象：控件值先留着（新开图会从默认/记忆起步）
+    snap = _display_snapshot(window, dock.params_snapshot)
+    if snap.get("裁剪区间"):
+        snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
+    dock.params_snapshot = snap
+    view = window.focus_panel.split("|", 1)[0]
+    if view == "1D" and getattr(dock, "last_tth", None) is not None:
+        _draw_1d(window, dock, dock.last_tth, dock.last_intensity)
+    elif view == "对比" and getattr(dock, "compare_data", None):
+        from xrd_toolkit.gui.plot_compare import (   # 破循环：延迟导入
+            _redraw_compare)
+        _redraw_compare(window, window.focus_panel)
+
+
 def _refresh_waterfalls(window: QMainWindow) -> None:
     """瀑布的行距控件（[手动行距] + 倍数）改了 → 各瀑布面板就地重画。
 

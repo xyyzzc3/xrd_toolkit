@@ -781,10 +781,20 @@ def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
         snap["纵轴下限"] = float(ylo)
         snap["纵轴上限"] = float(yhi)
         if window.plot_docks.get(window.focus_panel) is dock:
+            # 挂 _param_box_sync 旗标：这几个框的"即改即画"钩子
+            # （plot_views._refresh_1d_display）必须把这次程序同步当成
+            # 非用户改动跳过——否则框的 1 位小数会把缩放值四舍五入
+            # （1.02→1.0）、再经 _display_snapshot 写回快照，连续缩放
+            # 几步就卡住（2026-10-07 全量套件三条缩放/Home 测试当场红）。
             # setChecked(False) 触发 sync_ylim → 上下限框解除置灰
-            window.params["纵轴自动"].setChecked(False)
-            window.params["纵轴下限"].setValue(ylo)
-            window.params["纵轴上限"].setValue(yhi)
+            prev = getattr(window, "_param_box_sync", False)
+            window._param_box_sync = True
+            try:
+                window.params["纵轴自动"].setChecked(False)
+                window.params["纵轴下限"].setValue(ylo)
+                window.params["纵轴上限"].setValue(yhi)
+            finally:
+                window._param_box_sync = prev
     else:
         # 画像/行号轴（2D 像素、热图样品行、瀑布行偏移）：同上，走通用键。
         # 往"纵轴上下限"写会把**强度**的语义（默认 1.0/100000.0）串进来

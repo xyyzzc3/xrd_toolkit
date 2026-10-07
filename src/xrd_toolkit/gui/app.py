@@ -125,7 +125,7 @@ from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _proc_keep_this,
     _proc_save,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
-    _plot_view, _refresh_proc, _refresh_waterfalls,
+    _plot_view, _refresh_1d_display, _refresh_proc, _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
@@ -893,12 +893,52 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
     # 我按自己的想法收尾）：整页空白看着像没做完
     page_hint = QLabel(
-        "本页只管出图：2θ 范围与点数在参数面板顶部，显示参数（对数纵轴 / "
-        "纵轴范围）在「原图」页；勾选超过 24 项时不再弹面板——"
+        "2θ 范围与点数在参数面板顶部（改了要按 [重算这张图]）；下面的曲线"
+        "显示参数即改即画；勾选超过 24 项时不再弹面板——"
         "结果进文件栏「1D 产物」，双击看一张、右键整组打开")
     page_hint.setWordWrap(True)
     page_hint.setStyleSheet("color: gray;")
     form_1d.addRow(page_hint)
+
+    # ── 1D 显示（小节，2026-10-07 从「原图」页搬回本页）──
+    # 它本来就是曲线图自己的显示参数，原图页改名后屋里只剩 2D/剖面/瀑布，
+    # 这一节留在那儿名不对题（用户："搬回 1d"）。**同时改成即改即画**：
+    # 原来要按 [应用显示设置]，而那个按钮住在「原图」页——搬过来就够不着
+    # 了（这个应用反复在修的"够不着"病；对照 10-02 对比四参数、10-07 瀑布
+    # 行距的同款处理）。作用域 = **编辑对象这一个面板**：显示参数每张图各
+    # 记各的（10-02 起的规矩），不学 _refresh_compare 的"所有同类面板"——
+    # 1D 面板可以同时开很多张，每张各有各的缩放/刻度。
+    add_caption(form_1d, "1D 显示")
+    log_y = QCheckBox("对数纵轴")
+    log_y.setToolTip("对数刻度：强弱峰差几个数量级时弱峰也看得清（改完立刻重画）")
+    window.params["对数纵轴"] = log_y
+    form_1d.addRow(log_y)
+
+    auto_y = QCheckBox("纵轴自动")
+    auto_y.setChecked(True)
+    auto_y.setToolTip("按曲线 1%–99.9% 分位自动确定纵轴区间")
+    window.params["纵轴自动"] = auto_y
+    form_1d.addRow(auto_y)
+
+    add_range(form_1d, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
+              label="纵轴范围", decimals=1,
+              tooltip="取消自动后手填的纵轴区间（下限–上限）；改完立刻重画")
+
+    def sync_ylim(checked):
+        window.params["纵轴下限"].setEnabled(not checked)
+        window.params["纵轴上限"].setEnabled(not checked)
+        if checked:
+            _apply_auto_ylim(window)   # 勾回自动：立刻按焦点图算并填回（同对比度套路）
+
+    auto_y.toggled.connect(sync_ylim)
+    sync_ylim(True)   # 初始状态：自动开 → 输入框置灰
+    # 即改即画（先接 sync_ylim 再接它：连接按顺序触发，先填值后重画）
+    log_y.toggled.connect(lambda _=False: _refresh_1d_display(window))
+    auto_y.toggled.connect(lambda _=False: _refresh_1d_display(window))
+    window.params["纵轴下限"].valueChanged.connect(
+        lambda _v=0.0: _refresh_1d_display(window))
+    window.params["纵轴上限"].valueChanged.connect(
+        lambda _v=0.0: _refresh_1d_display(window))
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
@@ -949,9 +989,22 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btns_1d.addWidget(btn_plot_1d)
 
 
-    # 组内分区：上面的对比度/剖面角只对二维视图有意义；下面的
-    # "1D 显示" 子分组管曲线图自己的显示参数
-    add_caption(form_draw, "2D/剖面视图")
+    # ── 原图页的参数按"类型行里的三个功能"分节（2026-10-07 用户：
+    # "绘图页的参数分别对应功能，现在太乱了"）：2D 视图 / 剖面 / 瀑布，
+    # 各节和自己的类型按钮一一对应（原来把 2D 与剖面的参数混在一节里）。
+    # 这一页的参数是**看图参数**：不参与计算，点 [应用显示设置] 落到
+    # 编辑对象（而 1D 的曲线显示参数已搬回「1D」页、改成即改即画）。
+    # 看图参数：不参与计算，只影响图怎么显示。生效方式两种要说准
+    # （2026-10-07 分节重排时顺手订正：瀑布行距是即改即画，其余走 [应用]）
+    hint = QLabel("本页参数只看图、不参与计算：[手动行距] 即时生效，"
+                  "其余改完点 [应用显示设置]")
+    hint.setStyleSheet("color: gray;")
+    hint.setWordWrap(True)
+    hint_row = QHBoxLayout()
+    hint_row.addWidget(hint)
+    form_draw.addRow(hint_row)   # 全宽一行（不再挤在标签列里竖排）
+
+    add_caption(form_draw, "2D 视图")
 
     # 自动对比度（默认开）：显示区间按编辑对象（焦点图）数据的
     # 1%/99.9% 分位自定，与 view_diffraction 的默认行为一致；取消勾
@@ -977,11 +1030,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     auto.toggled.connect(sync_contrast)
     sync_contrast(True, silent=True)   # 初始状态：自动开 → 输入框置灰（不刷日志）
 
-    angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
-                      label="剖面角度", suffix="°",
-                      tooltip="剖面线相对参考方向的角度")
-    angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
-
     # 束心十字（2D 图上那个白色 +）画不画：默认画（与 CLI 的
     # view_diffraction 一致），取消勾选得到一张干净的衍射图。
     # 挨着 [应用] 那一套走（改完按 [应用显示设置] 重画，不重新积分）；
@@ -994,51 +1042,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["显示束心"] = beam_cross
     form_draw.addRow(beam_cross)
 
-    # 看图参数：不参与计算，只影响图怎么显示；点 [应用] 落到编辑
-    # 对象（快照跟着更新）
-    hint = QLabel("只看图不参与计算，点 [应用显示设置] 生效")
-    hint.setStyleSheet("color: gray;")
-    hint.setWordWrap(True)
-    hint_row = QHBoxLayout()
-    hint_row.addWidget(hint)
-    form_draw.addRow(hint_row)   # 全宽一行（不再挤在标签列里竖排）
-
-    # ── 1D 显示（小节）：曲线图自己的显示参数 ──
-    # 不套子分组框（嵌套框自带一套标签列 + 边框，白白多占 ~30px
-    # 宽）：灰色小节标题的层次感够用。对数纵轴：主峰与弱峰强度
-    # 差几个数量级，对数刻度把弱峰"抬起来"（XRD 软件行规）。纵轴
-    # 范围与对比度同套路：自动 = 按曲线 1%/99.9% 分位，取消勾选
-    # 手填；自动模式输入框置灰 = 只读展示正在用的区间
-    add_caption(form_draw, "1D 显示")
-
-    # "显示 2θ 范围"那一行**撤了**（用户 2026-09-27："显示范围用户自己
-    # 放大就行了"）：在图上滚轮/拖框缩放、[Home] 复位就够用，不必再摆一对
-    # 输入框。两个参数键（视图 2θ 下限/上限）**仍在**——缩放/平移照样写回
-    # 它们（写进面板快照，那才是权威），[恢复默认] 也照样让它们回到"跟随
-    # 积分范围"；只是没有控件显示它们了（_param_box_set 见不到控件就跳过）。
-    # 区别仍在：积分范围（坞顶那行）改了要重积分，视图范围只换窗口。
-
-    log_y = QCheckBox("对数纵轴")
-    log_y.setToolTip("对数刻度：强弱峰差几个数量级时弱峰也看得清")
-    window.params["对数纵轴"] = log_y
-    form_draw.addRow(log_y)
-
-    auto_y = QCheckBox("纵轴自动")
-    auto_y.setChecked(True)
-    auto_y.setToolTip("按曲线 1%–99.9% 分位自动确定纵轴区间")
-    window.params["纵轴自动"] = auto_y
-    form_draw.addRow(auto_y)
-
-    add_range(form_draw, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
-              label="纵轴范围", decimals=1,
-              tooltip="取消自动后手填的纵轴区间（下限–上限）")
+    # ── 剖面（小节）：剖面面板自己的参数 ——
+    add_caption(form_draw, "剖面")
+    angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
+                      label="剖面角度", suffix="°",
+                      tooltip="剖面线相对参考方向的角度")
+    angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
 
     # ── 瀑布显示（小节）── 瀑布 = 36 个扇区的堆叠曲线，行距口径与
     # 对比堆叠同源（services/stacking：第二高的行峰 × 0.7）。控件单开
     # 一对（键带「瀑布」前缀）：对比那对住「对比」页、这里住「原图」页
     # ——瀑布的面板就是从本页开出去的，用户在哪儿出图就在哪儿调。
     # 纯显示参数、即改即画（同对比那对），不勾 = 自动口径。
-    add_caption(form_draw, "瀑布显示")
+    add_caption(form_draw, "瀑布")
 
     wf_step_chk = QCheckBox("手动行距")
     wf_step_chk.setToolTip("默认自动：行距 = 第二高的行峰 × 0.7（各扇区同一个"
@@ -1619,15 +1635,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cmp_row.addWidget(btn_plot_cmp, 1)
     cmp_row.addWidget(btn_plot_heat, 1)
     btns_cmp.addLayout(cmp_row)
-
-    def sync_ylim(checked):
-        window.params["纵轴下限"].setEnabled(not checked)
-        window.params["纵轴上限"].setEnabled(not checked)
-        if checked:
-            _apply_auto_ylim(window)   # 勾回自动：立刻按焦点图算并填回（同对比度套路）
-
-    auto_y.toggled.connect(sync_ylim)
-    sync_ylim(True)   # 初始状态：自动开 → 输入框置灰
 
     img_defaults = {
         "对比度下限": 1.0,
