@@ -175,6 +175,21 @@ USER_CONFIGS = _read_user_config(USER_CONFIG_PATH)
 CONFIGS = _merge_configs(BUILTIN_CONFIGS, USER_CONFIGS)
 
 
+def entry_display(name, entry):
+    """条目在界面上的一条显示串：`key_备注`；两者相同就只写一次。
+
+    2026-10-07 用户定（"旧条目也变成一条，key_备注的格式"、"都改，
+    统一"）：配置下拉框、日志、删除确认这些地方一律用它——不再一半
+    显示 key、另一半藏在悬停里。新条目从「条目名称」一个框存进来
+    （key = 备注 = 那个名字，见后面 config_ops 的说明），显示出来就是
+    那个名字本身。
+    """
+    label = str((entry or {}).get("label") or "").strip()
+    if not label or label == name:
+        return name
+    return f"{name}_{label}"
+
+
 def _write_user_configs():
     """把内存里的 USER_CONFIGS 原子落盘（保存/删除共用）。
 

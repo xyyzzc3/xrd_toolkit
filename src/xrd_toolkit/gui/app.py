@@ -73,14 +73,14 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
+    QMainWindow, QMenu, QMessageBox, QMdiSubWindow,  # 兼容再导出：测试 isinstance 用
     QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QStackedWidget, QToolBar, QVBoxLayout, QWidget,
-    QDockWidget, QApplication)
+    QSpinBox, QSplitter, QStackedWidget, QToolBar,
+    QVBoxLayout, QWidget, QDockWidget, QApplication)
 
 from xrd_toolkit import config, paths
 from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 # ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
 from xrd_toolkit.gui.plot_export import (
     _ask_save_options, _build_export_dialog, _checked_1d_results,
@@ -713,14 +713,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     geom_lay.setSpacing(4)
     geom_lay.addWidget(QLabel("几何配置"))
     # 下拉框只显示短 key（如 lmfp1_lab6），完整批次备注挂在**条目**的
-    # 悬停提示上（下拉列表里逐条看）；key 藏在 itemData 里给程序用。
+    # 悬停提示上（下拉列表里逐条看）——**条目文字 2026-10-07 起统一写成
+    # `key_备注` 一条**（用户："旧条目也变成一条，key_备注的格式"、
+    # "都改，统一"，见 config.entry_display）；key 藏在 itemData 里给
+    # 程序用。超长时闭合框里会被裁掉尾巴，下拉列表与悬停里看全名。
     # 完整条目（含 beam_center）挂在 window.config，2D/剖面视图直接取用。
     # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没建好，
     # 信号此刻触发会去写一个还不存在的控件；默认值改由 create_window
     # 收尾时显式调用 _apply_config 应用。
     window.config_combo = QComboBox()
     for name, entry in CONFIGS.items():
-        window.config_combo.addItem(name, name)
+        window.config_combo.addItem(entry_display(name, entry), name)
         window.config_combo.setItemData(
             window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
     window.config_combo.setCurrentIndex(
@@ -1210,26 +1213,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     proc_hint.setWordWrap(True)
     proc_hint.setStyleSheet("color: gray;")
     form_bg.addRow(proc_hint)
-    add_caption(form_bg, "背景扣除")
+    # 计算顺序说清楚（用户 2026-10-07）：页面顺序（裁剪在最上）只管操作
+    # 顺手，实际计算永远按 背景 → 平滑 → 裁剪 走（services/process.
+    # apply_chain 的固定次序）——两件事不说明白，看着顺序和算的顺序反着
+    order_hint = QLabel("计算顺序固定：先扣背景，再平滑，最后裁剪"
+                        "（本页从上往下的顺序只管操作顺手，不是计算次序）")
+    order_hint.setWordWrap(True)
+    order_hint.setStyleSheet("color: gray;")
+    form_bg.addRow(order_hint)
 
-    bg_mode = QComboBox()
-    for text, data in (("关闭", "off"),
-                       ("空扫相减", "blank"),
-                       ("自动基线（推荐）", "auto"),
-                       ("手动锚点", "anchor")):
-        bg_mode.addItem(text, data)
-    bg_mode.setToolTip(
-        "背景：不含样品结构信息的加性信号（空气散射、非晶漫散射、"
-        "荧光、暗电流、直射束光晕）。\n"
-        "空扫相减：实测——先拍一张没有样品的图，从样品图里逐点减掉"
-        "（最干净，但必须真有空扫、曝光/几何一致）。\n"
-        "自动基线：自动估计——假设背景比峰宽且平滑，按窗口宽度估计"
-        "（一键，无需额外数据）。\n"
-        "手动锚点：手动标定——在图上点几个只有背景的位置连成底线"
-        "（最可控，适合宽鼓包样品）。")
-    window.params["背景扣除模式"] = bg_mode
-    form_bg.addRow(bg_mode)
-
+    # 排版小工具（本页三个小节共用；原先住在「背景扣除」小节里，
+    # 2026-10-07 裁剪小节挪到最上后提到这里——它先用 bg_row）
     def bg_group(rows):
         """把若干控件行打包成一个可整体显隐的竖直容器。
 
@@ -1253,6 +1247,74 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         for w, stretch in widgets:
             lay.addWidget(w, stretch)
         return row
+
+    # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
+    # **页面顺序 = 裁剪 → 扣背景 → 平滑**（用户 2026-10-07："最上方是
+    # 裁剪-扣背景-平滑的顺序"）：他就是这么用的——先把压扁其余的巨峰
+    # 裁掉，再估背景、最后平滑。计算顺序不受本页顺序影响（见上面那行
+    # 灰字与 services/process.apply_chain）
+    add_caption(form_bg, "裁剪区间")
+
+    cut_chk = QCheckBox("裁剪区间")
+    cut_chk.setToolTip("把指定 2θ 范围从曲线里挖掉：图上那一段空着，"
+                       "纵轴自动范围也跟着跳过它。\n"
+                       "典型用途：某个巨峰把其余部分压扁了，挖掉它让其余"
+                       "看得清。\n"
+                       "<b>影响的是数据</b>：处理产物与导出文件里这段同样是空的"
+                       "（导出文件头会写明删了哪一段）")
+    window.params["裁剪区间"] = cut_chk
+    form_bg.addRow(cut_chk)
+
+    cut_lo = QDoubleSpinBox()
+    cut_hi = QDoubleSpinBox()
+    for box, val in ((cut_lo, 2.0), (cut_hi, 3.0)):
+        box.setRange(0.0, 180.0)
+        box.setDecimals(3)
+        box.setSingleStep(0.1)
+        box.setValue(val)
+        box.setSuffix("°")
+        _fit_max_width(box, 84)      # 旧上限 84 降为下限，上限 = 完整显示 "180.000°"
+        box.setToolTip("裁剪区间的起止 2θ（含两端）。起点 ≥ 终点时视为"
+                       "不裁剪（不会出错）")
+    window.params["裁剪起点 (°)"] = cut_lo
+    window.params["裁剪终点 (°)"] = cut_hi
+    cut_add_btn = QPushButton("添加")
+    cut_add_btn.setObjectName("cut_add_btn")
+    cut_add_btn.setStyleSheet("padding: 2px 5px;")
+    cut_add_btn.setToolTip("把这一段的起止加进下面的清单——可以删好几段"
+                           "（例如同时删 2–3° 和 7–8°）")
+    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("–"), 0), (cut_hi, 1),
+                          (cut_add_btn, 0)))
+    cut_list_lbl = QLabel("清单：空")
+    cut_list_lbl.setStyleSheet("color: gray;")
+    cut_list_lbl.setToolTip("当前要挖掉的全部区间（图上、处理产物与导出文件"
+                            "里同样生效）")
+    window.cut_list_lbl = cut_list_lbl
+    cut_clear_btn = QPushButton("清空")
+    cut_clear_btn.setObjectName("cut_clear_btn")
+    cut_clear_btn.setStyleSheet("padding: 2px 5px;")
+    cut_clear_btn.setToolTip("清空清单（= 不裁剪）")
+    form_bg.addRow(bg_row((cut_list_lbl, 2), (cut_clear_btn, 0)))
+
+    add_caption(form_bg, "背景扣除")
+
+    bg_mode = QComboBox()
+    for text, data in (("关闭", "off"),
+                       ("空扫相减", "blank"),
+                       ("自动基线（推荐）", "auto"),
+                       ("手动锚点", "anchor")):
+        bg_mode.addItem(text, data)
+    bg_mode.setToolTip(
+        "背景：不含样品结构信息的加性信号（空气散射、非晶漫散射、"
+        "荧光、暗电流、直射束光晕）。\n"
+        "空扫相减：实测——先拍一张没有样品的图，从样品图里逐点减掉"
+        "（最干净，但必须真有空扫、曝光/几何一致）。\n"
+        "自动基线：自动估计——假设背景比峰宽且平滑，按窗口宽度估计"
+        "（一键，无需额外数据）。\n"
+        "手动锚点：手动标定——在图上点几个只有背景的位置连成底线"
+        "（最可控，适合宽鼓包样品）。")
+    window.params["背景扣除模式"] = bg_mode
+    form_bg.addRow(bg_mode)
 
     # 空扫模式：选图 + 归一化系数
     bg_blank_btn = QPushButton("选择空扫图")
@@ -1404,50 +1466,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     smooth_method.currentIndexChanged.connect(
         lambda _=0: _sync_smooth_rows(window))
     window._sync_smooth_rows = lambda: _sync_smooth_rows(window)
-
-    # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
-    add_caption(form_bg, "裁剪区间")
-
-    cut_chk = QCheckBox("裁剪区间")
-    cut_chk.setToolTip("把指定 2θ 范围从曲线里挖掉：图上那一段空着，"
-                       "纵轴自动范围也跟着跳过它。\n"
-                       "典型用途：某个巨峰把其余部分压扁了，挖掉它让其余"
-                       "看得清。\n"
-                       "<b>影响的是数据</b>：处理产物与导出文件里这段同样是空的"
-                       "（导出文件头会写明删了哪一段）")
-    window.params["裁剪区间"] = cut_chk
-    form_bg.addRow(cut_chk)
-
-    cut_lo = QDoubleSpinBox()
-    cut_hi = QDoubleSpinBox()
-    for box, val in ((cut_lo, 2.0), (cut_hi, 3.0)):
-        box.setRange(0.0, 180.0)
-        box.setDecimals(3)
-        box.setSingleStep(0.1)
-        box.setValue(val)
-        box.setSuffix("°")
-        _fit_max_width(box, 84)      # 旧上限 84 降为下限，上限 = 完整显示 "180.000°"
-        box.setToolTip("裁剪区间的起止 2θ（含两端）。起点 ≥ 终点时视为"
-                       "不裁剪（不会出错）")
-    window.params["裁剪起点 (°)"] = cut_lo
-    window.params["裁剪终点 (°)"] = cut_hi
-    cut_add_btn = QPushButton("添加")
-    cut_add_btn.setObjectName("cut_add_btn")
-    cut_add_btn.setStyleSheet("padding: 2px 5px;")
-    cut_add_btn.setToolTip("把这一段的起止加进下面的清单——可以删好几段"
-                           "（例如同时删 2–3° 和 7–8°）")
-    form_bg.addRow(bg_row((cut_lo, 1), (QLabel("–"), 0), (cut_hi, 1),
-                          (cut_add_btn, 0)))
-    cut_list_lbl = QLabel("清单：空")
-    cut_list_lbl.setStyleSheet("color: gray;")
-    cut_list_lbl.setToolTip("当前要挖掉的全部区间（图上、处理产物与导出文件"
-                            "里同样生效）")
-    window.cut_list_lbl = cut_list_lbl
-    cut_clear_btn = QPushButton("清空")
-    cut_clear_btn.setObjectName("cut_clear_btn")
-    cut_clear_btn.setStyleSheet("padding: 2px 5px;")
-    cut_clear_btn.setToolTip("清空清单（= 不裁剪）")
-    form_bg.addRow(bg_row((cut_list_lbl, 2), (cut_clear_btn, 0)))
 
     # ── 配方（小节，**放在整页最下方**）：一份设置存下来，别的批次能照用 ──
     # 用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点
@@ -2005,7 +2023,11 @@ def _build_menu(window: QMainWindow) -> None:
 
 
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + 面板开关（文件/参数/日志）。
+    """工具栏 = 五个入口 + 面板开关（文件/参数/日志）+ [帮助]。
+
+    四组之间都有分隔线（用户 2026-10-07："让这几部分的区分明显一点，
+    四大功能、绘图、三大板块、帮助"）：`[校准][1D][处理][对比] │ [绘图]
+    │ [文件][参数][日志] │ [帮助▾]`。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
     `[校准] [1D] [处理] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
@@ -2075,6 +2097,24 @@ def _build_toolbar(window: QMainWindow) -> None:
             lambda checked=False, n=name:
             window._dock_intent.__setitem__(n, checked))
 
+    # 帮助：**挨着 [日志]，不再只是菜单栏里那一条**（用户 2026-10-07：
+    # "把帮助放到日志旁边，不在外面了"）。点开一个小菜单（使用说明 /
+    # 关于）。与菜单栏那两个 QAction **同一批对象**——两条入口，一份行为。
+    # 菜单栏那条保留：macOS 的「关于」必须住在系统应用菜单里（AboutRole），
+    # F1 快捷键也归它管，删了会破坏平台惯例。
+    tb.addSeparator()
+    # 用 QPushButton（不是 QToolButton）：工具栏里其余按钮都是 QPushButton，
+    # 同一个外观（QToolButton 在 macOS 上是无边框的，混在一排里像少了壳）
+    btn_help = QPushButton("帮助")
+    btn_help.setObjectName("help_btn")
+    btn_help.setToolTip("使用说明（F1）与关于本软件")
+    help_menu = QMenu(btn_help)
+    help_menu.addAction(window.menu_actions["manual"])
+    help_menu.addAction(window.menu_actions["about"])
+    btn_help.setMenu(help_menu)       # 单击即弹菜单（按钮带一个小三角）
+    tb.addWidget(btn_help)
+    window.help_btn = btn_help
+
     # 开局谁都不选（参数坞建好才动得了，所以放在这里）：不点亮任何入口
     # + 收起参数坞。用户 2026-09-25 定：开界面时上面什么都不选、右边
     # 参数栏是隐藏的——"选到谁才放谁的参数"。
@@ -2120,7 +2160,7 @@ def _sync_geom_row(window: QMainWindow) -> None:
         tip = ""
     else:
         g = cfg["geometry"]
-        tip = (f"{window.config_name}：{cfg['label']}\n"
+        tip = (f"{entry_display(window.config_name, cfg)}\n"
                f"像素尺寸 {g['pixel_size_m'] * 1e6:.1f} µm\n"
                f"波长 {g['wavelength_m'] * 1e10:.4f} Å\n"
                f"距离 {g['dist_m'] * 1e3:.2f} mm")

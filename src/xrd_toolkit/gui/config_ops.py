@@ -206,7 +206,7 @@ def _delete_config(window: QMainWindow) -> None:
         return
     answer = QMessageBox.question(
         window, "删除配置",
-        f"删除用户配置条目 {key}（{entry['label']}）？\n"
+        f"删除用户配置条目 {config.entry_display(key, entry)}？\n"
         "删除后不可恢复（内置条目不受影响）。",
         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
     if answer != QMessageBox.Yes:
@@ -221,7 +221,7 @@ def _delete_config(window: QMainWindow) -> None:
         return
     _reload_config_combo(window, config.DEFAULT_CONFIG)
     _sync_del_config_btn(window)
-    _log(window, f"已删除配置条目 {key}（{entry['label']}），"
+    _log(window, f"已删除配置条目 {config.entry_display(key, entry)}，"
                  f"已切回默认条目 {config.DEFAULT_CONFIG}")
 
 
@@ -238,19 +238,38 @@ def _suggest_config_key(current_key: str) -> str:
     return "lab6_calib"
 
 
+def _sanitize_config_key(name: str) -> str:
+    """条目名称 → 命令行可用的标识（key）：非字母数字换下划线、去首尾
+    下划线，数字开头补 cfg_ 前缀；全空退回 cfg。
+
+    用户 2026-10-07：保存表单只剩**一个**「条目名称」框——名字本身是
+    备注，key 由它自动洗出来（如 "LMFP 第 2 批" → "LMFP_2"，命令行
+    --config 取用它）。旧条目 key/备注 分开存的照旧读、照旧用。
+    """
+    key = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+    if not key:
+        return "cfg"
+    if key[0].isdigit():
+        return f"cfg_{key}"
+    return key
+
+
 def _confirm_overwrite(window: QMainWindow, key: str) -> bool:
     """用户条目重名确认：覆盖返回 True（用户自己拍板，点击即复核）。"""
     return QMessageBox.question(
         window, "覆盖已有配置",
-        f"用户配置 {key} 已存在。用这次的校准结果覆盖它吗？"
+        f"配置 {config.entry_display(key, config.USER_CONFIGS.get(key) or {})} "
+        f"已存在。用这次的校准结果覆盖它吗？"
     ) == QMessageBox.Yes
 
 
 def _save_calib_config(window: QMainWindow) -> None:
     """[存为配置]：把**当前配置**的几何 → 命名用户条目（本地落盘）。
 
-    校验 key/label → 与内置条目撞名拒绝、与已存用户条目撞名弹确认
-    覆盖 → config.save_user_config 落盘 → 下拉框重建并自动选中新
+    **一个「条目名称」框**（用户 2026-10-07："一个框，预填文件名的不含
+    -后的长数字部分"）：名字本身是备注；命令行用的标识（key）由它洗出来
+    （_sanitize_config_key）→ 与内置条目撞名拒绝、与已存用户条目撞名弹
+    确认覆盖 → config.save_user_config 落盘 → 下拉框重建并自动选中新
     条目（_apply_config 把几何填进参数坞，保存即生效）。
 
     血缘一并写入：method = 这份几何是哪个动作产出的（raw/auto/manual/
@@ -268,18 +287,14 @@ def _save_calib_config(window: QMainWindow) -> None:
         _log(window, "还没有可保存的几何（先选一条配置或用 [编辑…] 填）")
         return
     _warn_pixel_unchecked(window, doing="保存")
-    key = window.calib_key_edit.text().strip()
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-        _log(window, "标识无效：只允许字母、数字、下划线，且以字母或"
-                     "下划线开头（如 lmfp2_lab6）")
-        return
-    if key in config.BUILTIN_CONFIGS:
-        _log(window, f"标识 {key} 与内置条目重名（内置条目人工登记，"
-                     "不可覆盖），换一个名字")
-        return
-    label = window.calib_label_edit.text().strip()
+    label = window.calib_name_edit.text().strip()
     if not label:
-        _log(window, "请先填写批次备注")
+        _log(window, "请先填写条目名称（预填值来自标样文件名，可直接改）")
+        return
+    key = _sanitize_config_key(label)
+    if key in config.BUILTIN_CONFIGS:
+        _log(window, f"「{label}」的标识 {key} 与内置条目重名（内置条目"
+                     "人工登记，不可覆盖），换个名字")
         return
     if key in config.USER_CONFIGS and not _confirm_overwrite(window, key):
         return
@@ -318,7 +333,9 @@ def _save_calib_config(window: QMainWindow) -> None:
         return
     _reload_config_combo(window, key)
     if is_new:
-        _log(window, f"已保存新配置条目 {key} 并自动选中；重启后仍在，"
-                     f"命令行脚本可用 --config {key} 取用")
+        _log(window, f"已保存新配置条目 {config.entry_display(key, entry)} "
+                     f"并自动选中；重启后仍在，命令行脚本可用 "
+                     f"--config {key} 取用")
     else:
-        _log(window, f"已覆盖配置条目 {key} 并自动选中")
+        _log(window, f"已覆盖配置条目 {config.entry_display(key, entry)} "
+                     f"并自动选中")

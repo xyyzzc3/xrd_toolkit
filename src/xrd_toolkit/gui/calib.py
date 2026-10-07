@@ -534,18 +534,24 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     window.calib_pixel_chk = chk_pix
     window.calib_pixel_warn = warn_pix
 
-    key_edit = QLineEdit()
-    key_edit.setPlaceholderText("条目标识（字母、数字、下划线，如 lmfp2_lab6）")
-    key_edit.setText(_suggest_config_key(config.DEFAULT_CONFIG))
-    label_edit = QLineEdit()
-    label_edit.setPlaceholderText("批次备注（必填）")
+    # 「条目名称」一个框（用户 2026-10-07："一个框，预填文件名的不含-
+    # 后的长数字部分……两个框保存后最后变成一个连在一起的"）：名字本身
+    # 是备注，命令行用的标识在存盘时自动洗出来（config_ops.
+    # _sanitize_config_key）；进校准/换标样时按文件名重填预填值
+    # （_refresh_config_name_prefill，用户自己改过的名字不覆盖）。
+    name_edit = QLineEdit()
+    name_edit.setPlaceholderText("条目名称（按标样文件名预填，可改）")
+    name_edit.setToolTip("存成一个几何配置条目：这个名字就是备注；命令行"
+                         " --config 用的标识由它自动生成（非字母数字换成"
+                         "下划线）。下拉框里显示成「标识_备注」。")
+    name_edit.setText(_default_config_name(window))
+    window._calib_name_auto = name_edit.text()   # 上次预填值：用户改过就不再覆盖
     save_hint = QLabel("还没有校准结果")
     save_hint.setStyleSheet("color: gray;")
     save_hint.setWordWrap(True)
-    for w_ in (key_edit, label_edit, save_hint):
+    for w_ in (name_edit, save_hint):
         ops.addWidget(w_)
-    window.calib_key_edit = key_edit
-    window.calib_label_edit = label_edit
+    window.calib_name_edit = name_edit
     window.calib_save_hint = save_hint
 
     # 三列表的说明：讲的是下面那张表，所以跟着表走
@@ -1218,6 +1224,36 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
 
 
 # ══ 模式进出（app._on_mode 调用）══════════════════════════════
+def _default_config_name(window: QMainWindow) -> str:
+    """「条目名称」的预填值：标样文件名去掉末尾的「-数字」段。
+
+    用户 2026-10-07："预填文件名的不含-后的长数字部分"——lab6-00024.tif
+    → lab6；LMFP_1_atten0-00029.tif → LMFP_1_atten0。没有标样（只在
+    校准页里借条目 / 手输几何）时退回按当前条目递推（lmfp1_lab6 →
+    lmfp2_lab6，见 config_ops._suggest_config_key）。
+    """
+    path = getattr(window, "calib_path", None)
+    if path:
+        stem = Path(path).stem
+        cleaned = re.sub(r"-\d+$", "", stem)
+        return cleaned or stem
+    return _suggest_config_key(config.DEFAULT_CONFIG)
+
+
+def _refresh_config_name_prefill(window: QMainWindow) -> None:
+    """进入校准时把「条目名称」按当前标样文件名重填。
+
+    只覆盖"还挂着上一次预填值"的框（或空框）——用户自己改过的名字不动。
+    """
+    box = getattr(window, "calib_name_edit", None)
+    if box is None:
+        return
+    if box.text().strip() not in ("", getattr(window, "_calib_name_auto", None)):
+        return   # 用户改过：不动
+    box.setText(_default_config_name(window))
+    window._calib_name_auto = box.text()
+
+
 def _enter_calib(window: QMainWindow) -> None:
     """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
 
@@ -1238,6 +1274,7 @@ def _enter_calib(window: QMainWindow) -> None:
         _log(window, "请先在文件列表勾选标样文件")
         return
     _open_calib_panel(window, path)
+    _refresh_config_name_prefill(window)   # 「条目名称」跟着这个标样重填
     _widen_dock_for_calib(window)
 
 

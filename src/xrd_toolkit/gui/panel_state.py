@@ -40,7 +40,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QMainWindow, QMdiSubWindow, QWidget)
 
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import process
 from xrd_toolkit.services.background import (
@@ -1101,7 +1101,7 @@ def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None
     if sync is not None:
         sync()
     if not silent:
-        _log(window, f"已加载几何配置 {key}（{cfg['label']}）")
+        _log(window, f"已加载几何配置 {entry_display(key, cfg)}")
 
 
 def _reload_config_combo(window: QMainWindow,
@@ -1119,7 +1119,7 @@ def _reload_config_combo(window: QMainWindow,
     combo.blockSignals(True)
     combo.clear()
     for name, entry in CONFIGS.items():
-        combo.addItem(name, name)
+        combo.addItem(entry_display(name, entry), name)   # 一条 key_备注，同 app 建库处
         tip = entry["label"]
         if "residual_deg" in entry:
             tip += f"（残差 {entry['residual_deg']:.4f}°）"

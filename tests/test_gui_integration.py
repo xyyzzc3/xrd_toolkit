@@ -3716,6 +3716,30 @@ class TestProcessingChain(unittest.TestCase):
                 lambda: len(_axes(w, "1D", str(files[0])).lines) > 0))
         return files[0], w.plot_docks["1D|" + str(files[0])]
 
+    def test_page_order_is_cut_then_bg_then_smooth(self):
+        """处理页从上到下 = 裁剪 → 扣背景 → 平滑（用户 2026-10-07）。
+
+        页面顺序只管操作顺手（先把压扁其余的巨峰裁掉、再估背景、最后
+        平滑）；**计算顺序不受它影响**（apply_chain 固定 背景→平滑→
+        裁剪），页顶那行灰字把这层区别写给用户看。
+        """
+        w = create_window()
+        try:
+            w.show()
+            w.entrance_buttons["处理"].click()
+            QApplication.processEvents()
+            y_cut = w.params["裁剪区间"].mapTo(w, QPoint(0, 0)).y()
+            y_bg = w.params["背景扣除模式"].mapTo(w, QPoint(0, 0)).y()
+            y_smooth = w.params["平滑曲线"].mapTo(w, QPoint(0, 0)).y()
+            self.assertLess(y_cut, y_bg, "裁剪该在最上")
+            self.assertLess(y_bg, y_smooth, "扣背景该在平滑之前")
+            labels = [lbl.text() for lbl in
+                      w.param_stack.widget(2).findChildren(QLabel)]
+            self.assertTrue(any("计算顺序固定" in t for t in labels),
+                            f"页顶该说明计算顺序：{labels[:6]}")
+        finally:
+            w.close()
+
     def test_processing_page_points_at_double_click(self):
         """处理页顶部常显指路行：双击文件栏「1D 产物」= 把它选成处理对象。
 
@@ -10676,25 +10700,70 @@ class TestSaveCalibConfig(unittest.TestCase):
                 lambda: any(r["name"].startswith("自动")
                             for r in w.calib_state["results"]), 8000))
 
+    def test_default_name_strips_the_dash_digit_tail(self):
+        """预填名 = 标样文件名去掉末尾「-数字」段（用户 2026-10-07）。
+
+        没有标样时退回按当前条目递推（lmfp1_lab6 → lmfp2_lab6）。
+        """
+        class _Stub:      # _default_config_name 只读 window.calib_path
+            calib_path = "/tmp/lab6-00024.tif"
+
+        self.assertEqual(gui_calib._default_config_name(_Stub()), "lab6")
+        _Stub.calib_path = "/tmp/LMFP_1_atten0-00029.tif"
+        self.assertEqual(gui_calib._default_config_name(_Stub()),
+                         "LMFP_1_atten0")
+        _Stub.calib_path = "/tmp/fake_a.tif"
+        self.assertEqual(gui_calib._default_config_name(_Stub()), "fake_a")
+        _Stub.calib_path = None
+        self.assertEqual(gui_calib._default_config_name(_Stub()),
+                         gui_config_ops._suggest_config_key(
+                             gui_app.DEFAULT_CONFIG))
+
+    def test_enter_calib_prefills_name_but_keeps_user_edits(self):
+        """进校准 → 名称框按标样文件名预填；用户改过的名字不被覆盖。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+            self.assertEqual(w.calib_name_edit.text(), "fake_a",
+                             "进校准该按标样文件名预填")
+            w.calib_name_edit.setText("我自己的名字")
+            w.calib_btn.setChecked(False)      # 退出校准
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.calib_btn.click()            # 再进：用户改过的名字不动
+            self.assertEqual(w.calib_name_edit.text(), "我自己的名字")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_save_adds_to_combo_and_selects(self):
-        """保存 → 下拉框出现新条目并自动选中（读数跟到几何行 + 落盘）。"""
+        """保存 → 下拉框出现新条目并自动选中（读数跟到几何行 + 落盘）。
+
+        2026-10-07 起保存表单只有一个「条目名称」框：名字就是备注，
+        命令行标识由它洗出来（名字本身合法时两者相同，下拉框显示 = 名字）。
+        """
         w = create_window()
         try:
             w.show()
             self._auto_calib(w)
-            w.calib_key_edit.setText("lmfp2_lab6")
-            w.calib_label_edit.setText("lmfp 第 2 批（LaB₆ 标样标定）")
+            w.calib_name_edit.setText("lmfp2_lab6")
             w.calib_save_btn.click()
-            # 下拉框：新条目出现 + 自动选中
+            # 下拉框：新条目出现 + 自动选中（显示一条 = 这个名字）
             idx = w.config_combo.findData("lmfp2_lab6")
             self.assertGreaterEqual(idx, 0)
             self.assertEqual(w.config_combo.currentIndex(), idx)
+            self.assertEqual(w.config_combo.currentText(), "lmfp2_lab6")
             self.assertEqual(w.config_name, "lmfp2_lab6")
             # 几何跟到坞顶：悬停读数 = 校准结果（1595.80，不是初值 1600）
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
             # 条目内容：结果几何 + 参数坞像素/波长 + 新拟合束心 B
             cfg = w.config
-            self.assertEqual(cfg["label"], "lmfp 第 2 批（LaB₆ 标样标定）")
+            self.assertEqual(cfg["label"], "lmfp2_lab6")
             self.assertAlmostEqual(cfg["geometry"]["dist_m"], 1.5958)
             self.assertAlmostEqual(cfg["geometry"]["poni1_m"],
                                    1045.2 * 200e-6)
@@ -10710,26 +10779,40 @@ class TestSaveCalibConfig(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_save_validation_errors(self):
-        """key/label 校验 + 内置重名拒绝：只记日志、不落盘。"""
+    def test_save_sanitizes_name_into_key(self):
+        """中文名 → 标识自动洗成下划线形式；两者不同时显示成 `key_备注`。"""
         w = create_window()
         try:
             w.show()
             self._auto_calib(w)
-            # 非法 key
-            w.calib_key_edit.setText("lmfp 2")
-            w.calib_label_edit.setText("某批次")
+            w.calib_name_edit.setText("LMFP 第 2 批")
             w.calib_save_btn.click()
-            self.assertIn("标识无效", w.log_text.toPlainText())
-            # 内置重名
-            w.calib_key_edit.setText("lmfp1_lab6")
+            self.assertIn("LMFP_2", config_mod.USER_CONFIGS,
+                          "非字母数字该换下划线、去掉首尾")
+            entry = config_mod.USER_CONFIGS["LMFP_2"]
+            self.assertEqual(entry["label"], "LMFP 第 2 批")
+            idx = w.config_combo.findData("LMFP_2")
+            self.assertEqual(w.config_combo.itemText(idx), "LMFP_2_LMFP 第 2 批",
+                             "key 与备注不同时显示成一条 key_备注")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_save_validation_errors(self):
+        """空名 / 内置重名拒绝：只记日志、不落盘。"""
+        w = create_window()
+        try:
+            w.show()
+            self._auto_calib(w)
+            # 空名
+            w.calib_name_edit.setText("  ")
+            w.calib_save_btn.click()
+            self.assertIn("请先填写条目名称", w.log_text.toPlainText())
+            # 内置重名（名字洗出来的标识撞上内置条目）
+            w.calib_name_edit.setText("lmfp1_lab6")
             w.calib_save_btn.click()
             self.assertIn("与内置条目重名", w.log_text.toPlainText())
-            # 空 label
-            w.calib_key_edit.setText("lmfp2_lab6")
-            w.calib_label_edit.setText("  ")
-            w.calib_save_btn.click()
-            self.assertIn("请先填写批次备注", w.log_text.toPlainText())
             self.assertFalse(self._path.exists())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -10751,8 +10834,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                                    return_value=np.ones((256, 256)) * 10):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()          # 没勾"已核对像素尺寸"
-            w.calib_key_edit.setText("lmfp9_lab6")
-            w.calib_label_edit.setText("第 9 批")
+            w.calib_name_edit.setText("lmfp9_lab6")
             w.calib_save_btn.click()
             self.assertIn("lmfp9_lab6", config_mod.USER_CONFIGS)
             self.assertTrue(self._path.exists())
@@ -10796,8 +10878,7 @@ class TestSaveCalibConfig(unittest.TestCase):
         try:
             w.show()
             self._auto_calib(w)
-            w.calib_key_edit.setText("lmfp2_lab6")
-            w.calib_label_edit.setText("第 2 批")
+            w.calib_name_edit.setText("lmfp2_lab6")
             w.calib_save_btn.click()
             self.assertIn("lmfp2_lab6", config_mod.USER_CONFIGS)
             # 同 key 再存 → 确认框 No：不覆盖
@@ -10805,14 +10886,14 @@ class TestSaveCalibConfig(unittest.TestCase):
                                    return_value=QMessageBox.No):
                 w.calib_save_btn.click()
             self.assertEqual(config_mod.USER_CONFIGS["lmfp2_lab6"]["label"],
-                             "第 2 批")
-            # 确认框 Yes：覆盖
-            w.calib_label_edit.setText("第 2 批（重标定）")
+                             "lmfp2_lab6")
+            # 确认框 Yes：覆盖（换个备注也一样洗出同一个标识 → 走覆盖）
+            w.calib_name_edit.setText("lmfp2_lab6（重标定）")
             with mock.patch.object(gui_calib.QMessageBox, "question",
                                    return_value=QMessageBox.Yes):
                 w.calib_save_btn.click()
             self.assertEqual(config_mod.USER_CONFIGS["lmfp2_lab6"]["label"],
-                             "第 2 批（重标定）")
+                             "lmfp2_lab6（重标定）")
             self.assertIn("已覆盖配置条目", w.log_text.toPlainText())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -12044,8 +12125,7 @@ class TestCalibFlow(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
                 w.calib_pixel_chk.setChecked(True)   # 保存前置：确认像素尺寸
-                w.calib_key_edit.setText("lmfp9_lab6")
-                w.calib_label_edit.setText("第 9 批")
+                w.calib_name_edit.setText("lmfp9_lab6")
                 w.calib_save_btn.click()
             entry = saved["lmfp9_lab6"]
             self.assertEqual(entry["method"], "raw")     # 还没跑过校准

@@ -43,6 +43,29 @@ class TestHelpMenu(unittest.TestCase):
         self.assertEqual(acts["manual"].text(), "使用说明")
         self.assertIn("关于", acts["about"].text())
 
+    def test_toolbar_help_button_shares_the_same_actions(self):
+        """[帮助] 按钮挨着 [日志]（用户 2026-10-07："把帮助放到日志旁边"）。
+
+        点开的小菜单里是**同一批 QAction 对象**（菜单栏那条照旧保留：
+        macOS 的「关于」必须住系统菜单、F1 也归它管）——两条入口、一份
+        行为，改一边两边都跟。
+        """
+        from PySide6.QtWidgets import QPushButton
+        btn = self.w.help_btn
+        self.assertIsInstance(btn, QPushButton)   # 与工具栏其余按钮同款外观
+        self.assertEqual(btn.text(), "帮助")
+        self.assertIsNotNone(btn.menu(), "该带弹出菜单")
+        acts = btn.menu().actions()
+        self.assertIs(acts[0], self.w.menu_actions["manual"])
+        self.assertIs(acts[1], self.w.menu_actions["about"])
+        # 确实挂在工具栏上、在 [日志] 开关的右边
+        from PySide6.QtWidgets import QToolBar
+        tb = self.w.findChild(QToolBar)
+        widgets = [tb.widgetForAction(a) for a in tb.actions()]
+        self.assertIn(btn, widgets)
+        self.assertLess(widgets.index(self.w.panel_toggles["日志"]),
+                        widgets.index(btn), "[帮助] 该在 [日志] 右边")
+
     def test_about_dialog_shows_version_license_and_entries(self):
         seen = {}
 
