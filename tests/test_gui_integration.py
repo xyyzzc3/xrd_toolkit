@@ -9447,17 +9447,103 @@ class TestAreaZoom(unittest.TestCase):
 
 
 class TestStatusBarPartition(unittest.TestCase):
-    """状态栏分区：坐标框（等宽字体 + 凹槽）| 竖分隔线 | 文件标签。"""
+    """状态行分区：进度条 | 竖分隔线 | 文件标签。
+
+    **坐标读数 2026-10-07 搬去绘图区横带**（用户："实时坐标放到靠上
+    一点便于观察"——原来在窗口最底部的状态行里，看图时眼睛够不着）；
+    新家由 TestPlotStripLayout 钉着。"""
 
     def test_coord_frame_and_separator(self):
         w = create_window()
         try:
             self.assertEqual(w.coord_label.frameShape(), QFrame.StyledPanel)
             self.assertIn("monospace", w.coord_label.styleSheet())
+            self.assertFalse(w.statusBar().isAncestorOf(w.coord_label),
+                             "坐标读数已搬去绘图区横带")
+            self.assertTrue(w.centralWidget().isAncestorOf(w.coord_label))
             vlines = [c for c in w.statusBar().findChildren(QFrame)
                       if c.frameShape() == QFrame.VLine]
             self.assertEqual(len(vlines), 1,
-                             "坐标与文件信息之间应有竖分隔线")
+                             "进度与文件信息之间应有竖分隔线")
+        finally:
+            w.close()
+
+
+class TestPlotStripLayout(unittest.TestCase):
+    """绘图区横带的排布 + 日志"两边缩"（用户 2026-10-07 定的布局轮）。
+
+    横带从左到右：`分析模式 | 空白 | 坐标读数 | 横排/竖排 | −100%+ |
+    全部关闭`（全关在最右、离排布按钮拉开距离防手滑）；日志的底角
+    归属改成左右区——文件栏/参数栏贯通到底，日志只占中间那段。"""
+
+    def _all_open(self, w, wide=1440):
+        for n in ("文件", "参数", "日志"):
+            if not w.panel_toggles[n].isChecked():
+                w.panel_toggles[n].click()
+        w.show()
+        w.resize(wide, 860)
+        for _ in range(6):
+            QApplication.processEvents()
+
+    def test_strip_order_and_close_all_at_far_right(self):
+        w = create_window()
+        try:
+            self._all_open(w)
+            strip = w.coord_label.parentWidget()
+
+            def x_of(widget):
+                return widget.mapTo(strip, QPoint(0, 0)).x()
+
+            self.assertLess(x_of(w.coord_label),
+                            x_of(w.arrange_buttons["横排"]),
+                            "坐标读数该在横排/竖排左边")
+            self.assertLess(x_of(w.arrange_buttons["竖排"]),
+                            x_of(w.zoom_buttons["−"]))
+            x_close = x_of(w.close_all_btn)
+            self.assertGreater(x_close, x_of(w.zoom_buttons["+"]),
+                               "全部关闭该在缩放区右边（最右端）")
+            self.assertGreater(
+                x_close - x_of(w.arrange_buttons["竖排"]), 100,
+                "[全部关闭] 该离 [横排]/[竖排] 拉开距离（防手滑全关）")
+        finally:
+            w.close()
+
+    def test_coord_slot_is_fixed_and_elides(self):
+        """坐标格固定宽：读数长短变化不把右边的按钮挤着左右跳。"""
+        w = create_window()
+        try:
+            self._all_open(w)
+            w.coord_label.setText("2θ 3.335°  I 48230")
+            QApplication.processEvents()
+            slot = w.coord_label.width()
+            w.coord_label.setText("LMFP_1_atten0-00029.tif 2θ 3.335° I 48230")
+            QApplication.processEvents()
+            self.assertEqual(w.coord_label.width(), slot,
+                             "槽宽不随文本长短变")
+            self.assertEqual(len(w.coord_label.text()), 41,
+                             "text() 仍是全文（缩略只影响显示）")
+            shown = QLabel.text(w.coord_label)   # 跳过 _ElideLabel 的覆写
+            self.assertIn("…", shown, "超长该显示省略号")
+        finally:
+            w.close()
+
+    def test_log_shortens_between_the_side_columns(self):
+        """日志"两边缩"：三栏全开只占中间；只开日志时铺满一行。"""
+        w = create_window()
+        try:
+            self._all_open(w)
+            self.assertEqual(w.corner(Qt.BottomLeftCorner),
+                             Qt.LeftDockWidgetArea)
+            self.assertEqual(w.corner(Qt.BottomRightCorner),
+                             Qt.RightDockWidgetArea)
+            self.assertLess(w.log_dock.width(), w.width() - 400,
+                            "三栏全开：日志该只占中间一段（实测 878/1440）")
+            w.panel_toggles["文件"].click()
+            w.panel_toggles["参数"].click()
+            for _ in range(6):
+                QApplication.processEvents()
+            self.assertGreaterEqual(w.log_dock.width(), w.width() - 20,
+                                    "只开日志：该铺满一行（实测 1440/1440）")
         finally:
             w.close()
 

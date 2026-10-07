@@ -19,14 +19,13 @@
     （Ctrl+滚轮）/ _settle（消化排队中的 Qt 布局事件）；
   - 弹出收回：_toggle_pop_out（状态经 _PANEL_ATTRS 白名单搬家）。
 """
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMainWindow, QMdiArea,
-    QMdiSubWindow, QPushButton, QVBoxLayout, QWidget)
+    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMdiArea,
+    QMdiSubWindow, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import _content, _log, _set_focus
-
 
 # 面板状态属性的白名单：弹出/收回时整体搬家的"行李清单"。
 # 不能用 vars() 整体拷：PySide6 包装对象 vars() 里混着信号实例
@@ -262,6 +261,78 @@ def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
             window.focus_label.setText("编辑对象：未选中图面板")
 
 
+class _ElideLabel(QLabel):
+    """宽度受限的单行标签：文字超宽时打省略号，绝不撑宽父布局。
+
+    用在参数坞的长名称行（编辑对象标题 / 几何配置说明）与绘图区横带的
+    实时坐标读数：窄了缩略显示，悬停有完整提示（tooltip 跟着文本走）；
+    布局给多宽就显示多宽（Ignored = 不按文字宽度反过来要地方）。
+    text() 仍返回完整文字（缩略只是显示层面，程序与测试读 text() 不受
+    影响）。坐标读数用它，读数长短变化时右边的按钮不会被挤着左右跳。
+
+    2026-10-07 从 app.py 搬来（坐标读数进了绘图区横带，而横带建在
+    panels——app 反过来从本模块取它，兼容导出照旧）。
+    """
+
+    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self._mode = mode
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setToolTip(text)
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self.setToolTip(text)
+        self._refresh()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if self.width() <= 0:
+            super().setText(self._full)   # 布局还没定宽：先显示全量
+            return
+        super().setText(self.fontMetrics().elidedText(
+            self._full, self._mode, self.width()))
+
+
+# 横带里坐标读数的槽宽（px）：偏好 180（单文件读数"2θ 3.335°  I 48230"
+# 放得下；带文件名的对比读数超出部分中部省略、悬停看全），空间紧时允许
+# 压到 50。**下限必须留得低**：横带最小宽会顶大"窗口的最小宽度"——
+# 实测下限 180 时整个窗口最小宽涨到能堵住"进校准拉宽参数坞"（1200 默认
+# 宽时参数坞要能到 ~335=校准页内容宽；50 是量出来的：60 还差 4px，
+# 见 calib.CALIB_PANEL_RESERVE_PX 与 TestCalibFlow 两条；2026-10-07
+# 全量套件逮到 280 vs 335）
+_COORD_SLOT_W = 180
+_COORD_MIN_W = 50
+
+
+class _CoordReadout(_ElideLabel):
+    """横带里的坐标读数格（见 _COORD_SLOT_W 的尺寸说明）。
+
+    sizeHint 固定 = 槽宽（**不随文本变**）：悬停读数长短变化不会把右边
+    的按钮挤着左右跳；空间不够时布局可以往下压，压到 _COORD_MIN_W 为止，
+    超出的文字继续由 _ElideLabel 打省略号。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__("", parent=parent)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setMinimumWidth(_COORD_MIN_W)
+        self.setMaximumWidth(_COORD_SLOT_W)
+
+    def sizeHint(self):
+        return QSize(_COORD_SLOT_W, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(_COORD_MIN_W, super().minimumSizeHint().height())
+
+
 def _build_center(window: QMainWindow) -> None:
     """中央绘图区 = QMdiArea：每张图一个子窗口，各拖各的互不牵连。
 
@@ -318,8 +389,9 @@ def _build_center(window: QMainWindow) -> None:
                              "未保存的图片不会另行提示；"
                              "关闭后日志里会列出没存过盘的图")
     btn_close_all.clicked.connect(lambda: _close_all_panels(window))
-    row.addWidget(btn_close_all)
     window.close_all_btn = btn_close_all
+    # 注意：**不再加进 arrange_box**——2026-10-07 起钉在横带最右端
+    # （见下面 srow 的排布），离 [横排]/[竖排] 拉开距离防手滑
 
     # 总缩放控件（Excel 式 − 100% +）：放在横排/竖排右边
     zoom_box = QWidget()
@@ -342,14 +414,31 @@ def _build_center(window: QMainWindow) -> None:
     zrow.addWidget(window.zoom_label)
     zrow.addWidget(window.zoom_buttons["+"])
 
+    # 实时坐标读数（2026-10-07 从状态行搬来）：看图时眼睛往下扫一点就到
+    # （原来在窗口最底部的状态行里，太远）。固定宽度 + 中部省略：悬停读数
+    # 长短变化不会把右边的按钮挤着左右跳（完整文字在悬停提示里）。
+    # 等宽字体 + 中文回退：Windows 的 Consolas 没有中文字形，不写回退时
+    # "2θ 3.335°"里的中文会是方框（2026-10-04 试用反馈）
+    window.coord_label = _CoordReadout()
+    window.coord_label.setObjectName("coord_label")
+    window.coord_label.setFrameShape(QFrame.Shape.StyledPanel)
+    window.coord_label.setStyleSheet(
+        "font-family: Menlo, Consolas, 'Microsoft YaHei', "
+        "'PingFang SC', monospace; padding: 1px 4px;")
+
     strip = QWidget()
     srow = QHBoxLayout(strip)
     srow.setContentsMargins(4, 2, 4, 2)
     srow.setSpacing(4)
+    # 从左到右（用户 2026-10-07 定的排法）：模式提示 | 空白 | 坐标读数 |
+    # 横排/竖排 | 缩放 −100%+ | 最右：全部关闭
     srow.addWidget(window.mode_label)
     srow.addStretch(1)
+    srow.addWidget(window.coord_label)
     srow.addWidget(arrange_box)
     srow.addWidget(zoom_box)
+    srow.addSpacing(8)   # 与缩放拉开一点：全关是"破坏性"按钮，别贴着
+    srow.addWidget(btn_close_all)
 
     center = QWidget()
     lay = QVBoxLayout(center)

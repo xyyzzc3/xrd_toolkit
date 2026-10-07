@@ -104,8 +104,8 @@ from xrd_toolkit.gui.config_ops import _sync_del_config_btn
 from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
 from xrd_toolkit.gui.panels import (
-    _apply_area_zoom, _build_center, _close_panel, _FloatedWindow,
-    _PlotSubWindow, _toggle_pop_out)
+    _apply_area_zoom, _build_center, _close_panel, _ElideLabel,
+    _FloatedWindow, _PlotSubWindow, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
@@ -221,41 +221,8 @@ class _PanelClickTracker(QObject):
             w = w.parentWidget()
         return False   # 不消费事件
 
-class _ElideLabel(QLabel):
-    """宽度受限的单行标签：文字超宽时打省略号，绝不撑宽父布局。
-
-    用在参数坞的长名称行（编辑对象标题 / 几何配置说明）：窄坞下
-    缩略显示，悬停有完整提示；把坞拖宽自动多显示几个字。text()
-    仍返回完整文字（缩略只是显示层面，程序与测试读 text() 不受
-    影响）。横向尺寸策略设 Ignored = "布局给多宽就显示多宽，
-    不按文字宽度反过来要地方"——正是它治住"名字太长撑大参数区"。
-    """
-
-    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None):
-        super().__init__(text, parent)
-        self._full = text
-        self._mode = mode
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.setToolTip(text)
-
-    def setText(self, text: str) -> None:
-        self._full = text
-        self.setToolTip(text)
-        self._refresh()
-
-    def text(self) -> str:
-        return self._full
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._refresh()
-
-    def _refresh(self) -> None:
-        if self.width() <= 0:
-            super().setText(self._full)   # 布局还没定宽：先显示全量
-            return
-        super().setText(self.fontMetrics().elidedText(
-            self._full, self._mode, self.width()))
+# _ElideLabel 已搬到 panels.py（2026-10-07：坐标读数进了绘图区横带，
+# 横带建在 panels；这里 import 进来，兼容再导出照旧）
 
 
 # ══ 右侧：参数面板 ═════════════════════════════════════════
@@ -1869,23 +1836,14 @@ def _build_log_dock(window: QMainWindow) -> QDockWidget:
 
 def _build_status(window: QMainWindow) -> None:
     """状态行（两层之二）：左侧常驻文字（"就绪"/瞬时消息）+ 右侧
-    两块分明：坐标标签（等宽字体 + 凹槽框，一眼就是"数据读数"）
-    | 竖分隔线 | 当前文件。用常驻 QLabel 而不是 showMessage——
-    后者超时清空后状态栏会变成看不见的细条。坐标标签常驻（鼠标
-    没悬停在曲线上时是空文字，悬停时才显示，见 _hover_motion），
-    这样出字时状态栏不会整体跳动。"""
+    进度条 | 竖分隔线 | 当前文件。用常驻 QLabel 而不是 showMessage——
+    后者超时清空后状态栏会变成看不见的细条。
+
+    实时**坐标读数 2026-10-07 搬去绘图区横带**（panels._build_center：
+    看图时眼睛够不着窗口最底部）——本条只剩"消息 + 进度 + 当前文件"，
+    竖分隔线改分隔进度条与文件信息。"""
     window.status_text = QLabel("就绪")
     window.statusBar().addWidget(window.status_text)
-    # 坐标标签：凹槽框 + 等宽字体——坐标是机器读出来的数，用等宽
-    # 字体数字不会左右跳；凹槽框把"坐标信息"和右侧文件信息切开
-    window.coord_label = QLabel("")   # 鼠标悬停时实时显示曲线坐标
-    window.coord_label.setFrameShape(QFrame.Shape.StyledPanel)
-    window.coord_label.setStyleSheet(
-        # 等宽字体里也要有中文回退：Windows 的 Consolas 没有中文字形，
-        # 不写回退时"2θ 3.335°"里的中文会是方框（2026-10-04 试用反馈）
-        "font-family: Menlo, Consolas, 'Microsoft YaHei', "
-        "'PingFang SC', monospace; padding: 1px 4px;")
-    window.statusBar().addPermanentWidget(window.coord_label)
     # 批量进度条（[1D] 等一次勾多张时出现）：开面板、后台积分、只算不画
     # 都走它（见 plot_views._progress_show/_batch_step）。平时藏起来，
     # 不占状态栏的地方；宽度固定，出现时右侧那几项不会左右跳。
@@ -2568,6 +2526,12 @@ def create_window() -> QMainWindow:
         lambda sources, name="1D": _open_source_group(window, name, sources))
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
+    # 日志"两边缩"（用户 2026-10-07）：两个底角归左右区 → 文件栏/参数栏
+    # 各贯通到底拿到全高，日志只占底部中间那一段（"夹在他俩中间"）；
+    # 只开日志、或只开一边时，角落归属自动失效，日志随之铺满/半铺。
+    # 默认（不设）两个底角归底部区，日志横贯整宽——就是改之前的样子。
+    window.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
+    window.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
     _build_status(window)
     _build_menu(window)
     _build_toolbar(window)
