@@ -1145,6 +1145,22 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
             "kind": source.kind}
 
 
+def _proc_save(window: QMainWindow) -> None:
+    """处理页唯一的产出按钮（2026-10-07 用户定：两个合成一个）。
+
+    勾了文件 = 批量处理勾选的每一份（原 [批量处理] 的语义——RAW /
+    1D 产物 / 处理产物都能当输入）；一个没勾 = 存编辑对象这一张
+    （原 [存成产物] 的语义——产物面板先就地换回它底下的原始曲线）。
+    两种模式共用同一台机器（`_process_source` 逐条处理 + 同一套台账），
+    只是目标集不同，所以这里只做分发。按钮文字跟着勾选数走（
+    file_dock._refresh_check_labels）。
+    """
+    if gui_sources.checked_sources(window):
+        _proc_batch_apply(window)
+    else:
+        _proc_keep_this(window)
+
+
 def _proc_keep_this(window: QMainWindow) -> None:
     """[采用这份结果]：把编辑对象这张图上**眼下这条处理后的曲线**落成产物。
 
@@ -1220,7 +1236,7 @@ def _proc_ensure_curves(window: QMainWindow, missing: list, kw: dict,
     两拨回调会各自接着跑一遍处理，产物与台账都翻倍）。
     """
     if getattr(window, "_proc_prep", None) is not None:
-        _log(window, "上一批还在按当前设置重算 1D，等它跑完再点 [批量处理]")
+        _log(window, "上一批还在按当前设置重算 1D，等它跑完再点 [存成产物]")
         return
     lo, hi = kw.get("tth_min"), kw.get("tth_max")
     span = (f"2θ {lo:g}–{hi:g}°" if lo is not None and hi is not None
@@ -1288,7 +1304,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     dock = window.plot_docks.get(window.focus_panel)
     focus_path = _bg_path_of(dock) if dock is not None else None
     if dock is None or focus_path is None:
-        _log(window, "先点一张 1D 图（编辑对象），再点 [批量处理]")
+        _log(window, "先点一张 1D 图（编辑对象），再点 [存成产物]")
         return
     settings = _proc_settings(window, dock, focus_path)
     params0 = _proc_params(window, dock, focus_path)
@@ -1296,12 +1312,12 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     chain = process.chain_parts(settings)
     if settings["mode"] == "off" and not chain:
         _log(window, "「处理」页里三项都关着（背景扣除 / 平滑 / 裁剪）——"
-                     "先开一项，再点 [批量处理]")
+                     "先开一项，再点 [存成产物]")
         return
     xs = [x for x, _ in settings["anchors"]]
     if settings["mode"] == "anchor" and not xs:
         _log(window, "先在图上点几个锚点（背景扣除模式为「手动锚点」），"
-                     "再点 [批量处理]")
+                     "再点 [存成产物]")
         return
     # 可处理的是原始数据 + 1D 产物 + 处理产物（后者按它底下的原始曲线重做，
     # 见 docstring——用户 2026-09-28 第 3 条）

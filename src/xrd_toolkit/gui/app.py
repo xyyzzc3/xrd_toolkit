@@ -6,8 +6,8 @@ create_window() 与 main() 分离：测试里可以只建窗口、不进事件�
 模块图（2026-09-18 从 3622 行单文件拆分，调用方向永远从上往下，
 循环导入无路可走）：
     app.py（本模块：窗口组装与保存/关窗流程）
-      → plot_views.py   视图注册表 + 出图调度 + 绘图（2D/剖面/1D/
-                         瀑布全接线）+ 悬停取点 + 手势（扩展点：
+      → plot_views.py   视图注册表 + 出图调度（2D/剖面/1D/瀑布全接
+                         线）+ 悬停取点 + 手势（扩展点：
                          _VIEW_BUILDERS/_VIEW_RUNNERS 两张注册表）
       → file_dock.py    左侧文件坞：文件栏（树：原始数据 + 各阶段产物
                          分组）+ 导入/拖放 + 选择工具
@@ -123,6 +123,7 @@ from xrd_toolkit.gui.plot_panels import (
     _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
     _apply_image_params, _apply_params, _proc_batch_apply, _proc_keep_this,
+    _proc_save,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
     _plot_view, _refresh_proc, _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task,
@@ -607,8 +608,8 @@ def _fit_max_width(box, old_cap=None) -> None:
 
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
     """参数坞：顶部两行固定件（"编辑对象"名 / "几何配置"条目）+ 五个
-    入口页（校准 / 1D / 处理 / 对比 / 绘图），翻页由工具栏那五个入口
-    按钮负责。
+    入口页（校准 │ 原图 / 1D / 处理 / 对比），翻页由工具栏那五个
+    入口按钮负责。
 
     固定件不随页面滚动：
       - 编辑对象：视图 [应用] 作用在它身上；
@@ -637,20 +638,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = 两行固定件（编辑对象 / 几何配置）+ **五个入口页**（校准 /
-    # 1D / 处理 / 对比 / 绘图）。工具栏那五个入口按钮翻页（位置 A =
-    # 窗口顶部，见 _build_toolbar / _switch_entrance）——用户 2026-09-24
-    # 定稿："最上方只留这四个功能，再加一个绘图；参数页选到谁就放谁的"。
+    # 参数坞 = 两行固定件（编辑对象 / 几何配置）+ **五个入口页**（校准 │
+    # 原图 / 1D / 处理 / 对比）。工具栏那五个入口按钮翻页（位置 A =
+    # 窗口顶部，见 _build_toolbar / _switch_entrance）。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
-    # 底部各带"产出"按钮（1D：[出图…][重算这张图]；处理：[重算这张图]
-    # [采用这份结果][批量处理…]；对比：[出对比][出热图]；绘图：[出图…]）。
+    # 底部各带"产出"按钮（原图：[出图…]；1D：[重算这张图][出图…]；
+    # 处理：[存成产物]（2026-10-07 合并了原 [存成产物]+[批量处理]）；
+    # 对比：[出对比][出热图]）。
     # **"重画"不再有按钮**（用户 2026-09-30）：改参数本来
     # 就实时重画，视野另有每张图标题栏的 [Home]；保存存的就是当前画面。
     # 控件与键名全部沿用拆分前（window.params 白名单、快照回放、测试
     # 都按这些键找控件），变的只是"住在哪一页"。
     window.param_stack = QStackedWidget()
     window.PARAM_PAGES = {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
-                          "绘图": 4}
+                          "原图": 4}
 
     # 编辑对象：五个入口共用的一行，固定在坞顶（不随页面滚动）。点图
     # 面板（_FocusMarker）或某视图计算完成（_on_integration_done）时
@@ -733,8 +734,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         # 转盘的最小尺寸提示更大，不设的话窄坞里最右边的「点数」会被裁
         # （2026-10-04 试用反馈："3000 点显示不全"）
         box.setMinimumWidth(58)
-        box.setToolTip("参与积分的 2θ 范围（1D / 处理 / 绘图页共用；"
-                       "改了要重出图才生效）")
+        box.setToolTip("参与积分的 2θ 范围——只在「1D」页显示（别页不读它）；"
+                       "改了要重出图才生效")
         window.params[key] = box
     dlay.addWidget(window.params["2θ 下限 (°)"], 1)
     dlay.addWidget(QLabel("–"))
@@ -744,8 +745,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
     _fit_max_width(npt)              # 上限 = 完整显示 "100000" 所需
     npt.setMinimumWidth(56)
-    npt.setToolTip("2θ 范围内的采样点数（1D / 处理 / 绘图页共用；"
-                   "改了要重出图才生效）")
+    npt.setToolTip("2θ 范围内的采样点数——只在「1D」页显示；"
+                   "改了要重出图才生效")
     window.params["输出点数"] = npt
     dlay.addWidget(QLabel("点数"))
     dlay.addWidget(npt, 1)
@@ -797,13 +798,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.param_stack.addWidget(page_1d)      # 1 1D
     window.param_stack.addWidget(page_bg)      # 2 处理
     window.param_stack.addWidget(page_cmp)     # 3 对比
-    window.param_stack.addWidget(page_draw)    # 4 绘图
-    # 「绘图」页最上面：六个类型选择（点一个 = 选中并立即出图）
+    window.param_stack.addWidget(page_draw)    # 4 原图
+    # 「原图」页最上面：三个类型选择（2D/剖面/瀑布，点一个 = 选中并立即出图）
     page_draw.layout().insertWidget(0, _build_plot_type_row(window))
-    # 勾选摘要紧跟在类型行下面：所有出图按钮（六个类型 + [出图]）画的都是
+    # 勾选摘要紧跟在类型行下面：三个类型按钮 + [出图] 画的都是
     # 这一句话描述的那批条目，数字摆在动作旁边
     page_draw.layout().insertWidget(1, _build_check_summary(window))
-    window._plot_type = "1D"   # [出图] 用哪个类型（点类型按钮时更新）
+    window._plot_type = "2D"   # [出图] 用哪个类型（点类型按钮时更新；默认 2D）
 
     # 几何配置行跟着页走：校准页上它只是显示（置灰）——校准用的是
     # 「当前配置」那份几何，这里的条目只决定分析侧用哪条，在校准页
@@ -893,7 +894,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 我按自己的想法收尾）：整页空白看着像没做完
     page_hint = QLabel(
         "本页只管出图：2θ 范围与点数在参数面板顶部，显示参数（对数纵轴 / "
-        "纵轴范围）在「绘图」页；勾选超过 24 项时不再弹面板——"
+        "纵轴范围）在「原图」页；勾选超过 24 项时不再弹面板——"
         "结果进文件栏「1D 产物」，双击看一张、右键整组打开")
     page_hint.setWordWrap(True)
     page_hint.setStyleSheet("color: gray;")
@@ -934,13 +935,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_col.addWidget(btn_reset_data, 1)
     btn_col.addWidget(btn_apply, 1)
     btns_1d.addLayout(btn_col)   # 按钮固定在本页最下方（滚动区之外）
-    # 本页产出：对勾选文件出 1D 图（常用循环不用切到「绘图」页）
+    # 本页产出：对勾选文件出 1D 图（常用循环不用切到「原图」页）
     btn_plot_1d = QPushButton("出图（尚未勾选）")
     btn_plot_1d.setObjectName("plot_1d_btn")
     btn_plot_1d.setToolTip("对<b>文件栏里勾选</b>的条目出 1D 图（勾了多少项，"
                            "按钮上就写着多少）：勾原始文件 = 现场积分；"
                            "勾产物条目 = 直接读那一份，不重算")
     window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
+    # 兼容别名（2026-10-07 类型行拆分）：view_buttons["1D"] 从此指向这颗
+    # 按钮——1D 的出图入口就在「1D」页，其它视图名（对比/热图）同理见下。
+    window.view_buttons["1D"] = btn_plot_1d
     btn_plot_1d.clicked.connect(lambda: _plot_view(window, "1D"))
     btns_1d.addWidget(btn_plot_1d)
 
@@ -1031,7 +1035,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # ── 瀑布显示（小节）── 瀑布 = 36 个扇区的堆叠曲线，行距口径与
     # 对比堆叠同源（services/stacking：第二高的行峰 × 0.7）。控件单开
-    # 一对（键带「瀑布」前缀）：对比那对住「对比」页、这里住「绘图」页
+    # 一对（键带「瀑布」前缀）：对比那对住「对比」页、这里住「原图」页
     # ——瀑布的面板就是从本页开出去的，用户在哪儿出图就在哪儿调。
     # 纯显示参数、即改即画（同对比那对），不勾 = 自动口径。
     add_caption(form_draw, "瀑布显示")
@@ -1157,7 +1161,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     step_mult.valueChanged.connect(lambda _v: _refresh_compare(window))
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
-    # [应用显示设置] 只在「绘图」页，够不着）。照热图那组的老做法
+    # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法
     # （_refresh_heat）：显示参数不触发重算，"改了就该看见"。
     for _w in (cmp_norm, norm_target, curve_palette):
         _w.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
@@ -1505,48 +1509,27 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 宽度在本函数末尾按 minimumSizeHint 算一次，隐藏的行不计入尺寸；
     # 先收起再量会把宽度量小、切模式时被裁。所以放到末尾、量完之后。
 
-    # 处理页只有一个"重算"出口（用户 2026-09-30 定：**删掉 [重画]**——它跑的
-    # 就是 _refresh_proc 这条**自动**通路，改任一处理控件（含每点一次锚点）
-    # 本来就会跑，按钮纯冗余；"用已有数据重画"另有每张图标题栏的 [Home]）。
-    # [重算这张图]（用户 2026-09-28 定"处理页也要有这个出口"，2026-09-30 与
-    # 1D 页统一成一个名字）：2θ 范围是**积分期**参数，处理链只吃"手上那条
-    # 曲线"——改了 2θ 没有任何地方能让数据跟上，看着就是"无效"。这里直接
-    # 复用 1D 页那支同名按钮（_apply_params），口径完全一样
-    btn_bg_recalc = QPushButton("重算这张图")
-    btn_bg_recalc.setObjectName("proc_recalc_btn")
-    btn_bg_recalc.setToolTip("按参数面板顶部的 2θ 范围 / 点数<b>重新积分</b>"
-                             "编辑对象这张图（与「1D」页的同名按钮是同一个"
-                             "动作）；重算完处理链会自动按新曲线重画")
-    btn_bg_recalc.clicked.connect(lambda: _apply_params(window))
-    window.proc_recalc_btn = btn_bg_recalc
-    btns_bg.addWidget(btn_bg_recalc)
-    # [存成产物]（用户 2026-09-28 第 4 条立项，10-02 改的名）：把编辑对象这张图上
-    # **眼下这条处理后的曲线**落成产物、进文件栏的「处理后 …」分组——单张也有
-    # 交代，不用"勾上自己再点批量处理"这种绕法。口径与 [批量处理] 逐位相同
-    # （同一个 apply_chain 的输出 + 同一套台账），只是目标只有编辑对象这一个。
-    # 名字从 [采用这份结果] 改成 [存成产物]（用户 2026-10-02 第 2 条说它跟
-    # [保存为配方…] 重复）：两者其实是两样东西——这个存**数据**（进文件栏），
-    # 那个存**设置**（可套到别的批次）；旧名字太虚，两个都像"保存"
-    btn_bg_keep = QPushButton("存成产物")
-    btn_bg_keep.setObjectName("proc_keep_btn")
-    btn_bg_keep.setToolTip("把编辑对象这张图当前的处理结果<b>存成产物</b>："
-                           "文件栏里长出一个「处理产物 …」分组，对比 / 热图 / 导出"
-                           "下次直接复用（与 [批量处理] 产出的是同一种东西）。"
-                           "存的是数据；要存「这套设置」用下面的 [存成配方…]")
-    btn_bg_keep.clicked.connect(lambda: _proc_keep_this(window))
-    window.proc_keep_btn = btn_bg_keep
-    btns_bg.addWidget(btn_bg_keep)
-    # [批量处理]：把编辑对象的锚点（只传 2θ 位置）用到所有勾选文件，
-    # 各扣各的并存成产物——对比/热图下次直接读它（跨会话秒开）。
-    # 绝对强度不能跨文件套，见 plot_views._proc_batch_apply 的说明
-    btn_bg_batch = QPushButton("批量处理（勾选文件）")
-    btn_bg_batch.setObjectName("proc_batch_btn")
-    btn_bg_batch.setToolTip("把当前图上的锚点用到所有勾选文件："
-                            "锚点只传 2θ 位置，强度到每张图自己的曲线上"
-                            "重新取；扣完存成产物，对比 / 热图直接复用")
-    btn_bg_batch.clicked.connect(lambda: _proc_batch_apply(window))
-    window.proc_batch_btn = btn_bg_batch
-    btns_bg.addWidget(btn_bg_batch)
+    # ── 处理页唯一的产出按钮（2026-10-07 用户定：两个合成一个）──
+    #   * **勾了文件** → 批量处理勾选的每一份（原 [批量处理] 的语义）；
+    #   * **一个没勾** → 存编辑对象这一张（原 [存成产物] 的语义）。
+    # 两者本来就走同一台机器（`_process_source` 逐条处理 + 同一套台账），
+    # 只是目标集不同；文字跟着勾选数走（file_dock._refresh_check_labels）。
+    # [重算这张图] **已撤**（同一天用户 C："处理页不要 2θ/重算"）——处理页
+    # 从此没有任何积分出口，"改范围重算"统一回「1D」页（那页行与按钮都在）。
+    # 绝对强度不能跨文件套，见 plot_views._proc_batch_apply 的说明。
+    btn_proc_save = QPushButton("存成产物")
+    btn_proc_save.setObjectName("proc_save_btn")
+    btn_proc_save.setToolTip("勾了文件 = 把当前这套处理（背景 / 平滑 / 裁剪）"
+                             "用到勾选的每一份（锚点只传 2θ 位置、强度逐文件"
+                             "重取）；一个都没勾 = 存编辑对象这一张。结果都进"
+                             "文件栏「处理产物 …」，对比 / 热图 / 导出直接复用；"
+                             "存的是数据，要存「这套设置」用最下面的 [存成配方…]")
+    btn_proc_save.clicked.connect(lambda: _proc_save(window))
+    window.proc_save_btn = btn_proc_save
+    # 兼容别名：旧名（测试与探针按它们找按钮）现在都指向这一颗，行为 = 合并语义
+    window.proc_keep_btn = btn_proc_save
+    window.proc_batch_btn = btn_proc_save
+    btns_bg.addWidget(btn_proc_save)
 
     # ── 热图显示（小节）：批量热图的显示参数 ──
     # 颜色映射 / 强度归一化 / 对数强度 / 强度范围。归一化与对比
@@ -1628,6 +1611,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_plot_heat = QPushButton("出热图")
     btn_plot_heat.setObjectName("plot_heat_btn")
     window.plot_heat_btn = btn_plot_heat
+    # 兼容别名（2026-10-07 类型行拆分）：compare_btn / heat_btn 从此指向
+    # 本页这两颗产出按钮（旧名沿自「原图」页类型行，测试与探针按它们找）
+    window.compare_btn = btn_plot_cmp
+    window.heat_btn = btn_plot_heat
     btn_plot_heat.clicked.connect(lambda: _plot_heatmap(window))
     cmp_row.addWidget(btn_plot_cmp, 1)
     cmp_row.addWidget(btn_plot_heat, 1)
@@ -1996,21 +1983,21 @@ def _build_menu(window: QMainWindow) -> None:
 def _build_toolbar(window: QMainWindow) -> None:
     """工具栏 = 五个入口 + 面板开关（文件/参数/日志）+ [帮助]。
 
-    四组之间都有分隔线（用户 2026-10-07："让这几部分的区分明显一点，
-    四大功能、绘图、三大板块、帮助"）：`[校准][1D][处理][对比] │ [绘图]
-    │ [文件][参数][日志] │ [帮助▾]`。
+    分组与顺序（用户 2026-10-07 两轮讨论定稿）：`[校准] │ [原图] [1D]
+    [处理] [对比] │ [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性
+    设置"（校准），右边四个是每天干活的循环，按数据流排：**原图**（直接
+    看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
+    （链加工）→ **对比**（多文件汇总）。
 
-    入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：
-    `[校准] [1D] [处理] [对比] │ [绘图]`——点一个 = 参数坞翻到那一页
-    （见 _switch_entrance）；出图动作由各页底部的产出按钮负责
-    （[出图…][重算这张图] / [重算这张图][存成产物][批量处理…] /
-    [出对比][出热图] / [出图…]）；存图走面板了自己的 [保存图片…]
+    入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
+    那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
+    （1D：[重算这张图][出图…]；处理：[存成产物]（合并了原 [批量处理]）；
+    对比：[出对比][出热图]；原图：[出图…]）；存图走面板自己的 [保存图片…]
     （[导出图片…] 已于 2026-10-01 删除）。
 
-    六个作图类型按钮（2D/剖面/1D/瀑布/对比/热图）都搬进了「绘图」页
-    （_build_plot_type_row）：工具栏因此从 7 项收到 5 项，也消掉了
-    "1D" 一词两义（入口 vs 视图）。按钮属性名不变（window.view_buttons
-    / compare_btn / heat_btn），只是住的地方换了。
+    类型行拆分（2026-10-07）：「原图」页只剩 2D / 剖面 / 瀑布 三个类型
+    按钮；1D / 对比 / 热图各回自己的家（兼容别名：window.view_buttons
+    ["1D"] / compare_btn / heat_btn 指向那三颗产出按钮）。
     """
     tb = QToolBar("主工具栏", window)
     tb.setMovable(False)
@@ -2023,7 +2010,14 @@ def _build_toolbar(window: QMainWindow) -> None:
     # 退出校准翻回哪一页：None = 还没选过任何一个入口（开局就是这样，
     # 退出校准就回到"什么都没选"，见 _clear_entrance / _on_mode）
     window._last_entrance = None
-    for name in ("校准", "1D", "处理", "对比"):
+    btn_calib = QPushButton("校准")
+    btn_calib.setCheckable(True)
+    btn_calib.setToolTip(_ENTRANCE_TIPS["校准"][0])
+    tb.addWidget(btn_calib)
+    window.entrance_buttons["校准"] = btn_calib
+    btn_calib.clicked.connect(lambda checked=False: _switch_entrance(window, "校准"))
+    tb.addSeparator()      # 设置 │ 干活的循环（见 docstring 的分组说明）
+    for name in ("原图", "1D", "处理", "对比"):
         btn = QPushButton(name)
         btn.setCheckable(True)
         btn.setToolTip(_ENTRANCE_TIPS[name][0])
@@ -2031,13 +2025,6 @@ def _build_toolbar(window: QMainWindow) -> None:
         window.entrance_buttons[name] = btn
         btn.clicked.connect(lambda checked=False, n=name:
                             _switch_entrance(window, n))
-    tb.addSeparator()
-    btn_plot = QPushButton("绘图")
-    btn_plot.setCheckable(True)
-    btn_plot.setToolTip(_ENTRANCE_TIPS["绘图"][0])
-    tb.addWidget(btn_plot)
-    window.entrance_buttons["绘图"] = btn_plot
-    btn_plot.clicked.connect(lambda: _switch_entrance(window, "绘图"))
 
     # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
     # 文字与提示由 _highlight_entrance 统一换（选中时变「退出校准」）
@@ -2143,20 +2130,22 @@ def _sync_geom_row(window: QMainWindow) -> None:
 
 
 def _sync_data_row(window: QMainWindow) -> None:
-    """坞顶"数据参数"那一行（2θ 范围 + 点数）随页显隐：**校准页与对比页不显示**。
+    """坞顶"数据参数"那一行（2θ 范围 + 点数）随页显隐：**只在 1D 页显示**。
 
-    这一行管的是 1D 积分区间，只有**真要按它取数/积分**的页才用它
-    （1D / 处理 / 绘图）。校准页不读 2θ 区间（`ring_metrics` 只吃几何，
-    用户 2026-09-27："校准页参数放 2theta 范围干嘛"）。**对比页 2026-10-03
-    起也不显示**（用户："对对比图改 2θ 会影响所有参与对比的图，这不合适"；
-    "对比页不起作用就藏起来"）——对比/热图只画每个文件**自己**已有的曲线
-    （见 plot_compare._curve_for），这一行在那里不起作用，就不摆着让人误按。
-    几何配置那一行相反，校准页要留着：它是借用起点，也是 [加载参数] /
-    [保存参数] / [删除] 三个按钮的作用对象。
+    这一行管的是 1D 积分区间。2026-10-07 用户逐页裁完（"校准页不起作用
+    就藏起来"的思路推广到全部页面）：
+      * 校准页：不读 2θ 区间（ring_metrics 只吃几何），藏（2026-09-27）；
+      * 对比页：对比/热图只画每个文件**自己**已有的曲线，藏（2026-10-03）；
+      * 处理页：该页不再有任何积分出口（[重算这张图] 已撤），藏；
+      * 「原图」页：页里只剩 2D / 剖面 / 瀑布——**三个都不吃 2θ
+        范围**（2D/剖面不换算；瀑布的扇区积分走全范围、显示自动定界），
+        只有瀑布吃"点数"（默认 3000，无感），藏。
+    于是它只剩一个家：**1D 页**（积分主台：范围 / 点数 / [重算这张图] /
+    [出图（勾选文件）] 都在一起）。几何配置那一行相反，校准页要留着：
+    它是借用起点，也是 [加载几何…] / [保存几何…] / [删除] 的作用对象。
     """
     page = window.param_stack.currentIndex()
-    hidden = (window.PARAM_PAGES["校准"], window.PARAM_PAGES["对比"])
-    window.data_row.setVisible(page not in hidden)
+    window.data_row.setVisible(page == window.PARAM_PAGES["1D"])
 
 
 def _switch_entrance(window: QMainWindow, name: str) -> None:
@@ -2210,12 +2199,12 @@ _ENTRANCE_TIPS = {
              "退出校准工作台，回到分析模式"),
     "1D": ("1D 参数：积分范围 / 输出点数 / 曲线显示",
            "再点一次退出「1D」页（收起参数面板）"),
-    "处理": ("处理参数：背景扣除 / 平滑 / 裁剪",
+    "处理": ("处理参数：裁剪 / 背景扣除 / 平滑（从上到下）；[存成产物] 勾了=批量、没勾=当前这张",
            "再点一次退出「处理」页（收起参数面板）"),
     "对比": ("对比参数：归一化 / 配色 / 堆叠",
            "再点一次退出「对比」页（收起参数面板）"),
-    "绘图": ("绘图参数：视图类型 / 显示设置",
-           "再点一次退出「绘图」页（收起参数面板）"),
+    "原图": ("本页画单文件视图：2D / 剖面 / 瀑布——都直接对原图，不经过 1D 产物",
+           "再点一次退出「原图」页（收起参数面板）"),
 }
 
 
@@ -2240,41 +2229,43 @@ def _highlight_entrance(window: QMainWindow, name: str) -> None:
 
 
 def _select_plot_type(window: QMainWindow, name: str) -> None:
-    """点某个类型按钮：记住它 + 高亮它 + 立即出图（沿用旧工具栏手感）。"""
+    """点某个类型按钮：记住它 + 高亮它 + 立即出图（沿用旧工具栏手感）。
+
+    2026-10-07 拆分后本页只剩 2D / 剖面 / 瀑布 三种类型（1D 归「1D」页、
+    对比/热图归「对比」页——它们在那里本来就有产出按钮）。window.view_buttons
+    里还留着 "1D" 这个名字，但它指向的是「1D」页的产出按钮（兼容别名，
+    见 _build_param_dock），**不参与**类型高亮。
+    """
     window._plot_type = name
     for key, btn in window.view_buttons.items():
-        btn.setChecked(key == name)
-    window.compare_btn.setChecked(name == "对比")
-    window.heat_btn.setChecked(name == "热图")
-    if name == "对比":
-        _plot_compare(window)
-    elif name == "热图":
-        _plot_heatmap(window)
-    else:
-        _plot_view(window, name)
+        if btn.isCheckable():
+            btn.setChecked(key == name)
+    _plot_view(window, name)
 
 
 def _plot_selected_type(window: QMainWindow) -> None:
-    """「绘图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
-    name = getattr(window, "_plot_type", "1D")
+    """「原图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
+    name = getattr(window, "_plot_type", "2D")
     _select_plot_type(window, name)
 
 
 def _build_plot_type_row(window: QMainWindow) -> QWidget:
-    """「绘图」页顶部的类型选择行：2D / 剖面 / 1D / 瀑布 / 对比 / 热图。
+    """「原图」页顶部的类型选择行：**2D / 剖面 / 瀑布**（2026-10-07 拆分）。
 
-    点一个 = 选中该类型**并立即出图**（对勾选文件）——沿用旧的工具栏
-    手感（点一次算一次，纯动作不是开关）；页底部的 [出图] 再点一次是
-    同样的动作，方便"先改显示参数、再出图"的循环。按钮属性名沿用
-    window.view_buttons / compare_btn / heat_btn（测试与其它模块按它们
-    找按钮）。
+    三个都是"直接对原图"的单文件视图；1D / 对比 / 热图各回自己的家
+    （1D 页的产出按钮、对比页的 [出对比]/[出热图]），本页不再摆它们的
+    复制品。点一个 = 选中该类型**并立即出图**（对勾选文件）——沿用旧的
+    工具栏手感（点一次算一次，纯动作不是开关）；页底部的 [出图] 再点一次
+    是同样的动作，方便"先改显示参数、再出图"的循环。按钮属性名沿用
+    window.view_buttons（测试与其它模块按它们找按钮；"1D"/"对比"/"热图"
+    三个名字仍可用——指向各自页的按钮，兼容别名）。
     """
     row = QWidget()
     box = QHBoxLayout(row)
     box.setContentsMargins(2, 2, 2, 2)
     box.setSpacing(3)
     window.view_buttons = {}   # 登记按钮（测试用）
-    for name in VIEW_NAMES:
+    for name in ("2D", "剖面", "瀑布"):
         btn = QPushButton(name)
         btn.setCheckable(True)     # 高亮 = 当前选的类型
         btn.setFocusPolicy(Qt.NoFocus)
@@ -2282,23 +2273,12 @@ def _build_plot_type_row(window: QMainWindow) -> QWidget:
         window.view_buttons[name] = btn
         btn.clicked.connect(lambda checked=False, n=name:
                             _select_plot_type(window, n))
-    btn_compare = QPushButton("对比")
-    btn_compare.setCheckable(True)
-    btn_compare.setFocusPolicy(Qt.NoFocus)
-    box.addWidget(btn_compare)
-    window.compare_btn = btn_compare
-    btn_compare.clicked.connect(lambda: _select_plot_type(window, "对比"))
-    btn_heat = QPushButton("热图")
-    btn_heat.setCheckable(True)
-    btn_heat.setFocusPolicy(Qt.NoFocus)
-    box.addWidget(btn_heat)
-    window.heat_btn = btn_heat
-    btn_heat.clicked.connect(lambda: _select_plot_type(window, "热图"))
+    window._plot_type = "2D"       # 默认类型（页底部 [出图] 用它）
     return row
 
 
 def _build_check_summary(window: QMainWindow) -> QWidget:
-    """「绘图」页的一句话：**勾了多少条、都是什么**（外加重复勾选提醒）。
+    """「原图」页的一句话：**勾了多少条、都是什么**（外加重复勾选提醒）。
 
     用户 2026-09-27："选中81个图出对比图，结果出了162个文件的对比图"——
     对比没错，是勾选集比他想的大（为了出 1D 图勾过 81 个原始文件，之后
@@ -2386,7 +2366,7 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     + 关校准面板（校准状态清零，关闭即遗忘）。
 
     2026-09-24 起入口是**五个页签式按钮**（[校准][1D][处理]
-    [对比][绘图]，见 _build_toolbar / _switch_entrance）。退出校准有
+    [对比][原图]，见 _build_toolbar / _switch_entrance）。退出校准有
     三条路，都汇到这里的 setChecked(False)：再点一次已亮着的 [校准]
     （见 _switch_entrance 的早退）、点别的入口、按坞顶常驻的
     [返回分析模式]。按钮文字由 _highlight_entrance 统一换（选中时写
@@ -2590,7 +2570,7 @@ def create_window() -> QMainWindow:
     # 同步置灰（默认条目是内置的 → 初始不可删）
     _apply_config(window, window.config_combo.currentIndex())
     _sync_del_config_btn(window)
-    # 出图按钮上的"勾选 N 个"与绘图页那句构成说明：开局填一次（此时一条
+    # 出图按钮上的"勾选 N 个"与原图页那句构成说明：开局填一次（此时一条
     # 都没勾），之后每次勾选变化由 _sync_select_label 刷新。放在最后：
     # 按钮与那句说明都归参数坞，要等它建好
     _sync_select_label(window)

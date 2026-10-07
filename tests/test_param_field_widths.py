@@ -100,11 +100,11 @@ class TestFieldsFollowTheDockWidth(unittest.TestCase):
             w.close()
 
     def test_a_long_page_field_restores_when_the_dock_widens(self):
-        """绘图页纵轴框（量程到 1e9）：坞够宽时必须到完整显示宽度。"""
+        """原图页纵轴框（量程到 1e9）：坞够宽时必须到完整显示宽度。"""
         app = QApplication.instance() or QApplication([])   # noqa: F841
         w = create_window()
         try:
-            w.param_stack.setCurrentIndex(w.PARAM_PAGES["绘图"])
+            w.param_stack.setCurrentIndex(w.PARAM_PAGES["原图"])
             self._widen(w)
             box = w.params["纵轴下限"]
             self.assertGreaterEqual(box.width(), box.sizeHint().width(),

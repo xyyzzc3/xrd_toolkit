@@ -7,7 +7,7 @@
     那一页 + 高亮跟着动；[校准] 另有一层"进出校准工作台"的含义
     （TestParamDockSplitLayout.test_pages_structure /
     test_entrance_switching_follows_buttons）；
-  - 六个作图类型按钮住在「绘图」页里（属性名不变）：点击 = 为当前文件
+  - 作图类型按钮住在「原图」页里（属性名不变）：点击 = 为当前文件
     开面板并计算该视图 → 出图（点一次算一次，纯动作不是开关）；
     页里另有 [出图（勾选文件）]，1D/扣背景/对比页各带
     自己的产出按钮（"重画"按钮 2026-09-30 已删，见那条用例）；
@@ -795,7 +795,7 @@ class TestNewViews(unittest.TestCase):
     def test_beam_cross_can_be_turned_off(self):
         """[显示束心]：2D 图上那个白色 + 默认画，取消勾选 + [应用] 后不画。
 
-        用户 2026-10-01："二维图的圆心用户自己选择是否添加"——只对绘图页
+        用户 2026-10-01："二维图的圆心用户自己选择是否添加"——只对原图页
         的 2D 图；校准图不参与（那张图上根本没有这个标记）。
         """
         w = create_window()
@@ -1848,7 +1848,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         """勾 [堆叠显示] 立刻重画，**不需要** [应用显示设置]（用户 2026-10-02 第 1 条）。
 
         回归的是"够不着"：这个框住在「对比」页，而 [应用显示设置] 与"未应用"
-        灰字只在「绘图」页——旧行为下在对比页勾上它，那一页没有任何东西能把
+        灰字只在「原图」页——旧行为下在对比页勾上它，那一页没有任何东西能把
         改动用出去，看上去就是"堆叠显示无效"（画图那侧实测一直是好的）。
         """
         w = create_window()
@@ -3451,7 +3451,7 @@ class TestProductGroups(unittest.TestCase):
     def test_clear_cache_empties_groups(self):
         """「删除所有缓存…」（文件栏右键）→ 产物分组跟着消失（台账也清了）。
 
-        清缓存只剩这一处入口了：绘图页那个 [清空缓存] 按钮已删
+        清缓存只剩这一处入口了：原图页那个 [清空缓存] 按钮已删
         （用户 2026-10-01："都删了"），右键这条还多一次二次确认。
         """
         w = create_window()
@@ -4133,11 +4133,19 @@ class TestProcessingPageExits(unittest.TestCase):
         QApplication.processEvents()
 
     def test_keep_this_result_writes_a_single_product(self):
-        """[采用这份结果]：单张的处理结果进文件栏「处理后 …」（用户第 4 条）。"""
+        """合并按钮的"当前这张"分支：一个没勾时单张进文件栏（用户第 4 条）。
+
+        2026-10-07 起 [采用这份结果]（后名 [存成产物]）与 [批量处理] 合并成
+        一颗按钮——**勾了=批量、没勾=当前这张**；这条走"没勾"分支，勾选文件
+        就变成那条批量测试的覆盖范围了（见 test_batch_*）。
+        """
         w = create_window()
         try:
             path, dock = self._panel(w)
             self._anchor_mode(w, dock, path)
+            for i in range(w.file_list.count()):     # 取消全部勾选
+                w.file_list.item(i).setCheckState(Qt.Unchecked)
+            QApplication.processEvents()
             w.proc_keep_btn.click()
             QApplication.processEvents()
             log = w.log_text.toPlainText()
@@ -4238,9 +4246,10 @@ class TestProcessingPageExits(unittest.TestCase):
             self.assertAlmostEqual(
                 float(np.asarray(dockp.last_tth)[-1]), 8.0, places=6,
                 msg="前提：产物是按 1–8° 算的")
-            # 改范围 → [重算这张图]
+            # 改范围 → [重算这张图]（2026-10-07 起处理页没有这个出口了，
+            # 重算统一回「1D」页；两边跑的是同一个 _apply_params）
             w.params["2θ 上限 (°)"].setValue(5.0)
-            w.proc_recalc_btn.click()
+            w.findChild(QPushButton, "apply_btn").click()
             self.assertTrue(_wait_until(
                 lambda: getattr(dockp, "last_tth", None) is not None
                 and abs(float(np.asarray(dockp.last_tth)[-1]) - 5.0) < 1e-6),
@@ -4255,14 +4264,15 @@ class TestProcessingPageExits(unittest.TestCase):
             w.close()
 
     def test_recalc_button_re_integrates_with_the_current_range(self):
-        """[重算这张图]：坞顶填的新范围真的进积分（处理页也有出口了）。"""
+        """[重算这张图]：坞顶填的新范围真的进积分（2026-10-07 起唯一的
+        出口在「1D」页——处理页那颗已撤）。"""
         w = create_window()
         try:
             path, dock = self._panel(w)
             self.assertAlmostEqual(float(np.asarray(dock.last_tth)[-1]),
                                    8.0, places=6, msg="初始按默认范围（1–8°）算")
             w.params["2θ 上限 (°)"].setValue(5.0)
-            w.proc_recalc_btn.click()
+            w.findChild(QPushButton, "apply_btn").click()
             self.assertTrue(_wait_until(
                 lambda: abs(float(np.asarray(w.plot_docks["1D|" + str(path)]
                                              .last_tth)[-1]) - 5.0) < 1e-6),
@@ -4361,7 +4371,7 @@ class TestPendingEdits(unittest.TestCase):
             self.assertFalse(lbl.isHidden(), "改了 2θ → 灰字该亮")
             self.assertTrue(w.pending_labels["图像"].isHidden(),
                             "图像组没改 → 它的灰字不该跟着亮")
-            w.proc_recalc_btn.click()
+            w.findChild(QPushButton, "apply_btn").click()
             self.assertTrue(_wait_until(lambda: lbl.isHidden()),
                             "按了 [重算这张图] → 灰字该灭")
         finally:
@@ -5238,7 +5248,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         （校准/1D/扣背景/对比/绘图）。
 
         2026-09-24 用户定稿：工具栏从 7 项收到 5 个入口，六个作图类型
-        按钮搬进「绘图」页（属性名不变：view_buttons / compare_btn /
+        按钮住进了「原图」页（属性名不变：view_buttons / compare_btn /
         heat_btn）。2026-09-26 又加了一行固定件：几何配置（下拉框 +
         校准模式下的 [返回分析模式]）——它得在每一页都看得见。
         """
@@ -5258,20 +5268,33 @@ class TestParamDockSplitLayout(unittest.TestCase):
             self.assertEqual(w.param_stack.count(), 5)
             self.assertEqual(w.PARAM_PAGES,
                              {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
-                              "绘图": 4})
+                              "原图": 4})
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["1D"], "默认可停在 1D 页")
             self.assertEqual(list(w.entrance_buttons),
-                             ["校准", "1D", "处理", "对比", "绘图"])
+                             ["校准", "原图", "1D", "处理", "对比"],
+                             "2026-10-07：绘图→原图，且挪到校准后面")
             # 开局谁都不点亮（用户 2026-09-25 定：上面什么都不选）
             for name, btn in w.entrance_buttons.items():
                 self.assertFalse(btn.isChecked(), name)
-            # 六个作图类型按钮都在「绘图」页里（工具栏只剩入口 + 面板开关）
-            draw_page = w.param_stack.widget(w.PARAM_PAGES["绘图"])
-            for btn in (list(w.view_buttons.values())
-                        + [w.compare_btn, w.heat_btn]):
-                self.assertTrue(draw_page.isAncestorOf(btn),
-                                f"{btn.text()} 应住在绘图页里")
+            # 类型行拆分（2026-10-07）：原图页只留 2D/剖面/瀑布三个类型
+            # 按钮；1D/对比/热图的出图按钮各回自己的家（view_buttons
+            # ["1D"]/compare_btn/heat_btn 是兼容别名，指向那三颗）
+            draw_page = w.param_stack.widget(w.PARAM_PAGES["原图"])
+            for name in ("2D", "剖面", "瀑布"):
+                self.assertTrue(draw_page.isAncestorOf(w.view_buttons[name]),
+                                f"{name} 类型按钮应住在原图页里")
+            self.assertEqual(
+                sorted(k for k, b in w.view_buttons.items()
+                       if b.isCheckable()),
+                ["2D", "剖面", "瀑布"], "原图页只有这三个类型按钮")
+            self.assertIs(w.view_buttons["1D"], w.plot_1d_btn,
+                          "view_buttons['1D'] 应指向「1D」页的产出按钮")
+            self.assertTrue(
+                w.param_stack.widget(w.PARAM_PAGES["1D"])
+                .isAncestorOf(w.view_buttons["1D"]))
+            self.assertIs(w.compare_btn, w.plot_cmp_btn)
+            self.assertIs(w.heat_btn, w.plot_heat_btn)
         finally:
             w.close()
 
@@ -5282,13 +5305,15 @@ class TestParamDockSplitLayout(unittest.TestCase):
         （C 拆分时最容易犯的错就是把按钮留在旧页/忘了接）。
 
         顺带钉住 2026-09-30 的删除：**"重画"不再有按钮**——[重画]（处理页）
-        跑的就是自动通路，[只重画，不重算]（绘图页）与每图的 [Home] 同源；
+        跑的就是自动通路，[只重画，不重算]（原图页）与每图的 [Home] 同源；
         用户定的新流程是"参数实时重画 + 放大镜调视野 + 保存存当前画面"。
         """
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
+                                   side_effect=_fake_compute), \
+                 mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))):
                 add_checked(w, ["data/fake_b.tif"])
                 # 1D 页：出 1D 图
                 w.entrance_buttons["1D"].click()
@@ -5298,9 +5323,10 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertTrue(_wait_until(lambda: len(
                     _axes(w, "1D", "data/fake_b.tif").lines) > 0),
                     "[出 1D 图] 该出图")
-                # 绘图页：[出图（勾选文件）] 按当前类型再出一次
-                w.entrance_buttons["绘图"].click()
-                draw = w.param_stack.widget(w.PARAM_PAGES["绘图"])
+                # 原图页：[出图（勾选文件）] 按当前类型再出一次
+                # （2026-10-07 拆分后默认类型 = 2D，页里只有 2D/剖面/瀑布）
+                w.entrance_buttons["原图"].click()
+                draw = w.param_stack.widget(w.PARAM_PAGES["原图"])
                 self.assertTrue(draw.isAncestorOf(w.plot_now_btn))
                 # [导出图片…][清空缓存] 已删（用户 2026-10-01："都删了，
                 # 保存图片在图片自身的工具栏有"）：存图走面板 [Save]、
@@ -5309,20 +5335,26 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertFalse(hasattr(w, "clear_cache_btn"))
                 w.plot_now_btn.click()
                 QApplication.processEvents()
-                # 当前类型 = 1D → 又起了一次积分（面板已开 = 刷新那张图）
-                self.assertEqual(
-                    w.log_text.toPlainText().count("开始积分"), 2,
-                    "[出图（勾选文件）] 该按当前类型再来一次")
-                # 处理页 / 对比页的产出按钮
-                for name, btn in (("处理", "proc_recalc_btn"),
-                                  ("处理", "proc_keep_btn"),
-                                  ("处理", "proc_batch_btn"),
+                # 当前类型 = 2D → 开一张 2D 面板（读图，不积分）
+                self.assertTrue(_wait_until(lambda: (
+                    "2D|data/fake_b.tif" in w.plot_docks
+                    and len(gui_panel_state._content(
+                        w.plot_docks["2D|data/fake_b.tif"]).axes_2d
+                        .images) > 0)),
+                    "[出图（勾选文件）] 该按当前类型（2D）出图")
+                # 处理页 / 对比页的产出按钮：处理页 2026-10-07 合并成一个
+                # （proc_save_btn；旧名 proc_keep_btn/proc_batch_btn 是别名）
+                for name, btn in (("处理", "proc_save_btn"),
                                   ("对比", "plot_cmp_btn"),
                                   ("对比", "plot_heat_btn")):
                     page = w.param_stack.widget(w.PARAM_PAGES[name])
                     self.assertTrue(
                         page.isAncestorOf(getattr(w, btn)),
                         f"{btn} 应在{name}页里")
+                self.assertIs(w.proc_keep_btn, w.proc_save_btn)
+                self.assertIs(w.proc_batch_btn, w.proc_save_btn)
+                self.assertFalse(hasattr(w, "proc_recalc_btn"),
+                                 "处理页的 [重算这张图] 已撤（2026-10-07）")
                 # "重画"按钮不许长回来（用户 2026-09-30：只留放大镜）
                 for gone in ("bg_redraw_btn", "redraw_now_btn"):
                     self.assertFalse(hasattr(w, gone), f"{gone} 应当已删")
@@ -5371,7 +5403,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         """点入口 = 翻到那一页 + 高亮跟着动；出入校准走同一条路。"""
         w = create_window()
         try:
-            for name in ("校准", "处理", "对比", "绘图", "1D"):
+            for name in ("校准", "原图", "处理", "对比", "1D"):
                 w.entrance_buttons[name].click()
                 QApplication.processEvents()
                 self.assertEqual(w.param_stack.currentIndex(),
@@ -5399,7 +5431,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         """
         w = create_window()
         try:
-            for name in ("1D", "处理", "对比", "绘图"):
+            for name in ("原图", "1D", "处理", "对比"):
                 btn = w.entrance_buttons[name]
                 self.assertEqual(btn.text(), name, "没选中时写入口名")
                 btn.click()
@@ -5436,35 +5468,31 @@ class TestParamDockSplitLayout(unittest.TestCase):
         finally:
             w.close()
 
-    def test_data_params_row_visible_on_the_pages_that_use_it(self):
-        """2θ 范围 / 点数在**真按它取数的页**看得见、能改：1D / 处理 / 绘图；
-        校准页与**对比页**不显示。
+    def test_data_params_row_visible_only_on_the_1d_page(self):
+        """2θ 范围 / 点数**只在「1D」页**看得见、能改（2026-10-07 逐页裁完）。
 
-        用户 2026-09-27："1d 画图时能选范围，后面处理时没法选范围，比如
-        对比时，参数里加上"，随后又指出"校准页参数放 2theta 范围干嘛"
-        ——校准全程不读 2θ 区间。**2026-10-03 对比页也收起来了**（用户：
-        "对对比图改 2θ 会影响所有参与对比的图，这不合适"；"对比页不起作用
-        就藏起来"）：对比/热图只画每个文件**自己**的曲线（数据参数按文件
-        记忆取，见 TestCompare 那两条），这行在那里不起作用，就别摆着让人
-        误按。几何配置那一行相反：校准页要留着（借用起点 + 那三个按钮的
-        对象）。
+        沿革：用户 2026-09-27 要求它别只住在 1D 页（"后面处理时没法选范围"）
+        → 之后又逐页把不起作用的页面裁掉："校准页参数放 2theta 范围干嘛"
+        （09-27）→ 对比页（10-03："不起作用就藏起来"）→ **处理页**（10-07：
+        该页再无积分出口，[重算这张图] 已撤）→ **原图页**（10-07：页里只剩
+        2D/剖面/瀑布，三个都不吃 2θ 范围）。剩下的唯一家 = 「1D」页。
+        几何配置那一行相反：校准页要留着（借用起点 + 那三个按钮的对象）。
         """
         w = create_window()
         try:
             w.show()
-            for page in ("1D", "处理", "绘图"):
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            for name in ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"):
+                self.assertTrue(w.params[name].isVisible(),
+                                f"1D 页上该看得见 {name}")
+            for page in ("对比", "校准", "处理", "原图"):
                 w.entrance_buttons[page].click()
                 QApplication.processEvents()
-                for name in ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"):
-                    self.assertTrue(w.params[name].isVisible(),
-                                    f"{page} 页上该看得见 {name}")
-            w.entrance_buttons["对比"].click()
-            QApplication.processEvents()
-            self.assertFalse(w.data_row.isVisible(),
-                             "对比页上它不该出现（那里不按它取数）")
+                self.assertFalse(w.data_row.isVisible(),
+                                 f"{page} 页上它不该出现")
             w.entrance_buttons["校准"].click()
             QApplication.processEvents()
-            self.assertFalse(w.data_row.isVisible(), "校准页上它不该出现")
             self.assertTrue(w.geom_row.isVisible(), "几何配置行校准页要留着")
             w.entrance_buttons["1D"].click()
             QApplication.processEvents()
@@ -5941,23 +5969,23 @@ class TestCompare(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
 
-    def test_the_data_row_is_hidden_on_the_compare_page(self):
-        """对比页不显示坞顶那行数据参数（用户 2026-10-03："不起作用就藏起来"）。
+    def test_the_data_row_shows_only_on_the_1d_page(self):
+        """坞顶那行数据参数只在「1D」页显示（2026-10-07 逐页裁完）。
 
-        对比/热图只画每个文件**自己**的曲线，2θ/点数在那里不起作用；与其
-        摆一行按了就重算一整批的控件，不如藏起来（校准页同款先例）。
+        用户逐页拍板：“校准页不起作用就藏起来”（2026-09-27）→ 对比页
+        （2026-10-03）→ 处理页（该页再无积分出口，[重算这张图] 已撤）→
+        原图页（页里只剩 2D/剖面/瀑布，三个都不吃 2θ 范围）。剩下的唯一
+        家 = 「1D」页：积分主台，范围/点数/重算都在那里。
         """
         w = create_window()
         try:
-            w.entrance_buttons["对比"].click()
-            QApplication.processEvents()
-            self.assertTrue(w.data_row.isHidden(), "对比页该藏起来")
-            w.entrance_buttons["1D"].click()
-            QApplication.processEvents()
-            self.assertFalse(w.data_row.isHidden(), "1D 页照旧显示")
-            w.entrance_buttons["处理"].click()
-            QApplication.processEvents()
-            self.assertFalse(w.data_row.isHidden(), "处理页照旧显示")
+            for name, want in (("校准", False), ("对比", False),
+                               ("处理", False), ("原图", False),
+                               ("1D", True)):
+                w.entrance_buttons[name].click()
+                QApplication.processEvents()
+                self.assertEqual(not w.data_row.isHidden(), want,
+                                 f"{name} 页的 2θ 行可见性不对")
         finally:
             w.close()
 

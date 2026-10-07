@@ -1749,7 +1749,7 @@ def _sync_select_label(window: QMainWindow) -> None:
     出图按钮上的数字（2026-09-27 用户："选中 81 个图出对比图，结果出了 162
     个文件的对比图"）：对比没错，是**勾选集比他想的大**——为了出 1D 图勾过
     81 个原始文件，之后又点了「1D 产物」组行，81+81=162；这些数字原先只写在
-    状态行角落。把它写在按钮上、并在绘图页给一句构成说明，就再也藏不住。
+    状态行角落。把它写在按钮上、并在原图页给一句构成说明，就再也藏不住。
     """
     btn = getattr(window, "select_all_btn", None)
     if btn is not None:
@@ -1794,13 +1794,18 @@ def _duplicate_raw_paths(checked) -> set:
 
 
 def _refresh_check_labels(window: QMainWindow) -> None:
-    """把"勾了多少条"写到出图按钮上，并在绘图页刷新那句构成说明。"""
+    """把"勾了多少条"写到出图按钮上，并在「原图」页刷新那句构成说明。"""
     n = len(gui_sources.checked_sources(window))
     text = f"出图（已勾选 {n} 项）" if n else "出图（尚未勾选）"
     for attr in ("plot_1d_btn", "plot_now_btn"):
         btn = getattr(window, attr, None)
         if btn is not None:
             btn.setText(text)
+    # 处理页合并后的产出按钮（2026-10-07）：勾了走批量、没勾存当前这张，
+    # 行为不同、文字必须说清走的是哪一种
+    btn = getattr(window, "proc_save_btn", None)
+    if btn is not None:
+        btn.setText(f"存成产物（已勾选 {n} 项）" if n else "存成产物（当前这张）")
     lbl = getattr(window, "check_summary_lbl", None)
     if lbl is not None:
         lbl.setText(_check_summary(window))
