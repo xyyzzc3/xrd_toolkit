@@ -459,21 +459,25 @@ def check_one_d_product_background(window) -> None:
            [ln for ln in log.splitlines()
             if ln.startswith("批量处理完成")][-1:])
     batches = stage_cache.list_batches("bg")
-    report(len(batches) == before + 1, "新落了一个扣背景批次",
-           f"{before} → {len(batches)}")
-    if len(batches) > before:
+    # 2026-10-07 起批次号 = 参数哈希：同一套参数复点会**合流到已有那一批**
+    # （组数不涨，条目并进去）——所以认"这一批收下了这个文件"，不认组数 +1。
+    # 合流的那一批 created 被刷新 → 仍在最前，batches[0] 就是这次点的那批
+    target = str(Path(dock.panel_file).resolve())
+    landed = bool(batches) and target in batches[0]["items"]
+    report(landed,
+           "批次进了台账（同参数复点合流，组数不涨）",
+           f"{before} → {len(batches)} 批，最新一批含目标：{landed}")
+    if landed:
         # 按**这个文件**取它那一条（批里可能有别的文件）
-        item = batches[0]["items"].get(str(Path(dock.panel_file).resolve()))
-        report(item is not None, "台账里有这个文件的一条")
-        if item is not None:
-            import json as _json
-            with np.load(stage_cache.CACHE_ROOT / "bg"
-                         / f"{item['key']}.npz") as data:
-                stored = _json.loads(str(data["meta"]))
-            base = key.split("#", 1)[1]
-            report(stored.get("base_key") == base,
-                   "产物挂在**勾的那份 1D 的键**下面（不按当前设置另算）",
-                   f"base={str(stored.get('base_key'))[:8]} 勾的={base[:8]}")
+        item = batches[0]["items"][target]
+        import json as _json
+        with np.load(stage_cache.CACHE_ROOT / "bg"
+                     / f"{item['key']}.npz") as data:
+            stored = _json.loads(str(data["meta"]))
+        base = key.split("#", 1)[1]
+        report(stored.get("base_key") == base,
+               "产物挂在**勾的那份 1D 的键**下面（不按当前设置另算）",
+               f"base={str(stored.get('base_key'))[:8]} 勾的={base[:8]}")
     # 分组刷新出来了
     report(any(g.text(0).startswith("处理") for g in
                window.file_list.groups()), "文件栏里出现新的扣背景分组")
@@ -675,6 +679,40 @@ def check_processing_chain(window, lab6: str) -> None:
                and "cut:" in text and all(ln.isascii() for ln in header),
                "文件头写明类别/处理链/删除点数（纯 ASCII）", header[:4])
         report("nan" not in text.lower(), "文件里没有 nan 行")
+
+    # ③b 保存的粒度按"当前配置"来（用户 2026-10-07："每次只有当前配置
+    # 的一批进入文件栏……不同参数多次点击，那就都进文件栏"）：
+    # 同一套参数重复点 = 不冒重复分组；换了参数再点 = 多一组、并存。
+    def proc_group_titles():
+        return sorted(g.text(0) for g in window.file_list.groups()
+                      if g.text(0).startswith("处理产物"))
+
+    def check_lab6_raw_only():
+        for i in range(window.file_list.count()):
+            item = window.file_list.item(i)
+            item.setCheckState(Qt.Checked
+                               if item.data(Qt.UserRole) == lab6
+                               else Qt.Unchecked)
+        for g in window.file_list.groups():
+            g.setCheckState(Qt.Unchecked)
+        QApplication.processEvents()
+
+    titles0 = proc_group_titles()
+    check_lab6_raw_only()
+    window.proc_batch_btn.click()       # 同一套参数，再点一次
+    QApplication.processEvents()
+    titles1 = proc_group_titles()
+    # 只比组数与"第 N 组"尾注：组名里的时间是"最近一次保存"，跨分钟会变
+    report(len(titles1) == len(titles0)
+           and not any("第 2 组" in t for t in titles1),
+           "同一套参数重复点：不冒重复分组", titles1)
+    check_lab6_raw_only()
+    window.params["平滑窗口 (°)"].setValue(0.5)   # 换参数再点
+    QApplication.processEvents()
+    window.proc_batch_btn.click()
+    QApplication.processEvents()
+    report(len(proc_group_titles()) == len(titles0) + 1,
+           "换了参数再点：多一组、并存", proc_group_titles())
 
 
 def main() -> int:

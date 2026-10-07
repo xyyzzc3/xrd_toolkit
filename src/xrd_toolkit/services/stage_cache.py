@@ -417,11 +417,20 @@ def record_batch(kind: str, batch: str, *, label: str, items, config: str,
     """记一批产物（界面上 = 一个新的"阶段文件夹"）。返回记下的条目数。
 
     items = [(源文件路径, 产物键), ...]；产物键 = 产物 npz 的 stem，界面
-    拿它去 bg/ 目录里核对产物还在不在。同一 batch id 再记一次 = 覆盖
-    （同一套设置在同一个时间戳上下标 → 幂等，不会长出重复的分组）。
+    拿它去 bg/ 目录里核对产物还在不在。
+
+    同一 batch id 再记一次 = **那条节点原地更新**（label / created / note
+    刷新到这次，界面上 = 组名时间与排序跟着最近一次保存走）。**items 合并
+    保留**（2026-10-07 改：批次号从"时间戳+哈希"换成纯参数哈希之后，同一
+    配置重复点会落到同一个 id——合并保证后一次点击不会把先前点进来、产物
+    还在盘上的条目从文件栏抹掉；文件栏的规矩是"除了你自己删，不会少东西"）。
+    同一文件再存更新的是它那条的产物键。
     """
     data = _read_index()
     node = data.setdefault(kind, {}).setdefault(batch, {})
+    merged = dict(node.get("items") or {})
+    merged.update({str(Path(p).resolve()): {"key": str(k), "source": Path(p).name}
+                   for p, k in items})
     node.update({
         "label": label,
         "created": time.time(),
@@ -431,8 +440,7 @@ def record_batch(kind: str, batch: str, *, label: str, items, config: str,
         "tth_max": None if tth_max is None else round(float(tth_max), 6),
         "settings": settings or {},
         "note": note,
-        "items": {str(Path(p).resolve()): {"key": str(k), "source": Path(p).name}
-                  for p, k in items},
+        "items": merged,
     })
     _write_index(data)
     return len(node["items"])

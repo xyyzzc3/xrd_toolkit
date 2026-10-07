@@ -3716,6 +3716,91 @@ class TestProcessingChain(unittest.TestCase):
                 lambda: len(_axes(w, "1D", str(files[0])).lines) > 0))
         return files[0], w.plot_docks["1D|" + str(files[0])]
 
+    def _proc_groups(self, w):
+        """文件栏里「处理产物 …」组的标题列表（新的在前）。"""
+        tree = w.file_list
+        return [tree.topLevelItem(i).text(0)
+                for i in range(tree.topLevelItemCount())
+                if tree.topLevelItem(i).text(0).startswith("处理产物")]
+
+    def test_same_settings_click_twice_is_one_group(self):
+        """同一套参数重复点 [存成产物]：还是那一组（不冒"第 2 组"）。
+
+        用户 2026-10-07："每次只有当前配置的一批进入文件栏"——点数 = 组数。
+        下面 sleep 1.1 s 是跨过旧批次号里的秒级时间戳：改之前隔一秒再点
+        必长一个"· 第 2 组"重复组，这条在老代码上会挂。
+        """
+        w = create_window()
+        try:
+            self._panel(w)
+            w.params["平滑曲线"].setChecked(True)
+            QApplication.processEvents()
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            self.assertEqual(len(self._proc_groups(w)), 1)
+            time.sleep(1.1)
+            w.proc_keep_btn.click()          # 同一套参数，再点
+            QApplication.processEvents()
+            groups = self._proc_groups(w)
+            self.assertEqual(len(groups), 1, f"同一配置只该有一组：{groups}")
+            self.assertNotIn("第 2 组", groups[0])
+        finally:
+            w.close()
+
+    def test_different_settings_click_keeps_both_groups(self):
+        """不同参数分别点击 → 各自进文件栏、并存（用户 2026-10-07：
+
+        "如果不同参数多次点击，那就都进文件栏"）。"""
+        w = create_window()
+        try:
+            self._panel(w)
+            w.params["平滑曲线"].setChecked(True)
+            w.params["平滑窗口 (°)"].setValue(0.2)
+            QApplication.processEvents()
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            w.params["平滑窗口 (°)"].setValue(0.5)     # 换参数再点
+            QApplication.processEvents()
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            groups = self._proc_groups(w)
+            self.assertEqual(len(groups), 2, f"两套参数该两组：{groups}")
+            self.assertTrue(any("0.2" in g for g in groups), groups)
+            self.assertTrue(any("0.5" in g for g in groups), groups)
+        finally:
+            w.close()
+
+    def test_tweaking_writes_nothing_until_a_click(self):
+        """处理过程中调参不落任何产物：点按钮之前盘上与台账都是空的。
+
+        用户 2026-10-07："用户处理过程中的产物不用保存进文件栏"。核查
+        结论是调参 / 点锚点本来就不写盘——这条把它钉住，防以后有人
+        "顺手缓存"进产物目录。
+        """
+        w = create_window()
+        try:
+            self._panel(w)
+            bg_dir = Path(stage_cache.CACHE_ROOT) / "bg"
+            before = set(bg_dir.glob("*.npz")) if bg_dir.exists() else set()
+            combo = w.params["背景扣除模式"]
+            combo.setCurrentIndex(combo.findData("auto"))
+            QApplication.processEvents()
+            for win in (0.2, 0.3, 0.5):
+                w.params["背景窗口 (°)"].setValue(win)
+                QApplication.processEvents()
+            self.assertEqual(stage_cache.list_batches("bg"), [],
+                             "没点按钮：台账不许有东西")
+            after = set(bg_dir.glob("*.npz")) if bg_dir.exists() else set()
+            self.assertEqual(after - before, set(),
+                             "没点按钮：盘上不许新增处理产物（同进程里别的"
+                             "用例可能先留了文件，这里只看增量）")
+            w.proc_keep_btn.click()
+            QApplication.processEvents()
+            self.assertEqual(len(stage_cache.list_batches("bg")), 1,
+                             "点一次才落一批")
+        finally:
+            w.close()
+
     def test_page_order_is_cut_then_bg_then_smooth(self):
         """处理页从上到下 = 裁剪 → 扣背景 → 平滑（用户 2026-10-07）。
 

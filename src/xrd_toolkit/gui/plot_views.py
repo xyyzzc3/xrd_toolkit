@@ -1420,17 +1420,24 @@ def _proc_batch_run(window: QMainWindow, targets: list, kw: dict, settings: dict
 def _proc_batch_label(settings: dict) -> tuple:
     """这一批处理的标签与批次号。
 
-    标签给人看（进文件坞的分组名 + 日志）：「处理后 09-25 16:40（锚点 5 个、
+    标签给人看（进文件坞的分组名 + 日志）：「处理产物 09-25 16:40（锚点 5 个、
     窗口 2°、平滑 0.15°、删 2–3°）」——三项都真的作用在数据上，所以三项都
     写；组名必须描述数据本身，不能写没生效的东西（见 process.chain_label）。
-    批次号给程序用 = 时间戳 + 处理链哈希前 6 位：同一套设置在同一个时间戳上
-    下标 → 同号（幂等，重复点不会长出重复分组），换了设置就是另一批（两套
-    参数的结果并存，正是拿来对比的用法）。
+    时间 = **最近一次保存的时刻**（同一配置重复点会把它刷新）。
+
+    批次号给程序用 = **处理链参数的哈希（不含时间戳，2026-10-07 改）**：
+    用户的原话——"每次只有当前配置的一批进入文件栏……不同参数多次点击，
+    那就都进文件栏"。所以：
+      * 同一套参数不管点几次、隔多久点，都归同一批：台账里再记一次 =
+        那份节点原地更新（组名里的时间与排序刷新到最近这次，**不再冒
+        "· 第 2 组"重复组**——改之前批次号带秒级时间戳，隔一秒再点就
+        长出第二个组）；
+      * 换了参数（模式/窗口/锚点/平滑/裁剪——proc_settings_hash 的全部门槛）
+        就是另一批：各组并存，正是"不同参数分别点击"的保存。
     """
     label = (f"处理产物 {time.strftime('%m-%d %H:%M')}"
              f"（{process.chain_label(settings)}）")
-    batch = (f"{time.strftime('%Y%m%d-%H%M%S')}-"
-             f"{stage_cache.proc_settings_hash(settings)[:6]}")
+    batch = stage_cache.proc_settings_hash(settings)
     return label, batch
 
 

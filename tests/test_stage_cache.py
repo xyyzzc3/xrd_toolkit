@@ -278,7 +278,7 @@ class TestProductLedger(unittest.TestCase):
         self.assertEqual(stage_cache.list_batches("1d"), [], "别的类没有台账")
 
     def test_same_batch_id_overwrites_and_new_is_first(self):
-        """同一个批次号再记一次 = 覆盖（重复点不长得重复分组）；
+        """同一个批次号再记一次 = 那条节点更新（重复点不长得重复分组）；
         列出来的顺序 = 新的在前。"""
         a, ka = self._store_proc("a.tif")
         b, kb = self._store_proc("b.tif")
@@ -287,7 +287,22 @@ class TestProductLedger(unittest.TestCase):
         self._record("batch-2", [(a, ka)], label="扣背景 09-25 11:11（空扫相减）")
         batches = stage_cache.list_batches("bg")
         self.assertEqual([n["id"] for n in batches], ["batch-2", "batch-1"])
-        self.assertEqual(len(batches[1]["items"]), 2, "同号覆盖成后记的那份")
+        self.assertEqual(len(batches[1]["items"]), 2, "两条都在（后记的带上了 b）")
+
+    def test_same_batch_id_merges_items(self):
+        """同号再记一次：**条目合并保留**（2026-10-07）。
+
+        批次号改成纯参数哈希之后，同一配置重复点会落到同一个 id——
+        合并保证后一次点击不会把先前点进来、产物还在盘上的条目从文件栏
+        抹掉（文件栏的规矩：除了你自己删，不会少东西）。
+        """
+        a, ka = self._store_proc("a.tif")
+        b, kb = self._store_proc("b.tif")
+        self._record("batch-1", [(a, ka), (b, kb)])
+        self._record("batch-1", [(a, ka)])
+        node = stage_cache.list_batches("bg")[0]
+        self.assertEqual(sorted(m["source"] for m in node["items"].values()),
+                         ["a.tif", "b.tif"], "后记少一条也不许把 b 抹掉")
 
     def test_list_prune_hides_dead_items(self):
         """产物被删掉（用户清了 outputs/）→ prune 后这一条不再出现，
