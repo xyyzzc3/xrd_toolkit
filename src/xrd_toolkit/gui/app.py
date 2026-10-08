@@ -122,10 +122,10 @@ from xrd_toolkit.gui.plot_panels import (
     _open_plot_panel, _pan_motion, _pan_press, _pan_release, _sync_bar_active,
     _wheel_zoom)
 from xrd_toolkit.gui.plot_views import (
-    _apply_image_params, _apply_params, _proc_batch_apply, _proc_keep_this,
-    _proc_save,
+    _apply_params, _proc_batch_apply, _proc_keep_this, _proc_save,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
-    _plot_view, _refresh_1d_display, _refresh_proc, _refresh_waterfalls,
+    _plot_view, _refresh_1d_display, _refresh_image_display,
+    _refresh_profile_angle, _refresh_proc, _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
@@ -801,10 +801,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.param_stack.addWidget(page_draw)    # 4 原图
     # 「原图」页最上面：三个类型选择（2D/剖面/瀑布，点一个 = 选中并立即出图）
     page_draw.layout().insertWidget(0, _build_plot_type_row(window))
-    # 勾选摘要紧跟在类型行下面：三个类型按钮 + [出图] 画的都是
+    # 勾选摘要紧跟在类型行下面：三个类型按钮画的都是
     # 这一句话描述的那批条目，数字摆在动作旁边
     page_draw.layout().insertWidget(1, _build_check_summary(window))
-    window._plot_type = "2D"   # [出图] 用哪个类型（点类型按钮时更新；默认 2D）
 
     # 几何配置行跟着页走：校准页上它只是显示（置灰）——校准用的是
     # 「当前配置」那份几何，这里的条目只决定分析侧用哪条，在校准页
@@ -992,12 +991,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # ── 原图页的参数按"类型行里的三个功能"分节（2026-10-07 用户：
     # "绘图页的参数分别对应功能，现在太乱了"）：2D 视图 / 剖面 / 瀑布，
     # 各节和自己的类型按钮一一对应（原来把 2D 与剖面的参数混在一节里）。
-    # 这一页的参数是**看图参数**：不参与计算，点 [应用显示设置] 落到
-    # 编辑对象（而 1D 的曲线显示参数已搬回「1D」页、改成即改即画）。
-    # 看图参数：不参与计算，只影响图怎么显示。生效方式两种要说准
-    # （2026-10-07 分节重排时顺手订正：瀑布行距是即改即画，其余走 [应用]）
-    hint = QLabel("本页参数只看图、不参与计算：[手动行距] 即时生效，"
-                  "其余改完点 [应用显示设置]")
+    # 这一页的参数是**看图参数**：不参与计算；2026-10-08 起重清扫后
+    # **全部即改即画**（2D 三项 + 剖面角度 + 热图范围接上实时，
+    # [应用显示设置] 与「未应用（显示设置）」灰字一并删了）。
+    hint = QLabel("本页参数只看图、不参与计算——全部即时生效：改完立刻重画"
+                  "（剖面角度改了会按新角度重新取线）")
     hint.setStyleSheet("color: gray;")
     hint.setWordWrap(True)
     hint_row = QHBoxLayout()
@@ -1011,6 +1009,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 选后手填两个输入框（对应 --vmin/--vmax 的"指定时覆盖自动值"
     # 语义）。自动模式下输入框置灰 = 只读展示程序正在用的区间；
     # 勾回自动 = 立刻按焦点图重算并填回（恢复默认对比度）。
+    # 2026-10-08 起**即改即画**（_refresh_image_display）：改任一项立刻
+    # 重画编辑对象；程序回填（自动算值进框）走 _param_box_set 旗标，
+    # 不会被即改即画钩子当成用户输入。
     auto = QCheckBox("自动对比度")
     auto.setChecked(True)
     auto.setToolTip("显示区间按图像 1%–99.9% 分位自动确定")
@@ -1026,28 +1027,36 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["对比度上限"].setEnabled(not checked)
         if checked:
             _apply_auto_contrast(window, silent=silent)
+        _refresh_image_display(window)   # 开关本身也是改动（即改即画）
 
     auto.toggled.connect(sync_contrast)
     sync_contrast(True, silent=True)   # 初始状态：自动开 → 输入框置灰（不刷日志）
 
+    for _box in (window.params["对比度下限"], window.params["对比度上限"]):
+        _box.valueChanged.connect(
+            lambda _v=0.0: _refresh_image_display(window))
+
     # 束心十字（2D 图上那个白色 +）画不画：默认画（与 CLI 的
     # view_diffraction 一致），取消勾选得到一张干净的衍射图。
-    # 挨着 [应用] 那一套走（改完按 [应用显示设置] 重画，不重新积分）；
-    # 校准图不受影响——那张图上没有这个标记（用户 2026-10-01："绘图的
-    # 2d……校准不要加"）
+    # 即改即画（同对比度那套）；校准图不受影响——那张图上没有这个标记
+    # （用户 2026-10-01："绘图的 2d……校准不要加"）
     beam_cross = QCheckBox("显示束心")
     beam_cross.setChecked(True)
     beam_cross.setToolTip("在 2D 图上画出当前几何配置的束心十字（+）；"
                           "取消勾选 = 只看原始衍射图")
     window.params["显示束心"] = beam_cross
+    beam_cross.toggled.connect(lambda _on: _refresh_image_display(window))
     form_draw.addRow(beam_cross)
 
     # ── 剖面（小节）：剖面面板自己的参数 ——
     add_caption(form_draw, "剖面")
     angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
                       label="剖面角度", suffix="°",
-                      tooltip="剖面线相对参考方向的角度")
+                      tooltip="剖面线相对参考方向的角度（改了即刻按新角度重算）")
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
+    # 即改即画里的"要重算"那一档（2026-10-08）：焦点是剖面面板就地重算，
+    # 否则只写快照（见 _refresh_profile_angle）
+    angle.valueChanged.connect(lambda _v=0.0: _refresh_profile_angle(window))
 
     # ── 瀑布显示（小节）── 瀑布 = 36 个扇区的堆叠曲线，行距口径与
     # 对比堆叠同源（services/stacking：第二高的行峰 × 0.7）。控件单开
@@ -1603,8 +1612,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["热图上限"].setEnabled(not checked)
         if checked:
             _apply_auto_heatlim(window)   # 勾回自动：立刻按焦点热图算并填回
+        _refresh_heat(window)   # 开关本身也是改动（即改即画，2026-10-08）
 
     auto_heat.toggled.connect(sync_heatlim)
+    # 热图范围两个手填框：2026-10-08 起即改即画（_refresh_heat）——它们
+    # 原先在「未应用」名单里、而 [应用显示设置] 住在「原图」页，改完根本
+    # 够不着（这个应用反复在修的老病；程序回填走 _param_box_set 旗标）
+    for _box in (window.params["热图下限"], window.params["热图上限"]):
+        _box.valueChanged.connect(lambda _v=0.0: _refresh_heat(window))
     sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
 
     # 视图 2θ：热图（与对比）横轴只看这一段（用户 2026-10-05："热图添加
@@ -1726,45 +1741,27 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         for name, base in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
                            ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
             _param_box_set(window, name, window.params[base].value())
+        # 复位完成后按最终状态把编辑对象收一笔重画（2026-10-08）：自动
+        # 开关/回填都挂旗标不触发即改即画，而视图窗口刚刚才被弹回"跟随"
+        # ——不在这里重画，画面会停在弹之前的旧窗口
+        _refresh_image_display(window)
         _log(window, "图像参数已恢复默认")
 
     btn_reset_img.clicked.connect(reset_image)
 
-    # [恢复默认] 左 [应用] 右并排：与数据参数组同款布局。[应用]
-    # 把当前图像参数应用到编辑对象（见 _apply_image_params）
-    btn_apply_img = QPushButton("应用显示设置")
-    btn_apply_img.setObjectName("apply_image_btn")
-    btn_apply_img.setToolTip("把上面的<b>显示</b>参数（对数纵轴 / 纵轴范围 / 配色"
-                             "…）用到<b>编辑对象</b>那张图上——不重新积分")
-    btn_apply_img.clicked.connect(lambda: _apply_image_params(window))
-
-    btn_col2 = QHBoxLayout()
-    btn_col2.setSpacing(4)
-    # 同数据参数组：通栏宽一分为二，[恢复默认] 在左、[应用] 在右
-    btn_col2.addWidget(btn_reset_img, 1)
-    btn_col2.addWidget(btn_apply_img, 1)
-    # 本页唯一的产出按钮：[出图（勾选 N 个）] 按当前类型对勾选文件出图。
-    # 另外两个都删了（用户 2026-10-01："都删了，保存图片在图片自身的工具栏
-    # 有"）：[导出图片…] 与面板标题栏的 [Save]、关窗时的存盘询问同源
-    # （`plot_export._save_figures` 还在，只是不再占一个按钮）；[清空缓存]
-    # 与文件栏右键「删除所有缓存…」是同一个功能的两处入口，留右键那处
-    # ——它还多一次二次确认。（更早的 [只重画，不重算] 已于 2026-09-30 删）
-    btn_plot_now = QPushButton("出图（尚未勾选）")
-    btn_plot_now.setObjectName("plot_now_btn")
-    btn_plot_now.setToolTip("按上面选中的类型，对<b>文件栏里勾选</b>的条目出图"
-                            "（勾了多少项，按钮上就写着多少）")
-    window.plot_now_btn = btn_plot_now
-    btn_plot_now.clicked.connect(lambda: _plot_selected_type(window))
-    btns_draw.addWidget(btn_plot_now)
-    # 「未应用」灰字（同坞顶数据行那个）：显示参数改了还没按 [应用显示设置]
-    # 时亮着。两组灰字在这里一起交给 panel_state 管（_PENDING_GROUPS）
-    lbl_img_pending = QLabel("未应用（显示设置）")
-    lbl_img_pending.setStyleSheet("color: gray;")
-    lbl_img_pending.setToolTip("改的显示参数还没生效——按右边的 [应用显示设置]")
-    lbl_img_pending.setVisible(False)
-    btns_draw.addWidget(lbl_img_pending)
-    btns_draw.addLayout(btn_col2)   # [恢复默认][应用]（显示参数）
-    window.pending_labels = {"数据": lbl_data_pending, "图像": lbl_img_pending}
+    # [恢复默认]：本页动作栏的最后一位。2026-10-08 起它旁边不再有
+    # [应用显示设置]——显示参数全部即改即画，那个按钮删了（复位动作本身
+    # 也即时生效：值一改，即改即画钩子就把编辑对象重画/重算了）。
+    # 本页的按钮删过五轮，别再长回来：[导出图片…] 与 [清空缓存]（用户
+    # 2026-10-01："都删了，保存图片在图片自身的工具栏有"——存图走面板
+    # [Save]、关窗询问；清缓存走文件栏右键，那里多一次二次确认）；
+    # [只重画，不重算]（2026-09-30）；[出图（勾选 N 个）]（2026-10-08：
+    # 与页顶三个类型按钮是**同一次调用的两个入口**——都走
+    # _select_plot_type，"再出一次"就是再点一次已高亮的类型按钮）；
+    # [应用显示设置]（同一天：显示参数全部即改即画，见
+    # plot_views._refresh_image_display / _refresh_profile_angle）。
+    btns_draw.addWidget(btn_reset_img)
+    window.pending_labels = {"数据": lbl_data_pending}
     _connect_pending_hooks(window)
 
     # 拖动坞边框的尺寸下限（上下左右都设）：左右 = 最宽一张表单的
@@ -2243,24 +2240,22 @@ def _highlight_entrance(window: QMainWindow, name: str) -> None:
 
 
 def _select_plot_type(window: QMainWindow, name: str) -> None:
-    """点某个类型按钮：记住它 + 高亮它 + 立即出图（沿用旧工具栏手感）。
+    """点某个类型按钮：高亮它 + 立即出图（沿用旧工具栏手感）。
+
+    本页的**出图入口就是这三个按钮**（2026-10-08：页底部那个 [出图] 与
+    这里同源、纯重复，已删）——点一次出一次，"再出一次" = 再点一次已
+    高亮的按钮（点已勾选的 checkable 按钮照常发 clicked，高亮由下面的
+    setChecked 复原，不会停在未选中态）。
 
     2026-10-07 拆分后本页只剩 2D / 剖面 / 瀑布 三种类型（1D 归「1D」页、
     对比/热图归「对比」页——它们在那里本来就有产出按钮）。window.view_buttons
     里还留着 "1D" 这个名字，但它指向的是「1D」页的产出按钮（兼容别名，
     见 _build_param_dock），**不参与**类型高亮。
     """
-    window._plot_type = name
     for key, btn in window.view_buttons.items():
         if btn.isCheckable():
             btn.setChecked(key == name)
     _plot_view(window, name)
-
-
-def _plot_selected_type(window: QMainWindow) -> None:
-    """「原图」页的 [出图（勾选文件）]：按当前选中的类型出图。"""
-    name = getattr(window, "_plot_type", "2D")
-    _select_plot_type(window, name)
 
 
 def _build_plot_type_row(window: QMainWindow) -> QWidget:
@@ -2269,8 +2264,10 @@ def _build_plot_type_row(window: QMainWindow) -> QWidget:
     三个都是"直接对原图"的单文件视图；1D / 对比 / 热图各回自己的家
     （1D 页的产出按钮、对比页的 [出对比]/[出热图]），本页不再摆它们的
     复制品。点一个 = 选中该类型**并立即出图**（对勾选文件）——沿用旧的
-    工具栏手感（点一次算一次，纯动作不是开关）；页底部的 [出图] 再点一次
-    是同样的动作，方便"先改显示参数、再出图"的循环。按钮属性名沿用
+    工具栏手感（点一次算一次，纯动作不是开关）；"再出一次"就是**再点一次
+    已经高亮的那个**（tooltip 里写明）。2026-10-08 前页底部另有
+    [出图（勾选 N 个）]，与这里同源（同一次 _select_plot_type 调用）——
+    纯重复，删了：本页的出图入口收敛到这三个按钮。按钮属性名沿用
     window.view_buttons（测试与其它模块按它们找按钮；"1D"/"对比"/"热图"
     三个名字仍可用——指向各自页的按钮，兼容别名）。
     """
@@ -2283,11 +2280,12 @@ def _build_plot_type_row(window: QMainWindow) -> QWidget:
         btn = QPushButton(name)
         btn.setCheckable(True)     # 高亮 = 当前选的类型
         btn.setFocusPolicy(Qt.NoFocus)
+        btn.setToolTip(f"对<b>文件栏里勾选</b>的条目出 {name} 图（点一次出"
+                       f"一次）；它已是当前类型时再点一次 = 按现在的勾选重出")
         box.addWidget(btn)
         window.view_buttons[name] = btn
         btn.clicked.connect(lambda checked=False, n=name:
                             _select_plot_type(window, n))
-    window._plot_type = "2D"       # 默认类型（页底部 [出图] 用它）
     return row
 
 

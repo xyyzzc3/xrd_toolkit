@@ -328,24 +328,17 @@ def _scroll_calib_to_table(window) -> None:
 
 
 def shot_calib(window) -> None:
-    """校准页：跑过 ① 自动 + ③ 二次精修（三列 + Δ + 结论）。"""
+    """校准页：跑一次 自动取点（三列 + Δ + 结论）。"""
     add_all(window, [LAB6])
     window.calib_btn.click()          # 进校准工作台
     window.calib_pixel_chk.setChecked(True)
     settle(400)
-    # ① 自动校准（真 pyFAI，慢）
+    # 自动校准（真 pyFAI，慢；2026-10-08 起校准页只有这一个动作入口）
     auto_btn = window.findChild(QPushButton, "start_auto_calib")
-    refine_btn = window.findChild(QPushButton, "start_refined_calib")
     auto_btn.click()
     wait_for(lambda: bool(getattr(window, "calib_state", {}).get("results")),
              timeout_s=300)
     settle(600)
-    # ③ 二次精修（按钮要 current 存在才可用）
-    if refine_btn is not None and refine_btn.isEnabled():
-        refine_btn.click()
-        wait_for(lambda: len(window.calib_state.get("results", [])) >= 2,
-                 timeout_s=300)
-        settle(600)
     # 图注承诺的是结果区（三列 + 指标 + 结论行）——滚下去让它真的入镜
     _scroll_calib_to_table(window)
     save(window, "gui_calib", size=(1500, 1000))

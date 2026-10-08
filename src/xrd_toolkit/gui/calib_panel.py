@@ -498,8 +498,8 @@ def _redraw_calib(window: QMainWindow) -> None:
     from xrd_toolkit.gui.calib import (_calib_sync, _ensure_current, _refresh_current_metrics,
         _reset_calib_form)   # 破循环：见模块说明
     state = _calib_state(window)
-    # 控制点来自 pyFAI extract_cp（自动 / 再精修都会产出）：取"当前配置"
-    # 对应的那份，没有就退回最近一条带控制点的结果
+    # 控制点来自 pyFAI extract_cp（自动取点产出；手动选点不带）：取
+    # "当前配置"对应的那份，没有就退回最近一条带控制点的结果
     cps = None
     cur_name = state["slots"].get("current")
     item = _result_by_name(state, cur_name) if cur_name else None

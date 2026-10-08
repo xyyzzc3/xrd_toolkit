@@ -1015,7 +1015,14 @@ def _refresh_heat(window: QMainWindow) -> None:
     （_display_snapshot：数据参数沿用各自的旧值），再用已有数据重画。
     热图通常只有一张，直接作用于所有热图面板最符合"改的是一张图的颜色"
     这个直觉；数据不受影响（重画不重算）。
+    2026-10-08：热图范围那两个手填框也接上这条路（原先它们在「未应用」
+    名单里、应用键在「原图」页，改完够不着）；回放快照与程序回填
+    （_apply_auto_heatlim / _param_box_set）都要挡在门外，否则会把
+    别的面板的中间态写进所有热图快照（串台）。
     """
+    if getattr(window, "_param_replaying", False) \
+            or getattr(window, "_param_box_sync", False):
+        return   # 回放 / 程序回填不是用户改动
     touched = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("热图"):
@@ -1024,7 +1031,7 @@ def _refresh_heat(window: QMainWindow) -> None:
         data = _heat_data(window, dock)
         if data is None:
             continue
-        dock.heat_data = data            # 与画的同源（同 _apply_image_params）
+        dock.heat_data = data            # 与画的同源（画热图也从这里取）
         _draw_heatmap(window, dock, data[0], data[1], data[2])
         touched += 1
     if touched:

@@ -461,6 +461,30 @@ class TestViewButtonRuns(unittest.TestCase):
         finally:
             w.close()
 
+    def test_reclicking_the_current_type_replots(self):
+        """再点一次**已高亮**的类型按钮 = 按现在的勾选重出图。
+
+        2026-10-08 删掉原图页底部的 [出图] 后，这是"重出图"的唯一手势
+        （它与那个按钮本来就是同一次调用）：点已勾选的 checkable 按钮
+        照常发 clicked，高亮由 _select_plot_type 复原——不会停在未选态。
+        """
+        w = create_window()
+        try:
+            w.show()
+            calls = []
+            with mock.patch.object(gui_app, "_plot_view",
+                                   side_effect=lambda win, name:
+                                   calls.append(name)):
+                w.view_buttons["剖面"].click()
+                w.view_buttons["剖面"].click()   # 已高亮：再点 = 重出
+            self.assertEqual(calls, ["剖面", "剖面"], "两次点击各出一次图")
+            self.assertTrue(w.view_buttons["剖面"].isChecked(), "高亮保住")
+            self.assertFalse(w.view_buttons["2D"].isChecked())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_single_1d_completion_refreshes_the_file_bar(self):
         """单张 1D 算完，文件栏**当场**长出「1D 产物」。
 
@@ -687,7 +711,7 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
-    def test_profile_view_uses_snapshot_angle_and_recomputes_on_apply(self):
+    def test_profile_view_uses_snapshot_angle_and_recomputes_on_change(self):
         w = create_window()
         try:
             profile_calls = []
@@ -712,28 +736,26 @@ class TestNewViews(unittest.TestCase):
             self.assertEqual(profile_calls[0][1], 0.0)
             self.assertEqual(profile_calls[0][0], tuple(w.config["beam_center"]))
             self.assertIn("剖面完成：fake_b.tif", w.log_text.toPlainText())
-            # 改角度点图像 [应用] → 按新角度重算（不是只重画）
-            w.params["剖面角度 (°)"].setValue(45.0)
+            # 改角度 → 即改即画（2026-10-08：[应用显示设置] 已删，焦点是
+            # 剖面面板 → 按新角度重算，不是只重画）
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(gui_views, "line_profile",
                                    side_effect=fake_profile):
-                w.findChild(QPushButton, "apply_image_btn").click()
+                w.params["剖面角度 (°)"].setValue(45.0)
                 recomputed = _wait_until(lambda: len(profile_calls) == 2)
                 self.assertTrue(recomputed, "角度变了应重算剖面")
             self.assertEqual(profile_calls[1][1], 45.0)
-            self.assertIn("剖面角度改为 45°，重新计算",
+            self.assertIn("开始计算剖面 fake_b.tif（后台运行，角度 45°）",
                           w.log_text.toPlainText())
-            # 角度没变再点 [应用] → 只重画，不再算
+            # 改一个**不用重算**的显示参数（显示束心）→ 只重画，不再算
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(gui_views, "line_profile",
                                    side_effect=fake_profile):
-                w.findChild(QPushButton, "apply_image_btn").click()
+                w.params["显示束心"].setChecked(False)
                 QApplication.processEvents()
-            self.assertEqual(len(profile_calls), 2, "角度没变不应重算")
-            self.assertIn("[应用] 图像参数已重画：剖面_fake_b.tif",
-                          w.log_text.toPlainText())
+            self.assertEqual(len(profile_calls), 2, "束心开关不该重算剖面")
         finally:
             w.close()
 
@@ -768,8 +790,12 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
-    def test_image_params_apply_redraws_2d_contrast(self):
-        """2D 对比度参数：关自动 + 手填 → [应用] 用已有图按手填值重画。"""
+    def test_2d_contrast_changes_redraw_live(self):
+        """2D 对比度参数：关自动 + 手填 → 即改即画，按手填值重画。
+
+        2026-10-08 起不再有 [应用显示设置]（那个按钮与「未应用」灰字随
+        显示参数全量即改即画一起删了）——改值本身就是触发。
+        """
         w = create_window()
         try:
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
@@ -784,16 +810,17 @@ class TestNewViews(unittest.TestCase):
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
             w.params["对比度上限"].setValue(50.0)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.images[0].norm.vmin, 5.0)
             self.assertEqual(ax.images[0].norm.vmax, 50.0)
-            self.assertIn("[应用] 图像参数已重画：2D_fake_b.tif",
-                          w.log_text.toPlainText())
+            self.assertEqual(
+                _dock(w, "2D", "data/fake_b.tif").params_snapshot["对比度下限"],
+                5.0, "快照跟着控件走（即改即画）")
         finally:
             w.close()
 
     def test_beam_cross_can_be_turned_off(self):
-        """[显示束心]：2D 图上那个白色 + 默认画，取消勾选 + [应用] 后不画。
+        """[显示束心]：2D 图上那个白色 + 默认画，取消勾选后立刻不画。
 
         用户 2026-10-01："二维图的圆心用户自己选择是否添加"——只对原图页
         的 2D 图；校准图不参与（那张图上根本没有这个标记）。
@@ -810,8 +837,7 @@ class TestNewViews(unittest.TestCase):
                 self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
             self.assertEqual(len(ax.lines), 1, "默认该画一个束心十字")
             self.assertTrue(w.params["显示束心"].isChecked(), "默认勾着")
-            w.params["显示束心"].setChecked(False)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            w.params["显示束心"].setChecked(False)   # 即改即画（2026-10-08）
             QApplication.processEvents()
             self.assertEqual(len(ax.lines), 0, "取消勾选后不该留十字")
         finally:
@@ -928,8 +954,8 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
-    def test_waterfall_apply_redraws_without_recompute(self):
-        """瀑布面板图像 [应用]：只重画已有结果，不重新扇形积分。"""
+    def test_waterfall_display_change_redraws_without_recompute(self):
+        """瀑布面板改显示参数：只重画已有结果，不重新扇形积分。"""
         w = create_window()
         try:
             tth = np.linspace(1.0, 8.0, 10)
@@ -944,10 +970,12 @@ class TestNewViews(unittest.TestCase):
                 _open_view(w, "瀑布")
                 self.assertTrue(_wait_until(lambda: len(gui_panel_state._content(
                     _dock(w, "瀑布", "data/fake_b.tif")).axes_waterfall.lines) > 0))
-                w.findChild(QPushButton, "apply_image_btn").click()
+                # 改显示参数（手动行距）→ 即改即画，不重新积分
+                w.params["瀑布手动行距"].setChecked(True)
+                w.params["瀑布行距倍数"].setValue(1.5)
                 QApplication.processEvents()
                 self.assertEqual(fake_sectors.call_count, 1,
-                                 "[应用] 不应重新积分")
+                                 "显示参数改动不应重新积分")
         finally:
             w.close()
 
@@ -1861,8 +1889,8 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
                              ["fake_a.tif", "fake_b.tif"], "勾上就该堆叠")
             self.assertTrue((w.plot_docks[key].params_snapshot or {})
                             .get("对比堆叠"), "快照跟着更新")
-            self.assertFalse(w.pending_labels["图像"].isVisibleTo(w),
-                             "即改即生效的参数不该亮'未应用'")
+            self.assertNotIn("图像", w.pending_labels,
+                             "「图像」待办组已随全量即改即画退休（2026-10-08）")
             w.params["对比堆叠"].setChecked(False)
             QApplication.processEvents()
             np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
@@ -2274,13 +2302,15 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             self.assertIsNotNone(group)
             tree.raw_group.setCheckState(0, Qt.Checked)     # 勾 3 条原始
             QApplication.processEvents()
-            self.assertEqual(w.plot_now_btn.text(), "出图（已勾选 3 项）")
+            # 原图页底部那个 [出图] 已删（2026-10-08：与页顶类型按钮
+            # 同源、纯重复）；"勾选 N 个"只剩 1D 页的产出按钮 + 摘要句
+            self.assertFalse(hasattr(w, "plot_now_btn"))
             self.assertEqual(w.plot_1d_btn.text(), "出图（已勾选 3 项）")
             self.assertIn("原始数据 3", w.check_summary_lbl.text())
             self.assertNotIn("⚠", w.check_summary_lbl.text(), "此时还没有重复")
             group.setCheckState(0, Qt.Checked)              # 再勾 3 条 1D 产物
             QApplication.processEvents()
-            self.assertEqual(w.plot_now_btn.text(), "出图（已勾选 6 项）")
+            self.assertEqual(w.plot_1d_btn.text(), "出图（已勾选 6 项）")
             txt = w.check_summary_lbl.text()
             self.assertIn("原始数据 3", txt)
             self.assertIn("1D 产物 3", txt)
@@ -4357,12 +4387,11 @@ class TestPendingEdits(unittest.TestCase):
 
     用户原话："参数页显示本图的参数，就是上方图片名称的本图参数。如果用户改了，
     添加一个灰字未应用来区分，切图再切回来保持"。三条：
-      * 改了"要按一下才生效"的控件（2θ/点数、显示参数）→ 对应那个灰字亮，
-        按了 [重算这张图] / [应用显示设置] → 灭（它量的是"控件 vs 快照"的差）；
+      * 改了"要按一下才生效"的控件（只剩 2θ/点数——显示参数 2026-10-08 起
+        全部即改即画、「图像」组与它的灰字已退休）→ 灰字亮，
+        按了 [重算这张图] → 灭（它量的是"控件 vs 快照"的差）；
       * 切图再切回来：你填的值**还在**（按图记在面板上），灰字照旧亮着——
-        改之前是回放直接把它冲掉、一声不响；
-      * 自动开关勾着时，它那对上下限是程序算完填进控件的展示值，不算改动
-        （不然"未应用"会永远亮着）。
+        改之前是回放直接把它冲掉、一声不响。
     """
 
     def _two_panels(self, w):
@@ -4390,8 +4419,6 @@ class TestPendingEdits(unittest.TestCase):
             w.params["2θ 上限 (°)"].setValue(7.0)
             QApplication.processEvents()
             self.assertFalse(lbl.isHidden(), "改了 2θ → 灰字该亮")
-            self.assertTrue(w.pending_labels["图像"].isHidden(),
-                            "图像组没改 → 它的灰字不该跟着亮")
             w.findChild(QPushButton, "apply_btn").click()
             self.assertTrue(_wait_until(lambda: lbl.isHidden()),
                             "按了 [重算这张图] → 灰字该灭")
@@ -4419,30 +4446,10 @@ class TestPendingEdits(unittest.TestCase):
         finally:
             w.close()
 
-    def test_auto_owned_values_are_not_pending(self):
-        """自动模式填进控件的展示值不算改动；取消自动 + 填值 → 亮，[应用] → 灭。
-
-        代表键 2026-10-07 换成「自动对比度」：原来的代表「纵轴自动」随
-        「1D 显示」小节搬回 1D 页时改成了即改即画，从"未应用"名单里除名
-        ——留在名单里的是对比度这组（2D 的看图参数，仍走 [应用显示设置]）。
-        """
-        w = create_window()
-        try:
-            self._two_panels(w)
-            lbl = w.pending_labels["图像"]
-            self.assertTrue(lbl.isHidden(),
-                            "自动对比度算出来的上下限不算用户改动")
-            w.params["自动对比度"].setChecked(False)
-            QApplication.processEvents()
-            self.assertFalse(lbl.isHidden(), "取消自动 = 用户改动 → 该亮")
-            w.params["对比度上限"].setValue(5000.0)
-            QApplication.processEvents()
-            self.assertFalse(lbl.isHidden())
-            w.findChild(QPushButton, "apply_image_btn").click()
-            QApplication.processEvents()
-            self.assertTrue(lbl.isHidden(), "[应用显示设置] 之后该灭")
-        finally:
-            w.close()
+    # （test_auto_owned_values_are_not_pending 2026-10-08 删除：它的代表键
+    # 是「自动对比度」，随「图像」待办组改即改即画后不再有"未应用"这一态；
+    # "程序回填不算用户改动"的护栏改挂在即改即画侧——见
+    # TestImageDisplayLive 里自动对比度回填不触发重画/不算用户输入那两条。）
 
     def _plot_only(self, w, file, params):
         """只勾这一个文件、设参数、出图并等完成（TestParamSnapshot._plot_fake 的简版）。"""
@@ -4911,13 +4918,26 @@ class TestAutoContrast(unittest.TestCase):
             w.close()
 
     def test_auto_contrast_load_failure_falls_back(self):
-        """焦点图读取失败 → 填占位默认并记日志，不崩溃。"""
+        """焦点图读取失败且面板没有内存图 → 填占位默认并记日志，不崩溃。
+
+        2026-10-08 起勾回自动会立刻重画（即改即画）：2D 面板**手里有图**
+        时按内存图算值、与画图口径一致（那种情形不再走读文件这条路）；
+        这条测的是连内存图都没有（读取本来就失败）的情形。
+        """
         w = create_window()
         try:
-            self._focus_2d(w)
+            add_checked(w, ["data/fake_a.tif"])
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   side_effect=OSError("boom")):
+                _open_view(w, "2D")
+                self.assertTrue(_wait_until(
+                    lambda: "读取失败" in w.log_text.toPlainText()))
+            # 焦点指到这张没算出来的 2D 面板
+            QTest.mouseClick(gui_panel_state._content(
+                _dock(w, "2D", "data/fake_a.tif")), Qt.LeftButton)
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
-            w._image_cache.clear()   # 2D 面板已缓存其图：清掉让读图真的失败
+            w._image_cache.clear()
             with mock.patch.object(gui_state, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 w.params["自动对比度"].setChecked(True)
@@ -5057,14 +5077,14 @@ class TestParamSnapshot(unittest.TestCase):
             # A 作图时自动对比度勾着（默认）
             self._plot_fake(w, "data/fake_a.tif",
                             {"2θ 下限 (°)": 1.5})
-            # B 新开（默认自动开）；对 B 关自动、改值并图像 [应用]
+            # B 新开（默认自动开）；对 B 关自动、改值（即改即画，2026-10-08）
             # → B 的快照 = 手动模式 + 这组值
             self._plot_fake(w, "data/fake_b.tif",
                             {"2θ 下限 (°)": 2.5})
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(123.0)
             w.params["对比度上限"].setValue(456.0)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             # 切回 A：A 的快照里自动是勾着的 → 自动开、输入框置灰
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
@@ -5168,12 +5188,12 @@ class Test1dDisplay(unittest.TestCase):
         return _axes(w, "1D", "data/fake_b.tif")
 
     def test_log_y_applied_at_plot(self):
-        """勾上对数纵轴 → 图像 [应用] → 曲线画在对数刻度上。"""
+        """勾上对数纵轴 → 即改即画 → 曲线画在对数刻度上。"""
         w = create_window()
         try:
             ax = self._plot_fake_b(w)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.get_yscale(), "log")
         finally:
             w.close()
@@ -5186,7 +5206,7 @@ class Test1dDisplay(unittest.TestCase):
             w.params["纵轴自动"].setChecked(False)
             w.params["纵轴下限"].setValue(10.0)
             w.params["纵轴上限"].setValue(500.0)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()   # 即改即画：不用再按 [应用]
             self.assertEqual(ax.get_ylim(), (10.0, 500.0))
             # 手动模式下输入框可用
             self.assertTrue(w.params["纵轴下限"].isEnabled())
@@ -5208,16 +5228,16 @@ class Test1dDisplay(unittest.TestCase):
         finally:
             w.close()
 
-    def test_log_y_off_apply_back_to_linear(self):
-        """对数 → 取消勾选 → [应用] → 曲线回到线性刻度（反方向也生效）。"""
+    def test_log_y_off_goes_back_to_linear(self):
+        """对数 → 取消勾选 → 曲线回到线性刻度（反方向也即改即画）。"""
         w = create_window()
         try:
             ax = self._plot_fake_b(w)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.get_yscale(), "log")
             w.params["对数纵轴"].setChecked(False)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.get_yscale(), "linear")
         finally:
             w.close()
@@ -5377,25 +5397,27 @@ class TestParamDockSplitLayout(unittest.TestCase):
                 self.assertTrue(_wait_until(lambda: len(
                     _axes(w, "1D", "data/fake_b.tif").lines) > 0),
                     "[出 1D 图] 该出图")
-                # 原图页：[出图（勾选文件）] 按当前类型再出一次
-                # （2026-10-07 拆分后默认类型 = 2D，页里只有 2D/剖面/瀑布）
+                # 原图页：点类型按钮 = 对勾选文件出这个类型（本页唯一出图
+                # 入口——底部那个 [出图] 2026-10-08 删了，与这里同源）
                 w.entrance_buttons["原图"].click()
                 draw = w.param_stack.widget(w.PARAM_PAGES["原图"])
-                self.assertTrue(draw.isAncestorOf(w.plot_now_btn))
-                # [导出图片…][清空缓存] 已删（用户 2026-10-01："都删了，
-                # 保存图片在图片自身的工具栏有"）：存图走面板 [Save]、
-                # 关窗询问；清缓存走文件栏右键。按钮不许长回来
+                self.assertTrue(draw.isAncestorOf(w.view_buttons["2D"]))
+                # [出图（勾选文件）][导出图片…][清空缓存] 都已删（用户
+                # 2026-10-01："都删了，保存图片在图片自身的工具栏有"：
+                # 存图走面板 [Save]、关窗询问；清缓存走文件栏右键；出图
+                # 走类型按钮）。按钮不许长回来
+                self.assertFalse(hasattr(w, "plot_now_btn"))
                 self.assertFalse(hasattr(w, "export_img_btn"))
                 self.assertFalse(hasattr(w, "clear_cache_btn"))
-                w.plot_now_btn.click()
+                w.view_buttons["2D"].click()
                 QApplication.processEvents()
-                # 当前类型 = 2D → 开一张 2D 面板（读图，不积分）
+                # 类型 2D → 开一张 2D 面板（读图，不积分）
                 self.assertTrue(_wait_until(lambda: (
                     "2D|data/fake_b.tif" in w.plot_docks
                     and len(gui_panel_state._content(
                         w.plot_docks["2D|data/fake_b.tif"]).axes_2d
                         .images) > 0)),
-                    "[出图（勾选文件）] 该按当前类型（2D）出图")
+                    "点 [2D] 该对勾选文件出 2D 图")
                 # 处理页 / 对比页的产出按钮：处理页 2026-10-07 合并成一个
                 # （proc_save_btn；旧名 proc_keep_btn/proc_batch_btn 是别名）
                 for name, btn in (("处理", "proc_save_btn"),
@@ -5643,44 +5665,41 @@ class TestParamDockSplitLayout(unittest.TestCase):
             w.close()
 
 
-class TestImageApply(unittest.TestCase):
-    """图像参数组的 [应用]：布局与数据参数组一致（[应用] 在上、
-    恢复默认在下竖排一列）。显示参数（对数纵轴/纵轴范围/对比归一化）每张图各
-    记各的：点一次 [应用] 只重画焦点那张图（不重算），别的图保持
-    自己的设置；切面板随快照回放该面板自己的显示设置。两个 [应用]
-    各管各的一组参数：图像 [应用] 不改数据参数，数据 [应用] 不改
-    显示参数；新开面板显示参数从默认起步（不继承上一张焦点图的）。"""
+class TestImageDisplayLive(unittest.TestCase):
+    """显示参数**全部即改即画**（2026-10-08 清扫：[应用显示设置] 已删）。
 
-    def test_layout_matches_data_params(self):
-        """[应用] 在上、[恢复默认] 在下竖排一列，结构与数据参数组完全同款。"""
+    三件事：
+      * 改了立刻生效——写进编辑对象的快照 + 用已有数据重画（剖面角度是
+        唯一的"要重算"，见 plot_views._refresh_profile_angle），不必按按钮；
+      * 作用域 = 编辑对象那一张：显示参数每张图各记各的，切面板随快照
+        回放该面板自己的显示设置；数据 [应用] 不捎带显示参数；
+      * 程序回填（自动对比度算值进框）挂 `_param_box_sync` 旗标，不算
+        用户输入、不触发重画。
+    """
+
+    def test_only_reset_button_remains(self):
+        """动作栏只剩 [恢复默认]：[应用显示设置] 已删、按钮不许长回来。"""
         w = create_window()
         try:
-            reset_img = w.findChild(QPushButton, "reset_image_btn")
-            apply_img = w.findChild(QPushButton, "apply_image_btn")
-            reset_data = w.findChild(QPushButton, "reset_data_btn")
-            apply_data = w.findChild(QPushButton, "apply_btn")
-            for btn in (reset_img, apply_img, reset_data, apply_data):
-                self.assertIsNotNone(btn)
-            # 按钮加入分组框布局后被收编进所属分组框（同父 = 同一
-            # 个小容器）；两组结构一致 = 同款布局
-            self.assertEqual(reset_img.parent(), apply_img.parent())
-            self.assertEqual(reset_data.parent(), apply_data.parent())
-            self.assertEqual(type(reset_img.parent()), type(reset_data.parent()))
+            self.assertIsNotNone(w.findChild(QPushButton, "reset_image_btn"))
+            self.assertIsNone(w.findChild(QPushButton, "apply_image_btn"))
+            self.assertFalse(hasattr(w, "apply_image_btn"))
         finally:
             w.close()
 
-    def test_apply_without_focus_prompts(self):
-        """没选图面板就点 [应用] → 日志提示先点图。"""
+    def test_change_without_focus_is_harmless(self):
+        """没有编辑对象时改显示参数：不崩、不算改动（值先留着）。"""
         w = create_window()
         try:
-            w.findChild(QPushButton, "apply_image_btn").click()
-            self.assertIn("先点击要更新的图面板",
-                          w.log_text.toPlainText())
+            w.params["显示束心"].setChecked(False)
+            w.params["对比度下限"].setValue(5.0)
+            QApplication.processEvents()
+            self.assertFalse(w.params["显示束心"].isChecked())
         finally:
             w.close()
 
-    def test_apply_updates_focus_snapshot_and_redraws(self):
-        """改图像参数 → [应用] → 快照更新 + 用已有数据重画（不重算）。"""
+    def test_change_updates_snapshot_and_redraws_immediately(self):
+        """改显示参数 → 快照立刻更新 + 用已有数据重画（不重算）。"""
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
@@ -5691,24 +5710,22 @@ class TestImageApply(unittest.TestCase):
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
                     > 0))
             done_before = w.log_text.toPlainText().count("积分完成")
-            w.params["剖面角度 (°)"].setValue(15.0)
-            w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            w.params["对数纵轴"].setChecked(True)          # 即改即画
+            w.params["剖面角度 (°)"].setValue(15.0)        # 焦点不是剖面：只写快照
             # 快照同步刷新（切走再切回显示这组值，与数据 [应用] 一致）
             dock = _dock(w, "1D", "data/fake_b.tif")
             self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 15.0)
             self.assertTrue(dock.params_snapshot["对数纵轴"])
-            log = w.log_text.toPlainText()
-            self.assertIn("[应用] 图像参数已重画：1D_fake_b.tif", log)
-            # 1D 显示参数真的落到图上（对数纵轴生效），且没有重算
+            # 显示参数真的落到图上（对数纵轴生效），且没有重算
             self.assertEqual(
                 _axes(w, "1D", "data/fake_b.tif").get_yscale(), "log")
-            self.assertEqual(log.count("积分完成"), done_before)
+            self.assertEqual(w.log_text.toPlainText().count("积分完成"),
+                             done_before)
         finally:
             w.close()
 
-    def test_apply_before_result_logs_pending(self):
-        """编辑对象是没算出结果的 2D 面板 → [应用] 提示先等计算结果。"""
+    def test_change_on_unfinished_panel_is_harmless(self):
+        """编辑对象是没算出结果的 2D 面板：改显示参数不崩（静默等它算完）。"""
         w = create_window()
         try:
             with mock.patch.object(gui_views, "load_diffraction_image",
@@ -5719,15 +5736,14 @@ class TestImageApply(unittest.TestCase):
                     lambda: "读取失败" in w.log_text.toPlainText()))
             QTest.mouseClick(gui_panel_state._content(_dock(w, "2D", "data/fake_b.tif")),
                              Qt.LeftButton)
-            w.findChild(QPushButton, "apply_image_btn").click()
-            self.assertIn("还没有计算结果（读取完成后再试）",
-                          w.log_text.toPlainText())
+            w.params["显示束心"].setChecked(False)   # 不崩即过
+            QApplication.processEvents()
         finally:
             w.close()
 
-    def test_apply_only_redraws_focus_panel(self):
+    def test_change_only_redraws_focus_panel(self):
         """显示参数每张图各记各的：1D + 对比同开，焦点在 1D 上改参数
-        [应用] → 只重画 1D 那张，对比保持自己的设置（修前是全局的，
+        → 只重画 1D 那张，对比保持自己的设置（修前是全局的，
         一张改了所有图都变）。"""
         w = create_window()
         try:
@@ -5743,11 +5759,11 @@ class TestImageApply(unittest.TestCase):
                 cax = gui_panel_state._content([d for k, d in w.plot_docks.items()
                                         if k.startswith("对比")][0]).axes_1d
                 self.assertTrue(_wait_until(lambda: len(cax.lines) >= 2))
-            # 焦点此时在对比面板；切到 1D 面板改参数 → 应用 → 只动 1D
+            # 焦点此时在对比面板；切到 1D 面板改参数 → 只动 1D（即改即画）
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(
                 _axes(w, "1D", "data/fake_a.tif").get_yscale(), "log")
             self.assertEqual(cax.get_yscale(), "linear")   # 对比没被波及
@@ -5772,11 +5788,11 @@ class TestImageApply(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: all(len(_axes(w, "1D", f"data/{n}.tif").lines) > 0
                                 for n in ("fake_a", "fake_b"))))
-            # 焦点是最后算完的那张；切到 fake_a 改成对数并应用
+            # 焦点是最后算完的那张；切到 fake_a 改成对数（即改即画）
             QTest.mouseClick(gui_panel_state._content(_dock(w, "1D", "data/fake_a.tif")),
                              Qt.LeftButton)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(
                 _axes(w, "1D", "data/fake_a.tif").get_yscale(), "log")
             self.assertEqual(
@@ -5809,7 +5825,7 @@ class TestImageApply(unittest.TestCase):
             w.params["纵轴自动"].setChecked(False)
             w.params["纵轴下限"].setValue(10.0)
             w.params["纵轴上限"].setValue(500.0)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()   # 即改即画：不用再按 [应用]
             self.assertEqual(_axes(w, "1D", "data/fake_a.tif").get_ylim(),
                              (10.0, 500.0))
             # B：只勾 B 新开一张（新面板显示参数从默认起步 = 自动开）
@@ -5851,12 +5867,12 @@ class TestImageApply(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
                     > 0))
-            # 把这张 1D 图改成对数 + 手填纵轴（图像 [应用]）
+            # 把这张 1D 图改成对数 + 手填纵轴（即改即画）
             w.params["对数纵轴"].setChecked(True)
             w.params["纵轴自动"].setChecked(False)
             w.params["纵轴下限"].setValue(10.0)
             w.params["纵轴上限"].setValue(500.0)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             # 新开对比图 → 显示参数是默认，不是上面的对数/手填
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
@@ -5893,9 +5909,9 @@ class TestImageApply(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
                     > 0))
-            # fake_a 改成对数并应用
+            # fake_a 改成对数（即改即画）
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(
                 _axes(w, "1D", "data/fake_a.tif").get_yscale(), "log")
             # 加一张 fake_b 两张都勾着重按 1D：重算两张。新开的 fake_b
@@ -5915,9 +5931,12 @@ class TestImageApply(unittest.TestCase):
         finally:
             w.close()
 
-    def test_each_apply_touches_only_its_group(self):
-        """两个 [应用] 各管各的：图像 [应用] 不改数据参数，数据 [应用]
-        不改显示参数（参数坞同时改了数据和显示也互不串改）。"""
+    def test_live_display_and_data_apply_stay_in_their_lanes(self):
+        """显示即改即画、数据 [应用] 各管各的（互不串改）。
+
+        （原 test_each_apply_touches_only_its_group：2026-10-08 起显示
+        参数不再有"按一下才生效"那一态，两个 [应用] 只剩数据这一个。）
+        """
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
@@ -5928,31 +5947,31 @@ class TestImageApply(unittest.TestCase):
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines)
                     > 0))
             dock = _dock(w, "1D", "data/fake_b.tif")
-            # 同时改了数据（2θ 上限）和显示（对数），只点图像 [应用]
+            # 同时改了数据（2θ 上限）和显示（对数）：显示立刻生效、
+            # 数据参数仍等 [重算这张图]
             w.params["2θ 上限 (°)"].setValue(7.0)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
-            # 显示生效、数据没动
             self.assertTrue(dock.params_snapshot["对数纵轴"])
             self.assertEqual(dock.params_snapshot["2θ 上限 (°)"], 8.0)
             self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_yscale(),
                              "log")
             self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_xlim(),
                              (1.0, 8.0))
-            # 再改一个**仍要走 [应用显示设置]** 的显示参数（剖面角度，
-            # 2026-10-07 起 1D 那四个已即改即画，代表键换它），只点数据
-            # [应用] → 数据生效、剖面角度仍是面板自己的旧设置
+            # 改剖面角度（焦点是 1D 面板）：也只写快照、不触发重算
             w.params["剖面角度 (°)"].setValue(45.0)
+            # 按数据 [应用] → 数据生效；重算用面板自己的显示参数
+            # （每图各记各的），不把坞里其它控件的值捎带进去
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
                     lambda: w.log_text.toPlainText().count("积分完成") >= 2))
             self.assertEqual(dock.params_snapshot["2θ 上限 (°)"], 7.0)
-            self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 0.0,
-                             "数据 [应用] 不该把显示参数捎带生效")
-            # 而「1D 显示」那几个是**即改即画**（2026-10-07 随小节搬回
-            # 1D 页改的）：关对数 → 立刻写进快照、图立刻回线性
+            self.assertEqual(_axes(w, "1D", "data/fake_b.tif").get_xlim(),
+                             (1.0, 7.0))
+            self.assertEqual(dock.params_snapshot["剖面角度 (°)"], 45.0,
+                             "重算保留面板自己的显示参数（每图各记各的）")
+            # 关对数 → 立刻写进快照、图立刻回线性（即改即画）
             w.params["对数纵轴"].setChecked(False)
             self.assertFalse(dock.params_snapshot["对数纵轴"],
                              "即改即画：控件一动快照就跟上")
@@ -6263,8 +6282,7 @@ class TestCompare(unittest.TestCase):
             self.assertEqual(w.params["对比归一化"].currentData(), "off")
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
-            self._set_norm_mode(w, "global")
-            w.findChild(QPushButton, "apply_image_btn").click()
+            self._set_norm_mode(w, "global")   # 即改即画（2026-10-02 起）
             # 同一个除数（全场峰值 30）：fake_b → 1.0，fake_a → 3/30
             for line, want in zip(ax.lines, (3.0 / 30.0, 1.0)):
                 self.assertAlmostEqual(float(np.max(line.get_ydata())),
@@ -6295,21 +6313,18 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_normalize_off_shows_raw_values(self):
-        """切到不归一化点图像 [应用] → 按原始强度重画（不重算）。"""
+        """切到不归一化 → 即改即画按原始强度重画（不重算）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
             done_before = w.log_text.toPlainText().count("开始对比")
             self._set_norm_mode(w, "off")
-            w.findChild(QPushButton, "apply_image_btn").click()
             # 快照记下关归一化，fake_b 曲线回到原始强度（最强峰 30）
             dock = [d for k, d in w.plot_docks.items()
                     if k.startswith("对比")][0]
             self.assertEqual(dock.params_snapshot["对比归一化"], "off")
             ymax = max(float(np.max(line.get_ydata())) for line in ax.lines)
             self.assertAlmostEqual(ymax, 30.0, places=4)
-            self.assertIn("[应用] 图像参数已重画：",
-                          w.log_text.toPlainText())
             # 只重画不重算
             self.assertEqual(w.log_text.toPlainText().count("开始对比"),
                              done_before)
@@ -6364,7 +6379,6 @@ class TestCompare(unittest.TestCase):
         try:
             ax = self._plot_compare(w)
             self._set_norm_mode(w, "global")
-            w.findChild(QPushButton, "apply_image_btn").click()
             peaks = sorted(float(np.max(line.get_ydata()))
                            for line in ax.lines)
             self.assertEqual(len(peaks), 2)
@@ -6389,7 +6403,6 @@ class TestCompare(unittest.TestCase):
             self.assertTrue(target.isEnabled(), "指定数据模式应启用目标下拉框")
             # 条目 data = 字符串路径，按字符串找
             target.setCurrentIndex(target.findData("data/fake_a.tif"))
-            w.findChild(QPushButton, "apply_image_btn").click()
             dock = [d for k, d in w.plot_docks.items()
                     if k.startswith("对比")][0]
             self.assertEqual(str(dock.params_snapshot["归一化目标"]),
@@ -6409,7 +6422,6 @@ class TestCompare(unittest.TestCase):
         try:
             ax = self._plot_compare(w)
             self._set_norm_mode(w, "off")
-            w.findChild(QPushButton, "apply_image_btn").click()
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
@@ -6547,12 +6559,12 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_compare_uses_1d_display_params(self):
-        """1D 显示参数（对数纵轴）对对比面板同样生效（图像 [应用]）。"""
+        """1D 显示参数（对数纵轴）对对比面板同样生效（即改即画，2026-10-08）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
             w.params["对数纵轴"].setChecked(True)
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.get_yscale(), "log")
         finally:
             w.close()
@@ -7238,10 +7250,10 @@ class TestHomeView(unittest.TestCase):
             x0 = tuple(ax.get_xlim())
             dock.params_snapshot["视图 2θ 下限 (°)"] = 2.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 5.0
-            gui_views._apply_image_params(w)
+            gui_views._redraw_panel(w, w.focus_panel)
             QApplication.processEvents()
             self.assertAlmostEqual(ax.get_xlim()[0], 2.0, delta=0.05,
-                                   msg="[应用] 该按快照里的窗口画")
+                                   msg="重画该按快照里的窗口画")
             content.toolbar._actions["home"].trigger()
             QApplication.processEvents()
             self.assertEqual(tuple(ax.get_xlim()), x0,
@@ -7597,14 +7609,14 @@ class TestBoxZoomOnAggregateViews(unittest.TestCase):
         self.assertNotEqual(before, zoomed, "前提：框选真的缩了")
         gui_panel_state._set_focus(w, dock.panel_key, dock.windowTitle())
         QApplication.processEvents()
-        gui_views._apply_image_params(w)      # [应用] = 用已有数据重画
+        gui_views._refresh_image_display(w)   # 即改即画同款：用已有数据重画
         QApplication.processEvents()
         for got, want in zip(ax.get_xlim(), zoomed[0]):
             self.assertAlmostEqual(got, want, delta=0.1,
-                                   msg="[应用] 之后 x 范围该保住")
+                                   msg="重画之后 x 范围该保住")
         for got, want in zip(ax.get_ylim(), zoomed[1]):
             self.assertAlmostEqual(got, want, delta=0.1,
-                                   msg="[应用] 之后 y 范围该保住")
+                                   msg="重画之后 y 范围该保住")
 
     def test_box_zoom_on_the_compare_survives_a_redraw(self):
         w = create_window()
@@ -7623,7 +7635,7 @@ class TestBoxZoomOnAggregateViews(unittest.TestCase):
             zoomed = (ax.get_xlim(), ax.get_ylim())
             combo = w.params.get("热图色图")
             combo.setCurrentIndex((combo.currentIndex() + 1) % combo.count())
-            gui_views._apply_image_params(w)
+            gui_views._refresh_image_display(w)
             QApplication.processEvents()
             for got, want in zip(ax.get_xlim(), zoomed[0]):
                 self.assertAlmostEqual(got, want, delta=0.1,
@@ -7662,14 +7674,14 @@ class TestBoxZoomOnPixelViews(unittest.TestCase):
         self.assertNotEqual(before, zoomed, "前提：框选真的缩了")
         gui_panel_state._set_focus(w, dock.panel_key, dock.windowTitle())
         QApplication.processEvents()
-        gui_views._apply_image_params(w)      # [应用] = 用已有数据重画
+        gui_views._refresh_image_display(w)   # 即改即画同款：用已有数据重画
         QApplication.processEvents()
         for got, want in zip(ax.get_xlim(), zoomed[0]):
             self.assertAlmostEqual(got, want, delta=0.5,
-                                   msg="[应用] 之后 x 范围该保住")
+                                   msg="重画之后 x 范围该保住")
         for got, want in zip(ax.get_ylim(), zoomed[1]):
             self.assertAlmostEqual(got, want, delta=0.5,
-                                   msg="[应用] 之后 y 范围该保住")
+                                   msg="重画之后 y 范围该保住")
 
     def test_box_zoom_on_the_2d_view_survives_a_redraw(self):
         w = create_window()
@@ -8853,7 +8865,7 @@ class TestViewLimitSync(unittest.TestCase):
             # 放大就行了"）→ 直接写快照，与缩放/平移写回的是同一处
             dock.params_snapshot["视图 2θ 下限 (°)"] = 1.0
             dock.params_snapshot["视图 2θ 上限 (°)"] = 5.0
-            w.findChild(QPushButton, "apply_image_btn").click()
+            gui_views._redraw_panel(w, w.focus_panel)
             QApplication.processEvents()
             xlo, xhi = ax.get_xlim()
             self.assertAlmostEqual(xlo, 1.0, places=4)
@@ -8879,8 +8891,8 @@ class TestViewLimitSync(unittest.TestCase):
             self.assertAlmostEqual(
                 w.params["视图 2θ 下限 (°)"].value(),
                 w.params["2θ 下限 (°)"].value(), delta=0.05)
-            # [恢复默认] 本身只复位参数、不重画（设计如此）→ 点 [应用] 看效果
-            w.findChild(QPushButton, "apply_image_btn").click()
+            # [恢复默认] 复位后收一笔重画（2026-10-08 起，复位尾部的
+            # _refresh_image_display）→ 视图窗口回到"跟随积分范围"
             QApplication.processEvents()
             self.assertAlmostEqual(
                 ax.get_xlim()[0], w.params["2θ 下限 (°)"].value(), delta=0.05,
@@ -8888,11 +8900,12 @@ class TestViewLimitSync(unittest.TestCase):
         finally:
             w.close()
 
-    def test_apply_keeps_follow_view_unpinned(self):
-        """[应用显示设置] 不把"跟随积分范围"钉成显式窗口（2026-10-07）。
+    def test_live_refresh_keeps_follow_view_unpinned(self):
+        """即改即画写快照不把"跟随积分范围"钉成显式窗口（2026-10-07 定，
+        2026-10-08 触发改走即改即画：原先这条查的是 [应用显示设置]）。
 
         「热图显示」那对视图框显示的是"跟随"折算出来的数（该面板的
-        积分范围）；[应用] 若把它采集进快照，"跟随"就被钉成显式窗口
+        积分范围）；写快照时若把它采集进去，"跟随"就被钉成显式窗口
         ——之后改积分范围重算，旧窗口会把新曲线裁错。
         """
         w = create_window()
@@ -8900,11 +8913,11 @@ class TestViewLimitSync(unittest.TestCase):
             dock = self._open_1d(w)
             self.assertIsNone(dock.params_snapshot.get("视图 2θ 下限 (°)"),
                               "新面板默认跟随积分范围")
-            w.findChild(QPushButton, "apply_image_btn").click()
+            w.params["对数纵轴"].setChecked(True)   # 任一即改即画都会写快照
             QApplication.processEvents()
             self.assertIsNone(
                 dock.params_snapshot.get("视图 2θ 下限 (°)"),
-                "[应用] 不该把跟随的视图钉成显式窗口")
+                "即改即画不该把跟随的视图钉成显式窗口")
             self.assertIsNone(dock.params_snapshot.get("视图 2θ 上限 (°)"))
         finally:
             w.close()
@@ -12260,44 +12273,17 @@ class TestCalibFlow(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_refined_starts_from_the_current_geometry(self):
-        """②[再精修]：初值 = 当前配置的环心与距离（不重新定位）。"""
+    def test_the_refined_button_is_gone(self):
+        """2026-10-08 裁决：删 [再精修]、两个入口收敛成一个。
+
+        依据是真 lab6 实测：它与 [定位束心并精修] 等价（环位偏差
+        0.24 vs 0.23 px，在重复跑抖动 0.014~0.029 px 以内），连按两个
+        按钮结果不变。这条守住删除本身，防将来无意加回。
+        """
         w = create_window()
         try:
-            w.show()
-            calls = []
-
-            def fake_calib(image, **kw):
-                calls.append(kw)
-                return dict(self.FAKE_AUTO, dist_m=1.5965)
-
-            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
-                                   return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
-                                   return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_lab6",
-                                   side_effect=fake_calib), \
-                 mock.patch.object(gui_calib, "ring_metrics",
-                                   side_effect=lambda image, **kw:
-                                   self._metrics(0.30)):
-                add_checked(w, ["data/fake_a.tif"])
-                w.calib_btn.click()
-                w.calib_pixel_chk.setChecked(True)
-                _wait_until(lambda: w.calib_state["current_metrics"] is not None,
-                            8000)
-                # 先把当前配置手改成一条明确的几何（自定义起点）
-                st = w.calib_state
-                st["current_geom"]["dist_m"] = 1.6000
-                st["current_geom"]["beam_center_rc"] = (1000.0, 1010.0)
-                st["current_metrics"] = self._metrics(0.50)
-                w.calib_start_refined.click()
-                self.assertTrue(_wait_until(
-                    lambda: w.calib_state["slots"]["A"] is not None, 8000))
-            last = calls[-1]
-            self.assertAlmostEqual(last["dist0_m"], 1.6000)      # 当前配置的距离
-            self.assertEqual(last["center0_px"], (1010.0, 1000.0))  # (列, 行)
-            self.assertIn("精修完成（精修1）",
-                          w.log_text.toPlainText())
+            self.assertIsNone(w.findChild(QPushButton, "start_refined_calib"))
+            self.assertFalse(hasattr(w, "calib_start_refined"))
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
@@ -13804,7 +13790,7 @@ class TestHeatmap(unittest.TestCase):
             w.close()
 
     def test_heatmap_image_apply_redraws_with_new_colormap(self):
-        """图像 [应用]：改色图 → 重画（不重新积分）。"""
+        """改色图 → 即改即画重画（不重新积分；2026-10-08 起无 [应用] 按钮）。"""
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
@@ -13818,14 +13804,14 @@ class TestHeatmap(unittest.TestCase):
             self.assertEqual(ax.images[0].get_cmap().name, "magma")
             w.params["热图色图"].setCurrentIndex(
                 w.params["热图色图"].findData("viridis"))
-            w.findChild(QPushButton, "apply_image_btn").click()
+            QApplication.processEvents()
             self.assertEqual(ax.images[0].get_cmap().name, "viridis")
             self.assertEqual(c.call_count, calls)   # 只重画不重算
         finally:
             w.close()
 
     def test_heatmap_repeated_apply_does_not_shrink_axes(self):
-        """图像 [应用] 反复重画：主坐标轴宽度不缩（教训 13——
+        """反复即改即画重画：主坐标轴宽度不缩（教训 13——
         remove+重建颜色条每次让 20% 宽度且不退还；颜色条改为
         update_normal 复用后几何只算一次）。"""
         w = create_window()
@@ -13839,10 +13825,10 @@ class TestHeatmap(unittest.TestCase):
             ax = gui_panel_state._content(dock).axes_heat
             widths = []
             for _ in range(3):
-                w.findChild(QPushButton, "apply_image_btn").click()
+                gui_plot_compare._refresh_heat(w)   # 即改即画同款重画
                 widths.append(float(ax.get_position().width))
             self.assertLess(max(widths) - min(widths), 1e-3,
-                            f"热图宽度在反复[应用]后缩小：{widths}")
+                            f"热图宽度在反复重画后缩小：{widths}")
         finally:
             w.close()
 
@@ -13880,15 +13866,15 @@ class Test2DColorbar(unittest.TestCase):
             dock = _dock(w, "2D", "data/fake_a.tif")
             fig = gui_panel_state._content(dock).figure
             self.assertEqual(len(fig.axes), 2)   # 图像轴 + 颜色条轴
-            # 图像 [应用] 重画 → 颜色条仍恰好一条
-            w.findChild(QPushButton, "apply_image_btn").click()
+            # 即改即画重画 → 颜色条仍恰好一条
+            gui_views._refresh_image_display(w)
             self.assertEqual(len(fig.axes), 2)
             self.assertIsNotNone(dock._colorbar_2d)
         finally:
             w.close()
 
     def test_2d_repeated_apply_does_not_shrink_axes(self):
-        """图像 [应用] 反复重画：主坐标轴宽度不缩（与热图同病，
+        """反复即改即画重画：主坐标轴宽度不缩（与热图同病，
         教训 13——remove+重建颜色条每次让 20% 宽度且不退还）。"""
         w = create_window()
         try:
@@ -13903,10 +13889,10 @@ class Test2DColorbar(unittest.TestCase):
             ax = gui_panel_state._content(dock).axes_2d
             widths = []
             for _ in range(3):
-                w.findChild(QPushButton, "apply_image_btn").click()
+                gui_views._refresh_image_display(w)   # 即改即画同款重画
                 widths.append(float(ax.get_position().width))
             self.assertLess(max(widths) - min(widths), 1e-3,
-                            f"2D 宽度在反复[应用]后缩小：{widths}")
+                            f"2D 宽度在反复重画后缩小：{widths}")
         finally:
             w.close()
 

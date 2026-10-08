@@ -1794,13 +1794,12 @@ def _duplicate_raw_paths(checked) -> set:
 
 
 def _refresh_check_labels(window: QMainWindow) -> None:
-    """把"勾了多少条"写到出图按钮上，并在「原图」页刷新那句构成说明。"""
+    """把"勾了多少条"写到 1D 页的出图按钮上，并刷新摘要那句构成说明。"""
     n = len(gui_sources.checked_sources(window))
     text = f"出图（已勾选 {n} 项）" if n else "出图（尚未勾选）"
-    for attr in ("plot_1d_btn", "plot_now_btn"):
-        btn = getattr(window, attr, None)
-        if btn is not None:
-            btn.setText(text)
+    btn = getattr(window, "plot_1d_btn", None)
+    if btn is not None:
+        btn.setText(text)
     # 处理页合并后的产出按钮（2026-10-07）：勾了走批量、没勾存当前这张，
     # 行为不同、文字必须说清走的是哪一种
     btn = getattr(window, "proc_save_btn", None)

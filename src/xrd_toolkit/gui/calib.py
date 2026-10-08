@@ -43,10 +43,8 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
   / calib_ax   面板与画布（None = 没开面板）
   calib_gen    代计数：面板关闭/重开/退出模式时 +1，在飞任务回调
                核对代数，迟到结果静默作废
-  calib_state  {"points": [(x, y, 环号), ...], "auto"/"manual"/"refined":
-                各来源结果|None, "current": 当前使用的来源键,
-                "custom": 用户是否手动指定过}——关闭面板即全清
-                （关闭即遗忘）
+  calib_state  选点 + 累积结果 + 三个槽（懒创建）——关闭面板即全清
+                （关闭即遗忘）；各键说明见 calib_model._calib_state
 """
 import re
 from datetime import datetime
@@ -61,7 +59,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMdiSubWindow, QMessageBox, QPushButton,
-    QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+    QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
 # 常量都住在 calib_model（纯逻辑层）。这里把面板/表格用的几个也一并
 # 导入，保持『经 gui_calib 取用』的历史引用可用（同 app.py 的再导出惯例）。
@@ -431,12 +429,12 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
-      自动取点  定位束心并精修 / 再精修
+      自动取点  定位束心并精修
       手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
-      三列表  表头三个下拉（当前配置 / A / B——都从累积结果里选；当前
-              配置还能借条目或手输，只是不在这个下拉里表达）+ 当前配置
-              一行 + 8 行数值 + 2 行 Δ（相对「当前配置」）
-              + 结论行 + ⚠ 说明
+      三列表  当前配置说明行（框顶）+ 灰字列头 + 三个槽下拉（当前配置 /
+              A / B——各贴自己那一列；都从累积结果里选；当前配置还能借
+              条目或手输，只是不在这个下拉里表达）+ 8 行数值 + 2 行 Δ
+              （相对「当前配置」）+ 结论行 + ⚠ 说明
     整页套滚动区；进校准模式时参数坞会按本页内容拉宽（见 _enter_calib）。
 
     数据表在**最下**（用户 2026-09-30："校准数据放最下，跟自动手动换位置"）：
@@ -564,39 +562,47 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # ── 三列表 ─────────────────────────────────────────────
     table_box = QGroupBox("数据")
     tb = QVBoxLayout(table_box)
-    head = QHBoxLayout()
-    head.setSpacing(4)
+
+    # 当前配置说明行放**框顶**（用户 2026-10-08："放到最上面"）：先看见
+    # "现在用的是哪一份几何"，再往表里看——它就是"往下看对比表之前必须
+    # 先看见的"那件事；放框顶还有个好处：下拉框下面直接就是自己列的数字，
+    # 中间不再隔一行。（像素尺寸确认曾经也住这儿，2026-10-01 单独搬回
+    # 页面顶部了，见上面。）
+    cur_lbl = QLabel("当前配置：—")
+    cur_lbl.setWordWrap(True)
+    tb.addWidget(cur_lbl)
+    window.calib_current_lbl = cur_lbl
+
+    # 三个槽下拉框进网格：灰字列头正下方、各贴自己那一列（用户
+    # 2026-10-08："三个选择框和对应的当前 A/B 太远了"——原先三框单独占
+    # 一行等宽摊开，跟下面的列对不上：实测左偏 31~91 px、中间还隔两行）。
+    # 水平 SizePolicy=Ignored：列宽照旧由数字和行名定（和加下拉框之前
+    # 一样），下拉框只占用自己那一格、长了省略——不然它按最长条目要宽度，
+    # 会把列撑到 102 px、参数坞整体从 359 顶宽到 465（实测）。
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(6)
     window.calib_slot_combo = {}
-    for slot in ("current", "A", "B"):
+    for c, (slot, text) in enumerate(
+            (("current", "当前配置"), ("A", "A"), ("B", "B")), start=1):
+        hdr = QLabel(text)
+        hdr.setAlignment(Qt.AlignCenter)
+        hdr.setStyleSheet("color: gray;")
+        grid.addWidget(hdr, 0, c)
         combo = QComboBox()
         combo.setToolTip({
             "current": "当前配置：选一条结果即采纳为当前配置；"
                        "[编辑…] 可用条目预填或手输",
             "A": "对比位 A：从累积结果里选；手动选过之后新结果不再覆盖它",
             "B": "对比位 B：同上"}[slot])
+        combo.setSizePolicy(QSizePolicy.Ignored,
+                            combo.sizePolicy().verticalPolicy())
         combo.currentIndexChanged.connect(
             lambda _i, s=slot: _on_slot_changed(window, s))
-        head.addWidget(combo, 1 if slot == "current" else 1)
+        grid.addWidget(combo, 1, c)
         window.calib_slot_combo[slot] = combo
-    tb.addLayout(head)
 
-    # 当前配置一行：紧挨着三个槽下拉框放——"往下看对比表之前必须先看见的"
-    # 那件事：当前用的到底是哪一份几何。（像素尺寸确认曾经也住这儿，2026-10-01
-    # 单独搬回页面顶部了，见上面。）
-    cur_lbl = QLabel("当前配置：—")
-    cur_lbl.setWordWrap(True)
-    tb.addWidget(cur_lbl)
-    window.calib_current_lbl = cur_lbl
-
-    grid = QGridLayout()
-    grid.setHorizontalSpacing(6)
     window.calib_vals = {"current": {}, "A": {}, "B": {}, "delta": {}}
-    for c, text in enumerate(("当前配置", "A", "B"), start=1):
-        hdr = QLabel(text)
-        hdr.setAlignment(Qt.AlignCenter)
-        hdr.setStyleSheet("color: gray;")
-        grid.addWidget(hdr, 0, c)
-    row_idx = 1
+    row_idx = 2
     for key_, name, _scale, _fmt, has_delta in COMPARE_ROWS:
         grid.addWidget(QLabel(name), row_idx, 0)
         for c, slot in enumerate(("current", "A", "B"), start=1):
@@ -642,28 +648,23 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     window.calib_verdict = verdict
 
     # ── 自动取点 ─────────────────────────────────────────────
+    # 2026-10-08：删掉旧的 [再精修]（以当前配置的束心为初值直接再精修）
+    # ——真 lab6 实测两个按钮产出等价（环位偏差 0.24 vs 0.23 px，在重复
+    # 跑 0.014~0.029 px 的抖动以内），连按两个按钮 = 空转，收敛成一个。
     auto_box = QGroupBox("自动取点")
     al = QVBoxLayout(auto_box)
     auto_hint = QLabel("从<b>当前配置</b>出发：定位束心（取点拟合，FFT 兜底）"
-                       "→ pyFAI 精修；或在当前几何上再精修一遍。结果<b>直接"
-                       "成为当前配置</b>（青环马上跟着动，好了或差了多少都写在"
-                       "日志里），同时进下面的累积列表")
+                       "→ pyFAI 精修。结果<b>直接成为当前配置</b>（青环马上"
+                       "跟着动，好了或差了多少都写在日志里），同时进下面的"
+                       "累积列表")
     auto_hint.setWordWrap(True)
     al.addWidget(auto_hint)
     btn_auto = QPushButton("定位束心并精修")
     btn_auto.setObjectName("start_auto_calib")
-    btn_auto.clicked.connect(lambda: _start_auto_calib(window, "auto"))
-    btn_refined = QPushButton("再精修")
-    btn_refined.setObjectName("start_refined_calib")
-    btn_refined.setToolTip("不重新定位束心，直接以当前配置的束心与距离为初值再"
-                           "精修一轮——已有解比重新定位更可信；首轮初值偏时，"
-                           "从更好的解出发能收敛到另一支")
-    btn_refined.clicked.connect(lambda: _start_auto_calib(window, "refined"))
+    btn_auto.clicked.connect(lambda: _start_auto_calib(window))
     al.addWidget(btn_auto)
-    al.addWidget(btn_refined)
     lay.addWidget(auto_box)
     window.calib_start_auto = btn_auto
-    window.calib_start_refined = btn_refined
     # （数据表在手动区之后才加进布局——见本函数末尾，用户要求放最下）
 
     # ── 手动选点 ─────────────────────────────────────────────
@@ -792,7 +793,6 @@ def _calib_sync(window: QMainWindow) -> None:
     window.calib_start_manual.setEnabled(enough)
     window.calib_undo_btn.setEnabled(bool(points))
     window.calib_clear_btn.setEnabled(bool(points))
-    window.calib_start_refined.setEnabled(state["current_geom"] is not None)
     window.calib_start_auto.setEnabled(state["current_geom"] is not None)
     window.calib_current_lbl.setText(_current_geom_text(window))
     # 像素确认：标记只在像素值真的变了时才被清掉（规则 (b)）；
@@ -890,13 +890,12 @@ def _metrics_note(result: dict) -> str:
 
 
 # ══ 后台任务：自动 / 手动（_spawn 同款守卫）═══════════════════
-def _auto_calib_worker(path_str: str, geom: dict,
-                       center0_px: tuple = None) -> dict:
-    """后台线程纯计算：读标样 → （可选定环心）→ pyFAI 精修。
+def _auto_calib_worker(path_str: str, geom: dict) -> dict:
+    """后台线程纯计算：读标样 → 自动定环心 → pyFAI 精修。
 
-    center0_px 为 None（①自动定位）时先自动定环心（取点拟合，FFT
-    兜底）；给定时（③二次精修）直接用给定的环心——那是"当前使用"
-    的解，比重新定位更可信。形参是 (列, 行)，与 calibrate_lab6 一致。
+    环心先用取点拟合自动定位（fit_center_from_rings），失败再 FFT
+    兜底（find_ring_center）。（2026-10-08 删 [再精修] 前这里还收一个
+    给定的环心跳过定位——实测那条路与自动定位等价，就不留了。）
 
     结果附 beam_center_rc：(行, 列) 像素——这次新拟合的环心就是直射
     束落点 B（比沿用配置条目的旧 B 更准），[保存为配置] 用它入条目。
@@ -906,14 +905,11 @@ def _auto_calib_worker(path_str: str, geom: dict,
     准图上看得见的那件事。
     """
     image = _load_image(path_str)
-    if center0_px is None:
-        center = fit_center_from_rings(image)
-        if center is None:
-            cy, cx = find_ring_center(image)
-        else:
-            cy, cx = center["cy"], center["cx"]
+    center = fit_center_from_rings(image)
+    if center is None:
+        cy, cx = find_ring_center(image)
     else:
-        cx, cy = center0_px
+        cy, cx = center["cy"], center["cx"]
     result = calibrate_lab6(
         image, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
@@ -1079,12 +1075,14 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
         float(geom["dist_m"]) * float(scale)
 
 
-def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
-    """[定位束心并精修]（target="auto"）与 [再精修]（"refined"）。
+def _start_auto_calib(window: QMainWindow) -> None:
+    """[定位束心并精修]：从当前配置出发，自动定位环心（取点拟合，FFT
+    兜底）→ pyFAI 精修。
 
-    auto     从当前配置出发：自动定位环心（取点拟合，FFT 兜底）→ 精修
-    refined  不重新定位环心，直接以**当前配置**的环心与距离为初值再精修
-             一轮（首轮初值偏时，从更好的解出发能收敛到另一支）
+    2026-10-08：删掉旧的 [再精修]（target="refined"，绕过定位、直接以
+    当前配置的束心与距离为初值再精修一轮）——真 lab6 实测两者等价：
+    环位偏差 0.24 vs 0.23 px（重复跑本身就抖 0.014~0.029 px），连按
+    两个按钮结果不变，两个入口收敛成一个。
     """
     path = _calib_standard_path(window)
     if path is None:
@@ -1095,12 +1093,6 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         return   # 图像读取失败（_open_calib_panel 已记日志）
     _warn_pixel_unchecked(window)     # 没核对像素只提醒，不拦（2026-10-05）
     geom = dict(_calib_state(window).get("current_geom") or {})
-    center0 = None
-    label = "定位束心并精修" if target == "auto" else "再精修"
-    if target == "refined":
-        bc = geom.get("beam_center_rc")
-        # beam_center_rc 是 (行, 列)；引擎的 center0_px 要 (列, 行)
-        center0 = ((bc[1], bc[0]) if bc and bc[0] is not None else None)
     gen = window.calib_gen
     key = "calib_auto"
     task = None
@@ -1113,7 +1105,7 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return   # 面板关过/退出过模式：迟到结果作废
-        _on_calib_result(window, target, result)
+        _on_calib_result(window, "auto", result)
 
     def error(msg):
         window._tasks.remove(task)
@@ -1123,13 +1115,13 @@ def _start_auto_calib(window: QMainWindow, target: str = "auto") -> None:
         if gen != getattr(window, "calib_gen", -1) \
                 or getattr(window, "calib_dock", None) is None:
             return
-        _log(window, f"校准失败（{label}）：{msg}")
+        _log(window, f"校准失败（定位束心并精修）：{msg}")
 
-    task = BackgroundTask(_auto_calib_worker, str(path), geom, center0,
+    task = BackgroundTask(_auto_calib_worker, str(path), geom,
                           on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
-    _log(window, f"开始{label}：{path.name}（后台运行）")
+    _log(window, f"开始定位束心并精修：{path.name}（后台运行）")
     task.start()
 
 

@@ -174,8 +174,8 @@ _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 # plot_panels._on_xlim_changed）。控件（「热图显示」小节那对框）只是
 # **展示与输入**：快照采集**不从这里拿控件值**——框里显示的往往是
 # "跟随"折算出来的数（该面板的积分范围），采集会把"跟随"钉成显式窗口，
-# 之后改积分范围重算，旧窗口就把新曲线裁错了（[应用显示设置] →
-# _display_snapshot 这条路）。用户真填进框里的值由
+# 之后改积分范围重算，旧窗口就把新曲线裁错了（_display_snapshot /
+# 快照回放这条路）。用户真填进框里的值由
 # plot_compare._refresh_heat_view 显式写回快照。
 _VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)")
 
@@ -326,48 +326,31 @@ def _set_widget_value(w, value) -> None:
 # ── 「未应用」：改了要按一下才生效的控件（用户 2026-09-30 的"丙"方案） ──
 # 用户原话："参数页显示本图的参数，就是上方图片名称的本图参数。如果用户改了，
 # 添加一个灰字未应用来区分，切图再切回来保持"。三件事：
-#   ① 灰字：当前编辑对象有"改了还没生效"的改动时，坞顶那两个灰字亮着；
+#   ① 灰字：当前编辑对象有"改了还没生效"的改动时，坞顶那个灰字亮着；
 #   ② 记住：改动**按图**记（`dock.pending_params`），切走再切回来原样还在
 #      （改之前的行为是：切图时回放直接把用户填的值冲掉，什么提示都没有）；
-#   ③ 生效即清：快照一旦追上控件（[重算这张图] / 图像 [应用] 都会写快照），
-#      差集自然为空、灰字自己灭——不需要谁专门去"清 pending"。
-# 表里只放**要按一下才生效**的控件。即改即生效的不放：处理页那几项
-# （背景/平滑/裁剪/锚点）与热图色图/归一化/对数/自动范围、对比归一化/
-# 归一化目标/曲线配色/堆叠（改完立刻按新值重画，见 app 里 _refresh_heat /
-# _refresh_compare 的接线）——它们没有"未应用"这一态。
+#   ③ 生效即清：快照一旦追上控件（[重算这张图] 会写快照），差集自然为空、
+#      灰字自己灭——不需要谁专门去"清 pending"。
+# 表里只放**要按一下才生效**的控件。即改即生效的不放——显示参数
+# 2026-10-08 起**全部**即改即画（对比四参数 10-02、热图三项与 1D 显示
+# 10-07、2D 三项 / 剖面角度 / 热图范围 10-08，见 app 与 plot_views 的
+# _refresh_* 接线），本表只剩「数据」一组：2θ 范围 / 点数要等**下一次
+# 计算**才被用掉，"改了还没算"是真实且必须提示的状态。
 _PENDING_GROUPS = {
     "数据": ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"),
-    # 「1D 显示」那四个（对数纵轴 / 纵轴自动 / 纵轴下限 / 纵轴上限）2026-10-07
-    # 随小节搬回「1D」页时改成**即改即画**（_refresh_1d_display）——从本表
-    # 除名，没有"未应用"这一态（同对比四参数、瀑布行距的老做法）
-    "图像": ("自动对比度", "对比度下限", "对比度上限", "剖面角度 (°)",
-             "显示束心",
-             "热图下限", "热图上限"),
 }
 
 
 def _pending_names() -> tuple:
-    """两组控件的名字并成一条（按表里的顺序）。"""
+    """表里所有控件的名字并成一条（按表里的顺序）。"""
     return tuple(name for names in _PENDING_GROUPS.values() for name in names)
 
 
-# "自动"开关勾着时，这几项是**程序算完填进控件**的灰色展示值，不是用户输入
-# （量它们会让"未应用"永远亮着）：自动对比度→对比度上下限、纵轴自动→纵轴
-# 上下限、热图自动范围→热图上下限。开关自己（owner）照常参与比较。
-_AUTO_OWNS = {
-    "自动对比度": ("对比度下限", "对比度上限"),
-    # "纵轴自动"→纵轴上下限 那条随 1D 显示改即改即画一并退休（2026-10-07）：
-    # 那对键不再进 pending 比对，本表里也就没有它的位置
-    "热图自动范围": ("热图下限", "热图上限"),
-}
-
-
-def _auto_owner(name: str):
-    """这个键归哪个"自动"开关管（不管就返回 None）。"""
-    for owner, owned in _AUTO_OWNS.items():
-        if name in owned:
-            return owner
-    return None
+# （_AUTO_OWNS / _auto_owner 随「图像」组于 2026-10-08 退休：它们只用来把
+# "自动开关算完填进上下限框的展示值"排除出 pending 比对，那个组没了就
+# 没有比对对象了。程序回填现在挂 _param_box_sync 旗标——见
+# _apply_auto_contrast / _apply_auto_heatlim——即改即画那一路靠它区分
+# 程序同步与用户输入。）
 
 
 def _group_of(name: str):
@@ -407,14 +390,11 @@ def _note_params_consumed(window: QMainWindow, group: str) -> None:
 def _pending_diff(window: QMainWindow, dock) -> dict:
     """当前控件值 vs 该面板**已生效**快照的差（只算上面那张表里的键）。
 
-    两个"程序自己填的值不算用户改动"的例外（探针实测踩到的，不排掉的话
-    "未应用"会永远亮着）：
-      * 自动模式勾着时，它的姊妹上下限是**程序算完填进控件**的展示值
-        （纵轴自动→纵轴上下限、热图自动范围→热图上下限、自动对比度→
-        对比度上下限），灰显只读，不是用户输入；
-      * 带空占位项的下拉（`currentData()` 是 None）与快照里的 ""（默认表
-        的写法）是同一个意思——直接比会永远不等。
-    快照里没有这个键（老快照）同样不算改动：宁可少报，也别误报。
+    "程序自己填的值不算用户改动"的例外（探针实测踩到的，不排掉的话"未
+    应用"会永远亮着）：带空占位项的下拉（`currentData()` 是 None）与快照
+    里的 ""（默认表的写法）是同一个意思——直接比会永远不等。快照里没有
+    这个键（老快照）同样不算改动：宁可少报，也别误报。
+    （"自动开关算完填进上下限"那条例外随「图像」组 2026-10-08 退休。）
     """
     snap = getattr(dock, "params_snapshot", None) or {}
     out = {}
@@ -424,11 +404,6 @@ def _pending_diff(window: QMainWindow, dock) -> dict:
         w = window.params.get(name)
         if w is None:
             continue
-        owner = _auto_owner(name)
-        if owner is not None:
-            ow = window.params.get(owner)
-            if ow is not None and _widget_value(ow) is True:
-                continue
         value = _widget_value(w)
         same = (value == snap[name]) or (value is None and snap[name] == "")
         if not same:
@@ -437,7 +412,7 @@ def _pending_diff(window: QMainWindow, dock) -> dict:
 
 
 def _refresh_pending_labels(window: QMainWindow) -> None:
-    """按"当前编辑对象有没有未应用的改动"开关那两个灰字（没控件就跳过）。"""
+    """按"当前编辑对象有没有未应用的改动"开关那个灰字（没控件就跳过）。"""
     labels = getattr(window, "pending_labels", None)
     if not labels:
         return
@@ -745,8 +720,8 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
                 loaded = True
             except ValueError:
                 pass   # 图像没有有效数值：占位默认
-    window.params["对比度下限"].setValue(lo)
-    window.params["对比度上限"].setValue(hi)
+    _param_box_set(window, "对比度下限", lo)
+    _param_box_set(window, "对比度上限", hi)
     if not silent:
         if loaded:
             _log(window, f"自动对比度：按 {path.name} 算得 {lo:.1f}–{hi:.1f}")
@@ -1086,8 +1061,8 @@ def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
                 lo, hi = _auto_y_range(shown, _panel_param(
                     window, dock, "热图对数", False))
                 loaded = True
-    window.params["热图下限"].setValue(lo)
-    window.params["热图上限"].setValue(hi)
+    _param_box_set(window, "热图下限", lo)
+    _param_box_set(window, "热图上限", hi)
     if not silent and loaded:
         _log(window, f"热图范围：编辑对象算得 {lo:.4g}–{hi:.4g}")
 

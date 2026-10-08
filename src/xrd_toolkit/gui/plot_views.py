@@ -22,8 +22,9 @@ builder 表 _VIEW_BUILDERS 在 plot_panels（视图名 → 建面板内容）—
     _compute_profile/_compute_waterfall，纯计算，后台线程跑）/
     _spawn（1D 特化）/ _spawn_task（通用版）/ 各 _on_*_done（过期
     结果丢弃，面板关了静默）/ _on_integration_error /
-    _on_view_error；_apply_params / _apply_image_params（两个
-    [应用] 各管各的）；
+    _on_view_error；_apply_params（数据 [应用]；显示参数 2026-10-08 起
+    全部即改即画，图像 [应用] 按钮已删——2D 走 _refresh_image_display、
+    剖面角度走 _refresh_profile_angle）；
   - 背景扣除：_draw_bg_overlay（原始曲线 / 基线 / 锚点标记的辅助
     线，统一带 _AUX_GID_PREFIX）+ _bg_path_of + _refresh_proc（按各
     面板快照重画全部曲线面板）；
@@ -227,8 +228,8 @@ def _run_profile(window: QMainWindow, path: Path, key: str,
                  geom: dict, npt: int) -> None:
     """剖面 = 过束心直线采样：中心取配置、角度取该面板快照。
 
-    剖面角度是显示参数（每张图各记各的）：改角度后点图像 [应用]
-    按新角度重算（见 _apply_image_params 的剖面分支）；主 [应用]
+    剖面角度是显示参数（每张图各记各的）：改角度即按新角度重算
+    （见 _refresh_profile_angle，2026-10-08 起即改即画）；主 [应用]
     （数据参数）重算时沿用面板自己的旧角度。
     """
     dock = window.plot_docks.get(key)
@@ -318,52 +319,58 @@ def _apply_params(window: QMainWindow) -> None:
     _refresh_pending_labels(window)
 
 
-def _apply_image_params(window: QMainWindow) -> None:
-    """[应用] 按钮（图像参数组）：把当前显示参数应用到编辑对象（焦点面板）。
+def _refresh_image_display(window: QMainWindow) -> None:
+    """2D 显示参数（自动对比度 / 显示范围 / 显示束心）改了 → 就地重画编辑对象。
 
-    两个 [应用] 各管各的：这个按钮只更新焦点面板快照里的显示参数
-    （_display_snapshot），数据参数沿用旧快照——顺手改了数据控件也
-    不会冒充成这张图的计算参数。显示参数（对比度/剖面角度/对数纵
-    轴/纵轴范围/对比归一化）与数据参数同款：每张图各记各的（存在
-    各自面板的 params_snapshot 里），点哪张图参数坞就显示哪张图的
-    设置。改完点 [应用] 用已有数据重画焦点那张图（不重新积分），
-    别的图保持自己的设置不动；只有剖面角度真的变过才重算剖面。
-    没算完的焦点面板提示先完成计算。
+    2026-10-08：这三项从"要按 [应用显示设置]"改成即改即画——那个按钮
+    随这次清扫删了（同 10-02 对比四参数、10-07 1D 显示与瀑布行距的老
+    做法）。原先的 _apply_image_params 就是干这件事（只写快照 + 用已有
+    数据重画、不重新积分），这里把触发从按钮换成值变。
+
+    作用域 = **编辑对象这一个面板**（同 _refresh_1d_display 的判例）：
+    2D 面板能同时开很多张、显示参数每张各记各的（色图/对比度/束心都按
+    面板记），改这张不该顺带改别的张。焦点不是 2D/剖面 时同样只写快照
+    ——与旧 [应用] 的口径一致（那几个键在别的视图里不参与画图）。
     """
-    # 具体重画在 _redraw_panel（它按视图类型再延迟导入 plot_compare）
+    if getattr(window, "_param_replaying", False) \
+            or getattr(window, "_param_box_sync", False):
+        return   # 回放快照 / 程序回填（自动对比度算值进框）不是用户改动
     key = window.focus_panel
     if key is None:
-        _log(window, "先点击要更新的图面板（如 1D），再点 [应用]")
+        return   # 没有编辑对象：控件值先留着（新开图会从默认/记忆起步）
+    dock = window.plot_docks.get(key)
+    if dock is None:
+        return   # 焦点面板已关：静默（值变只发生在控件上，没有可重画的东西）
+    dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+    _redraw_panel(window, key)   # 还没算完时它自己知道，这里不打扰
+
+
+def _refresh_profile_angle(window: QMainWindow) -> None:
+    """剖面角度改了 → 编辑对象是剖面面板就就地重算（后台），否则只写快照。
+
+    剖面角度是这批显示参数里唯一的"要重算"（沿新角度重新取一条线），
+    其余都是"用已有数据重画"。焦点是剖面面板 → 走 _run_profile（后台
+    任务按面板 key 一场一任务，拨快了由新任务说了算）；焦点不是剖面 →
+    只写快照，等将来算这条线时用它（与旧 [应用] 的口径一致）。
+    """
+    if getattr(window, "_param_replaying", False) \
+            or getattr(window, "_param_box_sync", False):
+        return   # 回放快照 / 程序同步写控件不是用户改动
+    key = window.focus_panel
+    if key is None:
         return
     dock = window.plot_docks.get(key)
     if dock is None:
-        _log(window, "编辑对象的面板已不存在")
-        window.focus_panel = None
-        window.focus_label.setText(FOCUS_EMPTY_TEXT)
         return
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
-    # 快照刚被写成控件当前值 → 图像组的「未应用」灰字该灭了（与 _apply_params
-    # 同一个口径：灰字量的是"控件 vs 快照"的差）；这组值也算被用掉了
-    _note_params_consumed(window, "图像")
-    _refresh_pending_labels(window)
-    view = key.split("|", 1)[0]
-    if view == "剖面":
-        # 角度变了要先重算（读图 + 线剖面，后台线程），其余都是"用已有
-        # 数据重画"——统一走 _redraw_panel（与面板 [Home] 共用）
-        angle = _panel_param(window, dock, "剖面角度 (°)", 0.0)
-        if angle != getattr(dock, "profile_angle", None):
-            _log(window, f"[应用] 图像参数：{dock.windowTitle()} 剖面"
-                         f"角度改为 {angle:g}°，重新计算")
-            _run_profile(window, dock.panel_file, key,
-                         _collect_geometry(window),
-                         int(window.params["输出点数"].value()))
-            return
-    reason = _redraw_panel(window, key)
-    if reason:
-        _log(window, f"[应用] 图像参数：{dock.windowTitle()} 还没有"
-                     f"计算结果（{reason}）")
-        return
-    _log(window, f"[应用] 图像参数已重画：{dock.windowTitle()}")
+    if key.split("|", 1)[0] != "剖面":
+        return   # 焦点不是剖面：快照已带上新角度，将来算它时用
+    angle = _panel_param(window, dock, "剖面角度 (°)", 0.0)
+    if angle == getattr(dock, "profile_angle", None):
+        return   # 角度没变（别的参数顺手带出来的刷新）：别白重算
+    _run_profile(window, dock.panel_file, key,
+                 _collect_geometry(window),
+                 int(window.params["输出点数"].value()))
 
 
 def _redraw_panel(window: QMainWindow, key: str) -> str:
@@ -1460,15 +1467,14 @@ def _proc_batch_label(settings: dict) -> tuple:
 def _refresh_proc(window: QMainWindow) -> None:
     """「处理」页任一参数一变就立刻重画（不重新积分）。
 
-    这是全代码库唯一的"改控件即重画"通路：其余显示参数都等图像组
-    [应用]。锚点点选本身是点击驱动的，每点一次都要 [应用] 不可接受，
-    所以处理这三项（背景扣除 / 平滑 / 裁剪）都走实时。三项都是纯函数、
+    锚点点选是点击驱动的，每点一次都要按一下 [应用] 不可接受，所以处理
+    这三项（背景扣除 / 平滑 / 裁剪）一直走实时。三项都是纯函数、
     毫秒级（基线估计实测 3000 点 1.4 ms；滑动平均是卷积，更快），直接拿
-    缓存里的曲线重画一遍就够。
+    缓存里的曲线重画一遍就够。（显示参数 2026-10-08 起也全部即改即画，
+    这条路不再是唯一。）
 
     三步：① 把参数坞里处理控件的当前值推进**编辑对象**面板的快照
-    （与图像组 [应用] 同一个动作，见 _apply_image_params——显示参数按
-    面板各记各的，不推进去的话画图读到的还是旧快照）；② 顺手把"平滑
+    （显示参数按面板各记各的，不推进去的话画图读到的还是旧快照）；② 顺手把"平滑
     窗口折成几个点"的灰度提示填上（教学用：窗口宽度是度、曲线是点）；
     ③ 按各面板自己的快照重画全部曲线面板，编辑对象跟着控件实时走，其余
     面板维持各自已设的显示参数。
@@ -1528,7 +1534,7 @@ def _refresh_proc(window: QMainWindow) -> None:
             elif view == "热图" and getattr(dock, "heat_results", None):
                 data = _heat_data(window, dock)
                 if data is not None:
-                    dock.heat_data = data   # 同 _apply_image_params：与画的同源
+                    dock.heat_data = data   # 与画的同源（画热图也从这里取）
                     _draw_heatmap(window, dock, data[0], data[1], data[2])
         except Exception as err:                      # 重画失败不该拖垮整窗
             _log(window, f"背景扣除重画失败：{user_error_text(err)}")
@@ -1712,8 +1718,10 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
             vmin = max(1.0, lo)
             vmax = max(hi, vmin * 10.0)
             if window.plot_docks.get(window.focus_panel) is dock:
-                window.params["对比度下限"].setValue(vmin)
-                window.params["对比度上限"].setValue(vmax)
+                # 这对框 2026-10-08 起接了即改即画：程序回填必须挂旗标
+                # （_param_box_set），否则每画一次 2D 都反触发一轮重画
+                _param_box_set(window, "对比度下限", vmin)
+                _param_box_set(window, "对比度上限", vmax)
         else:
             vmin = _panel_param(window, dock, "对比度下限", 1.0)
             vmax = _panel_param(window, dock, "对比度上限", 100000.0)
