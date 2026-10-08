@@ -51,8 +51,10 @@ class TestZipContents(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("使用说明.html", wf,
                       "zip 里要带说明书（macOS 与 Windows 两侧都要）")
-        self.assertEqual(wf.count("使用说明.html"), 2,
-                         "mac 与 win 各一次：漏一边同事拿到的包里就没有文档")
+        self.assertEqual(wf.count("使用说明.html"), 3,
+                         "mac 与 win 各一次 + 发布页资产一次（2026-10-08 起"
+                         "说明书也作为 Release 资产上传，供「先看说明书」"
+                         "直链用）；漏一边同事拿到的包里就没有文档")
 
 
 class TestNoticesContent(unittest.TestCase):

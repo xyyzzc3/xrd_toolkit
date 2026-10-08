@@ -125,10 +125,14 @@ jobs:
         with:
           path: assets
           merge-multiple: true
+      - name: 说明书摆成英文资产名（发布页"先看说明书"直链用，2026-10-08）
+        run: cp "docs/使用说明.html" "XRD-Toolkit-manual-zh.html"
       - name: 建 Release 并挂附件
         uses: softprops/action-gh-release@v2
         with:
-          files: assets/*
+          files: |
+            assets/*
+            XRD-Toolkit-manual-zh.html
           # 试用版说明（中文，给试用同事看的：怎么装、怎么用、出问题怎么办）
           body_path: docs/RELEASE_NOTES.md
           # 附件一个都没匹配上就报错（rc8 空版本的教训：静默比报错贵得多）
