@@ -18,11 +18,13 @@
 导入**不再自动打勾**（用户 2026-09-25 定）：200 张数据要自己说了算，
 勾选走 [全选] / [按条件选…]（区间·间隔·名字）或点对号方块。
 """
+import itertools
 import json
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QActionGroup, QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
     QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
@@ -78,6 +80,17 @@ PANEL_KEY_ROLE = GROUP_ROLE + 3     # 「打开的图」那一组的行：存面
 # 加槽时就撞过一次——新槽正好落在"批次号"那一格上，于是处理组的名字被批次
 # id 顶掉（文件栏上显示成 "probe-batch"），而组态、勾选、右键删除全都正常，
 # 只有名字错。这种撞车不报错，只是"名字看起来怪"，最难查。
+
+# ── 文件栏排序（2026-10-08）的常量 ──
+SORT_SEQ_ROLE = Qt.UserRole + 7   # 条目进文件栏的先后序号——「导入顺序」的
+                                  # 依据：重排会打乱位置，序号得单独记着
+SORT_IMPORT = "import"
+SORT_NAME = "name"
+SORT_MTIME = "mtime"
+SORT_MODES = (SORT_IMPORT, SORT_NAME, SORT_MTIME)
+SORT_LABELS = {SORT_IMPORT: "导入顺序", SORT_NAME: "名称",
+               SORT_MTIME: "修改时间"}
+_NATURAL_RE = re.compile(r"(\d+)")
 
 
 class FileItem(QTreeWidgetItem):
@@ -523,6 +536,107 @@ def _rebuild_recent_menu(window: QMainWindow) -> None:
             lambda _checked=False, s=p: _open_recent(window, s))
 
 
+# ── 文件栏排序（2026-10-08 用户："文件栏添加排序功能"） ─────────
+# 三个模式：导入顺序（默认）/ 名称（自然序）/ 修改时间（新在前）。
+# 只重排「原始数据」的子项（**移动条目对象、不重建**——勾选/高亮/开图
+# 记号都留住）；各产物分组的组内行序本来就按"文件栏行序"排，自动跟随。
+# 不落盘记忆：每次打开软件回到「导入顺序」（用户 2026-10-08 拍板）。
+
+
+def _natural_key(text) -> list:
+    """自然排序键：数字段按数值比（29 < 31 < 100），其余段按小写文本比。
+
+    re.split 带捕获组 ⇒ 键的偶数位必是文本段、奇数位必是数字段，类型逐位
+    一致，列表比较不会出现 int/str 混比（不用再包元组）。
+    """
+    return [int(part) if part.isdigit() else part.lower()
+            for part in _NATURAL_RE.split(str(text or ""))]
+
+
+def _sort_mode(window) -> str:
+    return getattr(window, "_sort_mode", SORT_IMPORT)
+
+
+def _stamp_import_order(window, item) -> None:
+    """给新条目盖"第几个进来的"序号——回头选「导入顺序」要靠它排回去。"""
+    item.setData(0, SORT_SEQ_ROLE, next(window._import_seq))
+
+
+def _file_mtime(window, path_str):
+    """按需 stat；读不到就沿用上次看到的（从没读到过 → None = 排最后）。"""
+    cache = window._sort_mtimes
+    try:
+        mt = Path(path_str).stat().st_mtime
+    except OSError:
+        return cache.get(path_str)
+    cache[path_str] = mt
+    return mt
+
+
+def _raw_sort_key(window, item) -> tuple:
+    mode = _sort_mode(window)
+    name = _natural_key(item.text(0))
+    path_str = item.data(0, Qt.UserRole) or ""
+    if mode == SORT_NAME:
+        return (name, path_str)
+    if mode == SORT_MTIME:
+        mt = _file_mtime(window, path_str)
+        return (0.0 if mt is None else -mt, name, path_str)   # 新在前
+    seq = item.data(0, SORT_SEQ_ROLE)
+    return (10 ** 9 if seq is None else int(seq),)
+
+
+def _apply_sort(window: QMainWindow) -> None:
+    """按当前模式重排「原始数据」子项（移动、不重建，勾选与高亮都留住）。
+
+    滚动条原地不动（同"不许跳"的既有规矩）；显式换排序时由
+    _set_sort_mode 在收尾把滚动条归零。
+    """
+    tree = window.file_list
+    raw = tree.raw_group
+    cur = tree.currentItem()
+    tree.blockSignals(True)
+    try:
+        items = [raw.takeChild(0) for _ in range(raw.childCount())]
+        for it in sorted(items, key=lambda it: _raw_sort_key(window, it)):
+            raw.addChild(it)
+    finally:
+        tree.blockSignals(False)
+    if cur is not None:
+        _set_current_keeping_scroll(tree, cur)
+
+
+def _sync_sort_menu(window) -> None:
+    """菜单勾点归位（setChecked 不会发 triggered，无递归）。"""
+    menu = getattr(window, "sort_menu", None)
+    if menu is None:
+        return
+    cur = _sort_mode(window)
+    for act in menu.actions():
+        act.setChecked(act.data() == cur)
+
+
+def _set_sort_mode(window: QMainWindow, mode: str) -> None:
+    """换排序：重排「原始数据」→ 产物分组行序跟上 → 勾点归位 → 回顶端。
+
+    不落盘：关掉软件再打开回到「导入顺序」。
+    """
+    if mode == _sort_mode(window):
+        _sync_sort_menu(window)
+        return   # 原地不动：不重排、不滚顶（点的是已选中的那条）
+    window._sort_mode = mode
+    _apply_sort(window)
+    _log(window, f"文件栏排序改为「{SORT_LABELS[mode]}」：重排「原始数据」"
+                 "（产物分组的行序跟着走，勾选与高亮不动）")
+    refresh_product_groups(window, quiet=True)   # 产物行序立刻跟上
+    _sync_sort_menu(window)
+    bar = window.file_list.verticalScrollBar()
+    bar.setValue(0)
+    # 延后一帧再归零一次：与 _set_current_keeping_scroll 的延迟滚动同一招，
+    # 不让"回顶端"输给 Qt 排在下一个事件循环里的滚动
+    QTimer.singleShot(0, lambda: bar.setValue(0))
+
+
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """文件坞：打开（多选）/ 保存 / 删除 / 导出 + 选择工具 + 文件列表。
 
@@ -582,7 +696,35 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     window.open_folder_action = act_folder
     row1 = QHBoxLayout()
     row1.addWidget(btn_open, 1)
+    # [排序▾]（2026-10-08 用户："文件栏添加排序功能"）：挂在第一行右侧。
+    # 为什么不进第三行（全选/按条件选 旁）：那行添第三个按钮会把文件列顶
+    # 过 ≈320 px 的窄排版红线（第二行三个按钮已把下限锁在 ≈270）。
+    btn_sort = QPushButton("排序▾")
+    btn_sort.setObjectName("sort_btn")
+    btn_sort.setToolTip("「原始数据」的排列方式：导入顺序 / 名称（数字按大小）/ "
+                        "修改时间（新在前）；产物分组的行序跟着走，勾选与高亮不动")
+    sort_menu = QMenu(btn_sort)
+    sort_menu.setObjectName("sort_menu")
+    sort_menu.setToolTipsVisible(True)
+    sort_group = QActionGroup(btn_sort)
+    sort_group.setExclusive(True)
+    for mode, tip in (
+            (SORT_IMPORT, "按加入文件栏的先后排（默认；每次打开软件都回到它）"),
+            (SORT_NAME, "自然顺序：名字里的数字按数值比（29 小于 31 小于 100）"),
+            (SORT_MTIME, "文件在磁盘上的修改时间，最新的在最上面")):
+        act = sort_menu.addAction(SORT_LABELS[mode])
+        act.setCheckable(True)
+        act.setData(mode)
+        act.setToolTip(tip)
+        sort_group.addAction(act)
+        act.triggered.connect(
+            lambda _checked=False, m=mode: _set_sort_mode(window, m))
+    btn_sort.setMenu(sort_menu)
+    window.sort_btn = btn_sort
+    window.sort_menu = sort_menu
+    row1.addWidget(btn_sort, 0)
     lay.addLayout(row1)
+    _sync_sort_menu(window)
     row2 = QHBoxLayout()
     row2.addWidget(btn_save, 1)
     row2.addWidget(btn_delete, 1)
@@ -617,6 +759,11 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
 
     window.file_list = FileTree()   # 覆盖了 minimumSizeHint，可以收窄
     window._check_syncing = False   # 组↔子项联动期间别再记账（防递归）
+    # 排序状态（2026-10-08）：模式只活在本次会话（不落盘，用户拍板）；
+    # _import_seq 给条目盖"第几个进来的"序号（选回「导入顺序」要用）
+    window._sort_mode = SORT_IMPORT
+    window._import_seq = itertools.count(1)
+    window._sort_mtimes = {}
     lay.addWidget(window.file_list)
 
     def on_item_changed(item, column=0):
@@ -910,6 +1057,7 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 gui_sources.set_item_source(item, p)
                 window.file_list.addItem(item)
+                _stamp_import_order(window, item)
                 item.setCheckState(0, Qt.Checked if select else Qt.Unchecked)
                 added.append(item)
                 existing[p.resolve()] = item   # 同批再出现同路径时走本条目
@@ -922,10 +1070,15 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
         item.setToolTip(0, str(p))              # 全路径在悬停提示里
         gui_sources.set_item_source(item, p)    # 路径 + 来源三件套
         window.file_list.addItem(item)
+        _stamp_import_order(window, item)
         item.setCheckState(0, Qt.Checked if select else Qt.Unchecked)
         existing[p.resolve()] = item
         added.append(item)
     window.file_list.blockSignals(False)
+    if added and _sort_mode(window) != SORT_IMPORT:
+        # 排序开着时新条目落到排好的位置；默认模式保持"纯追加"老路径
+        # （TestFolderImport / TestDragDrop 等按导入序断言的用例不受影响）
+        _apply_sort(window)
     if added:
         # 高亮最后新条目，但**不许把列表滚过去**：一次导入几十个文件时
         # Qt 会把当前项滚进视野，列表就停在最后一批（用户 2026-09-27：
@@ -1086,7 +1239,7 @@ def _entry_menu(window: QMainWindow, item) -> None:
     elif item is None or item is window.file_list.raw_group:
         # 空白处 / 原始数据组：批量打开勾选的那批 + （整组）+ 清缓存。
         # 用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮
-        # 在 1D 上超过 24 张一张都不画，所以这里给一条没有上限的入口
+        # 超过防爆线（MAX_PANELS_PER_BATCH）一张都不画，所以这里给一条没有上限的入口
         n_checked = len(gui_sources.checked_sources(window))
         if n_checked:
             actions[menu.addAction(
@@ -1184,7 +1337,7 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
 def _open_group_views(window: QMainWindow, item) -> None:
     """右键 [打开整组 1D 图]：整组逐条打开；张数多时先问一声。
 
-    每张 ≈15 MB（81 张 ≈1.4 GB），超过批量开图的上限（24）先弹确认——
+    每张 ≈15 MB（81 张 ≈1.4 GB），超过批量开图的上限（MAX_PANELS_PER_BATCH）先弹确认——
     整组打开是显式动作，确认一下比默默吃内存好。
     """
     from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
@@ -1206,7 +1359,7 @@ def _open_group_views(window: QMainWindow, item) -> None:
 
 
 def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
-    """>24 张批量开图前的确认框：[打开] / [取消]（回车默认 [取消]）。
+    """> 防爆线批量开图前的确认框：[打开] / [取消]（回车默认 [取消]）。
 
     单独抽成一个函数是为了让测试能拦住它：这里直接 exec() 一个模态框，
     离屏测试里没人去点它就会把测试挂死（2026-10-02 踩到：测试 mock 的
@@ -1225,9 +1378,9 @@ def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
 def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
     """右键 [打开勾选的 N 张 1D 图]：把勾选的条目逐条打开。
 
-    与视图按钮的唯一区别：**没有 24 张上限**，超过先弹确认（每张 ≈15 MB）。
+    与视图按钮的唯一区别：**没有防爆线**，超过先弹确认（每张 ≈15 MB）。
     用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮在 1D
-    上超过 24 张是**一张都不画**的（防爆图），所以那批人没有别的入口；这条
+    上超过防爆线是**一张都不画**的（防爆图），所以那批人没有别的入口；这条
     右键给他们一条明确的、带确认的路。
     """
     sources = gui_sources.checked_sources(window)
@@ -1601,7 +1754,10 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
                 continue        # 不在当前文件栏里 → 不显示
             groups_1d.setdefault(_oned_sig(meta, lo, hi), []).append(
                 (it, key, meta, lo, hi))
-        for sig in sorted(groups_1d, key=lambda s: (_oned_sig_is_current(s, cur),
+        # not 不能省：False 排在 True 前，取反后「当前设置」那一组才是第一
+        # （2026-10-08 修——原键漏了 not，实际排在最后，与本文件 1322/1343
+        # 与 NOTES「当前设置那一组排最前」相反；当时没有测试钉住顺序）
+        for sig in sorted(groups_1d, key=lambda s: (not _oned_sig_is_current(s, cur),
                                                     s[2], s[3])):
             rows = groups_1d[sig]
             # 组内按**文件栏的行序**排（同一文件的两份产物都在时也能对上眼）
@@ -1614,6 +1770,9 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
             tree.addTopLevelItem(group)
 
         # ② 处理：一次 [批量处理] = 一组（台账，新的在上）
+        # 组内行序 = **文件栏行序**（2026-10-08 用户拍板：与 1D 产物组同
+        # 口径；原先按路径字符串排，文件栏一排序就与其它组对不上）
+        row_of = {id(tree.item(i)): i for i in range(tree.count())}
         raw_batches = stage_cache.list_batches("bg")
         batches = stage_cache.list_batches("bg", prune=True)
         if sum(len(n["items"]) for n in raw_batches) != \
@@ -1623,7 +1782,10 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         seen_labels = {}      # 组名 → 已出现几次（重名时加尾注，见下）
         for node in batches:
             kids = []
-            for path, meta in sorted(node["items"].items()):
+            for path, meta in sorted(
+                    node["items"].items(),
+                    key=lambda kv: row_of.get(
+                        id(by_path.get(str(Path(kv[0]).resolve()))), 10 ** 9)):
                 raw_item = by_path.get(str(Path(path).resolve()))
                 if raw_item is None or not stage_cache.has_key(
                         "bg", meta.get("key")):

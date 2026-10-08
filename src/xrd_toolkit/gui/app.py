@@ -115,7 +115,7 @@ from xrd_toolkit.gui.panel_state import (
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_heat,
-    _refresh_heat_view)
+    _refresh_heat_view, _refresh_heatmap_view)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _home_key_reset, _hover_leave, _hover_motion, _magnifier_on,
@@ -125,7 +125,8 @@ from xrd_toolkit.gui.plot_views import (
     _apply_params, _proc_batch_apply, _proc_keep_this, _proc_save,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
     _plot_view, _refresh_1d_display, _refresh_image_display,
-    _refresh_profile_angle, _refresh_proc, _refresh_waterfalls,
+    _refresh_name_labels, _refresh_profile_angle, _refresh_proc,
+    _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
 from xrd_toolkit.gui import sources as gui_sources
@@ -896,7 +897,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
     # 我按自己的想法收尾）：整页空白看着像没做完
     page_hint = QLabel(
-        "2θ 范围与点数在参数面板顶部，改了按 [重算这张图]。勾选超过 24 项"
+        "2θ 范围与点数在参数面板顶部，改了按 [重算这张图]。勾选超过 25 项"
         "只计算、不弹面板——结果都在文件栏「1D 产物」：双击看单张、右键"
         "整组打开")
     page_hint.setWordWrap(True)
@@ -998,12 +999,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页的参数是**看图参数**：不参与计算；2026-10-08 起重清扫后
     # **全部即改即画**（2D 三项 + 剖面角度 + 热图范围接上实时，
     # [应用显示设置] 与「未应用（显示设置）」灰字一并删了）。
-    hint = QLabel("本页参数只影响显示，改完立刻生效")
-    hint.setStyleSheet("color: gray;")
-    hint.setWordWrap(True)
+    # 页顶那条"本页参数只影响显示…"的灰字同日删除（用户："显示不全……
+    # 有没有必要保留"）：即改即画全站一致、图上一改就动，它是重复信息，
+    # 窄坞下还会断行挤在 [恢复默认] 旁边看着像不全。空行布局留给
+    # [恢复默认]——它在下面构建时挂进这一行，位置仍在页顶。
     hint_row = QHBoxLayout()
-    hint_row.addWidget(hint)
-    form_draw.addRow(hint_row)   # 全宽一行（不再挤在标签列里竖排）
+    form_draw.addRow(hint_row)   # 全宽一行
 
     add_caption(form_draw, "2D 视图")
 
@@ -1189,17 +1190,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     step_mult.valueChanged.connect(lambda _v: _refresh_compare(window))
 
     # 「显示数据名」（2026-10-08 用户："做按钮，默认不显示，点击开启后按
-    # 条件显示"）：平铺的图例与堆叠的纵轴样品名一起管。默认关——名字多了
-    # 糊成一条黑带（用户原话是 81 条堆叠时的毛病；实测全名占图宽 29%）；
-    # 勾上按"放得下"的条件显示：平铺 ≤12 条画短名图例、堆叠画短名+抽稀
-    # 的刻度。认线兜底 = 悬停读数（全名）。即改即画，同上面那组。
+    # 条件显示"）：**四处**的名字一起管——平铺的图例、堆叠的纵轴样品名、
+    # 热图的行名、瀑布的 χ 刻度（后两处是当晚扩的，用户拍板"四处一起
+    # 受控、默认关"）。默认关——名字多了糊成一条黑带（原来只有对比有这
+    # 毛病；81 条堆叠实测全名占图宽 29%）；勾上按"放得下"的条件显示。
+    # 认线/认行兜底 = 悬停读数（全名）。即改即画，同上面那组。
     name_chk = QCheckBox("显示数据名")
-    name_chk.setToolTip("默认不显示（认线看悬停读数）。勾上按放得下的方式"
-                        "显示：平铺画短名图例（12 条以内）、堆叠画短名+"
-                        "抽稀的纵轴样品名。勾上立刻重画")
+    name_chk.setToolTip("默认不显示（认线/认行看悬停读数）。勾上按放得下"
+                        "的方式显示：平铺画短名图例（12 条以内）、堆叠画"
+                        "短名+抽稀的纵轴样品名、热图画行名、瀑布画 χ 刻度。"
+                        "勾上立刻重画")
     window.params["显示数据名"] = name_chk
     form_cmp.addRow(name_chk)
     name_chk.toggled.connect(lambda _on: _refresh_compare(window))
+    name_chk.toggled.connect(lambda _on: _refresh_name_labels(window))
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法
@@ -1207,6 +1211,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     for _w in (cmp_norm, norm_target, curve_palette):
         _w.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
     cmp_stack.toggled.connect(lambda _on: _refresh_compare(window))
+
+    # 视图 2θ（**对比那对**，老键）：对比横轴只看这一段——图上的缩放/
+    # 平移实时写回这两个框，框里填数 → 立刻裁剪重画（_refresh_heat_view）。
+    # 2026-10-08 晚与热图拆开（用户："对比与热图分开管理"）：热图有自己
+    # 的一对（在「热图显示」小节，键名"热图视图 2θ …"），改一边不再动
+    # 两边。1D 面板也共用这一对键显示它的缩放窗口（老行为，不动）。
+    cv_lo, cv_hi = add_range(
+        form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
+        DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
+        label="视图 2θ", suffix="°", decimals=1,
+        tooltip="对比横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
+                "图上的缩放/平移会实时写回这两个框")
+    cv_lo.valueChanged.connect(lambda _v: _refresh_heat_view(window))
+    cv_hi.valueChanged.connect(lambda _v: _refresh_heat_view(window))
 
     # ── 背景扣除（小节）：1D/对比/瀑布/热图四条曲线路径共用 ──
     # 三种模式 = 对"背景长什么样"的三个不同假设（物理依据见
@@ -1642,22 +1660,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         _box.valueChanged.connect(lambda _v=0.0: _refresh_heat(window))
     sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
 
-    # 视图 2θ：热图（与对比）横轴只看这一段（用户 2026-10-05："热图添加
-    # 回 2theta 改变视图的功能，就是重看，不是重算"）。绑的是缩放/平移
-    # 那对老键（视图 2θ 下限/上限）：图上缩放/平移实时写回这两个框，
-    # 反过来在框里填数 → 立刻裁剪重画（_refresh_heat_view）——换的只是
-    # 窗口，数据一份不动。超出某文件自己算过的范围的那一段就是空白：
-    # 画不出来也不重算，正是"重看"的含义。初始值 = 积分范围出厂默认，
-    # 焦点面板一回放就被它的窗口（或"跟随"的折算值）覆盖。
+    # 视图 2θ：**热图自己的**一对（2026-10-08 晚用户："对比与热图分开
+    # 管理"——此前两图共用一对老键，改一边动两边）。用户 2026-10-05：
+    # "热图添加回 2theta 改变视图的功能，就是重看，不是重算"：图上缩放/
+    # 平移实时写回这两个框，反过来在框里填数 → 立刻裁剪重画
+    # （_refresh_heatmap_view）——换的只是窗口，数据一份不动。超出某文件
+    # 自己算过的范围的那一段就是空白：画不出来也不重算，正是"重看"的
+    # 含义。初始值 = 积分范围出厂默认，焦点是热图面板时一回放就被它的
+    # 窗口（或"跟随"的折算值）覆盖。对比那对在「对比」小节里（老键）。
     wv_lo, wv_hi = add_range(
-        form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
+        form_cmp, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)", 0.0, 90.0,
         DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
         label="视图 2θ", suffix="°", decimals=1,
-        tooltip="热图 / 对比横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
+        tooltip="热图横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
                 "图上的缩放/平移会实时写回这两个框。数据按各文件自己的积分"
                 "范围算——超出已算范围的那一段是空白")
-    wv_lo.valueChanged.connect(lambda _v: _refresh_heat_view(window))
-    wv_hi.valueChanged.connect(lambda _v: _refresh_heat_view(window))
+    wv_lo.valueChanged.connect(lambda _v: _refresh_heatmap_view(window))
+    wv_hi.valueChanged.connect(lambda _v: _refresh_heatmap_view(window))
 
     # 对比页产出：多文件才成立的两种图（对比叠图 / 批量热图）
     cmp_row = QHBoxLayout()
@@ -1762,10 +1781,13 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         # 之后的复位会被静默跳过）
         dock = window.plot_docks.get(window.focus_panel)
         if dock is not None and getattr(dock, "params_snapshot", None):
-            for name in ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)"):
+            for name in ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
+                         "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)"):
                 dock.params_snapshot.pop(name, None)
         for name, base in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
-                           ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
+                           ("视图 2θ 上限 (°)", "2θ 上限 (°)"),
+                           ("热图视图 2θ 下限 (°)", "2θ 下限 (°)"),
+                           ("热图视图 2θ 上限 (°)", "2θ 上限 (°)")):
             _param_box_set(window, name, window.params[base].value())
         # 复位完成后按最终状态把编辑对象收一笔重画（2026-10-08）：自动
         # 开关/回填都挂旗标不触发即改即画，而视图窗口刚刚才被弹回"跟随"

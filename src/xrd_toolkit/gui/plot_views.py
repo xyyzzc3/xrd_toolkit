@@ -1584,6 +1584,21 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     path = _bg_path_of(dock)
     raw = intensity          # 辅助线里的"原始曲线"要的是未扣的那份
     tth, intensity, base = _proc_curve(window, dock, path, tth, intensity)
+    # 裁剪挖空**也作用于两条辅助线**（2026-10-08 用户："剪完……扣完
+    # 背景的峰看不清。两条线都在一张图，保证都能看清"）：被剪的区间三条
+    # 线一起空着——否则未剪的"原始"仍顶着大峰的量程，纵轴自动范围掉不
+    # 下来、结果线被压扁在底部。平滑不套（虚线本来就是"扣背景前"的对照）。
+    cuts = (_proc_settings(window, dock, path) or {}).get("cut_ranges") or []
+    if cuts:
+        hide = np.zeros(np.shape(tth), dtype=bool)
+        for lo, hi in cuts:
+            hide |= (tth >= lo) & (tth <= hi)
+        raw = np.where(hide, np.nan, np.asarray(raw, dtype=float))
+        if base is not None:
+            base = np.where(hide, np.nan, np.asarray(base, dtype=float))
+    # 旗标 save/restore：重入本函数时内层恢复外层取值，不许踩灭外层保护
+    # （2026-10-08"裁剪后纵轴自动被关掉"的链条里就有这一环）
+    prev_limits = getattr(window, "_setting_limits", False)
     window._setting_limits = True
     try:
         ax.clear()
@@ -1645,8 +1660,13 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
                 if not eff_log:
                     ylo = min(ylo, -0.02 * abs(yhi))
             if window.plot_docks.get(window.focus_panel) is dock:
-                window.params["纵轴下限"].setValue(ylo)
-                window.params["纵轴上限"].setValue(yhi)
+                # 程序回填必须挂旗标（同 10-08 对比度那对）：裸 setValue 会触发
+                # 即改即画钩子（_refresh_1d_display）、重入一次本函数——重入的
+                # finally 把 _setting_limits 踩灭后，本函数稍后的 set_ylim 就被
+                # _on_ylim_changed 当成"用户动过纵轴"、把「纵轴自动」悄悄关掉
+                # （用户 2026-10-08 报"裁剪后扣背景的峰看不清"的真凶）
+                _param_box_set(window, "纵轴下限", ylo)
+                _param_box_set(window, "纵轴上限", yhi)
         else:
             ylo = _panel_param(window, dock, "纵轴下限", 1.0)
             yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
@@ -1661,7 +1681,7 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     if zoomed:
         # 这次画的是"用户缩放过的窗口"，不是这张图本来的样子 → 别更新家
@@ -1709,6 +1729,9 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
     ax = _content(dock).axes_2d
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    # 旗标 save/restore：重入本函数时内层恢复外层取值，不许踩灭外层保护
+    # （2026-10-08"裁剪后纵轴自动被关掉"的链条里就有这一环）
+    prev_limits = getattr(window, "_setting_limits", False)
     window._setting_limits = True
     try:
         ax.clear()
@@ -1755,7 +1778,7 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     _connect_axis_sync(window, dock.panel_key, ax)   # ax.clear() 清掉了回调
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
@@ -1773,6 +1796,9 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
     ax = _content(dock).axes_profile
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    # 旗标 save/restore：重入本函数时内层恢复外层取值，不许踩灭外层保护
+    # （2026-10-08"裁剪后纵轴自动被关掉"的链条里就有这一环）
+    prev_limits = getattr(window, "_setting_limits", False)
     window._setting_limits = True
     try:
         ax.clear()
@@ -1787,8 +1813,9 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         if _panel_param(window, dock, "纵轴自动", True):
             ylo, yhi = _auto_y_range(intensity, eff_log)
             if window.plot_docks.get(window.focus_panel) is dock:
-                window.params["纵轴下限"].setValue(ylo)
-                window.params["纵轴上限"].setValue(yhi)
+                # 同 _draw_1d：程序回填挂旗标，否则触发即改即画钩子重入本函数
+                _param_box_set(window, "纵轴下限", ylo)
+                _param_box_set(window, "纵轴上限", yhi)
         else:
             ylo = _panel_param(window, dock, "纵轴下限", 1.0)
             yhi = _panel_param(window, dock, "纵轴上限", 100000.0)
@@ -1812,7 +1839,7 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     # x 也要接（写通用键"视图 x 范围"）：不接的话剖面横向的缩放白做
     # （用户 2026-09-28："别的图的放大检查一下"；y 一直是接的）
     _connect_axis_sync(window, dock.panel_key, ax=ax, sync_x=True)
@@ -1862,6 +1889,9 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     ax = _content(dock).axes_waterfall
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    # 旗标 save/restore：重入本函数时内层恢复外层取值，不许踩灭外层保护
+    # （2026-10-08"裁剪后纵轴自动被关掉"的链条里就有这一环）
+    prev_limits = getattr(window, "_setting_limits", False)
     window._setting_limits = True
     try:
         ax.clear()
@@ -1917,8 +1947,13 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         for t_cut, v_cut, k in curves:
             ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],
                     color=colors[k], lw=0.5)
-        ax.set_yticks(offsets)
-        ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=6)
+        if _panel_param(window, dock, "显示数据名", False):
+            ax.set_yticks(offsets)
+            ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=6)
+        else:
+            # χ 刻度默认关、由 [显示数据名] 统一管（2026-10-08 晚扩到瀑布：
+            # 曲线照样认得出——悬停读数读的是曲线名，与刻度无关）
+            ax.set_yticks([])
         zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
@@ -1927,7 +1962,7 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         ax.grid(alpha=0.2)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     _connect_axis_sync(window, dock.panel_key, ax)   # ax.clear() 清掉了回调
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"
@@ -1997,11 +2032,50 @@ def _refresh_waterfalls(window: QMainWindow) -> None:
         _draw_waterfall(window, dock, tth, i2d, chi)
 
 
-# 一次批量作图最多画**前多少张**（按文件列表顺序，2026-09-24 用户"图一多
-# 就很卡"）。开图是唯一随数量变慢的成本：第 1 张 136 ms、第 100 张 287 ms
-# （每开一张都要把已经开着的子窗口重排一遍），而且每张 ≈15 MB（真机 81 张
-# ≈1.4 GB）。超出的文件不是不能看——日志写清画了几张、出口在哪（[热图]/
-# [对比] 一张图放完整批，还会把整批算完落盘，之后单独点开是秒开）。
+def _refresh_name_labels(window: QMainWindow) -> None:
+    """[显示数据名] 改了 → 各热图 / 瀑布面板就地重画（不重算）。
+
+    2026-10-08 晚用户拍板：这个开关从只管对比（图例 + 堆叠纵轴名）扩到
+    **热图行名 + 瀑布 χ 刻度**——"四处一起受控、默认关"。对比那半仍走
+    `plot_compare._refresh_compare`（它本来就管对比那组即改即画）；这里
+    只写「显示数据名」这一个键、再按已有数据重画——**不整包套用别的
+    显示参数**（控件是所有面板共用的一份，整包写会把别的图的设置串
+    过来，同 _refresh_waterfalls 的判例）。
+    """
+    if getattr(window, "_param_replaying", False):
+        return   # 回放快照期间控件值正被程序改写，不是用户改动
+    chk = window.params.get("显示数据名")
+    if chk is None:
+        return   # 裸窗口（测试里没建这个控件）
+    on = bool(chk.isChecked())
+    from xrd_toolkit.gui.plot_compare import (   # 破循环：只取这一个
+        _draw_heatmap)
+    for key, dock in list(window.plot_docks.items()):
+        view = key.split("|", 1)[0]
+        if view not in ("热图", "瀑布"):
+            continue
+        snap = getattr(dock, "params_snapshot", None)
+        if snap is not None:
+            snap["显示数据名"] = on
+        if view == "热图":
+            data = getattr(dock, "heat_data", None)
+            if data is not None:
+                _draw_heatmap(window, dock, data[0], data[1], data[2])
+        else:
+            data = getattr(dock, "last_waterfall", None)
+            if data is not None:
+                tth, i2d, chi = data
+                _draw_waterfall(window, dock, tth, i2d, chi)
+
+
+# 一次批量作图的防爆线（2026-09-24 用户"图一多就很卡"；开图是唯一随数量
+# 变慢的成本：第 1 张 136 ms、第 100 张 287 ms——每开一张都要把已开的子窗口
+# 重排一遍——而且每张 ≈15 MB，真机 81 张 ≈1.4 GB）。**超过这个数一张都不画**
+# （边界 = **24 张全画、25 张起防爆**——2026-10-08 晚用户拍的："24 全画"；
+# 同一天从"只有 1D 防爆、原图只画前 N 张"统一到**所有视图同款防爆**，
+# 用户："原图批量出图没有防爆图"）。1D 超限照旧全部只算不画、进文件栏
+# 「1D 产物」；其余视图没有产物可留，直接不弹面板——出口都在日志里写明
+# （[热图]/[对比] 一张图放完整批）。
 MAX_PANELS_PER_BATCH = 24
 
 # 批量多大之后"日志合并"（2026-09-25 用户："81 张 = 81 行「打开面板」+
@@ -2185,10 +2259,10 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     按钮是纯动作不是开关——点一下算一下，重复点击安全；面板的
     开/关只由 × 和拖动管理。
 
-    一次批量最多画**前 MAX_PANELS_PER_BATCH 张**（按文件列表顺序，
-    理由见常量旁的注释）：超出的文件记一行日志并指出 [热图]/[对比]
-    这两条出口，不静默少画一半。进度记账的总数 = 这一批真画的张数，
-    否则 k/n 永远到不了 n、批也不清账。
+    超过 MAX_PANELS_PER_BATCH 张**一张都不画**（防爆图，边界与理由见
+    常量旁的注释）：日志写明这批多少张、出口在哪（1D 只算不画、进
+    「1D 产物」；其余视图用 [热图]/[对比] 看整批），不静默少画。进度
+    记账的总数 = 这一批真要跑的张数，否则 k/n 永远到不了 n、批也不清账。
     """
     checked = gui_sources.checked_sources(window)
     if not checked:
@@ -2216,9 +2290,11 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         products = []
     targets = raw[:MAX_PANELS_PER_BATCH]
     rest = raw[len(targets):]
-    if name == "1D" and len(raw) > MAX_PANELS_PER_BATCH:
-        # 勾得比上限还多 → **一张都不画**、全部只算不画（用户 2026-09-26
-        # 定："防爆图"）：结果照旧进文件栏「1D 产物」，按需打开一张或整组
+    if len(raw) > MAX_PANELS_PER_BATCH:
+        # 勾得比防爆线还多 → **一张都不画**（用户 2026-09-26 定："防爆图"；
+        # 2026-10-08 从"只有 1D、且原图只画前 N 张"统一到所有视图——用户：
+        # "原图批量出图没有防爆图"）。1D 全部只算不画、进「1D 产物」；
+        # 其余视图（2D/剖面/瀑布）是显示阶段没有产物可留，直接不弹面板。
         targets, rest = [], list(raw)
     # 只算不画的文件**照样算完入库**：1D 有产物可留，之后单独点开就是
     # 复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
@@ -2227,16 +2303,13 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     if rest:
         why = (f"这批 {len(raw)} 张超过一次最多画的 {MAX_PANELS_PER_BATCH} 张"
                "（每张 ≈ 15 MB、越开越慢）")
-        if not targets and name == "1D":
+        if name == "1D":
             _log(window, f"{why}：全部只算不画——结果进文件栏"
                          "「1D 产物」，双击看一张；想一次全开：右键文件栏"
                          "（或「原始数据」组）→「打开勾选的 N 张 1D 图」")
         else:
-            tail = ("其余 {n} 张后台算完存入「1D 产物」、点开即看".format(n=len(rest))
-                    if name == "1D"
-                    else "要看全部：[热图] / [对比] 一张图看完整批")
-            _log(window, f"这批 {len(raw)} 张里先画前 {len(targets)} 张"
-                         f"（按文件列表顺序）；{tail}")
+            _log(window, f"{why}：这次一张都不弹——要看整批用 [热图] / "
+                         "[对比]（一张图看完），或减少勾选分批看")
     total_tasks = len(targets) + len(pending)
     # 只开**一张**新图：2θ/点数默认用该文件自己上次的（甲，见 _apply_range_memory）；
     # 批量（≥2 张）仍用坞顶那行当输入——一组图总得有一个共同范围

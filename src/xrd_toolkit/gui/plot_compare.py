@@ -161,6 +161,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     # Customize 保护：同 _draw_1d，先拍下现状再 clear
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    prev_limits = getattr(window, "_setting_limits", False)   # save/restore（同 _draw_1d）
     window._setting_limits = True   # 同 _draw_1d：程序设范围不算用户改动
     try:
         ax.clear()
@@ -259,10 +260,12 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                     ylo = max(ylo, 1e-6)
                 if ylo < yhi:
                     ax.set_ylim(ylo, yhi)
-            # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点）
+            # 自动模式把实际用的区间填进置灰输入框（同 _draw_1d，只填焦点；
+            # 回填挂旗标——裸 setValue 会触发即改即画钩子重入本函数，见
+            # _draw_1d 那处的长注释）
             if auto_y and ylo is not None and window.plot_docks.get(window.focus_panel) is dock:
-                window.params["纵轴下限"].setValue(ylo)
-                window.params["纵轴上限"].setValue(yhi)
+                _param_box_set(window, "纵轴下限", ylo)
+                _param_box_set(window, "纵轴上限", yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         if dock.compare_data and not stack:
             # 堆叠下 y 刻度为样品名（曲线就躺在自己名字那行上），
@@ -273,7 +276,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
@@ -376,11 +379,12 @@ def _run_compare(window: QMainWindow, key: str) -> None:
     epoch = window._panel_epoch.get(key, 0)   # 面板代数：关过重开旧代全作废
     dock.compare_pending = len(dock.compare_files)
     dock.compare_data = {}
+    prev_limits = getattr(window, "_setting_limits", False)   # save/restore（同 _draw_1d）
     window._setting_limits = True   # 程序自己清轴：不触发范围同步写回
     try:
         _content(dock).axes_1d.clear()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
 
     def finish_one(path, display, result):
         """单文件结果到位：存原始数据、画一条曲线；全齐后收尾。"""
@@ -783,6 +787,7 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
     ax = _content(dock).axes_heat
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
+    prev_limits = getattr(window, "_setting_limits", False)   # save/restore（同 _draw_1d）
     window._setting_limits = True
     try:
         ax.clear()
@@ -794,8 +799,10 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         if auto:
             vmin, vmax = _auto_y_range(shown, log_c)
             if window.plot_docks.get(window.focus_panel) is dock:
-                window.params["热图下限"].setValue(vmin)
-                window.params["热图上限"].setValue(vmax)
+                # 回填挂旗标（_refresh_heat 就接在这几个框上）：裸 setValue
+                # 会触发即改即画钩子重入本函数（同 _draw_1d 的那条病）
+                _param_box_set(window, "热图下限", vmin)
+                _param_box_set(window, "热图上限", vmax)
         else:
             vmin = _panel_param(window, dock, "热图下限", 1.0)
             vmax = _panel_param(window, dock, "热图上限", 100000.0)
@@ -810,25 +817,32 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         im = ax.imshow(shown, aspect="auto", origin="lower", cmap=cmap,
                        norm=norm, extent=[float(tth[0]), float(tth[-1]),
                                           -0.5, n - 0.5])
-        ax.set_yticks(range(n))
-        ax.set_yticklabels(_short_labels(stems, ax), fontsize=7)
+        if _panel_param(window, dock, "显示数据名", False):
+            ax.set_yticks(range(n))
+            ax.set_yticklabels(_short_labels(stems, ax), fontsize=7)
+        else:
+            # 行名默认关、由 [显示数据名] 统一管（2026-10-08 晚扩到热图：
+            # 行照样认得出——悬停读数读的是行名，与刻度无关）
+            ax.set_yticks([])
         # 视图窗口：与 1D/对比同一套口径（缩放/平移写回快照，重画按它摆回去）
         #
         # 用户 2026-09-28："热图和对比图的画框放大还是有bug"——热图这里原本
         # **从不设坐标范围**，只 imshow 一把；而 imshow 会自己 autoscale，
         # 于是任何一次重画（[应用]、改色图/归一化、重出图）都把缩放顶掉 ✗。
-        xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
-        xhi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
+        # 热图 2026-10-08 晚起走**自己的一对键**（用户："对比与热图分开
+        # 管理"）：热图的缩放/平移只写「热图视图 2θ」，不再顺带动对比
+        xlo = _panel_param(window, dock, "热图视图 2θ 下限 (°)", None)
+        xhi = _panel_param(window, dock, "热图视图 2θ 上限 (°)", None)
         zoomed = xlo is not None and xhi is not None and xlo < xhi
         if not zoomed:
             xlo, xhi = float(tth[0]), float(tth[-1])
         ax.set_xlim(xlo, xhi)
         if window.plot_docks.get(window.focus_panel) is dock:
-            # 焦点面板 → 「热图显示」那对视图窗口框同步显示（同
+            # 焦点面板 → 「热图显示」小节那对视图窗口框同步显示（同
             # _redraw_compare；程序写控件挂 _param_box_sync 旗标，
             # 不会被即改即画那条路当成用户输入）
-            _param_box_set(window, "视图 2θ 下限 (°)", xlo)
-            _param_box_set(window, "视图 2θ 上限 (°)", xhi)
+            _param_box_set(window, "热图视图 2θ 下限 (°)", xlo)
+            _param_box_set(window, "热图视图 2θ 上限 (°)", xhi)
         # y 是**样品行号**，没有强度语义 → 走通用键"视图 y 范围"
         # （见 plot_panels._INTENSITY_Y_VIEWS 的说明）；x 是 2θ，走语义键
         zoomed = _apply_plain_view(window, dock, ax) or zoomed
@@ -843,7 +857,7 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _content(dock).draw()
     finally:
-        window._setting_limits = False
+        window._setting_limits = prev_limits
     # ax.clear() 会把坐标轴的回调注册表整个清空（mpl 3.11 起）→ 画完必须
     # 重连"范围 → 快照"的写回，否则热图上的缩放/平移**永远写不进快照**，
     # 任何一次重画都按数据自动缩放把它顶掉（1D/对比都重连了，热图漏了）
@@ -1053,17 +1067,21 @@ def _refresh_heat(window: QMainWindow) -> None:
         _apply_auto_heatlim(window)      # 对数/自动范围改了 → 置灰框跟着更新
 
 
-def _refresh_heat_view(window: QMainWindow) -> None:
-    """「视图 2θ」框改了 → 各热图（与对比）面板按新窗口就地裁剪重画。
+def _apply_view_boxes(window: QMainWindow, lo_name: str, hi_name: str,
+                      views) -> None:
+    """把一对「视图 2θ」框的值写进指定视图面板的快照并就地裁剪重画。
 
     用户 2026-10-05："热图添加回 2theta 改变视图的功能，就是重看，
-    不是重算"。两个框绑的是缩放/平移写回的那对老键（见
-    plot_panels._on_xlim_changed），这里走反方向：把框里的数写进各面板
-    快照再重画——换的只是 xlim，数据一份都不碰，谁也不用重新积分。
-    超过某个文件自己算过的范围时那一段就是空白：画不出来也不重算，
-    正是"重看"的含义。
+    不是重算"——框与缩放/平移写回是同一对键（见
+    plot_panels._on_xlim_changed），这里走反方向：换的只是 xlim，
+    数据一份都不碰，谁也不用重新积分。超过某个文件自己算过的范围的
+    那一段就是空白：画不出来也不重算，正是"重看"的含义。
 
-    只动这一个窗口键，**不整包套用别的显示参数**（_refresh_heat 那套
+    2026-10-08 晚拆键（用户："对比与热图分开管理"）：对比用老键
+    （_refresh_heat_view）、热图用「热图视图 2θ」新键
+    （_refresh_heatmap_view）——改一边不再动两边。
+
+    只动这一对窗口键，**不整包套用别的显示参数**（_refresh_heat 那套
     的写法在这里是错的）：这些控件是所有面板共用的一份，控件值可能
     正显示着别的图（编辑对象）的设置，整包写过去会串台。
     """
@@ -1071,8 +1089,8 @@ def _refresh_heat_view(window: QMainWindow) -> None:
             or getattr(window, "_param_box_sync", False) \
             or getattr(window, "_setting_limits", False):
         return   # 程序在写控件（回放/缩放同步/[恢复默认]）或正在画图
-    lo_w = window.params.get("视图 2θ 下限 (°)")
-    hi_w = window.params.get("视图 2θ 上限 (°)")
+    lo_w = window.params.get(lo_name)
+    hi_w = window.params.get(hi_name)
     if lo_w is None or hi_w is None:
         return   # 裸窗口（测试里没建这对框）：无框可读
     lo, hi = float(lo_w.value()), float(hi_w.value())
@@ -1080,7 +1098,7 @@ def _refresh_heat_view(window: QMainWindow) -> None:
         return   # 还没填好（如先改了上限）：画个空窗口不如不动
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]
-        if view not in ("热图", "对比"):
+        if view not in views:
             continue
         snap = getattr(dock, "params_snapshot", None)
         if not snap:
@@ -1089,16 +1107,32 @@ def _refresh_heat_view(window: QMainWindow) -> None:
             data = _heat_data(window, dock)
             if data is None:
                 continue         # 还没算完：等它自己画
-            snap["视图 2θ 下限 (°)"] = lo
-            snap["视图 2θ 上限 (°)"] = hi
+            snap[lo_name] = lo
+            snap[hi_name] = hi
             dock.heat_data = data   # 与画的同源（同 _refresh_heat）
             _draw_heatmap(window, dock, data[0], data[1], data[2])
         else:
             if not getattr(dock, "compare_data", None):
                 continue
-            snap["视图 2θ 下限 (°)"] = lo
-            snap["视图 2θ 上限 (°)"] = hi
+            snap[lo_name] = lo
+            snap[hi_name] = hi
             _redraw_compare(window, key)
+
+
+def _refresh_heat_view(window: QMainWindow) -> None:
+    """「视图 2θ」框（**对比小节那对**，老键）改了 → 各对比面板裁剪重画。"""
+    _apply_view_boxes(window, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
+                      ("对比",))
+
+
+def _refresh_heatmap_view(window: QMainWindow) -> None:
+    """「热图显示」小节那对框（新键）改了 → 各**热图**面板裁剪重画。
+
+    2026-10-08 晚拆键（用户："对比与热图分开管理"）：热图专用键 =
+    "热图视图 2θ 下限/上限 (°)"，改热图的窗口不再顺带改对比的。
+    """
+    _apply_view_boxes(window, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)",
+                      ("热图",))
 
 
 def _plot_heatmap(window: QMainWindow) -> None:

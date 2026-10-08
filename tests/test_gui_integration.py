@@ -605,7 +605,7 @@ class TestViewButtonRuns(unittest.TestCase):
             w.close()
 
     def test_open_group_asks_before_opening_a_huge_group(self):
-        """整组打开超过 24 张：先弹确认；选 No 就一张都不开（防 1.4 GB）。"""
+        """整组打开超过防爆线：先弹确认；选 No 就一张都不开（防 1.4 GB）。"""
         w = create_window()
         files = _tmp_files(gui_views.MAX_PANELS_PER_BATCH + 1)
         try:
@@ -784,9 +784,16 @@ class TestNewViews(unittest.TestCase):
             dock = _dock(w, "瀑布", "data/fake_b.tif")
             ax = gui_panel_state._content(dock).axes_waterfall
             self.assertEqual(len(ax.lines), 36, "36 条扇区曲线")
-            # 每行基线标 χ（第一条 -175°），曲线名 = 扇区名（悬停读数）
-            self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°")
+            # χ 刻度默认关（2026-10-08 晚起 [显示数据名] 四处一起管：
+            # 对比图例/堆叠纵轴名 + 热图行名 + 瀑布 χ）；曲线名照旧 =
+            # 扇区名（悬停读数，与刻度无关）
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
+                             "χ 刻度默认不显示")
             self.assertEqual(ax.lines[0].get_label(), "-175°")
+            w.params["显示数据名"].setChecked(True)   # 即改即画
+            QApplication.processEvents()
+            self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°",
+                             "勾上 [显示数据名] → χ 刻度出现（第一条 -175°）")
             self.assertIn("扇形积分完成：fake_b.tif（36 扇区 × 30 点）",
                           w.log_text.toPlainText())
         finally:
@@ -1837,10 +1844,11 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             w.close()
 
     def test_view_boxes_crop_compare_without_recompute(self):
-        """「视图 2θ」框也作用于对比面板（裁剪窗口、不重算，2026-10-07）。
+        """「视图 2θ」框（对比小节那对，老键）作用于对比面板（裁剪窗口、
+        不重算，2026-10-07；2026-10-08 晚拆键后它是**对比专用**——热图
+        有自己一对，改一边不再动两边，见 TestHeatmap 的拆键测试）。
 
-        框住在「热图显示」小节（热图与对比同页、同一对窗口键）——
-        填数即把两张图的横轴裁到同一段，数据一份不动。
+        填数即把对比的横轴裁到这一段，数据一份不动。
         """
         w = create_window()
         try:
@@ -2296,7 +2304,7 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
         """右键「打开勾选的 N 张 1D 图」：勾选的条目全交出去（>24 也不砍）。
 
         用户 2026-09-27："没有办法批量打开图，只能一个一个选"。视图按钮在
-        1D 上超过 24 张是**一张都不画**的（防爆图），所以批量开图必须有
+        1D 上超过防爆线是**一张都不画**的（防爆图），所以批量开图必须有
         另一条入口——它带确认框，但不砍张数。
         """
         w = create_window()
@@ -2380,6 +2388,222 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
                              "取消勾选不该动滚动条")
             self.assertIsNone(tree.currentItem(),
                               "高亮留在没勾的条目上就是假象 → 直接取消")
+        finally:
+            w.close()
+
+
+class TestFileBarSorting(unittest.TestCase):
+    """文件栏排序（2026-10-08 用户："文件栏添加排序功能"）。
+
+    三个模式：导入顺序（默认；只活本次会话、不落盘）/ 名称（自然序）/
+    修改时间（新在前）。只动「原始数据」的行；产物分组的行序跟着走；
+    勾选与高亮始终不动；「按条件选…」的"第 N 个"按**当前显示顺序**数。
+    """
+
+    def _named(self, names):
+        folder = Path(tempfile.mkdtemp(prefix="xrd_sort_"))
+        out = []
+        for n in names:
+            p = folder / n
+            p.write_bytes(b"x")
+            out.append(str(p))
+        return out
+
+    def _order(self, w):
+        return [w.file_list.item(i).text() for i in range(w.file_list.count())]
+
+    def _trigger(self, w, label):
+        act = next(a for a in w.sort_menu.actions() if a.text() == label)
+        act.trigger()
+        QApplication.processEvents()
+
+    def test_natural_key_orders_digit_runs_numerically(self):
+        k = gui_file_dock._natural_key
+        self.assertLess(k("LMFP_1_atten0-00029.tif"),
+                        k("LMFP_1_atten0-00031.tif"))
+        self.assertLess(k("LMFP_1_atten0-00031.tif"),
+                        k("LMFP_1_atten0-00100.tif"))
+        self.assertLess(k("s2.tif"), k("s10.tif"))
+        self.assertEqual(k("A1"), k("a1"), "大小写不影响排序")
+        self.assertEqual(k(None), k(""), "空值不炸")
+
+    def test_sort_menu_defaults_to_import_order(self):
+        w = create_window()
+        try:
+            btn = w.findChild(QPushButton, "sort_btn")
+            self.assertIsNotNone(btn)
+            self.assertIsNotNone(btn.menu(), "排序是个下拉菜单")
+            acts = w.sort_menu.actions()
+            self.assertEqual([a.text() for a in acts],
+                             ["导入顺序", "名称", "修改时间"])
+            self.assertEqual([a.text() for a in acts if a.isChecked()],
+                             ["导入顺序"], "默认勾「导入顺序」")
+        finally:
+            w.close()
+
+    def test_switch_to_name_reorders_and_keeps_checks_and_current(self):
+        w = create_window()
+        try:
+            paths = self._named(["b.tif", "a.tif", "c.tif"])
+            w.add_files(paths, select=False)
+            first = w.file_list.item(0)          # b.tif
+            first.setCheckState(0, Qt.Checked)
+            w.file_list.setCurrentItem(first)
+            self._trigger(w, "名称")
+            self.assertEqual(self._order(w), ["a.tif", "b.tif", "c.tif"])
+            self.assertEqual(first.text(0), "b.tif", "移动的是同一个条目对象")
+            self.assertEqual(first.checkState(0), Qt.Checked, "勾选跟着走")
+            self.assertIs(w.file_list.currentItem(), first, "高亮跟着走")
+            self.assertIn("文件栏排序改为「名称」", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_switch_back_to_import_order_restores_the_original_order(self):
+        w = create_window()
+        try:
+            w.add_files(self._named(["b.tif", "a.tif", "c.tif"]),
+                        select=False)
+            self._trigger(w, "名称")
+            self._trigger(w, "导入顺序")
+            self.assertEqual(self._order(w), ["b.tif", "a.tif", "c.tif"],
+                             "序号戳把原顺序排回来")
+        finally:
+            w.close()
+
+    def test_sort_by_mtime_puts_the_newest_first(self):
+        w = create_window()
+        try:
+            paths = self._named(["a.tif", "b.tif", "c.tif"])
+            base = time.time() - 1000
+            for i, p in enumerate(paths):        # a 最旧、c 最新
+                os.utime(p, (base + i * 10, base + i * 10))
+            os.remove(paths[1])                  # b 从磁盘消失（条目还在栏里）
+            w.add_files(paths, select=False)
+            self._trigger(w, "修改时间")
+            order = self._order(w)
+            self.assertEqual(order[0], "c.tif", "最新的在最上面")
+            self.assertEqual(order[-1], "b.tif",
+                             "读不到修改时间的（文件已不在）排最后")
+        finally:
+            w.close()
+
+    def test_import_while_sorted_lands_in_sorted_position(self):
+        w = create_window()
+        try:
+            w.add_files(self._named(["s05.tif"]), select=False)
+            w.show()
+            QApplication.processEvents()
+            # 40 条（同 test_import_does_not_scroll_the_list 的舞台）：
+            # 默认窗口下列表够长、滚动条真的能滚
+            w.add_files(self._named([f"s{i:02d}.tif" for i in
+                                     range(20, 60)]), select=False)
+            self._trigger(w, "名称")
+            bar = w.file_list.verticalScrollBar()
+            self.assertGreaterEqual(bar.maximum(), 2, "内容够长才有得测")
+            bar.setValue(bar.maximum())
+            keep = bar.value()
+            self.assertGreater(keep, 0, "前提：真的滚到了下面")
+            w.add_files(self._named(["s01.tif"]), select=False)
+            QApplication.processEvents()
+            self.assertEqual(self._order(w)[0], "s01.tif",
+                             "排序开着时新条目落到排好的位置")
+            self.assertEqual(bar.value(), keep, "滚动条原地不动（不许跳）")
+        finally:
+            w.hide()
+            w.close()
+
+    def test_product_group_rows_follow_the_sorted_raw_order(self):
+        w = create_window()
+        try:
+            paths = [Path(s) for s in self._named(["b.tif", "a.tif"])]
+            w.add_files([str(p) for p in paths], select=False)
+            for p in paths:
+                _store_product(w, p)
+            w.refresh_groups()
+            group = _group_by_text(w, "1D 产物")
+            self.assertEqual(
+                [group.child(i).text(0).split(" ·")[0]
+                 for i in range(group.childCount())],
+                ["b.tif", "a.tif"], "前提：组内先按文件栏行序（导入序）")
+            self._trigger(w, "名称")
+            group = _group_by_text(w, "1D 产物")
+            self.assertEqual(
+                [group.child(i).text(0).split(" ·")[0]
+                 for i in range(group.childCount())],
+                ["a.tif", "b.tif"], "1D 产物组的行序跟着文件栏走")
+        finally:
+            w.close()
+
+    def test_processing_group_rows_follow_the_sorted_raw_order(self):
+        w = create_window()
+        try:
+            paths = [Path(s) for s in self._named(["b.tif", "a.tif"])]
+            w.add_files([str(p) for p in paths], select=False)
+            items = [(p, _store_product(w, p, kind="bg")) for p in paths]
+            stage_cache.record_batch(
+                "bg", "20260101-000000-c0ffee",
+                label="处理产物 01-01 00:00（自动基线）",
+                items=items, config=w.config_name, npt=1000)
+            w.refresh_groups()
+            group = _group_by_text(w, "处理产物 01-01")
+            self.assertIsNotNone(group, "前提：该有处理产物组")
+            self.assertEqual(
+                [group.child(i).text(0).split(" ·")[0]
+                 for i in range(group.childCount())],
+                ["b.tif", "a.tif"],
+                "处理产物组行序 = 文件栏行序（与路径字符串序相反，"
+                "2026-10-08 拍板与 1D 组同口径）")
+            self._trigger(w, "名称")
+            group = _group_by_text(w, "处理产物 01-01")
+            self.assertEqual(
+                [group.child(i).text(0).split(" ·")[0]
+                 for i in range(group.childCount())],
+                ["a.tif", "b.tif"], "排序后处理产物组也跟着走")
+        finally:
+            w.close()
+
+    def test_selection_by_condition_counts_in_display_order(self):
+        """「按条件选…」的"第 N 个"按当前显示顺序——排序会改变它数的对象。"""
+        w = create_window()
+        try:
+            w.add_files(self._named(["s10.tif", "s2.tif", "s1.tif"]),
+                        select=False)
+            spec = {"mode": "range", "start": 1, "stop": 1, "text": "",
+                    "append": False}
+            gui_file_dock.apply_selection(w, spec)
+            self.assertEqual(
+                [self._order(w)[i] for i in range(3)
+                 if w.file_list.item(i).checkState() == Qt.Checked],
+                ["s10.tif"], "排序前：第 1 个 = 导入的第一个")
+            self._trigger(w, "名称")
+            gui_file_dock.apply_selection(w, spec)
+            self.assertEqual(
+                [self._order(w)[i] for i in range(3)
+                 if w.file_list.item(i).checkState() == Qt.Checked],
+                ["s1.tif"], "排序后：第 1 个 = 显示的第一个")
+        finally:
+            w.close()
+
+    def test_picking_the_current_mode_does_not_move_the_list(self):
+        w = create_window()
+        try:
+            w.add_files(self._named(["b.tif", "a.tif"]), select=False)
+            n_before = w.log_text.toPlainText().count("文件栏排序改为")
+            self._trigger(w, "导入顺序")     # 已经是导入顺序：点了等于没点
+            self.assertEqual(self._order(w), ["b.tif", "a.tif"])
+            self.assertEqual(w.log_text.toPlainText().count("文件栏排序改为"),
+                             n_before, "不重排也不刷日志")
+        finally:
+            w.close()
+
+    def test_sort_button_keeps_the_file_dock_narrow(self):
+        """第三个按钮不进第三行：文件列不许顶过 ≈320 px 的窄排版红线。"""
+        w = create_window()
+        try:
+            w.show()
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertLess(w.file_dock.minimumSizeHint().width(), 320)
         finally:
             w.close()
 
@@ -3061,6 +3285,8 @@ class TestProductGroups(unittest.TestCase):
             self.assertEqual(len(titles), 2, f"该分成两组：{titles}")
             self.assertIn("1D 产物 2θ 1–8°（当前设置）", titles,
                           "当前那一组排最前并标明")
+            self.assertEqual(titles[0], "1D 产物 2θ 1–8°（当前设置）",
+                             "当前那一组排最前（2026-10-08 修：排序键漏了 not）")
             self.assertIn("1D 产物 2θ 1–7°", titles)
         finally:
             w.close()
@@ -3985,6 +4211,38 @@ class TestProcessingChain(unittest.TestCase):
         finally:
             w.close()
 
+    def test_cut_does_not_uncheck_the_auto_y_axis(self):
+        """裁剪不许把「纵轴自动」关掉（2026-10-08 真数据复现出的真凶）。
+
+        焦点面板 = 这张图时，_draw_1d 会把自动算出的纵轴区间回填进置灰
+        框；裸 setValue 触发即改即画钩子、重入一次 _draw_1d，内层 finally
+        把 _setting_limits 旗标踩灭，外层 set_ylim 就被 _on_ylim_changed
+        当成"用户动过纵轴"、悄悄取消勾选「纵轴自动」。用户口径：裁剪只
+        改数据，显示开关是用户自己的选择。第二条重画是复现的关键一步
+        （快照里被写成 False 后，下一次重画就走手动分支、纵轴卡在旧值）。
+        """
+        w = create_window()
+        try:
+            path, dock = self._panel(w)
+            self.assertEqual(w.focus_panel, "1D|" + str(path), "前提：焦点=这张图")
+            self.assertTrue(w.params["纵轴自动"].isChecked(), "前提：默认自动")
+            w.params["裁剪起点 (°)"].setValue(3.5)
+            w.params["裁剪终点 (°)"].setValue(4.5)
+            self._enable(w, cut=True)
+            QApplication.processEvents()
+            self.assertTrue(w.params["纵轴自动"].isChecked(),
+                            "裁剪后「纵轴自动」该保持勾选（程序不许替用户关掉）")
+            self.assertTrue(dock.params_snapshot.get("纵轴自动", True),
+                            "快照里也不许被写成手动")
+            gui_views._refresh_proc(w)          # 再整幅重画一次（复现关键）
+            QApplication.processEvents()
+            self.assertTrue(w.params["纵轴自动"].isChecked(),
+                            "第二次重画后「纵轴自动」还在（快照没被污染）")
+            self.assertLess(_axes(w, "1D", str(path)).get_ylim()[1], 100,
+                            "重画后纵轴仍是裁后数据的范围")
+        finally:
+            w.close()
+
     def test_cut_only_when_checked(self):
         """勾选框没勾时，起止框填了也不生效（三项都是可选项）。"""
         w = create_window()
@@ -4643,6 +4901,51 @@ class TestDuplicateFiles(unittest.TestCase):
                     ] if hasattr(stage_cache, "_read_index") else []
             if keys:      # 老实现细节变了也不误伤：至少不崩
                 self.assertLessEqual(len(keys), 1)
+        finally:
+            w.close()
+
+    def test_duplicate_entries_share_one_product_in_batch(self):
+        """重复条目走 [存成产物]（批）：同一文件只扣一份，日志写明。
+
+        1D 那条路 2026-10-07 有测试（上面那条）；批量这条当时只读过
+        代码、没搭起门禁（2026-10-09 补）。**必须用真文件**：1D 键按
+        文件指纹算，data/fake_* 这类假路径连键都建不出来（老会话
+        "门禁搭不起来"踩的就是这个）。同一文件两条条目（改名重复）→
+        开一项平滑（三项全关时批不写产物）→ 批处理只产一份，日志有
+        "同一文件在批里只扣一份"和跳过计数。
+        """
+        p = _tmp_files(1)[0]        # 真文件：产物与 1D 键都要文件指纹
+        w = create_window()
+        try:
+            add_checked(w, [str(p)])
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
+                                   return_value="rename"):
+                add_checked(w, [str(p)])
+            self.assertEqual(w.file_list.count(), 2)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: sum(1 for k, d in w.plot_docks.items()
+                                if k.startswith("1D")
+                                and getattr(d, "last_tth", None)
+                                is not None) >= 2), "两张面板都算完再切")
+                # 出图即产 1D 产物 → 既有规则"新产物 = 勾选清零"（甲）；
+                # 重新勾上「原始数据」整组（两条重复条目都在里面；
+                # 它恒在顶行——groups() 只列产物组，不含它）
+                raw = w.file_list.topLevelItem(0)
+                self.assertTrue(raw.text(0).startswith("原始数据"))
+                raw.setCheckState(Qt.Checked)
+                QApplication.processEvents()
+                w.params["平滑曲线"].setChecked(True)   # 三项都关时批不写产物
+                QApplication.processEvents()
+                w.proc_save_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: "批量处理完成" in w.log_text.toPlainText()))
+            log = w.log_text.toPlainText()
+            self.assertIn("同一文件在批里只扣一份", log)
+            self.assertIn("批量处理完成：1/2 个文件", log, "只产一份")
+            self.assertIn("跳过 1 个", log)
         finally:
             w.close()
 
@@ -8902,9 +9205,9 @@ class TestViewLimitSync(unittest.TestCase):
             snap = dock.params_snapshot
             self.assertAlmostEqual(snap["视图 2θ 下限 (°)"], 2.0, places=4)
             self.assertAlmostEqual(snap["视图 2θ 上限 (°)"], 3.0, places=4)
-            # 焦点面板 → 「热图显示」小节那对视图窗口框同步显示
-            # （2026-10-07 加回：热图"2θ 改变视图"用；1D 页上仍不摆框，
-            # 键全局唯一，焦点是谁就显示谁的窗口）
+            # 焦点面板 → 「对比」小节那对视图窗口框同步显示
+            # （1D 页上仍不摆框，1D 与对比共用这对老键；热图 2026-10-08
+            # 晚起有自己的一对，分别显示各自焦点面板的窗口）
             self.assertAlmostEqual(
                 w.params["视图 2θ 下限 (°)"].value(), 2.0, places=4)
             self.assertAlmostEqual(
@@ -8984,9 +9287,10 @@ class TestViewLimitSync(unittest.TestCase):
         """即改即画写快照不把"跟随积分范围"钉成显式窗口（2026-10-07 定，
         2026-10-08 触发改走即改即画：原先这条查的是 [应用显示设置]）。
 
-        「热图显示」那对视图框显示的是"跟随"折算出来的数（该面板的
-        积分范围）；写快照时若把它采集进去，"跟随"就被钉成显式窗口
-        ——之后改积分范围重算，旧窗口会把新曲线裁错。
+        「对比」小节那对视图框（老键；1D 与对比共用）显示的是"跟随"
+        折算出来的数（该面板的积分范围）；写快照时若把它采集进去，
+        "跟随"就被钉成显式窗口——之后改积分范围重算，旧窗口会把新
+        曲线裁错。
         """
         w = create_window()
         try:
@@ -12579,6 +12883,34 @@ class TestBatchProgress(unittest.TestCase):
         finally:
             w.close()
 
+    def test_the_batch_cap_is_twenty_four(self):
+        """防爆线 = 24 张（2026-10-08 晚用户拍的："24 全画"）：24 张照画、
+        25 张起防爆。数字是用户点名的，钉住。"""
+        self.assertEqual(gui_views.MAX_PANELS_PER_BATCH, 24)
+
+    def test_pixel_views_also_refuse_the_whole_batch_over_the_cap(self):
+        """原图（2D/剖面/瀑布）超上限也**一张都不弹**（2026-10-08 用户：
+        "原图批量出图没有防爆图"——此前它只画前 N 张、其余记日志）。"""
+        folder = tempfile.mkdtemp()
+        paths = [str(Path(folder, f"v{i}.tif")) for i in range(1, 4)]
+        for p in paths:
+            Path(p).touch()
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_views, "load_diffraction_image",
+                                      return_value=np.zeros((8, 8))):
+                add_checked(w, paths)
+                _open_view(w, "2D")
+                QApplication.processEvents()
+            self.assertEqual([k for k in w.plot_docks if k.startswith("2D|")],
+                             [], "超上限就该一张都不弹")
+            log = w.log_text.toPlainText()
+            self.assertIn("一张都不弹", log)
+            self.assertIn("[热图] / [对比]", log)
+        finally:
+            w.close()
+
     def test_batch_cap_opens_only_max_panels(self):
         """勾选超过上限 → 一张都不画（全部只算不画）；没超过照旧全画。
 
@@ -13760,10 +14092,11 @@ class TestHeatmap(unittest.TestCase):
             w.close()
 
     def test_heatmap_view_boxes_crop_without_recompute(self):
-        """「视图 2θ」框：填数 → 立刻裁剪重画（重看，不是重算）。
+        """「视图 2θ」框（热图那对，2026-10-08 晚拆出的专用键）：填数 →
+        立刻裁剪重画（重看，不是重算）。
 
         用户 2026-10-05："热图添加回 2theta 改变视图的功能，就是重看，
-        不是重算"。框绑缩放/平移那对老键，双向：填数 → 裁剪重画 +
+        不是重算"。框绑缩放/平移写回的那对键，双向：填数 → 裁剪重画 +
         写回快照；图上缩放 → 实时写回框。
         """
         w = create_window()
@@ -13776,22 +14109,99 @@ class TestHeatmap(unittest.TestCase):
                 calls = c.call_count
             ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
             self.assertAlmostEqual(ax.get_xlim()[0], 0.5, places=2)  # 初始 = 数据范围
-            w.params["视图 2θ 下限 (°)"].setValue(2.0)
-            w.params["视图 2θ 上限 (°)"].setValue(4.0)
+            w.params["热图视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["热图视图 2θ 上限 (°)"].setValue(4.0)
             QApplication.processEvents()
             self.assertAlmostEqual(ax.get_xlim()[0], 2.0, places=2)
             self.assertAlmostEqual(ax.get_xlim()[1], 4.0, places=2)
             self.assertEqual(c.call_count, calls, "只换窗口，不许重新积分")
             snap = self._heat_dock(w).params_snapshot
-            self.assertAlmostEqual(snap["视图 2θ 下限 (°)"], 2.0, places=1)
-            self.assertAlmostEqual(snap["视图 2θ 上限 (°)"], 4.0, places=1)
+            self.assertAlmostEqual(snap["热图视图 2θ 下限 (°)"], 2.0, places=1)
+            self.assertAlmostEqual(snap["热图视图 2θ 上限 (°)"], 4.0, places=1)
             # 反方向：图上的缩放实时写回这两个框（热图是焦点面板）
             ax.set_xlim(1.5, 3.5)
             QApplication.processEvents()
             self.assertAlmostEqual(
-                w.params["视图 2θ 下限 (°)"].value(), 1.5, places=1)
+                w.params["热图视图 2θ 下限 (°)"].value(), 1.5, places=1)
             self.assertAlmostEqual(
-                w.params["视图 2θ 上限 (°)"].value(), 3.5, places=1)
+                w.params["热图视图 2θ 上限 (°)"].value(), 3.5, places=1)
+        finally:
+            w.close()
+
+    def test_view_boxes_split_between_compare_and_heatmap(self):
+        """拆键（2026-10-08 晚用户："对比与热图分开管理"）：两对框各管各的。
+
+        「对比」小节那对（老键）只裁对比面板；「热图显示」那对（新键
+        "热图视图 2θ …"）只裁热图面板——改一边不再动两边。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
+                self.assertEqual(len(keys), 1)
+                cmp_ax = gui_panel_state._content(
+                    w.plot_docks[keys[0]]).axes_1d
+                self.assertTrue(_wait_until(lambda: len(cmp_ax.lines) >= 2))
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            heat_dock = self._heat_dock(w)
+            heat_ax = gui_panel_state._content(heat_dock).axes_heat
+            x0_heat = tuple(heat_ax.get_xlim())
+            # ① 老键那对（对比）：只裁对比，热图纹丝不动
+            w.params["视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["视图 2θ 上限 (°)"].setValue(4.0)
+            QApplication.processEvents()
+            self.assertAlmostEqual(cmp_ax.get_xlim()[0], 2.0, places=2)
+            self.assertAlmostEqual(cmp_ax.get_xlim()[1], 4.0, places=2)
+            self.assertAlmostEqual(heat_ax.get_xlim()[0], x0_heat[0], places=4,
+                                   msg="对比那对框不许动热图")
+            # ② 新键那对（热图）：只裁热图，对比保持 ① 的窗口
+            w.params["热图视图 2θ 下限 (°)"].setValue(3.0)
+            w.params["热图视图 2θ 上限 (°)"].setValue(5.0)
+            QApplication.processEvents()
+            self.assertAlmostEqual(heat_ax.get_xlim()[0], 3.0, places=2)
+            self.assertAlmostEqual(heat_ax.get_xlim()[1], 5.0, places=2)
+            self.assertAlmostEqual(cmp_ax.get_xlim()[0], 2.0, places=2,
+                                   msg="热图那对框不许动对比")
+            # 快照各写各的键：热图不沾老键、对比不沾新键
+            hsnap = heat_dock.params_snapshot
+            self.assertAlmostEqual(hsnap["热图视图 2θ 下限 (°)"], 3.0, places=1)
+            self.assertIsNone(hsnap.get("视图 2θ 下限 (°)"),
+                              "热图的窗口不该再写进老键")
+            csnap = w.plot_docks[keys[0]].params_snapshot
+            self.assertAlmostEqual(csnap["视图 2θ 下限 (°)"], 2.0, places=1)
+            self.assertIsNone(csnap.get("热图视图 2θ 下限 (°)"),
+                              "对比的窗口不该沾新键")
+        finally:
+            w.close()
+
+    def test_row_names_default_off_and_toggle_live(self):
+        """热图行名默认关、由 [显示数据名] 即改即画（2026-10-08 晚扩四处）。
+
+        四处的口径统一：对比图例、堆叠纵轴名、热图行名、瀑布 χ 刻度——
+        默认都不显示（名字多了糊成黑带），勾上立刻按"放得下"显示。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(self._wait_heat(w))
+            ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
+                             "行名默认关")
+            w.params["显示数据名"].setChecked(True)     # 即改即画
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
+                             ["fake_a", "fake_b"], "勾上 → 短名出现")
+            w.params["显示数据名"].setChecked(False)
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
+                             "取消 → 名字收回")
         finally:
             w.close()
 
@@ -13816,10 +14226,14 @@ class TestHeatmap(unittest.TestCase):
             self.assertIn("复用已有 1D 结果，后台积分 0 个", log)
             self.assertIn("热图完成：2 个文件 × 3 点", log)
             # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
+            # （行名默认关、由 [显示数据名] 统一管——2026-10-08 晚起；
+            # 这里勾上才读得到短名，"默认关"本身由专门测试钉）
             dock = self._heat_dock(w)
             ax = gui_panel_state._content(dock).axes_heat
             self.assertEqual(len(ax.images), 1)
             self.assertIsNotNone(dock._heat_colorbar)
+            w.params["显示数据名"].setChecked(True)
+            QApplication.processEvents()
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a", "fake_b"])
             self.assertTrue(w.focus_panel.startswith("热图"))

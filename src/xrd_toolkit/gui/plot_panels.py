@@ -448,6 +448,9 @@ class _SlimToolbar(QWidget):
                 _log(window, f"[复位视图] 已回到参数定义的视图：{title}")
             return
         (xlo, xhi), (ylo, yhi), yscale = home
+        # 旗标 save/restore（同 plot_views._draw_1d）：万一有重入，
+        # 内层恢复外层取值、不许踩灭外层保护
+        prev_limits = getattr(window, "_setting_limits", False)
         window._setting_limits = True
         try:
             ax.set_xlim(xlo, xhi)
@@ -455,7 +458,7 @@ class _SlimToolbar(QWidget):
             if ax.get_yscale() != yscale:
                 ax.set_yscale(yscale)
         finally:
-            window._setting_limits = False
+            window._setting_limits = prev_limits
         # 但"视图窗口"仍要写回快照（缩放/平移写回的也是这一处，快照才是
         # 权威）：不写的话，下一次重画会按快照里那份缩放的窗口画，Home
         # 等于白按。纵轴**只在本来就是手动时**跟着写——绝不替用户翻
@@ -720,7 +723,8 @@ def _wheel_zoom(window: QMainWindow, key: str, event) -> None:
     ax.figure.canvas.draw_idle()
 
 
-# x 轴是 2θ 的视图：范围写进"视图 2θ 范围"两个语义键。
+# x 轴是 2θ 的视图：范围写进"视图 2θ 范围"语义键（热图 2026-10-08 晚起
+# 是它自己的一对"热图视图 2θ …"，对比与 1D 仍用老键；见回调里的分派）。
 # 其余视图（2D / 剖面 / 瀑布）的 x 是**像素**，没有 2θ 语义，
 # 走通用键"视图 x 范围"（见下面的两个回调与 _apply_plain_view）。
 _TTH_X_VIEWS = ("1D", "对比", "热图")
@@ -747,12 +751,20 @@ def _on_xlim_changed(window: QMainWindow, key: str, ax) -> None:
     if not snap:
         return
     xlo, xhi = ax.get_xlim()
-    if key.split("|", 1)[0] in _TTH_X_VIEWS:
-        snap["视图 2θ 下限 (°)"] = float(xlo)
-        snap["视图 2θ 上限 (°)"] = float(xhi)
+    view = key.split("|", 1)[0]
+    if view in _TTH_X_VIEWS:
+        # 热图 2026-10-08 晚起有**自己的一对键**（用户："对比与热图分开
+        # 管理"）：热图上缩放/平移只写「热图视图 2θ」，对比与 1D 共用老
+        # 那对（1D 页不摆框；两个框只做展示——焦点是谁就显示谁）
+        if view == "热图":
+            lo_key, hi_key = "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)"
+        else:
+            lo_key, hi_key = "视图 2θ 下限 (°)", "视图 2θ 上限 (°)"
+        snap[lo_key] = float(xlo)
+        snap[hi_key] = float(xhi)
         if window.plot_docks.get(window.focus_panel) is dock:
-            _param_box_set(window, "视图 2θ 下限 (°)", xlo)
-            _param_box_set(window, "视图 2θ 上限 (°)", xhi)
+            _param_box_set(window, lo_key, xlo)
+            _param_box_set(window, hi_key, xhi)
     else:
         # 像素轴（2D / 剖面 / 瀑布）：没有 2θ 语义，但"我缩到哪了"也得留住
         # ——否则下一次重画按数据自动缩放，缩放白做（用户 2026-09-28：

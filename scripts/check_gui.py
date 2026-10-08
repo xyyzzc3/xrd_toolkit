@@ -725,6 +725,29 @@ def check_processing_chain(window, lab6: str) -> None:
            "换了参数再点：多一组、并存", proc_group_titles())
 
 
+def check_file_bar_sort(window, lab6: str, lmfp: str) -> None:
+    """文件栏排序（2026-10-08）：名称（自然序）重排 → 「导入顺序」原样还原。"""
+    print("F. 文件栏排序（真数据）")
+    from xrd_toolkit.gui.file_dock import _natural_key   # 与实现同源
+    order0 = [window.file_list.item(i).text()
+              for i in range(window.file_list.count())]
+    if len(order0) < 2:
+        report(False, "文件栏排序：需要至少两个文件", order0)
+        return
+    acts = {a.text(): a for a in window.sort_menu.actions()}
+    acts["名称"].trigger()
+    QApplication.processEvents()
+    order1 = [window.file_list.item(i).text()
+              for i in range(window.file_list.count())]
+    report(order1 == sorted(order0, key=_natural_key),
+           "按名称（自然序）重排", order1[:4])
+    acts["导入顺序"].trigger()
+    QApplication.processEvents()
+    order2 = [window.file_list.item(i).text()
+              for i in range(window.file_list.count())]
+    report(order2 == order0, "回到导入顺序（序号戳还原原序）", order2[:4])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="GUI 真数据探针（跑完给出退出码）")
@@ -762,6 +785,7 @@ def main() -> int:
         check_one_d_product_background(window)
         check_product_delete(window)
         check_processing_chain(window, lab6_key)
+        check_file_bar_sort(window, lab6_key, lmfp_key)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:

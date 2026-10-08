@@ -129,6 +129,8 @@ _DISPLAY_DEFAULTS = {
     "显示数据名": False,
     "视图 2θ 下限 (°)": None,   # None = 跟随积分 2θ 范围；缩放/平移后写回显式值
     "视图 2θ 上限 (°)": None,
+    "热图视图 2θ 下限 (°)": None,   # 热图专用（2026-10-08 晚拆键）；语义同上面那对
+    "热图视图 2θ 上限 (°)": None,
     # 热图显示：色图 / 归一化（与对比同款 each/global/off 三模式）/
     # 对数强度 / 强度范围（自动 = 1%/99.9% 分位）
     "热图色图": "magma",
@@ -175,14 +177,16 @@ _DISPLAY_DEFAULTS = {
 }
 _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 
-# 视图窗口的两个键：None = 跟随积分范围，缩放/平移后写回显式值（见
-# plot_panels._on_xlim_changed）。控件（「热图显示」小节那对框）只是
-# **展示与输入**：快照采集**不从这里拿控件值**——框里显示的往往是
-# "跟随"折算出来的数（该面板的积分范围），采集会把"跟随"钉成显式窗口，
-# 之后改积分范围重算，旧窗口就把新曲线裁错了（_display_snapshot /
-# 快照回放这条路）。用户真填进框里的值由
-# plot_compare._refresh_heat_view 显式写回快照。
-_VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)")
+# 视图窗口的键：None = 跟随积分范围，缩放/平移后写回显式值（见
+# plot_panels._on_xlim_changed）。控件（「对比」/「热图显示」小节各自
+# 那对框）只是**展示与输入**：快照采集**不从这里拿控件值**——框里显示
+# 的往往是"跟随"折算出来的数（该面板的积分范围），采集会把"跟随"钉成
+# 显式窗口，之后改积分范围重算，旧窗口就把新曲线裁错了（_display_snapshot
+# / 快照回放这条路）。用户真填进框里的值由 plot_compare._refresh_heat_view
+# / _refresh_heatmap_view 显式写回快照。热图那对是 2026-10-08 晚拆出来的
+# 专用键（用户："对比与热图分开管理"）。
+_VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
+                     "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)")
 
 # 曲线配色表：分类色固定顺序、颜色跟着文件走不跟排序走（第一个
 # 文件永远是蓝，过滤/增删文件不会把幸存者重涂）。"高对比" 8 槽按
@@ -268,13 +272,15 @@ def _param_box_set(window: QMainWindow, name: str, value) -> None:
     """给参数坞里的控件赋值（控件不在了就跳过）。
 
     2026-09-27：用户要求撤掉「显示 2θ 范围」那一行（"显示范围用户自己
-    放大就行了"）。但视图范围这两个键仍然活着——缩放/平移写回它们、[恢复
+    放大就行了"）。但视图范围这些键仍然活着——缩放/平移写回它们、[恢复
     默认] 复位它们；写回时**快照才是权威**，控件只是顺带刷新的只读展示，
-    没有控件就静默跳过（2026-10-07 那对框在「热图显示」小节回来了）。
+    没有控件就静默跳过（2026-10-07 那对框在「热图显示」小节回来、
+    2026-10-08 晚拆成对比/热图两对）。
 
     写控件时挂 `_param_box_sync` 旗标：接线到这些框的"即改即画"路径
-    （_refresh_heat_view）靠它分辨程序同步和用户输入——缩放写回同样走
-    本函数，不挂旗标的话每格滚轮都会触发一次整图重画。
+    （_refresh_heat_view / _refresh_heatmap_view）靠它分辨程序同步和
+    用户输入——缩放写回同样走本函数，不挂旗标的话每格滚轮都会触发一次
+    整图重画。
     """
     box = window.params.get(name)
     if box is not None:
@@ -520,9 +526,13 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
             continue
         _set_widget_value(w, value)   # data 不在下拉列表里就保持原样（下方兜底）
     # 视图 2θ 范围跟随积分范围时：输入框显示"正在用的视图" =
-    # 该面板快照里的积分范围（无快照值退回控件当前值，防御后路）
+    # 该面板快照里的积分范围（无快照值退回控件当前值，防御后路）。
+    # 热图那对同款（2026-10-08 晚拆键；焦点不是热图时填的是焦点面板的
+    # 范围——框不在眼前，切到热图面板时回放会再填一次）
     for name, fallback in (("视图 2θ 下限 (°)", "2θ 下限 (°)"),
-                           ("视图 2θ 上限 (°)", "2θ 上限 (°)")):
+                           ("视图 2θ 上限 (°)", "2θ 上限 (°)"),
+                           ("热图视图 2θ 下限 (°)", "2θ 下限 (°)"),
+                           ("热图视图 2θ 上限 (°)", "2θ 上限 (°)")):
         box = window.params.get(name)
         if box is None or snap.get(name) is not None:
             continue
@@ -1038,8 +1048,11 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
                                             None) is not None:
                 ylo, yhi = _auto_y_range(dock.last_profile_intensity, log_y)
                 loaded = True
-    window.params["纵轴下限"].setValue(ylo)
-    window.params["纵轴上限"].setValue(yhi)
+    # 回填挂旗标（同 _apply_auto_contrast/_apply_auto_heatlim，见本文件
+    # 2026-10-08 的旗标说明）：裸 setValue 会触发即改即画钩子、抢在
+    # 调用方的重画之前重入一次画图（同 _draw_1d 那批 2026-10-08 的病）
+    _param_box_set(window, "纵轴下限", ylo)
+    _param_box_set(window, "纵轴上限", yhi)
     if not silent and loaded:
         _log(window, f"自动纵轴：编辑对象算得 {ylo:.4g}–{yhi:.4g}")
 
