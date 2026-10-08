@@ -390,6 +390,11 @@ def main() -> int:
     for name in names:
         print(f"[{name}]")
         window = create_window()
+        # 截图里不要那条只装「帮助」的系统菜单栏（2026-10-08 用户："窗口
+        # 最上方还是有一行单独的帮助"）：它实际住在 macOS 的屏幕顶部系统
+        # 菜单栏、不占窗口，Windows/Linux 上干脆是隐藏的——只有离屏渲染
+        # 会把它画成窗口内一行。隐掉，截图才与用户看到的窗口一致。
+        window.menuBar().setVisible(False)
         try:
             SHOTS[name](window)
         finally:

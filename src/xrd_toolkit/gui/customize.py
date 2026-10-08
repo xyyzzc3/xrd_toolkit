@@ -16,9 +16,9 @@ layout 引擎（fig.set_layout_engine(None)），否则每次 draw
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
+    QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
-    QVBoxLayout, QWidget)
+    QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import (
     _content, _curve_color, _log, _panel_param)
@@ -89,6 +89,22 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     dlg.setWindowTitle(f"外观：{dock.panel_display}")
     dlg.setMinimumWidth(460)
     root = QVBoxLayout(dlg)
+    # 内容区套滚动区（2026-10-08 用户："有时包含图例，但是会看不全，添加
+    # 滚动轮"）：对比面板的「曲线颜色」是**每曲线一行**——勾 81 条就是 81
+    # 行，没有滚动时对话框撑出屏幕，底部 [应用] 都点不到。滚动区高度按
+    # 屏幕可用高度封顶；按钮行钉在滚动区**外面**，永远够得着。
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    body = QWidget()
+    body_lay = QVBoxLayout(body)
+    body_lay.setContentsMargins(0, 0, 2, 0)
+    scroll.setWidget(body)
+    screen = window.screen()
+    if screen is not None:
+        scroll.setMaximumHeight(
+            int(screen.availableGeometry().height() * 0.7))
+    root.addWidget(scroll, 1)
     # 表单统一左对齐（用户点名要的）：macOS 风格默认把表单内容
     # 整块水平居中（真机探针实测 formAlignment = AlignHCenter），
     # 标签/输入框全停在对话框中间——formAlignment 显式设左，标签
@@ -107,7 +123,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     text_form.addRow("标题", title)
     text_form.addRow("X 轴标签", xlabel)
     text_form.addRow("Y 轴标签", ylabel)
-    root.addWidget(text_box)
+    body_lay.addWidget(text_box)
 
     scale_box = QGroupBox("纵轴刻度")
     scale_form = QFormLayout(scale_box)
@@ -120,7 +136,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     idx = scale.findData(cur_scale)
     scale.setCurrentIndex(idx if idx >= 0 else 0)
     scale_form.addRow("刻度", scale)
-    root.addWidget(scale_box)
+    body_lay.addWidget(scale_box)
 
     # 2D 色图（只对 2D 面板出现）：用户 2026-09-27"二维图颜色，customize里"
     cmap = None
@@ -136,7 +152,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         idx = cmap.findData(cur)
         cmap.setCurrentIndex(idx if idx >= 0 else 0)
         cmap_form.addRow("色图", cmap)
-        root.addWidget(cmap_box)
+        body_lay.addWidget(cmap_box)
 
     margin_box = QGroupBox("图边距")
     margin_form = QFormLayout(margin_box)
@@ -162,7 +178,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     margin_form.addRow("下边距", fields["bottom"])
     margin_form.addRow("右边距", fields["right"])
     margin_form.addRow("上边距", fields["top"])
-    root.addWidget(margin_box)
+    body_lay.addWidget(margin_box)
 
     # 对比面板专属：逐条自定义曲线颜色。参数坞的"曲线配色"只给
     # 整套色板，这里允许"某一条换色"（任务六的"自定义选取色彩"）。
@@ -216,7 +232,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         clear_btn.setObjectName("clear_colors_btn")
         clear_btn.clicked.connect(clear_colors)
         color_form.addRow("", clear_btn)
-        root.addWidget(color_box)
+        body_lay.addWidget(color_box)
         dlg._color_picks = staged
 
     btn_row = QHBoxLayout()

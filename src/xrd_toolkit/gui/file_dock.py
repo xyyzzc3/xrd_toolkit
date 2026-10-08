@@ -18,6 +18,7 @@
 导入**不再自动打勾**（用户 2026-09-25 定）：200 张数据要自己说了算，
 勾选走 [全选] / [按条件选…]（区间·间隔·名字）或点对号方块。
 """
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
@@ -36,6 +37,7 @@ from xrd_toolkit.cli import SUPPORTED_EXTS
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log, _set_focus
 from xrd_toolkit.gui.plot_export import _run_export, _save_figures
 from xrd_toolkit.services.data_loader import load_diffraction_image
+from xrd_toolkit import paths as xrd_paths
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 
@@ -453,6 +455,74 @@ def _scan_folder(window: QMainWindow, folder) -> None:
     window.add_files([str(p) for p in found], skip_duplicates=True)
 
 
+# ── 「最近打开」（2026-10-08 用户："最近打开——做"） ──────────────
+# 记录存 outputs/recent.json：那是用户自己的数据区（不进包、不上传，
+# 与"数据不出本机"的既有口径一致）。菜单每次弹出前重建（aboutToShow），
+# 已经不存在的路径不进菜单；点击走与主按钮同一条导入口。
+_RECENT_KEEP = 8     # 存这么多条
+_RECENT_SHOW = 5     # 菜单里最多露这么多
+
+
+def _recent_path():
+    return xrd_paths.OUTPUTS_DIR / "recent.json"
+
+
+def _load_recent() -> list:
+    """读记录；没有/坏了都当空——这是便利功能，不打扰用户。"""
+    try:
+        data = json.loads(_recent_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [str(p) for p in data if isinstance(p, str)]
+
+
+def _note_recent(window: QMainWindow, chosen) -> None:
+    """把刚打开的文件/文件夹记进「最近打开」（去重、最新的在前）。"""
+    items = [str(Path(p)) for p in chosen if p]
+    if not items:
+        return
+    merged = (items + [p for p in _load_recent() if p not in items]
+              )[:_RECENT_KEEP]
+    try:
+        xrd_paths.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        _recent_path().write_text(
+            json.dumps(merged, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+    except OSError as err:       # 写不进去只是少个便利入口，如实说一声
+        _log(window, f"「最近打开」写入失败（不影响导入）：{err}")
+
+
+def _open_recent(window: QMainWindow, path_str: str) -> None:
+    """点「最近打开」里的一条：按类型走与主按钮同一条导入口。"""
+    path = Path(path_str)
+    if not path.exists():
+        return                   # 刚被删/挪走：什么都不做（下次弹出即消失）
+    _note_recent(window, [path_str])   # 用过一次顶到最前
+    if path.is_dir():
+        _scan_folder(window, path)
+    else:
+        window.add_files([path_str])
+
+
+def _rebuild_recent_menu(window: QMainWindow) -> None:
+    """「最近打开」子菜单每次弹出前重建（失效路径剔除）。"""
+    menu = getattr(window, "recent_menu", None)
+    if menu is None:
+        return
+    menu.clear()
+    items = [p for p in _load_recent() if Path(p).exists()][:_RECENT_SHOW]
+    if not items:
+        act = menu.addAction("（空）")
+        act.setEnabled(False)
+        return
+    for p in items:
+        path = Path(p)
+        act = menu.addAction(path.name or str(path))
+        act.setToolTip(p)
+        act.triggered.connect(
+            lambda _checked=False, s=p: _open_recent(window, s))
+
+
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """文件坞：打开（多选）/ 保存 / 删除 / 导出 + 选择工具 + 文件列表。
 
@@ -500,6 +570,13 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     act_folder = open_menu.addAction("打开文件夹…")
     act_folder.setToolTip("选一个文件夹，自动遍历其中的衍射图像并加入文件栏"
                           "（拖文件夹进窗口同样生效）")
+    # 「最近打开」子菜单（2026-10-08 用户："最近打开——做"）：内容每次
+    # 弹出前重建（见 _rebuild_recent_menu），空态给一条禁用占位
+    recent_menu = open_menu.addMenu("最近打开")
+    recent_menu.setObjectName("recent_menu")
+    recent_menu.setToolTipsVisible(True)   # 让 action 的完整路径提示可见
+    window.recent_menu = recent_menu
+    recent_menu.aboutToShow.connect(lambda: _rebuild_recent_menu(window))
     btn_open.setMenu(open_menu)
     window.open_files_action = act_files
     window.open_folder_action = act_folder
@@ -613,9 +690,9 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         lambda *_a: _refresh_group_badges(window))
     window.file_list.itemCollapsed.connect(
         lambda *_a: _refresh_group_badges(window))
-    # 双击条目 = 打开这一张的 1D 图（"点开看一张"最顺手的手势；右键菜单
-    # 里也有同一条，两个都留着——双击的第一次单击会顺手勾上这一条，
-    # 无害；不想动勾选就用右键）
+    # 双击条目 = 打开这一张的图：产物/右键那条 = 1D；原始条目 = 它本身的
+    # 2D 图（2026-10-08 改，见 _open_entry_view 的说明）。第一次单击会顺手
+    # 勾上这一条，无害；不想动勾选就用右键
     window.file_list.itemDoubleClicked.connect(
         lambda item, _col=0: _open_entry_view(window, item))
     window.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -626,10 +703,11 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         _PressRecorder(window, window.file_list))
 
     def open_dialog():
-        paths, _ = QFileDialog.getOpenFileNames(
+        chosen, _ = QFileDialog.getOpenFileNames(
             window, "选择数据文件", "data", FILE_FILTER)
-        if paths:
-            window.add_files(paths)
+        if chosen:
+            window.add_files(chosen)
+            _note_recent(window, chosen)   # 记进「最近打开」
 
     def open_folder():
         """文件夹导入 = 弹目录选择框 → _scan_folder 扫描加入
@@ -638,6 +716,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
             window, "选择数据文件夹", "data")
         if folder:
             _scan_folder(window, folder)
+            _note_recent(window, [folder])   # 记进「最近打开」
 
     act_files.triggered.connect(lambda _checked=False: open_dialog())
     act_folder.triggered.connect(lambda _checked=False: open_folder())
@@ -1079,10 +1158,12 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     避免本模块反向 import plot_views。双击时第一次单击已经按老手势处理过
     （可能顺手把这条勾上了）——不去撤销：勾上无害，撤销反而打乱用户的选择。
 
-    **原始条目双击不出图**（用户 2026-09-27："原始数据应该双击打不开，因为
-    原始数据可以出各种图"）：双击只给一句指路——原始数据要哪种图由视图按钮
-    定。右键那条 `explicit=True` 照旧打开（菜单上明写着 1D，不会误解）。
-    产物条目两种手势都直接打开：它们天生只有 1D 这一种。
+    **原始条目双击 = 打开它本身的 2D 图**（2026-10-08 用户拍板改的）：
+    旧行为（2026-09-27"双击打不开、只给指路"）的理由是"原始数据能出多种
+    图"——但"双击必有反应"是更硬的习惯，而原始数据的本体就是那张 2D 图
+    （零计算、秒开）；1D / 剖面 / 瀑布仍走顶部类型按钮——那些才是要计算
+    的动作。右键 [打开 1D 图] 的 `explicit=True` 路照旧打开 1D（菜单上
+    明写着，不会误解）。产物条目两种手势都直接打开：它们天生只有 1D 一种。
     """
     key = panel_key_of(item)
     if key is not None:
@@ -1095,9 +1176,7 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     if src is None:
         return
     if src.kind == gui_sources.RAW and not explicit:
-        _log(window, f"{src.display}：原始数据可以出多种图——先勾上它，再点 "
-                     f"[2D] / [剖面] / [1D] / [瀑布]；只看 1D 用右键 →"
-                     f"[打开 1D 图]")
+        opener(src, "2D")
         return
     opener(src, "1D")
 

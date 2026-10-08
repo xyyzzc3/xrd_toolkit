@@ -556,23 +556,25 @@ class TestViewButtonRuns(unittest.TestCase):
         finally:
             w.close()
 
-    def test_double_click_on_raw_does_not_open_a_panel(self):
-        """双击**原始条目**不出图，只给一句指路；右键那条（显式）照旧开。
+    def test_double_click_on_raw_opens_the_2d_panel(self):
+        """双击**原始条目** = 打开它本身的 2D 图；右键那条（显式）照旧开 1D。
 
-        用户 2026-09-27："原始数据应该双击打不开，因为原始数据可以出各种图"。
-        双击是个"打开"的手势，而原始数据没有唯一的一种图；产物条目天生只有
-        1D 这一种，双击没歧义（另有用例覆盖）。
+        2026-10-08 用户拍板改的：旧行为（2026-09-27"双击打不开、只给指路"）
+        的理由是"原始数据能出多种图"——但"双击必有反应"是更硬的习惯，而
+        原始数据的本体就是那张 2D 图（零计算、秒开）；1D / 剖面 / 瀑布仍
+        走顶部类型按钮（那些才要计算）。产物条目双击照旧开 1D（另有用例）。
         """
         w = create_window()
         files = _tmp_files(2)
         try:
             w.add_files([str(p) for p in files], select=False)
             item = w.file_list.raw_group.child(0)
-            w.file_list.itemDoubleClicked.emit(item, 0)
-            QApplication.processEvents()
-            self.assertEqual(len(w.plot_docks), 0, "双击原始条目不该开面板")
-            self.assertIn("原始数据可以出多种图", w.log_text.toPlainText(),
-                          "要说清怎么出图")
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.ones((8, 8)) * 3.0):
+                w.file_list.itemDoubleClicked.emit(item, 0)
+                key2d = f"2D|{files[0]}"
+                self.assertTrue(_wait_until(lambda: key2d in w.plot_docks),
+                                "双击原始条目该打开它本身的 2D 图")
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(w, item, explicit=True)
@@ -581,7 +583,7 @@ class TestViewButtonRuns(unittest.TestCase):
                     lambda: key in w.plot_docks
                     and len(_axes(w, "1D", str(files[0])).lines) > 0, 30000),
                     "右键 [打开 1D 图] 该开出这一张")
-            self.assertEqual(len(w.plot_docks), 1, "只开那一条")
+            self.assertEqual(len(w.plot_docks), 2, "双击开 2D、右键开 1D，各开各的")
         finally:
             w.close()
 
@@ -8456,6 +8458,46 @@ class TestCustomizeDialog(unittest.TestCase):
         return dock, gui_customize._build_customize_dialog(
             w, dock, content.axes_1d, content.figure)
 
+    def test_dialog_scrolls_when_content_overflows(self):
+        """内容多时进滚动区、按钮行钉在滚动区外（2026-10-08）。
+
+        复现场景（用户报"有时包含图例、看不全"）：对比面板勾 30 条 →
+        「曲线颜色」30 行——修前对话框撑出屏幕，底部 [应用] 都够不着。
+        """
+        w = create_window()
+        files = _tmp_files(30)
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                w.add_files([str(p) for p in files], select=True)
+                w.compare_btn.click()
+                key = next((k for k in w.plot_docks
+                            if k.startswith("对比")), None)
+                self.assertIsNotNone(key)
+                ax = gui_panel_state._content(w.plot_docks[key]).axes_1d
+                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 30))
+            dock = w.plot_docks[key]
+            content = gui_panel_state._content(dock)
+            dlg = gui_customize._build_customize_dialog(
+                w, dock, content.axes_1d, content.figure)
+            scroll = dlg.findChild(QScrollArea)
+            self.assertIsNotNone(scroll, "对话框该有滚动区")
+            apply_btn = next(b for b in dlg.findChildren(QPushButton)
+                             if b.text() == "应用")
+            self.assertFalse(scroll.isAncestorOf(apply_btn),
+                             "[应用] 钉在滚动区外，永远够得着")
+            color_box = next(b for b in dlg.findChildren(QGroupBox)
+                             if b.title() == "曲线颜色")
+            self.assertTrue(scroll.isAncestorOf(color_box),
+                            "逐条颜色列表在滚动区里")
+            dlg.resize(460, 360)
+            dlg.show()
+            QApplication.processEvents()
+            self.assertGreater(scroll.verticalScrollBar().maximum(), 0,
+                               "内容超出时该出现滚动轮")
+        finally:
+            w.close()
+
     def test_dialog_prefills_current_axis_state(self):
         w = create_window()
         try:
@@ -12759,6 +12801,47 @@ class TestFolderImport(unittest.TestCase):
                                    return_value=""):
                 w.open_folder_action.trigger()
             self.assertEqual(w.file_list.count(), 0)
+        finally:
+            w.close()
+
+
+class TestRecentOpens(unittest.TestCase):
+    """「最近打开」（2026-10-08 用户："最近打开——做"）：导入过的文件夹/
+    文件记进 [打开…] →「最近打开」子菜单，点击可再导入；失效路径自动消失。"""
+
+    def _texts(self, w):
+        w.recent_menu.aboutToShow.emit()   # = 弹出前的重建钩子
+        return [a.text() for a in w.recent_menu.actions()]
+
+    def test_records_reimports_and_prunes(self):
+        folder = tempfile.mkdtemp()
+        Path(folder, "a.tif").touch()
+        # recent.json 存公共输出目录、全测试共享——本测把它指到**单独的**
+        # 临时文件，免得别的用例（如 TestFolderImport）先跑留下的记录污染
+        # "空态"断言（2026-10-08 全量跑抓到的）；也不能写进 folder，
+        # 不然最后 os.rmdir 会因目录非空失败
+        recent_file = (Path(tempfile.mkdtemp(prefix="xrd_recent_"))
+                       / "recent.json")
+        w = create_window()
+        try:
+            with mock.patch.object(gui_file_dock, "_recent_path",
+                                   return_value=recent_file):
+                self.assertEqual(self._texts(w), ["（空）"],
+                                 "没打开过 → 空态占位")
+                with mock.patch.object(QFileDialog, "getExistingDirectory",
+                                       return_value=folder):
+                    w.open_folder_action.trigger()
+                self.assertIn(Path(folder).name, self._texts(w))
+                # 点「最近打开」里那条 → 走同一条导入口（整目录重复 → 跳过）
+                act = next(a for a in w.recent_menu.actions()
+                           if a.text() == Path(folder).name)
+                act.trigger()
+                self.assertIn("已跳过重复文件", w.log_text.toPlainText())
+                # 路径失效 → 不再出现在菜单里
+                os.remove(Path(folder, "a.tif"))
+                os.rmdir(folder)
+                self.assertEqual(self._texts(w), ["（空）"],
+                                 "失效路径该从菜单消失")
         finally:
             w.close()
 
