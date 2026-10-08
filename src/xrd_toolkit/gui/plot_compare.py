@@ -86,19 +86,26 @@ def _short_labels(names, ax) -> list:
 
 
 def _draw_compare_legend(window, dock, ax, labels) -> None:
-    """对比面板图例：超过 LEGEND_MAX_CURVES 就不画图例（它挡图）。
+    """对比面板图例：先看「显示数据名」（默认关），再看条数放不放得下。
 
-    画得下时用**短名**（剥共同前后缀）+ 多列排（每列约 8 条）；条数变了
-    才记一次日志（重画不刷屏）。认曲线不靠图例也行：状态栏悬停读数本来
-    就报曲线名，圆点颜色与曲线一致。
+    2026-10-08：名字由「对比」页的 [显示数据名] 勾选控制——默认一个不画
+    （名字多了糊成黑带，见 panel_state._DISPLAY_DEFAULTS 的说明）；勾上
+    后超过 LEGEND_MAX_CURVES 仍不画（它挡图，日志说清）。画得下时用
+    **短名**（剥共同前后缀）+ 多列排（每列约 8 条）；条数变了才记一次
+    日志（重画不刷屏）。认曲线不靠图例也行：悬停读数本来就报曲线名，
+    圆点颜色与曲线一致。
     """
+    if not _panel_param(window, dock, "显示数据名", False):
+        dock._legend_off_n = None   # 关着不算"提示过"：重新勾上要能再提示
+        return
     n = len(labels)
     if n > LEGEND_MAX_CURVES:
         if getattr(dock, "_legend_off_n", None) != n:
             dock._legend_off_n = n
-            _log(window, f"对比图例：{n} 条曲线太多、挡住图了，默认不画。"
-                         "点热图某一行可隐藏/显示几条；曲线名看状态栏的"
-                         "悬停读数（圆点颜色与曲线一致）")
+            _log(window, f"对比图例：{n} 条曲线太多、挡住图了，不画"
+                         f"（{LEGEND_MAX_CURVES} 条以内才画）。点热图某一行"
+                         "可隐藏/显示几条；曲线名看状态栏的悬停读数"
+                         "（圆点颜色与曲线一致）")
         return
     dock._legend_off_n = None
     shown = [lb for lb in labels if lb]
@@ -188,7 +195,15 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 ax.plot(tth, shown + off, color=color, lw=0.8,
                         label=display)
             ax.set_yticks(offsets)
-            ax.set_yticklabels([c[2] for c in curves], fontsize=6)
+            # 纵轴样品名：「显示数据名」默认关（81 条全名实测占图宽 29%、
+            # 糊成黑带）；勾上按条件显示 = 短名 + 按高度抽稀（热图同款，
+            # _short_labels）。不显示名字时行序 = 文件栏顺序，认具体某行
+            # 靠悬停读数（全名 + 2θ）
+            if _panel_param(window, dock, "显示数据名", False):
+                ax.set_yticklabels(
+                    _short_labels([c[2] for c in curves], ax), fontsize=6)
+            else:
+                ax.set_yticks([])
         else:
             for tth, shown, display, i, _ref in curves:
                 color = overrides.get(display) or _curve_color(palette, i)

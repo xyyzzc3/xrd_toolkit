@@ -265,22 +265,37 @@ def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
 class _ElideLabel(QLabel):
     """宽度受限的单行标签：文字超宽时打省略号，绝不撑宽父布局。
 
-    用在参数坞的长名称行（编辑对象标题 / 几何配置说明）与绘图区横带的
-    实时坐标读数：窄了缩略显示，悬停有完整提示（tooltip 跟着文本走）；
-    布局给多宽就显示多宽（Ignored = 不按文字宽度反过来要地方）。
-    text() 仍返回完整文字（缩略只是显示层面，程序与测试读 text() 不受
-    影响）。坐标读数用它，读数长短变化时右边的按钮不会被挤着左右跳。
+    用在参数坞的长名称行（编辑对象标题 / 几何配置说明 / 锚点计数 / 裁剪
+    清单）与绘图区横带的实时坐标读数：窄了缩略显示，悬停有完整提示
+    （tooltip 跟着文本走）；布局给多宽就显示多宽（Ignored = 不按文字宽度
+    反过来要地方）。text() 仍返回完整文字（缩略只是显示层面，程序与测试
+    读 text() 不受影响）。坐标读数用它，读数长短变化时右边的按钮不会被
+    挤着左右跳。
+
+    min_cap：**minimumSizeHint 的封顶值**（px）。默认 None = 按全文要宽度；
+    传了值就封顶——参数坞的最小宽度是照各控件 minimumSizeHint 量的，长
+    动态文本不封顶会把坞顶宽/把页面顶出滚动区（ScrollBarAlwaysOff 直接
+    裁掉右缘，2026-10-08 实测：21 个锚点的计数让处理页内容 301 > 坞最小
+    280）。
 
     2026-10-07 从 app.py 搬来（坐标读数进了绘图区横带，而横带建在
     panels——app 反过来从本模块取它，兼容导出照旧）。
     """
 
-    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None):
+    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None,
+                 min_cap: int = None):
         super().__init__(text, parent)
         self._full = text
         self._mode = mode
+        self._min_cap = min_cap
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setToolTip(text)
+
+    def minimumSizeHint(self):
+        base = super().minimumSizeHint()
+        if self._min_cap is None:
+            return base
+        return QSize(min(base.width(), self._min_cap), base.height())
 
     def setText(self, text: str) -> None:
         self._full = text
@@ -336,18 +351,18 @@ class _CoordReadout(_ElideLabel):
 
 
 class _FocusElideLabel(_ElideLabel):
-    """坞顶"编辑对象"那一行用的省略号标签：
+    """坞顶"编辑对象"那一行用的省略号标签：minimumSizeHint 封顶 160。
 
-    比 _ElideLabel 多一条——**minimumSizeHint 封顶**。QLabel 的
-    minimumSizeHint 会按全文宽度要地方，而参数坞的最小宽度是照它量的：
-    2026-10-07 空态文案加了"双击文件栏…"指路（31 字）后，坞最小宽从
-    ~280 跳到 405，两条"最小宽 < 320"的测试当场红。它按设计会自己打
-    省略号（坞拖宽自动多显示几个字，悬停看全），不需要全文宽度。
+    封顶的来由（2026-10-07）：QLabel 的 minimumSizeHint 会按全文宽度要
+    地方，而参数坞的最小宽度是照它量的——空态文案加了指路（31 字）之后，
+    坞最小宽从 ~280 跳到 405，两条"最小宽 < 320"的测试当场红。它按设计
+    会自己打省略号（坞拖宽自动多显示几个字，悬停看全），不需要全文宽度。
+    2026-10-08 封顶机制上提为 _ElideLabel 的 min_cap 参数，本类保留
+    原名额与 160 的取值。
     """
 
-    def minimumSizeHint(self):
-        base = super().minimumSizeHint()
-        return QSize(min(base.width(), 160), base.height())
+    def __init__(self, text: str = "", mode=Qt.ElideMiddle, parent=None):
+        super().__init__(text, mode, parent, min_cap=160)
 
 
 def _build_center(window: QMainWindow) -> None:

@@ -553,10 +553,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     window.calib_save_hint = save_hint
 
     # 三列表的说明：讲的是下面那张表，所以跟着表走
-    intro = QLabel("校准功能：用标样定几何（束心、距离、倾斜角）。"
-                   "三列：当前配置（要用的那份）与对比位 A 和 B；"
-                   "跑完自动或手动后，结果进列表并按环位偏差决定要不要"
-                   "替换当前配置")
+    intro = QLabel("用标样图标定几何（束心、距离、倾斜角）；跑出的结果"
+                   "<b>直接成为当前配置</b>，并与对比位 A、B 三列并排对照")
     intro.setWordWrap(True)
 
     # ── 三列表 ─────────────────────────────────────────────
@@ -628,8 +626,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # 历史：2026-09-27 加它是因为"不知道谁在和谁比"；2026-09-28 让它同时管
     # 结论与 Δ；现在干脆去掉这一层——一屏只讲"当前配置 vs A、vs B"这一件事，
     # 比"选一个基准再看结论"少一步，也不会再出现"基准列写着 A、结论在讲 B"。
-    delta_note = QLabel("Δ = 该列 − 当前配置；结论同样以「当前配置」为基准，"
-                        "把 A、B 两个候选分别报出来")
+    delta_note = QLabel("Δ = 该列 − 当前配置；结论同样以「当前配置」为准")
     delta_note.setWordWrap(True)
     delta_note.setStyleSheet("color: gray;")
     tb.addWidget(delta_note)
@@ -653,10 +650,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # 跑 0.014~0.029 px 的抖动以内），连按两个按钮 = 空转，收敛成一个。
     auto_box = QGroupBox("自动取点")
     al = QVBoxLayout(auto_box)
-    auto_hint = QLabel("从<b>当前配置</b>出发：定位束心（取点拟合，FFT 兜底）"
-                       "→ pyFAI 精修。结果<b>直接成为当前配置</b>（青环马上"
-                       "跟着动，好了或差了多少都写在日志里），同时进下面的"
-                       "累积列表")
+    auto_hint = QLabel("从<b>当前配置</b>出发，自动定位束心并精修；结果"
+                       "<b>直接成为当前配置</b>（图上青环立刻跟着动），"
+                       "同时进下方列表")
     auto_hint.setWordWrap(True)
     al.addWidget(auto_hint)
     btn_auto = QPushButton("定位束心并精修")
@@ -670,10 +666,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # ── 手动选点 ─────────────────────────────────────────────
     manual_box = QGroupBox("手动选点")
     ml = QVBoxLayout(manual_box)
-    manual_hint = QLabel("在中央校准图上点衍射环：点自动吸附最近的理论环"
-                         "（±0.5°；判环可疑时会自动按尺度重判一遍）；"
-                         "<b>右键某个点 = 选中它</b>，在下面把它的环号改掉；"
-                         "至少 3 个点、覆盖 2 个不同的环")
+    manual_hint = QLabel("在中央图上点衍射环（自动吸附最近的环，±0.5°）；"
+                         "<b>右键某个点</b>可选中并在下方改环号；"
+                         "至少 3 个点、覆盖 2 个环")
     manual_hint.setWordWrap(True)
     ml.addWidget(manual_hint)
     points_label = QLabel("已选 0 个点 / 0 个环")

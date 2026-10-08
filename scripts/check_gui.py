@@ -232,9 +232,16 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
         report("对比" in window.plot_docks[ckey].windowTitle(),
                "对比标题是 A vs B 形态",
                window.plot_docks[ckey].windowTitle()[:44])
+        # 名字默认关（2026-10-08「显示数据名」）：先验默认无图例，
+        # 勾上再验两条短名图例
+        report(axc.get_legend() is None, "默认不画图例（显示数据名 关）")
+        window.params["显示数据名"].setChecked(True)
+        for _ in range(30):
+            QApplication.processEvents()
         legend = axc.get_legend()
         report(legend is not None and len(legend.get_texts()) == 2,
-               "图例两条", len(legend.get_texts()) if legend else 0)
+               "勾 [显示数据名] 后图例两条",
+               [t.get_text() for t in legend.get_texts()] if legend else 0)
 
     window.heat_btn.click()
     ok = wait_until(

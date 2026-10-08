@@ -280,6 +280,9 @@ def _update_bg_count(window: QMainWindow) -> None:
         lbl.setText("0 个锚点")
         return
     xs = sorted(float(x) for x, _ in anchors)
+    # "覆盖"两个字是这行标签的意义所在（锚点之外是推出来的，不让用户
+    # 以为整条曲线都点过了，TestBackgroundSubtraction 钉着）——坞窄时由
+    # _ElideLabel 打省略号、悬停看全，不需要为了宽度减字
     lbl.setText(f"{len(xs)} 个锚点（覆盖 {xs[0]:.2f}–{xs[-1]:.2f}°）")
 
 
@@ -642,7 +645,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 原图 / 1D / 处理 / 对比）。工具栏那五个入口按钮翻页（位置 A =
     # 窗口顶部，见 _build_toolbar / _switch_entrance）。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
-    # 底部各带"产出"按钮（原图：[出图…]；1D：[重算这张图][出图…]；
+    # 底部各带"产出"按钮（原图：**没有了**——产出 = 页顶类型按钮，
+    # 2026-10-08 删 [出图]；1D：[重算这张图][出图…]；
     # 处理：[存成产物]（2026-10-07 合并了原 [存成产物]+[批量处理]）；
     # 对比：[出对比][出热图]）。
     # **"重画"不再有按钮**（用户 2026-09-30）：改参数本来
@@ -892,9 +896,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
     # 我按自己的想法收尾）：整页空白看着像没做完
     page_hint = QLabel(
-        "2θ 范围与点数在参数面板顶部（改了要按 [重算这张图]）；下面的曲线"
-        "显示参数即改即画；勾选超过 24 项时不再弹面板——"
-        "结果进文件栏「1D 产物」，双击看一张、右键整组打开")
+        "2θ 范围与点数在参数面板顶部，改了按 [重算这张图]。勾选超过 24 项"
+        "只计算、不弹面板——结果都在文件栏「1D 产物」：双击看单张、右键"
+        "整组打开")
     page_hint.setWordWrap(True)
     page_hint.setStyleSheet("color: gray;")
     form_1d.addRow(page_hint)
@@ -994,8 +998,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 这一页的参数是**看图参数**：不参与计算；2026-10-08 起重清扫后
     # **全部即改即画**（2D 三项 + 剖面角度 + 热图范围接上实时，
     # [应用显示设置] 与「未应用（显示设置）」灰字一并删了）。
-    hint = QLabel("本页参数只看图、不参与计算——全部即时生效：改完立刻重画"
-                  "（剖面角度改了会按新角度重新取线）")
+    hint = QLabel("本页参数只影响显示，改完立刻生效")
     hint.setStyleSheet("color: gray;")
     hint.setWordWrap(True)
     hint_row = QHBoxLayout()
@@ -1184,6 +1187,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     sync_step_mult()   # 初始：自动行距 → 倍数框置灰
     step_chk.toggled.connect(lambda _on: _refresh_compare(window))
     step_mult.valueChanged.connect(lambda _v: _refresh_compare(window))
+
+    # 「显示数据名」（2026-10-08 用户："做按钮，默认不显示，点击开启后按
+    # 条件显示"）：平铺的图例与堆叠的纵轴样品名一起管。默认关——名字多了
+    # 糊成一条黑带（用户原话是 81 条堆叠时的毛病；实测全名占图宽 29%）；
+    # 勾上按"放得下"的条件显示：平铺 ≤12 条画短名图例、堆叠画短名+抽稀
+    # 的刻度。认线兜底 = 悬停读数（全名）。即改即画，同上面那组。
+    name_chk = QCheckBox("显示数据名")
+    name_chk.setToolTip("默认不显示（认线看悬停读数）。勾上按放得下的方式"
+                        "显示：平铺画短名图例（12 条以内）、堆叠画短名+"
+                        "抽稀的纵轴样品名。勾上立刻重画")
+    window.params["显示数据名"] = name_chk
+    form_cmp.addRow(name_chk)
+    name_chk.toggled.connect(lambda _on: _refresh_compare(window))
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法
@@ -1204,16 +1220,16 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 双击文件栏 1D 产出进行处理，让用户看明白"）：页顶常显这行指路，
     # 空态不再是干巴巴一句"没选中"。双击 1D 产物本来就打开面板并把它
     # 设为编辑对象（plot_views._open_product_panel → _set_focus）。
-    proc_hint = QLabel("处理对象就是上面的「编辑对象」：在文件栏双击「1D 产物」"
-                       "（或点开一张 1D 图）即可选定；本页参数改完立刻重画")
+    proc_hint = QLabel("处理的是「编辑对象」那张图：在文件栏双击「1D 产物」"
+                       "即可选定；参数改了立刻重画")
     proc_hint.setWordWrap(True)
     proc_hint.setStyleSheet("color: gray;")
     form_bg.addRow(proc_hint)
     # 计算顺序说清楚（用户 2026-10-07）：页面顺序（裁剪在最上）只管操作
     # 顺手，实际计算永远按 背景 → 平滑 → 裁剪 走（services/process.
     # apply_chain 的固定次序）——两件事不说明白，看着顺序和算的顺序反着
-    order_hint = QLabel("计算顺序固定：先扣背景，再平滑，最后裁剪"
-                        "（本页从上往下的顺序只管操作顺手，不是计算次序）")
+    order_hint = QLabel("计算顺序固定：扣背景 → 平滑 → 裁剪"
+                        "（与页面上的排列顺序无关）")
     order_hint.setWordWrap(True)
     order_hint.setStyleSheet("color: gray;")
     form_bg.addRow(order_hint)
@@ -1281,7 +1297,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
                            "（例如同时删 2–3° 和 7–8°）")
     form_bg.addRow(bg_row((cut_lo, 1), (QLabel("–"), 0), (cut_hi, 1),
                           (cut_add_btn, 0)))
-    cut_list_lbl = QLabel("清单：空")
+    # 动态长文本（几段区间串起来能到二三百 px）：省略号 + 悬停看全，
+    # min_cap 封顶——不封的话窄坞下这一行把页面顶宽、右缘被裁
+    cut_list_lbl = _ElideLabel("清单：空", min_cap=180)
     cut_list_lbl.setStyleSheet("color: gray;")
     cut_list_lbl.setToolTip("当前要挖掉的全部区间（图上、处理产物与导出文件"
                             "里同样生效）")
@@ -1363,7 +1381,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     bg_clear_btn.setToolTip("清空当前 1D 面板所对应文件的全部锚点")
     for _b in (bg_pick_btn, bg_clear_btn):
         _b.setStyleSheet("padding: 2px 5px;")
-    bg_count_lbl = QLabel("")
+    # 动态长文本（"21 个锚点（1.29–2.69°）"）：省略号 + 悬停看全，
+    # min_cap 封顶——实测它是把处理页内容顶到 301 > 坞最小 280 的主力
+    bg_count_lbl = _ElideLabel("", min_cap=140)
     bg_count_lbl.setStyleSheet("color: gray;")
     bg_fit_combo = QComboBox()
     # 默认 = 保单调平滑：三种都严格过锚点，差别在锚点之间——弯背景上
@@ -1668,6 +1688,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "归一化目标": "",
         "曲线配色": "高对比",
         "对比堆叠": False,
+        "显示数据名": False,
         "手动行距": False,
         "行距倍数": 1.0,
         "瀑布手动行距": False,
@@ -1687,6 +1708,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     }
     btn_reset_img = QPushButton("恢复默认")
     btn_reset_img.setObjectName("reset_image_btn")
+    btn_reset_img.setToolTip(
+        "把显示参数恢复出厂默认——2D 视图 / 剖面 / 瀑布，以及住在别页的"
+        "「1D 显示」、对比、热图、背景扣除显示项都在复位范围内（这按钮"
+        "一直是全量的）；数据参数（2θ / 点数）不动。复位后立刻按新值重画。")
 
     def reset_image():
         if not auto.isChecked():
@@ -1702,6 +1727,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["曲线配色"].setCurrentIndex(
             window.params["曲线配色"].findData(img_defaults["曲线配色"]))
         window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
+        window.params["显示数据名"].setChecked(img_defaults["显示数据名"])
         window.params["手动行距"].setChecked(img_defaults["手动行距"])
         window.params["行距倍数"].setValue(img_defaults["行距倍数"])
         window.params["瀑布手动行距"].setChecked(img_defaults["瀑布手动行距"])
@@ -1749,9 +1775,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     btn_reset_img.clicked.connect(reset_image)
 
-    # [恢复默认]：本页动作栏的最后一位。2026-10-08 起它旁边不再有
-    # [应用显示设置]——显示参数全部即改即画，那个按钮删了（复位动作本身
-    # 也即时生效：值一改，即改即画钩子就把编辑对象重画/重算了）。
+    # [恢复默认] 挂到**页顶提示行**旁（2026-10-08 用户："挪走"；原先是
+    # 页底动作栏的孤零一位）——它复位的是**全部显示参数**（2D / 剖面 /
+    # 瀑布 + 住在别页的「1D 显示」/ 对比 / 热图 / 背景扣除显示项），是
+    # 整页级别的动作，放进「2D 视图」节会让人以为只复位那一节；提示行
+    # 讲的正是"本页参数全部即时生效"，两者同类。btns_draw（页底动作栏）
+    # 本页从此为空。复位动作本身即改即画：值一改，钩子就把编辑对象重画。
     # 本页的按钮删过五轮，别再长回来：[导出图片…] 与 [清空缓存]（用户
     # 2026-10-01："都删了，保存图片在图片自身的工具栏有"——存图走面板
     # [Save]、关窗询问；清缓存走文件栏右键，那里多一次二次确认）；
@@ -1760,7 +1789,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # _select_plot_type，"再出一次"就是再点一次已高亮的类型按钮）；
     # [应用显示设置]（同一天：显示参数全部即改即画，见
     # plot_views._refresh_image_display / _refresh_profile_angle）。
-    btns_draw.addWidget(btn_reset_img)
+    hint_row.addWidget(btn_reset_img)
     window.pending_labels = {"数据": lbl_data_pending}
     _connect_pending_hooks(window)
 
@@ -2366,8 +2395,14 @@ def _sync_cut_label(window: QMainWindow) -> None:
     （清单才是权威），这句话省掉一次"怎么没反应"。
     """
     cuts = window.cut_list
-    window.cut_list_lbl.setText(
-        f"清单：{_cut_text(cuts)}（改起止后点 [添加]）" if cuts else "清单：空")
+    full = (f"清单：{_cut_text(cuts)}（改起止后点 [添加]）" if cuts
+            else "清单：空")
+    window.cut_list_lbl.setText(full)   # _ElideLabel：窄了省略号、悬停看全
+    # 悬停放全文之外再带上"哪里生效"的说明（_ElideLabel.setText 会把
+    # tooltip 刷成正文，这句得在它之后写）
+    window.cut_list_lbl.setToolTip(
+        (full + "\n" if cuts else "")
+        + "当前要挖掉的全部区间（图上、处理产物与导出文件里同样生效）")
 
 
 def _on_mode(window: QMainWindow, calibrating: bool) -> None:

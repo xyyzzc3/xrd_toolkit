@@ -1764,8 +1764,9 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
 
     def test_stack_offsets_curves_like_waterfall(self):
         """堆叠：行距统一 = **第二高**的行峰 ×0.7（不按各条自己的峰值，
-        也不按全场最大），y 刻度为样品名，无图例；取消堆叠回到平铺 +
-        图例回来。
+        也不按全场最大），y 刻度为样品名（[显示数据名] 勾上时；默认关，
+        见 test_data_names_default_off_and_toggle_live），无图例；取消堆叠
+        回到平铺 + 图例回来。
 
         用户 2026-09-26："不要按照各自的最高峰归一化，所有的图"——
         假数据 fake_a 峰值 3、fake_b 峰值 30：两条按**同一个**行距抬行
@@ -1780,6 +1781,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             dock = w.plot_docks[key]
             y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
             dock.params_snapshot["对比堆叠"] = True
+            dock.params_snapshot["显示数据名"] = True   # 名字默认关（2026-10-08）
             gui_plot_compare._redraw_compare(w, key)
             y_stack = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
             peaks = [float(np.nanmax(y)) for y in y_flat]        # [3, 30]
@@ -1794,7 +1796,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             self.assertAlmostEqual(float(y_stack[1][0]) - float(y_flat[1][0]),
                                    step)
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
-                             ["fake_a.tif", "fake_b.tif"])
+                             ["fake_a", "fake_b"], "短名（剥公共后缀）")
             self.assertIsNone(ax.get_legend(), "堆叠下 y 刻度即样品名，无图例")
             dock.params_snapshot["对比堆叠"] = False
             gui_plot_compare._redraw_compare(w, key)
@@ -1883,10 +1885,11 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         try:
             key, ax = self._plot_compare(w)
             y_flat = [np.asarray(l.get_ydata()).copy() for l in ax.lines]
+            w.params["显示数据名"].setChecked(True)   # 名字默认关（2026-10-08）
             w.params["对比堆叠"].setChecked(True)     # 只勾，不按 [应用]
             QApplication.processEvents()
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
-                             ["fake_a.tif", "fake_b.tif"], "勾上就该堆叠")
+                             ["fake_a", "fake_b"], "勾上就该堆叠（短名刻度）")
             self.assertTrue((w.plot_docks[key].params_snapshot or {})
                             .get("对比堆叠"), "快照跟着更新")
             self.assertNotIn("图像", w.pending_labels,
@@ -1895,6 +1898,34 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             QApplication.processEvents()
             np.testing.assert_allclose(ax.lines[0].get_ydata(), y_flat[0])
             self.assertIsNotNone(ax.get_legend(), "取消堆叠图例回来")
+        finally:
+            w.close()
+
+    def test_data_names_default_off_and_toggle_live(self):
+        """「显示数据名」默认关：平铺无图例、堆叠无纵轴名；勾上立刻出现。
+
+        2026-10-08（用户："做按钮，默认不显示，点击开启后按条件显示"）
+        ——起因是 81 条堆叠时全名糊成一条黑带（实测占图宽 29%）。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)             # 平铺，默认关
+            self.assertIsNone(ax.get_legend(), "默认不画图例")
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
+                             "默认不标样品名")
+            w.params["显示数据名"].setChecked(True)     # 即改即画
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
+                             ["fake_a", "fake_b"], "勾上：短名 + 抽稀")
+            w.params["显示数据名"].setChecked(False)
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [])
+            w.params["对比堆叠"].setChecked(False)
+            w.params["显示数据名"].setChecked(True)
+            QApplication.processEvents()
+            self.assertIsNotNone(ax.get_legend(), "平铺 + 勾名字 → 图例")
         finally:
             w.close()
 
@@ -6201,10 +6232,11 @@ class TestCompare(unittest.TestCase):
         self.assertEqual(strip(["只有一个"]), ["只有一个"])
 
     def test_compare_legend_hidden_when_too_many_curves(self):
-        """曲线超过 LEGEND_MAX_CURVES → 不画图例（它挡图），日志说清怎么办。
+        """勾了 [显示数据名]、但曲线超过 LEGEND_MAX_CURVES → 仍不画图例。
 
-        用户 2026-09-26："对比的图例还是影响看图，太多了"。认曲线改看
-        状态栏悬停读数（那里本来就报曲线名）。
+        用户 2026-09-26："对比的图例还是影响看图，太多了"；2026-10-08 起
+        名字默认关、由 [显示数据名] 控制（本测勾上），超限时日志说清怎么办
+        ——认曲线看悬停读数（那里本来就报曲线名）。
         """
         w = create_window()
         files = _tmp_files(gui_plot_compare.LEGEND_MAX_CURVES + 1)
@@ -6216,6 +6248,9 @@ class TestCompare(unittest.TestCase):
                 ax = self._compare_axes(w)
                 self.assertTrue(_wait_until(
                     lambda: len(ax.lines) >= len(files)))
+            self.assertIsNone(ax.get_legend(), "默认关：本来就不画")
+            w.params["显示数据名"].setChecked(True)   # 勾上也放不下（超限）
+            QApplication.processEvents()
             self.assertIsNone(ax.get_legend(), "条数超限就不该有图例")
             log = w.log_text.toPlainText()
             self.assertIn(f"对比图例：{len(files)} 条曲线太多", log)
@@ -6252,13 +6287,16 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_compare_two_files_one_panel_with_legend(self):
-        """两个文件 → 一张对比面板、两条曲线、图例 = 显示名。"""
+        """两个文件 → 一张对比面板、两条曲线、图例 = 显示名（勾 [显示数据名]）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
             self.assertEqual(len(ax.lines), 2)
             self.assertEqual([line.get_label() for line in ax.lines],
                              ["fake_a.tif", "fake_b.tif"])
+            self.assertIsNone(ax.get_legend(), "默认关：不画图例（2026-10-08）")
+            w.params["显示数据名"].setChecked(True)   # 即改即画
+            QApplication.processEvents()
             self.assertIsNotNone(ax.get_legend())
             # 完成后对比面板成为编辑对象，日志报 2 条曲线
             self.assertTrue(w.focus_panel.startswith("对比"))
