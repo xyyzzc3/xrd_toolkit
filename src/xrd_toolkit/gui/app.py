@@ -821,11 +821,25 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     _sync_data_row(window)
 
     def add_caption(form, text):
-        """全宽灰色小节标题（布局行横跨标签/字段两列）。"""
+        """全宽灰字小节标题（横跨标签/字段两列）：**上面一条细分隔线**。
+
+        2026-10-09 加线加粗：用户"对比和热图的参数区没有很明显区分"
+        （根子是「对比」那半页当时连标题都没有）——标题补上之后顺手把
+        小节边界做明显：细线 + 半粗。全页统一，原图页三节、处理页四节
+        也一起吃这套。
+        """
         cap = QLabel(text)
-        cap.setStyleSheet("color: gray;")
-        row = QHBoxLayout()
-        row.addWidget(cap)
+        cap.setStyleSheet("color: gray; font-weight: 600;")
+        line = QFrame()
+        line.setFixedHeight(1)
+        # 裸 QFrame 上给 color 画不出来（实测）——固定 1px 高 + 背景色
+        line.setStyleSheet("background-color: #d5dae0;")
+        row = QWidget()
+        box = QVBoxLayout(row)
+        box.setContentsMargins(0, 3, 0, 1)
+        box.setSpacing(3)
+        box.addWidget(line)
+        box.addWidget(cap)
         form.addRow(row)
         return cap
 
@@ -1098,6 +1112,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     sync_wf_step_mult()   # 初始：自动行距 → 倍数框置灰
     wf_step_chk.toggled.connect(lambda _on: _refresh_waterfalls(window))
     wf_step_mult.valueChanged.connect(lambda _v: _refresh_waterfalls(window))
+
+    # 对比页自己的小节标题（2026-10-09 用户："对比和热图的参数区没有
+    # 很明显区分"——此前只有下半页的「热图显示」有标题，对比这半页光秃
+    # 秃地接在上面，两套参数看起来是一坨）。和 原图 页的 2D/剖面/瀑布、
+    # 处理页的 背景扣除/平滑 同一套灰字标题。
+    add_caption(form_cmp, "对比显示")
 
     # 对比归一化（下拉框三选一）——叠图时强度差很大的文件不归一会被
     # 强者压扁。三种模式（**都是全场统一的比例**）：
