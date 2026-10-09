@@ -45,7 +45,11 @@ from PySide6.QtCore import (QMetaObject, QObject, QThread, Qt, Signal, Slot)
 # 单看积分就要 ~10 s，两条线程吃不满。线程是长驻的（见 _pool_threads），
 # 加条数不碰当年那处"每任务一条 QThread、销毁时锁序反转"的老坑；
 # 仍然有上限，别让 200 张一起挤进来把机器压死。
-MAX_CONCURRENT_TASKS = 4
+# 4 → 8（2026-10-09，真数据 30 张超限批实测，12 核）：池1 13.1 s /
+# 池2 8.9 / 池4 7.3 / **池8 6.8**——每张的活是"读 40 ms + 积分 82 ms
+# （pyFAI 内部已吃满多核）+ 写产物"，4→8 再省 ~7%；串行反而慢 44%
+# （用户问"批量出 1d 还有办法再快吗"的实测，见 CHANGELOG）。
+MAX_CONCURRENT_TASKS = 8
 
 # 任务对象在跑完（或被确认放弃）之前不许被 Python 回收：排队中的任务
 # 只有 worker 被引用着，而调用方（比如关窗时）会把自己的引用放掉。
