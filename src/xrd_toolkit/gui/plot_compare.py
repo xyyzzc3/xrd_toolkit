@@ -280,7 +280,10 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
-    _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
+    # 程序重画 = 新"家"（见 helper 注释）；堆叠的 y 是**模式算出来的**
+    # （错开行高），家的 y 必须跟着换——否则先放大、再开堆叠后按 Home，
+    # 恢复的是没堆叠时的 y 窗口、把上半截裁掉（2026-10-09 用户实测）
+    _refresh_home(dock, ax, mode_y=stack)
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 

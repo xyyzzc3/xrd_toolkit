@@ -278,7 +278,7 @@ def _home_key_reset(window: QMainWindow) -> None:
         action.trigger()
 
 
-def _refresh_home(dock, ax=None):
+def _refresh_home(dock, ax=None, mode_y=False):
     """程序自己重画后：维护这张面板的"家"视图（`dock.view_home`）。
 
     面板自己那条 [Home] 不跟任何历史栈（程序重画会把栈清掉，按下去常常
@@ -292,12 +292,26 @@ def _refresh_home(dock, ax=None):
     于是 Home 永远回得到最初（用户 2026-09-24：回到最初的样子，而不是
     上次画的位置）。
 
+    **`mode_y=True`（2026-10-09 加）**：这次画的 y 是**按当前显示模式算
+    出来的**（对比·堆叠的错开行高——每行的 y 含义都换了），家的 y 必须
+    跟着换，否则按 Home 恢复的是"没堆叠时"的旧 y 窗口、把堆叠上半截裁掉
+    （用户："对比子窗口的 home 键在先放大后开启堆叠后失效"——实测 8 条：
+    数据到 6165、Home 后只到 1045，可见 17%）。只换 y，**x 仍用家的 x**
+    （手势缩出来的 x 不算家，这条不变）。y 是模式算的，与"这次重画是不
+    是手势来的"无关，所以 mode_y 分支不理会 from_gesture 旗标。
+
     旧版这里还顺手刷一下 mpl 工具栏的按钮状态、清它的历史栈——面板工具栏
     换成自绘的 _SlimToolbar（自己拿四个 QAction）之后，那套机件不在场了。
     """
     from_gesture = getattr(dock, "_view_from_gesture", False)
     dock._view_from_gesture = False
-    if ax is not None and not from_gesture:
+    if ax is None:
+        return
+    home = getattr(dock, "view_home", None)
+    if mode_y and home is not None:
+        dock.view_home = (home[0], tuple(ax.get_ylim()), ax.get_yscale())
+        return
+    if not from_gesture:
         dock.view_home = (tuple(ax.get_xlim()), tuple(ax.get_ylim()),
                           ax.get_yscale())
 

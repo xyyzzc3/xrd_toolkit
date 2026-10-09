@@ -1979,7 +1979,10 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
     _connect_axis_sync(window, dock.panel_key, ax)   # ax.clear() 清掉了回调
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"
-    _refresh_home(dock, ax)
+    # 瀑布的 y 是**模式算出来的**（36 行的错开行距，[手动行距]/倍数一改
+    # 就换高矮），与对比·堆叠同款：家的 y 跟着换（2026-10-09，原因见
+    # _refresh_home 的 mode_y 说明）
+    _refresh_home(dock, ax, mode_y=True)
     dock.figure_saved = False
 
 

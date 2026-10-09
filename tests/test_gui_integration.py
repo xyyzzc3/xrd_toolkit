@@ -7593,6 +7593,53 @@ class TestHomeView(unittest.TestCase):
         finally:
             w.close()
 
+    def test_home_after_stacking_keeps_the_stacked_y(self):
+        """先放大、再开堆叠，按 Home：x 回全宽，**y 用堆叠自己的范围**。
+
+        用户 2026-10-09："对比子窗口的 home 键在先放大后开启堆叠后失效"
+        ——家的 y 还是开堆叠前记的（没堆叠的强度范围），按 Home 恢复出来
+        把堆叠上半截裁掉（实测 8 条时只剩 17% 可见），看着就是"Home 坏了"。
+        修法：堆叠的 y 是**模式算出来的**，家的 y 跟着换（x 仍用家的 x，
+        手势缩的不算家——这条照旧）。
+        """
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: any(k.startswith("对比")
+                                and len(gui_panel_state._content(
+                                    w.plot_docks[k]).axes_1d.lines) >= 2
+                                for k in w.plot_docks), 60000))
+            key = next(k for k in w.plot_docks if k.startswith("对比"))
+            content = gui_panel_state._content(w.plot_docks[key])
+            ax = content.axes_1d
+            x0 = tuple(ax.get_xlim())
+            # 前置条件：放大（手势做的两件事——改范围 + 立旗标）
+            content.toolbar._actions["zoom"].trigger()
+            ax.set_xlim(2.5, 3.5)
+            w.plot_docks[key]._view_from_gesture = True
+            QApplication.processEvents()
+            # 开堆叠（即改即画）
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            stacked_top = max(float(np.nanmax(ln.get_ydata()))
+                              for ln in ax.lines)
+            self.assertGreaterEqual(float(w.plot_docks[key].view_home[1][1]),
+                                    stacked_top * 0.95,
+                                    "家的 y 该跟着堆叠换（不是旧范围）")
+            self.assertEqual(tuple(w.plot_docks[key].view_home[0]), x0,
+                             "x 仍是家的 x（缩放不算家）")
+            content.toolbar._actions["home"].trigger()
+            QApplication.processEvents()
+            self.assertEqual(tuple(ax.get_xlim()), x0, "Home 该回全宽")
+            self.assertGreaterEqual(float(ax.get_ylim()[1]), stacked_top * 0.95,
+                                    "Home 后不该把堆叠裁掉")
+        finally:
+            w.close()
+
     def test_home_works_after_a_program_redraw(self):
         """程序重画（会清空 mpl 的历史栈）之后 Home 照样回得去——旧实现
         就是死在这一步：栈空了，按 Home 什么也不发生。"""
