@@ -4958,32 +4958,38 @@ class TestDuplicateFiles(unittest.TestCase):
             w.close()
 
     def test_duplicate_entries_compute_once_with_a_note(self):
-        """重复条目出 1D：同一份数据只算一遍、只开一张图，日志要说这件事。
+        """重复条目出 1D：**只算一遍、图每条一张**（批尾从缓存补画）。
 
         用户 2026-10-07："重复的原始数据生成产物时会只生成一个，在日志里
-        提到这个事情"——以前一个字都不说，只看见"勾了两条、文件栏只长出
-        1 条"。**2026-10-09** 用户："去重，减少工作量，出图速度永远是越快
-        越好"——从"两条各算一遍、共用产物"再进一步：后来那条整条跳过
-        （连面板都不建），双击它随时单独开（1D 从产物缓存秒开）。
+        提到这个事情"。**2026-10-09**："去重，减少工作量"——只算一遍；
+        **2026-10-10**："出 1d 图变少，这个怎么还没修复"——上一版把重复
+        条目的面板也省了（勾 5 条出 4 张），现在面板照开、只是不排积分，
+        批收尾时从产物缓存补画（毫秒级）。断言：两张面板都出来、积分
+        只跑了一次。
         """
+        p = _tmp_files(1, prefix="dup1_")[0]     # 真文件：产物要真指纹
         w = create_window()
         try:
-            add_checked(w, ["data/fake_b.tif"])
+            add_checked(w, [str(p)])
             with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                    return_value="rename"):
-                add_checked(w, ["data/fake_b.tif"])     # 同一文件第二条条目
+                add_checked(w, [str(p)])                # 同一文件第二条条目
             self.assertEqual(w.file_list.count(), 2)
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
-                    lambda: w.log_text.toPlainText().count("积分完成") >= 1))
+                    lambda: len([k for k in w.plot_docks
+                                 if k.startswith("1D")]) == 2
+                    and all(len(gui_panel_state._content(w.plot_docks[k])
+                                .axes_1d.lines) > 0
+                            for k in w.plot_docks if k.startswith("1D"))),
+                    "两条条目的图都该画出来（重复的那张从缓存补）")
             log = w.log_text.toPlainText()
             self.assertIn("是同一文件的重复条目", log)
             self.assertIn("只算一遍", log)
-            # 只开了一张图：重复的那条是**整条跳过**，不是"两条都算"
-            self.assertEqual(
-                len([k for k in w.plot_docks if k.startswith("1D")]), 1)
+            self.assertEqual(log.count("开始积分"), 1,
+                             "同一份数据只算一遍（补画不算）")
         finally:
             w.close()
 
@@ -5171,41 +5177,41 @@ class TestDuplicateFiles(unittest.TestCase):
             w.close()
 
     def test_renamed_entry_gets_own_panel(self):
-        """改名条目：批里只算一遍、只开一张；单独开仍是自己的面板。
+        """改名条目：**算一遍、图各一张**（批尾从缓存补画，互不顶掉）。
 
         2026-09-24 的老坑：两条条目抢同一个键、只出一张图（后来者把先开
         的那张当过期刷掉）——所以键补显示名区分、"互不当过期"。2026-10-09
-        用户"去重，减少工作量"后：批里重复条目**整条跳过**（连面板都不
-        建），要看它双击单独开——那时仍然是自己的键、自己的图，互不顶掉。
+        "去重"只去掉**计算**；2026-10-10 用户"出 1d 图变少"：重复条目的
+        面板照开、批收尾从缓存补画。**真文件**（产物要真指纹才存得下、
+        补画才命中缓存，假路径会退化成重算）。
         """
+        p = _tmp_files(1, prefix="ren_")[0]
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif"])
+                add_checked(w, [str(p)])
                 with mock.patch.object(gui_file_dock, "_ask_duplicate",
                                        return_value="rename"):
-                    add_checked(w, ["data/fake_a.tif"])
+                    add_checked(w, [str(p)])
                 _open_view(w, "1D")
+                key2 = f"1D|{p}|{p.name.split('.')[0]} (1).tif"
                 self.assertTrue(_wait_until(
-                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0),
-                    "原条目应出图")
-                # 批里只开这一张：改名那条整条跳过（日志说明）
-                self.assertEqual(
-                    len([k for k in w.plot_docks if k.startswith("1D")]), 1)
-                self.assertIn("只算一遍", w.log_text.toPlainText())
-                # 双击改名条目单独开：键 = 视图|路径|显示名，曲线照画
-                item2 = w.file_list.raw_group.child(1)
-                gui_file_dock._open_entry_view(w, item2, explicit=True)
-                key2 = "1D|data/fake_a.tif|fake_a (1).tif"
-                self.assertTrue(_wait_until(
-                    lambda: key2 in w.plot_docks
-                    and len(gui_panel_state._content(
-                        w.plot_docks[key2]).axes_1d.lines) > 0),
-                    "单独打开的改名条目仍是自己的面板")
+                    lambda: len([k for k in w.plot_docks
+                                 if k.startswith("1D")]) == 2
+                    and all(len(gui_panel_state._content(w.plot_docks[k])
+                                .axes_1d.lines) > 0
+                            for k in w.plot_docks if k.startswith("1D"))),
+                    "两条条目的图都该出来（第二条从缓存补画）")
+                self.assertIn(key2, w.plot_docks,
+                              "改名条目的面板有自己的键（视图|路径|显示名）")
+                log = w.log_text.toPlainText()
+                self.assertEqual(log.count("开始积分"), 1,
+                                 "计算只跑一次（补画命中缓存）")
+                self.assertIn("只算一遍", log)
             self.assertEqual(len(w.plot_docks), 2)
             self.assertEqual(w.plot_docks[key2].windowTitle(),
-                             "1D_fake_a (1).tif")
+                             f"1D_{p.name.split('.')[0]} (1).tif")
             self.assertNotIn("已忽略", w.log_text.toPlainText())
         finally:
             w.close()
@@ -10203,22 +10209,41 @@ class TestPlotStripLayout(unittest.TestCase):
         finally:
             w.close()
 
-    def test_coord_slot_is_fixed_and_elides(self):
-        """坐标格固定宽：读数长短变化不把右边的按钮挤着左右跳。"""
+    def test_coord_slot_stretches_but_not_with_text(self):
+        """读数格吃剩余宽（2026-10-10 改）：宽敞整句显示、挤不下才省略，
+        但宽度只跟版面有关、**与文本长短无关**（右边按钮不会被挤得跳）。
+
+        用户："对比图的坐标显示还是有问题……挪位置以前怎么没这个问题"
+        ——10-07 搬进横带时给了固定 230 px 上限，对比读数必被裁；现在
+        去上限、行里 stretch=1。
+        """
         w = create_window()
         try:
             self._all_open(w)
             w.coord_label.setText("2θ 3.335°  I 48230")
             QApplication.processEvents()
             slot = w.coord_label.width()
-            w.coord_label.setText("LMFP_1_atten0-00029.tif 2θ 3.335° I 48230")
+            self.assertGreater(slot, 260, "宽敞时该比旧上限 230 宽得多")
+            # 造一段"刚好放得下"的长文本：起点本身比旧上限 230 长
+            fm = w.coord_label.fontMetrics()
+            base = "LMFP_1_atten0-00029.tif · 2θ 3.214° I 1234.5"
+            self.assertGreater(fm.horizontalAdvance(base), 230,
+                               "前置：这段比旧上限长（旧行为必被裁）")
+            long_text = base
+            while fm.horizontalAdvance(long_text + " · 12345") < slot - 16:
+                long_text += " · 12345"
+            w.coord_label.setText(long_text)
             QApplication.processEvents()
             self.assertEqual(w.coord_label.width(), slot,
                              "槽宽不随文本长短变")
-            self.assertEqual(len(w.coord_label.text()), 41,
-                             "text() 仍是全文（缩略只影响显示）")
+            self.assertEqual(QLabel.text(w.coord_label), long_text,
+                             "放得下就整句显示（不再被 230 截断）")
+            w.coord_label.setText("X" * 500 + " 2θ 3.335°")
+            QApplication.processEvents()
             shown = QLabel.text(w.coord_label)   # 跳过 _ElideLabel 的覆写
-            self.assertIn("…", shown, "超长该显示省略号")
+            self.assertIn("…", shown, "实在挤不下才显示省略号")
+            self.assertEqual(w.coord_label.width(), slot,
+                             "省略也不改槽宽")
         finally:
             w.close()
 

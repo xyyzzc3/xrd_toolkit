@@ -143,6 +143,22 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     fit_row = QHBoxLayout()
     fit_row.setContentsMargins(4, 2, 4, 2)
     fit_row.addWidget(chk_fit)
+    # [保存图片…]（2026-10-10 用户："校准的图保存不了"——这张面板此前
+    # 压根没有保存入口：面板顶栏那套按钮只装在普通图面板上）。复用
+    # plot_panels._save_panel 的整套流程（分辨率/格式弹窗 + 默认名 +
+    # 防覆盖），容器用取用函数传（校准面板不进 plot_docks）。惰性
+    # import：calib_panel ↔ plot_panels 别在模块层绕成环。
+    btn_save = QPushButton("保存图片…")
+    btn_save.setObjectName("calib_save_btn")
+    btn_save.setToolTip("把校准图另存为图片（对话框与普通图面板同一个）")
+
+    def _do_save():
+        from xrd_toolkit.gui.plot_panels import _save_panel   # 破循环
+        _save_panel(window, key,
+                    get_dock=lambda: getattr(window, "calib_dock", None))
+
+    btn_save.clicked.connect(lambda: _do_save())
+    fit_row.addWidget(btn_save)
     fit_row.addStretch(1)
     lay.addLayout(fit_row)
     lay.addWidget(canvas)
@@ -153,6 +169,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     #   ② 内容上补挂 .canvas——手抓要装在真正的鼠标落点（画布）上，QWidget 的
     #      父过滤器收不到子部件事件（见 _install_resize_grip 的说明）。
     content.canvas = canvas
+    content.figure = fig      # _save_panel 读的就是内容上的 .figure（同普通面板）
     _install_resize_grip(window, key, content,
                          get_dock=lambda: getattr(window, "calib_dock", None))
     sub.setWidget(content)
@@ -287,8 +304,13 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     state = _calib_state(window)
     dev = _metrics_dev(state.get("current_metrics"))
     dev_txt = f" · ring deviation {dev:.2f} px" if dev is not None else ""
-    ax.set_title(f"{window.calib_display}  ·  Cyan rings = current config: "
-                 f"{_slot_label(state, 'current')}{dev_txt}  ·  {span}")
+    # 标题两行、字号收小（2026-10-10 用户："标题过长"——原先一行塞四段
+    # （文件名 · 青环是谁 · 环位偏差 · 环半径覆盖），面板一窄两头裁）。
+    # 第一行只留"青环=哪条结果 + 环位偏差"（看图的人真正要对的信息）；
+    # 文件名删掉（窗口标题栏已经写着），环半径覆盖挪到第二行。
+    ax.set_title(f"Cyan rings = current config: "
+                 f"{_slot_label(state, 'current')}{dev_txt}\n{span}",
+                 fontsize=10)
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
     # 视野（必须在所有画线之后设）：默认锁死 = 图像那一框；面板上勾了

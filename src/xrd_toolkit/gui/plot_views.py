@@ -611,6 +611,10 @@ def _batch_step(window: QMainWindow, key: str, name: str = ""):
         # 现在有产物了）；别的视图没有产物，刷了也没变化
         if batch["view"] == "1D":
             window.refresh_groups()
+        # 重复条目的面板此刻补画（_batch 已清账 → 补画不会再计数；
+        # 缓存命中，毫秒级。见 _plot_selected 的 deferred）
+        _reload_deferred(window, batch["view"],
+                         batch.get("deferred") or [])
     return suffix, quiet
 
 
@@ -2211,6 +2215,21 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
     return key
 
 
+def _reload_deferred(window: QMainWindow, name: str, keys) -> None:
+    """批尾补画"重复条目"的面板：从产物缓存读（毫秒级），不重算。
+
+    两条到达路径（见 _plot_selected 尾部）：批正常收尾时由 _batch_step
+    调（此时 _batch 已清账 → 补画不会二次计数）；整批在循环里就收完尾
+    （全缓存命中、同步完成）时由 _plot_selected 自己调。面板已被关掉
+    的键跳过；缓存万一没命中会走一次正常积分（可接受，且有日志）。
+    """
+    for key in keys:
+        dock = window.plot_docks.get(key)
+        if dock is None:
+            continue
+        _run_view(window, name, Path(dock.panel_file), key)
+
+
 def _open_source_group(window: QMainWindow, name: str, sources) -> int:
     """整组打开（右键 [打开整组 N 张]）：逐条走 _open_source_view。
 
@@ -2314,8 +2333,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         n_dupe = len(paths) - len(set(paths))
         if n_dupe:
             _log(window, f"注意：勾选里有 {n_dupe} 条是同一文件的重复条目"
-                         "——同一份数据只算一遍、只开一张图，产物共用"
-                         "（要看重复的那条：双击它单独开）")
+                         "——同一份数据只算一遍（图照开，重复条目的面板"
+                         "等本批算完从缓存补画），产物共用")
     if products and name != "1D":
         _log(window, f"跳过 {len(products)} 个产物条目：{name} 要从原始图像"
                      "算（产物是 1D 曲线，只能出 1D 图 / 对比 / 热图）")
@@ -2348,10 +2367,11 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                          f"[对比]（一张图看完）；想一张张全开：右键文件栏 →"
                          f"「打开勾选的 N 张图」→ {name}（先弹确认）；"
                          "或减少勾选分批看")
-    # 同一文件的重复条目：**本批只算一遍、只开一张图**（2026-10-09 用户：
-    # "去重，减少工作量，出图速度永远是越快越好"）。第一次出现照常，后来
-    # 的条目整条跳过（连面板都不建——面板就是那份计算本身），日志汇总
-    # 一句；要看第二条条目：双击它单独开（1D 从产物缓存秒开）。
+    # 同一文件的重复条目：**本批只算一遍**（2026-10-09 用户："去重，减少
+    # 工作量，出图速度永远是越快越好"），但**图仍是每条一张**（2026-10-10
+    # 用户："出 1d 图变少，这个怎么还没修复"——上一版把面板也省了，
+    # 勾 5 条出 4 张，看着就是少画了）：第一次出现照常算；后来的条目
+    # 照常建面板、只是**不排积分**，批收尾时从产物缓存补画（毫秒级）。
     repeat_items = set()
     if n_dupe:
         seen_paths = set()
@@ -2378,10 +2398,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     for source in products:
         _open_product_panel(window, source)
     skipped_repeats = 0
+    deferred = []        # 重复条目的面板键：不排积分，批尾从缓存补画
     for i, source in enumerate(targets):
-        if source.item in repeat_items:
-            skipped_repeats += 1     # 同一文件本批已开/已算：整条跳过
-            continue
         path = Path(source.path)
         display = source.display
         key, dock = _resolve_dock(window, name, source.item)
@@ -2409,14 +2427,28 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             else:
                 _log(window, f"打开{view_word}面板：{display}")
         dock.setVisible(True)
+        if source.item in repeat_items:
+            # 同一文件本批已算/在算：面板照建，但不排任务——批尾从缓存补画
+            skipped_repeats += 1
+            if getattr(dock, "last_tth", None) is None:
+                show_placeholder(dock, "同一文件本批只算一遍——算完自动补画")
+            deferred.append(key)
+            continue
         _run_view(window, name, path, key)
     if opened:
         head = "、".join(opened[:5]) + ("…" if len(opened) > 5 else "")
         _log(window, f"打开{view_word}面板 {len(opened)} 张：{head}")
     if skipped_repeats:
-        _log(window, f"{skipped_repeats} 条重复条目本批只算一遍：同一文件的"
-                     "图只开一张（要看那一条：双击它的名字单独开）")
+        _log(window, f"{skipped_repeats} 条重复条目本批只算一遍：它们的图"
+                     "照开，等本批算完从缓存补画（毫秒级）")
     if total_tasks > 1:
         _progress_show(window, total_tasks)   # 进入计算阶段（总数已按去重算）
     for path in pending:
         _spawn_headless(window, name, path)
+    if deferred:
+        # 批还没收尾 → 交给收尾（_batch_step）补；已经在循环里收完尾
+        # （全缓存命中、同步完成）→ 这里直接补。两条路都不落空
+        if getattr(window, "_batch", None) is not None:
+            window._batch["deferred"] = list(deferred)
+        else:
+            _reload_deferred(window, name, deferred)

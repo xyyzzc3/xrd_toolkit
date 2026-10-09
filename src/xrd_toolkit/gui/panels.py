@@ -332,16 +332,19 @@ _COORD_MIN_W = 50
 class _CoordReadout(_ElideLabel):
     """横带里的坐标读数格（见 _COORD_SLOT_W 的尺寸说明）。
 
-    sizeHint 固定 = 槽宽（**不随文本变**）：悬停读数长短变化不会把右边
-    的按钮挤着左右跳；空间不够时布局可以往下压，压到 _COORD_MIN_W 为止，
-    超出的文字继续由 _ElideLabel 打省略号。
+    **上限 230 px 已去掉（2026-10-10）**：用户"对比图的坐标显示还是有问题
+    ……挪位置以前怎么没这个问题"——10-07 读数从底部状态栏（整条全宽）搬进
+    绘图区横带时，给它定了固定上限 230，对比读数（文件名 + 2θ + 强度）
+    必然被省略号裁掉。现在读数格**吃掉横带的剩余宽度**（行里 stretch=1），
+    面板多宽就显示多宽、窄了压到 _COORD_MIN_W 才省略——一劳永逸。
+    sizeHint 仍固定 = 槽宽（不随文本变）：悬停读数长短变化不会把右边的
+    按钮挤着左右跳（宽度只由剩余空间决定，与文本无关）。
     """
 
     def __init__(self, parent=None):
         super().__init__("", parent=parent)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.setMinimumWidth(_COORD_MIN_W)
-        self.setMaximumWidth(_COORD_SLOT_W)
 
     def sizeHint(self):
         return QSize(_COORD_SLOT_W, super().sizeHint().height())
@@ -462,11 +465,12 @@ def _build_center(window: QMainWindow) -> None:
     srow = QHBoxLayout(strip)
     srow.setContentsMargins(4, 2, 4, 2)
     srow.setSpacing(4)
-    # 从左到右（用户 2026-10-07 定的排法）：模式提示 | 空白 | 坐标读数 |
+    # 从左到右（用户 2026-10-07 定的排法）：模式提示 | 坐标读数（吃剩余宽）|
     # 横排/竖排 | 缩放 −100%+ | 最右：全部关闭
+    # （2026-10-10：原来的"空白 + 固定 230 读数格"改成读数格占 stretch
+    # ——读数多长都能显示全，见 _CoordReadout 的说明）
     srow.addWidget(window.mode_label)
-    srow.addStretch(1)
-    srow.addWidget(window.coord_label)
+    srow.addWidget(window.coord_label, 1)
     srow.addWidget(arrange_box)
     srow.addWidget(zoom_box)
     srow.addSpacing(8)   # 与缩放拉开一点：全关是"破坏性"按钮，别贴着

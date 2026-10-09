@@ -502,13 +502,17 @@ class _SlimToolbar(QWidget):
             _save_panel(self._window, self._panel_key)
 
 
-def _save_panel(window: QMainWindow, key: str) -> None:
+def _save_panel(window: QMainWindow, key: str, get_dock=None) -> None:
     """单面板保存（工具栏 [Save] 走这里）：选分辨率/格式 → 选文件名存图。
 
     成功即置 figure_saved = True——这张面板在关窗询问里不再算
     "未保存"；用户取消（选项弹窗或文件名框）不动记账。
+
+    `get_dock`（2026-10-10 加）：容器现查函数（同 _install_resize_grip
+    的套路）——**校准面板不进 plot_docks**（它有自己的 window.calib_dock），
+    它那颗新 [保存图片…] 就是把取用函数传进来走同一条保存流程的。
     """
-    dock = window.plot_docks.get(key)
+    dock = (get_dock or (lambda: window.plot_docks.get(key)))()
     if dock is None:
         return
     figure = getattr(_content(dock), "figure", None)
