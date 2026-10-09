@@ -200,6 +200,12 @@ def check_single_views(window, lab6: str) -> None:
 
     # 瀑布行距的手动倍数（2026-10-07）：勾上 [手动行距] + 倍数 ×2 →
     # y 刻度（= 各行基线）间距翻倍，即改即画
+    #
+    # 2026-10-10：先勾 [显示数据名] —— χ 刻度（就是这里读间距用的 y 刻度）
+    # 自 10-08 起默认关，不勾 `get_yticks()` 是空的（探针当时量到 0.0）；
+    # 量完记得关回去——C 段要验"对比默认不画图例"。
+    window.params["显示数据名"].setChecked(True)
+    QApplication.processEvents()
     ticks0 = [float(t) for t in axw.get_yticks()]
     step0 = (ticks0[1] - ticks0[0]) if len(ticks0) > 1 else 0.0
     window.params["瀑布手动行距"].setChecked(True)
@@ -211,6 +217,7 @@ def check_single_views(window, lab6: str) -> None:
            "瀑布 [手动行距] ×2：行距翻倍（即改即画）",
            f"{step0:.1f} → {step1:.1f}")
     window.params["瀑布手动行距"].setChecked(False)
+    window.params["显示数据名"].setChecked(False)
     QApplication.processEvents()
 
 
@@ -261,10 +268,12 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
            "热图带颜色条")
 
     # 视图 2θ 框（2026-10-07）：填数 → 立刻裁剪重画（重看，不是重算）；
-    # 反方向——图上的缩放实时写回这两个框
+    # 反方向——图上的缩放实时写回这两个框。
+    # 2026-10-10：**热图用的是自己那对键**（10-08 拆键：老键归对比，
+    # 热图专用「热图视图 2θ …」）——探针原来填老键，热图当然不动
     lo0, hi0 = axh.get_xlim()
-    window.params["视图 2θ 下限 (°)"].setValue(2.0)
-    window.params["视图 2θ 上限 (°)"].setValue(4.0)
+    window.params["热图视图 2θ 下限 (°)"].setValue(2.0)
+    window.params["热图视图 2θ 上限 (°)"].setValue(4.0)
     QApplication.processEvents()
     lo1, hi1 = axh.get_xlim()
     report(abs(lo1 - 2.0) < 0.05 and abs(hi1 - 4.0) < 0.05,
@@ -272,9 +281,9 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
            f"{lo0:.2f}–{hi0:.2f} → {lo1:.2f}–{hi1:.2f}")
     axh.set_xlim(2.5, 3.5)
     QApplication.processEvents()
-    report(abs(window.params["视图 2θ 下限 (°)"].value() - 2.5) < 0.06,
+    report(abs(window.params["热图视图 2θ 下限 (°)"].value() - 2.5) < 0.06,
            "热图缩放写回 视图 2θ 框",
-           window.params["视图 2θ 下限 (°)"].value())
+           window.params["热图视图 2θ 下限 (°)"].value())
 
 
 def check_batch_background(window, lab6: str, lmfp: str) -> None:
