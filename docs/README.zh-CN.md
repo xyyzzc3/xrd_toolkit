@@ -63,7 +63,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
   <tr>
     <td align="center" colspan="2">
       <img src="../showcase/gui/gui_compare_heat.png" width="100%"><br>
-      <sub>一批图一眼扫完——同一批 8 个文件：左边八条曲线堆叠对比，右边 2θ×样品 热图</sub>
+      <sub>一批图一眼扫完——同一批 8 个文件（自动扣完背景）：左边堆叠对比，右边 2θ×样品 热图</sub>
     </td>
   </tr>
 </table>

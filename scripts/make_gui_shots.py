@@ -17,6 +17,7 @@ docs/使用说明.md）：
     gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
     gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README / 使用说明 §3
     gui_compare_heat 同一批 8 个文件：堆叠对比（左）+ 热图（右）→ README / 使用说明 §7
+    gui_panel_bar   面板顶上那一行按钮（裁图，所有视图通用） → 使用说明 §4
     gui_compare     同一条曲线的原始 vs 扣背景产物（短名图例）→ NOTES
     gui_customize   Customize 对话框（单张，460×542）         → NOTES
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
@@ -178,6 +179,27 @@ def add_all(window, paths, entrance: str = None) -> None:
     settle(200)
 
 
+def check_sources(window, kinds=None, paths=None) -> None:
+    """按**来源**挑勾选（check_only 只会勾「原始数据」组；产物条目与它
+    共用源路径，分不出是哪一类）。
+
+    用户 2026-10-09："说明书所有的图的左侧文件栏都检查一遍……处理用的
+    1d 产物，对比用的扣完背景的，应该是处理后产物"——这几张图的文件栏
+    勾什么由这里定：kinds 挑 stage（gui_sources.RAW / ONED / BG），
+    paths 限路径（None = 不限）。**只动叶子、不碰组节点**：组上的
+    setCheckState 会级联到子项，后手会把刚勾好的又清掉（见
+    shot_compare 那处注释）。
+    """
+    from xrd_toolkit.gui import sources as gui_sources
+    want = None if paths is None else {str(Path(p)) for p in paths}
+    for s in gui_sources.all_sources(window):
+        ok = (kinds is None or s.kind in kinds)
+        if ok and want is not None:
+            ok = str(Path(s.path)) in want
+        s.item.setCheckState(Qt.Checked if ok else Qt.Unchecked)
+    QApplication.processEvents()
+
+
 def check_only(window, paths) -> None:
     """只勾这组文件（其余全不勾）——点出图按钮之前要（重新）保证的事。
 
@@ -313,6 +335,33 @@ def shot_compare(window) -> None:
     save(window, "gui_compare")
 
 
+def shot_panel_bar(window) -> None:
+    """第 4 节配图：面板顶上那一行按钮的实拍（所有视图通用）。
+
+    用户 2026-10-09："每张图面板顶上一行按钮（所有视图通用）这个地方
+    加上实际的图方便用户理解。"——抓一张**默认大小**的 1D 面板、裁出
+    顶上那一行（标题 + 按钮 + 下面一条画布），一比一贴进说明书
+    （默认面板 ~505 px 宽，在 820 px 正文里不用缩放）。
+    """
+    add_all(window, [LAB6], entrance="1D")
+    window.view_buttons["1D"].click()
+    key = "1D|" + LAB6
+    wait_for(lambda: key in window.plot_docks
+             and len(content_of(window, key).axes_1d.lines) > 0)
+    window.resize(1600, 1000)
+    settle(400)
+    window.grab()          # 布局先推一把（同 fit_dock 的理由）
+    settle(300)
+    dock = window.plot_docks[key]
+    pix = dock.grab()
+    bar = getattr(dock.widget(), "slim_bar", None)
+    h = (bar.height() + 52) if bar is not None else 96   # 带全下面那行标题
+    crop = pix.copy(0, 0, pix.width(), min(h, pix.height()))
+    crop.save(str(OUT / "gui_panel_bar.png"))
+    print(f"  ✓ showcase/gui/gui_panel_bar.png  "
+          f"({crop.width()}×{crop.height()})")
+
+
 def shot_customize(window) -> None:
     """Customize 对话框（只有对话框本体，460×542）。
 
@@ -422,8 +471,35 @@ def shot_compare_heat(window) -> None:
     堆叠与显示数据名都是即改即画的显示参数，必须在**面板出来之后**再勾
     （新面板的显示参数从默认起步——同 shot_compare 那处注释）。
     """
+    from xrd_toolkit.gui import panels as gui_panels
+    from xrd_toolkit.gui import sources as gui_sources
     paths = find_data("LMFP*.tif", 8)
-    add_all(window, paths, entrance="对比")
+    # 8 个**都导入**，但只留第一条勾着：批量处理需要一个"编辑对象"
+    # （1D 面板）当设置来源，只勾一条才不会一次开出 8 张面板；拍图前
+    # 这张借来的面板也会关掉（图注：gui 里只有堆叠 + 热图两个面板）
+    add_all(window, paths, entrance="处理")
+    check_sources(window, kinds={gui_sources.RAW}, paths=paths[:1])
+    window.view_buttons["1D"].click()
+    raw_key = "1D|" + paths[0]
+    wait_for(lambda: raw_key in window.plot_docks
+             and len(content_of(window, raw_key).axes_1d.lines) > 0)
+    combo = window.params["背景扣除模式"]
+    combo.setCurrentIndex(combo.findData("auto"))   # 自动基线、窗口默认 0.2°
+    settle(300)
+    # 勾上全部 8 条原始数据 → [存成产物] 批量出 8 条**扣完背景**的产物
+    # （不开面板；用户 2026-10-09："对比用的……应该是处理后产物"）
+    check_sources(window, kinds={gui_sources.RAW}, paths=paths)
+    window.proc_save_btn.click()
+    wait_for(lambda: sum(1 for s in gui_sources.all_sources(window)
+                         if s.kind == gui_sources.BG) >= 8, timeout_s=240)
+    window.plot_docks[raw_key].figure_saved = True
+    gui_panels._close_panel(window, raw_key, quiet=True)
+    settle(300)
+    # 勾「处理产物」整组（勾组 = 勾组里全部子项）
+    for g in window.file_list.groups():
+        if g.text(0).startswith("处理产物"):
+            g.setCheckState(Qt.Checked)
+    QApplication.processEvents()
     window.compare_btn.click()
     wait_for(lambda: any(k.startswith("对比")
                          and len(content_of(window, k).axes_1d.lines) >= 8
@@ -443,7 +519,6 @@ def shot_compare_heat(window) -> None:
     settle(400)
     window.params["显示数据名"].setChecked(True)
     settle(400)
-    check_only(window, paths)   # 文件栏回到"八条都选中"的样子
     # 只留这两个面板：左右并排铺满（窗口里没有 1D / 别的图）
     window.resize(1600, 1000)
     settle(400)
@@ -457,21 +532,41 @@ def shot_compare_heat(window) -> None:
 
 
 def shot_background(window) -> None:
-    """背景扣除：自动基线——**不点任何锚点**。
+    """背景扣除：自动基线——**不点任何锚点**；文件栏选的是「1D 产物」。
 
-    用户 2026-10-09："扣背景的图不要手动选点了，就自动扣背景。"——
-    模式切到自动基线（窗口 0.2° 默认），原始 / 基线 / 结果三线同在。
+    用户 2026-10-09 两条："扣背景的图不要手动选点了，就自动扣背景" +
+    "处理用的 1d 产物"（文件栏该勾的、开着的那条是 1D 产物，不是原始
+    数据）——所以这张图走说明书里教的那条路：先出一条 1D 产物，关掉
+    原始那张面板，**双击「1D 产物」**打开它（编辑对象），再切「自动
+    基线」。开面板/关面板都走 app 自己的路，截图状态 = 用户操作后的样子。
     """
+    from xrd_toolkit.gui import panels as gui_panels
+    from xrd_toolkit.gui import file_dock as gui_file_dock
+    from xrd_toolkit.gui import sources as gui_sources
     path = LMFP[0]
     add_all(window, [path], entrance="处理")
     window.view_buttons["1D"].click()
-    key = "1D|" + path
-    wait_for(lambda: key in window.plot_docks
-             and len(content_of(window, key).axes_1d.lines) > 0)
-    ax = content_of(window, key).axes_1d
+    raw_key = "1D|" + path
+    wait_for(lambda: raw_key in window.plot_docks
+             and len(content_of(window, raw_key).axes_1d.lines) > 0)
+    # 原始那张面板关掉（「1D 产物」条目留在文件栏）；figure_saved 免得
+    # 关面板弹存盘询问
+    window.plot_docks[raw_key].figure_saved = True
+    gui_panels._close_panel(window, raw_key, quiet=True)
+    settle(300)
+    # 勾「1D 产物」、双击打开它 → 编辑对象就是这条产物（说明书第 6 节的路）
+    oned = next(s for s in gui_sources.all_sources(window)
+                if s.kind == gui_sources.ONED)
+    check_sources(window, kinds={gui_sources.ONED})
+    gui_file_dock._open_entry_view(window, oned.item, explicit=True)
+    wait_for(lambda: any(k.startswith("1D")
+                         and len(content_of(window, k).axes_1d.lines) > 0
+                         for k in window.plot_docks))
+    key = next(k for k in window.plot_docks if k.startswith("1D"))
     combo = window.params["背景扣除模式"]
     combo.setCurrentIndex(combo.findData("auto"))
     settle(500)
+    ax = content_of(window, key).axes_1d
     window.resize(1600, 1000)
     settle(400)
     fit_panel(window, key)
@@ -554,8 +649,8 @@ def shot_calib(window) -> None:
 
 SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
          "gui_compare": shot_compare, "gui_compare_heat": shot_compare_heat,
-         "gui_customize": shot_customize, "gui_views": shot_views,
-         "gui_batch": shot_batch,
+         "gui_panel_bar": shot_panel_bar, "gui_customize": shot_customize,
+         "gui_views": shot_views, "gui_batch": shot_batch,
          "gui_background": shot_background, "gui_calib": shot_calib}
 
 

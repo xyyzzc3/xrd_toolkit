@@ -70,7 +70,7 @@ own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
   <tr>
     <td align="center" colspan="2">
       <img src="showcase/gui/gui_compare_heat.png" width="100%"><br>
-      <sub>A whole batch at a glance — eight frames stacked beside their 2θ × sample heatmap</sub>
+      <sub>A whole batch at a glance — eight background-subtracted frames stacked beside their 2θ × sample heatmap</sub>
     </td>
   </tr>
 </table>
