@@ -394,6 +394,27 @@ class TestLastRangeFor(unittest.TestCase):
         self.assertEqual(got["npt"], 2000, "取更新的那条")
         self.assertAlmostEqual(got["tth_min"], 1.0)
 
+    def test_point_root_switches_and_invalidates_the_range_index(self):
+        """point_root：换根要连惰性索引一起失效（2026-10-09）。
+
+        场景：脚本同一进程里每个场景换一份缓存根（重拍图不串味）。
+        `_ranges_cache` 按 `_write_gen` 判失效——不清的话，新根上的
+        第一次查询会把旧根的索引当新的用（图里 2θ 默认值串台）。
+        """
+        root_a = Path(tempfile.mkdtemp(prefix="xrd_root_a_"))
+        root_b = Path(tempfile.mkdtemp(prefix="xrd_root_b_"))
+        old = stage_cache.CACHE_ROOT
+        try:
+            stage_cache.point_root(root_a)
+            stage_cache.store_1d(self.f, np.linspace(3.0, 12.0, 4),
+                                 np.ones(4), config="c", npt=1000)
+            self.assertEqual(stage_cache.last_range_for(self.f)["npt"], 1000)
+            stage_cache.point_root(root_b)          # 换到空根
+            self.assertEqual(stage_cache.last_range_for(self.f), {},
+                             "换根后不该再看见上一个根的产物")
+        finally:
+            stage_cache.point_root(old)    # 还回去也要失效（别把空索引留给后面的用例）
+
     def test_ledger_batch_also_counts(self):
         """处理产物批次（台账里带范围）同样算这个文件的"上次设置"。"""
         import time

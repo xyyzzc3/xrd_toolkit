@@ -53,6 +53,21 @@ from xrd_toolkit.services.process import chain_desc, chain_parts
 # 基准统一在 xrd_toolkit.paths——2026-10-02 起不再各算各的）
 CACHE_ROOT = Path(os.environ.get("XRD_STAGE_CACHE", OUTPUTS_DIR / "_stage"))
 
+
+def point_root(new_root) -> None:
+    """把缓存根换到 new_root，并让惰性索引失效（脚本/测试用）。
+
+    CACHE_ROOT 是模块级常量（导入时读环境变量），同一进程里要拍几组
+    互不串味的图就得换着来——`scripts/make_gui_shots` 每个场景一份根
+    （2026-10-09 全量重拍实测：共用缓存时，前一场景存的处理产物会混进
+    后一场景的文件栏，对比图勾组变成 9 条）。`_ranges_cache` 按
+    `_write_gen` 判失效，换根必须一起清，否则新根上的第一次查询会把
+    上一个根的索引当新的用。
+    """
+    global CACHE_ROOT
+    CACHE_ROOT = Path(new_root)
+    _ranges_cache["gen"] = -1
+
 # 写产物的代数：每写一条 +1。last_range_for 的惰性索引靠它判"要不要重建"
 # （别每次开图都扫一遍全部 npz）
 _write_gen = 0

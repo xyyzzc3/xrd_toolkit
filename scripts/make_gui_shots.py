@@ -67,6 +67,7 @@ from PySide6.QtWidgets import QApplication, QPushButton    # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state       # noqa: E402
 from xrd_toolkit.gui.app import create_window              # noqa: E402
+from xrd_toolkit.services import stage_cache               # noqa: E402
 
 OUT = ROOT / "showcase" / "gui"
 
@@ -677,6 +678,11 @@ def main() -> int:
     print(f"项目根：{ROOT}\n输出目录：{OUT.relative_to(ROOT)}\n")
     for name in names:
         print(f"[{name}]")
+        # 每个场景一份**干净的产物缓存**（模块级常量，运行时重新指向）。
+        # 同一进程连着拍好几张时共用缓存会串味：2026-10-09 全量重拍实测，
+        # 「对比+热图」那张被前面场景存下的 1 条处理产物混进文件栏，勾组
+        # 时变成 9 条——图上多了不存在的曲线。配方是本窗口内存态，不用管。
+        stage_cache.point_root(_SCRATCH / f"stage_{name}")
         window = create_window()
         # 截图里不要那条只装「帮助」的系统菜单栏（2026-10-08 用户："窗口
         # 最上方还是有一行单独的帮助"）：它实际住在 macOS 的屏幕顶部系统
