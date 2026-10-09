@@ -12,14 +12,16 @@
 
 场景与文档里的图注一一对应（改图注前先看这里；2026-09-25 起 README
 只放三张 GUI 图，其余在 docs/NOTES.md）：
+    gui_welcome     刚打开软件：中间空白、参数坞收起        → 使用说明 §1
     gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
     gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README
     gui_heatmap     三个数据集的热图 + 旁边一条 1D            → README
     gui_compare     同一条曲线的原始 vs 扣背景产物（短名图例）→ NOTES
+    gui_compare_stack 八条 LMFP 堆叠对比（纵轴短名）          → 使用说明 §7
     gui_customize   Customize 对话框（单张，460×542）         → NOTES
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
-    gui_background  真 LMFP 上的四个手动锚点（原始/基线/结果）→ NOTES
+    gui_background  自动基线 + 几个锚点校正（原始/基线/结果）→ 使用说明 §6
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**
@@ -196,15 +198,22 @@ def check_only(window, paths) -> None:
 
 
 # ══ 各场景 ══════════════════════════════════════════════════════
-def _set_manual_anchors(window, key: str, n: int = 4) -> None:
-    """在 1D 面板上沿曲线取 n 个纯背景锚点（背景/对比两张共用）。"""
+def _set_manual_anchors(window, key: str, n: int = 4,
+                        mode: str = "anchor") -> None:
+    """在 1D 面板上沿曲线取 n 个纯背景锚点（背景/对比两张共用）。
+
+    mode：背景扣除模式的下拉值——"anchor" 手动锚点 / "auto" 自动基线
+    （auto 也允许锚点，即"自动 + 锚点校正"；2026-10-09 起背景那张图拍
+    auto——用户："在自动扣背景的基础上，选几个点，类似我现在的 gui 的
+    状态"）。
+    """
     from xrd_toolkit.gui import plot_compare as gui_compare
     import numpy as np
     dock = window.plot_docks[key]
     ax = content_of(window, key).axes_1d
-    # 切到手动锚点 + 打开拾取开关
+    # 切到目标模式 + 打开拾取开关
     combo = window.params["背景扣除模式"]
-    combo.setCurrentIndex(combo.findData("anchor"))
+    combo.setCurrentIndex(combo.findData(mode))
     window.bg_pick_btn.setChecked(True)
     # 在曲线上取四个纯背景位置（避开峰）：用曲线自身的分位挑点
     tth = np.asarray(dock.last_tth, dtype=float)
@@ -217,6 +226,22 @@ def _set_manual_anchors(window, key: str, n: int = 4) -> None:
         gui_compare._anchor_release(window, key, press)
         settle(120)
     settle(500)
+
+
+def shot_welcome(window) -> None:
+    """刚打开软件的样子（使用说明 §1 的"确认"图）。
+
+    用户 2026-10-09："第一步的图应该是不包含任何打开的文件的图，也就是
+    用户第一次打开软件的状态，中间区也应该是空的。"——新窗口本来就该是
+    这个状态（导入默认不勾、参数坞收起、绘图区空白），这里不导入任何
+    东西，只定窗口尺寸再抓。
+    """
+    window.resize(1600, 1000)
+    settle(400)
+    window.grab()          # 离屏布局要先推一把（原因见 fit_dock）
+    settle(300)
+    window.grab().save(str(OUT / "gui_welcome.png"))
+    print("  ✓ showcase/gui/gui_welcome.png  (1600×1000)")
 
 
 def shot_main(window) -> None:
@@ -254,7 +279,8 @@ def shot_compare(window) -> None:
     key = "1D|" + path
     wait_for(lambda: key in window.plot_docks
              and len(content_of(window, key).axes_1d.lines) > 0)
-    _set_manual_anchors(window, key)
+    # 处理产物按用户日常那套做（自动基线 + 锚点校正），与背景那张同源
+    _set_manual_anchors(window, key, mode="auto")
     window.bg_pick_btn.setChecked(False)      # 拍图状态收干净
     # [存成产物]：一个没勾 = 存编辑对象这一张（合并语义，见 app.py）
     window.proc_save_btn.click()
@@ -285,6 +311,31 @@ def shot_compare(window) -> None:
     fit_panel(window, next(k for k in window.plot_docks
                            if k.startswith("对比")))
     save(window, "gui_compare")
+
+
+def shot_compare_stack(window) -> None:
+    """对比·堆叠：八条 LMFP 上下错开 + 纵轴短名（使用说明 §7）。
+
+    堆叠与显示数据名都是**即改即画**的显示参数，必须**面板出来之后**
+    再勾（新面板的显示参数从默认起步，先勾会被盖掉——同 shot_compare
+    那处注释）。行高 = 第二高的行峰 × 0.7（services.stacking 的口径），
+    八条几乎重合的帧就是八条平行线——这正是"堆叠"要展示的样子。
+    """
+    paths = find_data("LMFP*.tif", 8)
+    add_all(window, paths, entrance="对比")
+    window.compare_btn.click()
+    wait_for(lambda: any(k.startswith("对比")
+                         and len(content_of(window, k).axes_1d.lines) >= 8
+                         for k in window.plot_docks), timeout_s=240)
+    window.params["对比堆叠"].setChecked(True)     # 控件文字是「堆叠显示」
+    settle(400)
+    window.params["显示数据名"].setChecked(True)   # 纵轴短名（默认关）
+    settle(400)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_panel(window, next(k for k in window.plot_docks
+                           if k.startswith("对比")))
+    save(window, "gui_compare_stack")
 
 
 def shot_customize(window) -> None:
@@ -429,7 +480,12 @@ def shot_heatmap(window) -> None:
 
 
 def shot_background(window) -> None:
-    """背景扣除：真 LMFP 上四个手动锚点（原始/基线/结果三线同在）。"""
+    """背景扣除：自动基线 + 几个手动锚点校正。
+
+    用户 2026-10-09："在自动扣背景的基础上，选几个点，类似我现在的 gui
+    的状态"——默认工作流（自动基线、窗口 0.2°）加四个校正锚点，
+    原始 / 基线 / 结果三线同在。
+    """
     path = LMFP[0]
     add_all(window, [path], entrance="处理")
     window.view_buttons["1D"].click()
@@ -437,7 +493,7 @@ def shot_background(window) -> None:
     wait_for(lambda: key in window.plot_docks
              and len(content_of(window, key).axes_1d.lines) > 0)
     ax = content_of(window, key).axes_1d
-    _set_manual_anchors(window, key)
+    _set_manual_anchors(window, key, mode="auto")
     window.resize(1600, 1000)
     settle(400)
     fit_panel(window, key)
@@ -518,7 +574,8 @@ def shot_calib(window) -> None:
             print("    " + line)
 
 
-SHOTS = {"gui_main": shot_main, "gui_compare": shot_compare,
+SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
+         "gui_compare": shot_compare, "gui_compare_stack": shot_compare_stack,
          "gui_customize": shot_customize, "gui_views": shot_views,
          "gui_batch": shot_batch, "gui_heatmap": shot_heatmap,
          "gui_background": shot_background, "gui_calib": shot_calib}
