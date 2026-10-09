@@ -702,7 +702,11 @@ class TestNewViews(unittest.TestCase):
             self.assertEqual(dock.windowTitle(), "2D_fake_b.tif")
             ax = gui_panel_state._content(dock).axes_2d
             self.assertEqual(len(ax.images), 1)
-            # 束心十字画在当前配置的 beam_center 上（(行, 列) → x=列, y=行）
+            # 束心十字**默认关**（2026-10-09）；勾上后画在当前配置的
+            # beam_center 上（(行, 列) → x=列, y=行）——即改即画，这里顺带钉
+            self.assertEqual(len(ax.lines), 0, "默认不画束心")
+            w.params["显示束心"].setChecked(True)
+            QApplication.processEvents()
             cy, cx = w.config["beam_center"]
             self.assertAlmostEqual(ax.lines[0].get_xdata()[0], cx)
             self.assertAlmostEqual(ax.lines[0].get_ydata()[0], cy)
@@ -751,11 +755,12 @@ class TestNewViews(unittest.TestCase):
             self.assertIn("开始计算剖面 fake_b.tif（后台运行，角度 45°）",
                           w.log_text.toPlainText())
             # 改一个**不用重算**的显示参数（显示束心）→ 只重画，不再算
+            # （束心默认关着，这里勾上才真的触发一次改动）
             with mock.patch.object(gui_views, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(gui_views, "line_profile",
                                    side_effect=fake_profile):
-                w.params["显示束心"].setChecked(False)
+                w.params["显示束心"].setChecked(True)
                 QApplication.processEvents()
             self.assertEqual(len(profile_calls), 2, "束心开关不该重算剖面")
         finally:
@@ -828,11 +833,13 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
-    def test_beam_cross_can_be_turned_off(self):
-        """[显示束心]：2D 图上那个白色 + 默认画，取消勾选后立刻不画。
+    def test_beam_cross_is_off_by_default(self):
+        """[显示束心]：2D 图上那个白色 + **默认不画**，勾上才出现（2026-10-09）。
 
-        用户 2026-10-01："二维图的圆心用户自己选择是否添加"——只对原图页
-        的 2D 图；校准图不参与（那张图上根本没有这个标记）。
+        用户："实现默认 2D 图是不显示束心的"——默认先看一张干净的衍射图，
+        要核对束心位置再勾上（2026-10-01 起就有这个开关，当时默认画：
+        "二维图的圆心用户自己选择是否添加"）。只对原图页的 2D 图；校准图
+        不参与（那张图上根本没有这个标记）。
         """
         w = create_window()
         try:
@@ -843,12 +850,16 @@ class TestNewViews(unittest.TestCase):
                 _open_view(w, "2D")
                 ax = gui_panel_state._content(
                     _dock(w, "2D", "data/fake_b.tif")).axes_2d
-                self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
-            self.assertEqual(len(ax.lines), 1, "默认该画一个束心十字")
-            self.assertTrue(w.params["显示束心"].isChecked(), "默认勾着")
-            w.params["显示束心"].setChecked(False)   # 即改即画（2026-10-08）
+                # 等图出来（束心关着时 ax.lines 是空的，只能等 imshow 的图）
+                self.assertTrue(_wait_until(lambda: len(ax.images) > 0))
+            self.assertFalse(w.params["显示束心"].isChecked(), "默认不勾")
+            self.assertEqual(len(ax.lines), 0, "默认不画十字")
+            w.params["显示束心"].setChecked(True)    # 即改即画（2026-10-08）
             QApplication.processEvents()
-            self.assertEqual(len(ax.lines), 0, "取消勾选后不该留十字")
+            self.assertEqual(len(ax.lines), 1, "勾上后才叠束心十字")
+            w.params["显示束心"].setChecked(False)
+            QApplication.processEvents()
+            self.assertEqual(len(ax.lines), 0, "取消后不留十字")
         finally:
             w.close()
 
@@ -6142,10 +6153,10 @@ class TestImageDisplayLive(unittest.TestCase):
         """没有编辑对象时改显示参数：不崩、不算改动（值先留着）。"""
         w = create_window()
         try:
-            w.params["显示束心"].setChecked(False)
+            w.params["显示束心"].setChecked(True)    # 默认关着：勾上才算一次改动
             w.params["对比度下限"].setValue(5.0)
             QApplication.processEvents()
-            self.assertFalse(w.params["显示束心"].isChecked())
+            self.assertTrue(w.params["显示束心"].isChecked())
         finally:
             w.close()
 
@@ -6187,7 +6198,7 @@ class TestImageDisplayLive(unittest.TestCase):
                     lambda: "读取失败" in w.log_text.toPlainText()))
             QTest.mouseClick(gui_panel_state._content(_dock(w, "2D", "data/fake_b.tif")),
                              Qt.LeftButton)
-            w.params["显示束心"].setChecked(False)   # 不崩即过
+            w.params["显示束心"].setChecked(True)    # 不崩即过（默认关着）
             QApplication.processEvents()
         finally:
             w.close()

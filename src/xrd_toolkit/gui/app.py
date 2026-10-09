@@ -1040,14 +1040,14 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         _box.valueChanged.connect(
             lambda _v=0.0: _refresh_image_display(window))
 
-    # 束心十字（2D 图上那个白色 +）画不画：默认画（与 CLI 的
-    # view_diffraction 一致），取消勾选得到一张干净的衍射图。
-    # 即改即画（同对比度那套）；校准图不受影响——那张图上没有这个标记
-    # （用户 2026-10-01："绘图的 2d……校准不要加"）
+    # 束心十字（2D 图上那个白色 +）画不画：**默认不画**——用户 2026-10-09：
+    # "实现默认 2D 图是不显示束心的"（默认先看干净的衍射图，要核对束心
+    # 位置再勾上）。即改即画（同对比度那套）；校准图不受影响——那张图上
+    # 没有这个标记（用户 2026-10-01："绘图的 2d……校准不要加"）
     beam_cross = QCheckBox("显示束心")
-    beam_cross.setChecked(True)
+    beam_cross.setChecked(False)
     beam_cross.setToolTip("在 2D 图上画出当前几何配置的束心十字（+）；"
-                          "取消勾选 = 只看原始衍射图")
+                          "默认不画，勾上才叠这个标记（校准图不参与）")
     window.params["显示束心"] = beam_cross
     beam_cross.toggled.connect(lambda _on: _refresh_image_display(window))
     form_draw.addRow(beam_cross)
