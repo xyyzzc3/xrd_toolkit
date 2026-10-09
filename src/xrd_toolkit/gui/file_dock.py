@@ -27,10 +27,10 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QActionGroup, QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QDockWidget,
-    QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMdiSubWindow, QMenu, QMessageBox, QPushButton, QRadioButton,
-    QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget)
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QMainWindow, QMdiSubWindow, QMenu, QMessageBox, QPushButton,
+    QRadioButton, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.services import stage_cache
@@ -694,8 +694,16 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_open.setMenu(open_menu)
     window.open_files_action = act_files
     window.open_folder_action = act_folder
-    row1 = QHBoxLayout()
-    row1.addWidget(btn_open, 1)
+    # 三行按钮排成**一张三列栅格**（2026-10-09 用户："文件栏的按钮排布
+    # 有点乱"）：此前三行各自是独立横排、分栏各不相同（2/1、1/1/1、1/1），
+    # 竖缝一行一个位置（166+80 / 80×3 / 123×2），右边缘看着参差。同一张
+    # 栅格 + 每列等拉伸后，三行的缝落在同样的两列上。按钮、顺序、职责都不动。
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(6)
+    grid.setVerticalSpacing(4)
+    for col in range(3):
+        grid.setColumnStretch(col, 1)
+    grid.addWidget(btn_open, 0, 0, 1, 2)
     # [排序▾]（2026-10-08 用户："文件栏添加排序功能"）：挂在第一行右侧。
     # 为什么不进第三行（全选/按条件选 旁）：那行添第三个按钮会把文件列顶
     # 过 ≈320 px 的窄排版红线（第二行三个按钮已把下限锁在 ≈270）。
@@ -722,14 +730,11 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_sort.setMenu(sort_menu)
     window.sort_btn = btn_sort
     window.sort_menu = sort_menu
-    row1.addWidget(btn_sort, 0)
-    lay.addLayout(row1)
+    grid.addWidget(btn_sort, 0, 2)
     _sync_sort_menu(window)
-    row2 = QHBoxLayout()
-    row2.addWidget(btn_save, 1)
-    row2.addWidget(btn_delete, 1)
-    row2.addWidget(btn_export, 1)
-    lay.addLayout(row2)
+    grid.addWidget(btn_save, 1, 0)
+    grid.addWidget(btn_delete, 1, 1)
+    grid.addWidget(btn_export, 1, 2)
 
     # 选择工具（挨着文件列，管的就是它）：导入默认不勾选，所以"选哪些"
     # 得有一组顺手的按钮——全选 / 全不选 / 按条件选（区间·间隔·名字）。
@@ -752,10 +757,9 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_pick.setToolTip("按区间（第几个到第几个）、间隔（每 N 个选 1 个）"
                         "或名称包含来勾选，可叠加，可追加；"
                         "只作用在「原始数据」上")
-    row3 = QHBoxLayout()
-    row3.addWidget(btn_all, 1)
-    row3.addWidget(btn_pick, 1)
-    lay.addLayout(row3)
+    grid.addWidget(btn_all, 2, 0, 1, 2)
+    grid.addWidget(btn_pick, 2, 2)
+    lay.addLayout(grid)
 
     window.file_list = FileTree()   # 覆盖了 minimumSizeHint，可以收窄
     window._check_syncing = False   # 组↔子项联动期间别再记账（防递归）
