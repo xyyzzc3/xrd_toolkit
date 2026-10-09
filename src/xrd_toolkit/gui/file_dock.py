@@ -1209,23 +1209,19 @@ def drop_product_item(window: QMainWindow, item) -> int:
     return n
 
 
-def _entry_menu(window: QMainWindow, item) -> None:
-    """右键文件栏：**删除与导出**，一套手势、不区分原始与处理后。
+# 右键批量打开可选的视图（2026-10-09）：菜单顺序就是这里的顺序。产物条目
+# 只有 1D 能出，选了别的视图由 _open_checked_views 挑出原始条目并记日志。
+OPEN_BULK_VIEWS = ("1D", "2D", "剖面", "瀑布")
 
-    用户 2026-09-25 定："把删除和保存统一做成右键以及按键，不要区分原始和
-    处理后"。映射如下：
 
-        原始数据条目  → 从列表移除（**硬盘上的 tif 永远不动**）
-        产物条目      → 删除这一条产物（真删文件 + 台账）
-        产物分组      → 删除这一组产物 / 导出这一组（数据）
-        空白处 / 原始数据组 → 删除所有缓存…
+def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
+    """往 menu 上挂右键菜单项，返回 {QAction: 动作} 映射（不 exec）。
 
-    两个词分工：**删除**管"不要了"，**导出**管"存出去"（图另存走面板上的
-    [保存]，那是图片不是数据）。差别只在日志里说明——菜单项本身长得一样。
+    与 _entry_menu 分开（2026-10-09）：离屏测试点不了模态菜单（_entry_menu
+    在窗口没显示时直接 return），但菜单**内容**值得钉住——批量打开两条从
+    写死 1D 扩成按视图的子菜单，回归测试直接检查这个映射。动作值两种形态：
+    字符串（不带参数）或 (名字, 参数) 元组（如 ("open_checked", "2D")）。
     """
-    if not window.isVisible():
-        return   # 窗口没显示（测试/无头）不弹模态菜单：会永远等不到人点
-    menu = QMenu(window)
     actions = {}
     src = None if is_group(item) else gui_sources.source_of(item)
     panel_key = panel_key_of(item)
@@ -1239,15 +1235,21 @@ def _entry_menu(window: QMainWindow, item) -> None:
     elif item is None or item is window.file_list.raw_group:
         # 空白处 / 原始数据组：批量打开勾选的那批 + （整组）+ 清缓存。
         # 用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮
-        # 超过防爆线（MAX_PANELS_PER_BATCH）一张都不画，所以这里给一条没有上限的入口
+        # 超过防爆线（MAX_PANELS_PER_BATCH）一张都不画，所以这里给一条没有
+        # 上限的入口。**2026-10-09 起按视图选**（子菜单，此前写死 1D）：
+        # 原图三类超限后此前连手动全开的入口都没有——用户："原图功能无法
+        # 批量出超过防爆图数字，应该怎么优化"。
         n_checked = len(gui_sources.checked_sources(window))
         if n_checked:
-            actions[menu.addAction(
-                f"打开勾选的 {n_checked} 张 1D 图")] = "open_checked"
+            sub = menu.addMenu(f"打开勾选的 {n_checked} 张图")
+            for name in OPEN_BULK_VIEWS:
+                actions[sub.addAction(name)] = ("open_checked", name)
         if item is window.file_list.raw_group and item.childCount():
-            actions[menu.addAction(
-                f"打开整组 1D 图（{item.childCount()} 张）")] = "open_group"
+            sub = menu.addMenu(f"打开整组图（{item.childCount()} 张）")
+            for name in OPEN_BULK_VIEWS:
+                actions[sub.addAction(name)] = ("open_group", name)
     elif is_group(item):
+        # 产物组：产物是 1D 曲线，只有 1D 能出——不给视图子菜单
         if item.childCount():
             actions[menu.addAction(
                 f"打开整组 1D 图（{item.childCount()} 张）")] = "open_group"
@@ -1272,17 +1274,44 @@ def _entry_menu(window: QMainWindow, item) -> None:
     if actions:
         menu.addSeparator()
     actions[menu.addAction("删除所有缓存…")] = "clear_cache"
+    return actions
+
+
+def _entry_menu(window: QMainWindow, item) -> None:
+    """右键文件栏：**删除与导出**，一套手势、不区分原始与处理后。
+
+    用户 2026-09-25 定："把删除和保存统一做成右键以及按键，不要区分原始和
+    处理后"。映射如下：
+
+        原始数据条目  → 从列表移除（**硬盘上的 tif 永远不动**）
+        产物条目      → 删除这一条产物（真删文件 + 台账）
+        产物分组      → 删除这一组产物 / 导出这一组（数据）
+        空白处 / 原始数据组 → 删除所有缓存…
+
+    两个词分工：**删除**管"不要了"，**导出**管"存出去"（图另存走面板上的
+    [保存]，那是图片不是数据）。差别只在日志里说明——菜单项本身长得一样。
+    菜单项在 _entry_menu_actions 里建（与 exec 分开，便于离屏测试）。
+    """
+    if not window.isVisible():
+        return   # 窗口没显示（测试/无头）不弹模态菜单：会永远等不到人点
+    # 派发时要用的两样东西（菜单项在 helper 里建，它自己也算这两样）
+    src = None if is_group(item) else gui_sources.source_of(item)
+    panel_key = panel_key_of(item)
+    menu = QMenu(window)
+    actions = _entry_menu_actions(menu, window, item)
     pos = window.file_list.viewport().mapToGlobal(QPoint(0, 0))
     picked = menu.exec(pos)
-    what = actions.get(picked)
-    if what is None:
+    entry = actions.get(picked)
+    if entry is None:
         return
+    # 动作两种形态：字符串（无参数）或 (名字, 参数) 元组（视图子菜单那几条）
+    what, arg = entry if isinstance(entry, tuple) else (entry, None)
     if what == "open_checked":
-        _open_checked_views(window, "1D")
+        _open_checked_views(window, arg or "1D")
     elif what == "open_item":
         _open_entry_view(window, item, explicit=True)   # 右键：原始条目也照开
     elif what == "open_group":
-        _open_group_views(window, item)
+        _open_group_views(window, item, arg or "1D")
     elif what == "drop_group":
         drop_product_group(window, item)
     elif what == "drop_item":
@@ -1334,11 +1363,13 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     opener(src, "1D")
 
 
-def _open_group_views(window: QMainWindow, item) -> None:
-    """右键 [打开整组 1D 图]：整组逐条打开；张数多时先问一声。
+def _open_group_views(window: QMainWindow, item, name: str = "1D") -> None:
+    """右键 [打开整组图] ▸ 视图：整组逐条打开；张数多时先问一声。
 
-    每张 ≈15 MB（81 张 ≈1.4 GB），超过批量开图的上限（MAX_PANELS_PER_BATCH）先弹确认——
-    整组打开是显式动作，确认一下比默默吃内存好。
+    每张 ≈15 MB（81 张 ≈1.4 GB），超过批量开图的上限（MAX_PANELS_PER_BATCH）
+    先弹确认——整组打开是显式动作，确认一下比默默吃内存好。
+    **name 可换视图**（2026-10-09）：原始数据组自带视图子菜单（整组开
+    2D/剖面/瀑布）；产物组只有 1D（那条菜单项不传 name，走默认）。
     """
     from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
     sources = [gui_sources.source_of(item.child(i))
@@ -1349,13 +1380,13 @@ def _open_group_views(window: QMainWindow, item) -> None:
         return
     if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
         if not _confirm_open_many(
-                window, "打开整组 1D 图",
-                f"要打开 {len(sources)} 张 1D 图吗？每张约占 15 MB 内存"
+                window, f"打开整组 {name} 图",
+                f"要打开 {len(sources)} 张 {name} 图吗？每张约占 15 MB 内存"
                 f"（合计约 {len(sources) * 15} MB），开完会占满面板区。"):
             return
     opener = getattr(window, "open_view_group", None)
     if opener is not None:
-        opener(sources, "1D")
+        opener(sources, name)
 
 
 def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
@@ -1376,17 +1407,32 @@ def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
 
 
 def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
-    """右键 [打开勾选的 N 张 1D 图]：把勾选的条目逐条打开。
+    """右键 [打开勾选的 N 张图] ▸ 视图：把勾选的条目逐条打开。
 
     与视图按钮的唯一区别：**没有防爆线**，超过先弹确认（每张 ≈15 MB）。
-    用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮在 1D
-    上超过防爆线是**一张都不画**的（防爆图），所以那批人没有别的入口；这条
+    用户 2026-09-27："没有办法批量打开图，只能一个一个选"——视图按钮超
+    过防爆线是**一张都不画**的（防爆图），所以那批人没有别的入口；这条
     右键给他们一条明确的、带确认的路。
+    **2026-10-09**：入口从写死 1D 扩成按视图选（1D / 2D / 剖面 / 瀑布），
+    因为原图三类超限后此前没有任何手动全开的出口（用户："原图功能无法
+    批量出超过防爆图数字，应该怎么优化"）。非 1D 视图要的是原始图像：
+    勾选里的产物条目跳过、日志说清（产物是 1D 曲线，只能出 1D 图 /
+    对比 / 热图——与视图按钮 _plot_selected 同一套说法）。
     """
     sources = gui_sources.checked_sources(window)
     if not sources:
         _log(window, "还没有勾选任何条目")
         return
+    if name != "1D":
+        raws = [s for s in sources if s.kind == gui_sources.RAW]
+        if len(raws) != len(sources):
+            _log(window, f"跳过 {len(sources) - len(raws)} 个产物条目："
+                         f"{name} 要从原始图像算（产物是 1D 曲线，只能出 "
+                         "1D 图 / 对比 / 热图）")
+        sources = raws
+        if not sources:
+            _log(window, f"勾选里没有原始数据条目——{name} 要从原始图像算")
+            return
     from xrd_toolkit.gui.plot_views import MAX_PANELS_PER_BATCH
     if len(sources) > MAX_PANELS_PER_BATCH and window.isVisible():
         if not _confirm_open_many(

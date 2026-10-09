@@ -2301,11 +2301,12 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             w.close()
 
     def test_right_click_open_checked_has_no_panel_cap(self):
-        """右键「打开勾选的 N 张 1D 图」：勾选的条目全交出去（>24 也不砍）。
+        """右键「打开勾选的 N 张图」：勾选的条目全交出去（超防爆线也不砍）。
 
-        用户 2026-09-27："没有办法批量打开图，只能一个一个选"。视图按钮在
-        1D 上超过防爆线是**一张都不画**的（防爆图），所以批量开图必须有
-        另一条入口——它带确认框，但不砍张数。
+        用户 2026-09-27："没有办法批量打开图，只能一个一个选"。视图按钮
+        超过防爆线是**一张都不画**的（防爆图），所以批量开图必须有另一条
+        入口——它带确认框，但不砍张数。2026-10-09 起按视图选，这里把
+        1D 与 2D 两条都过一遍。
         """
         w = create_window()
         try:
@@ -2317,8 +2318,59 @@ class TestFileBarKeepsItsPlace(unittest.TestCase):
             w.open_view_group = lambda sources, name: got.update(
                 n=len(sources), name=name)
             gui_file_dock._open_checked_views(w, "1D")   # 窗口没显示 → 不弹确认
-            self.assertEqual(got.get("n"), 30, "30 张全交出去，不砍到 24")
+            self.assertEqual(got.get("n"), 30, "30 张全交出去，不砍到防爆线")
             self.assertEqual(got.get("name"), "1D")
+            gui_file_dock._open_checked_views(w, "2D")   # 原图同样没有上限
+            self.assertEqual(got.get("n"), 30)
+            self.assertEqual(got.get("name"), "2D")
+        finally:
+            w.close()
+
+    def test_bulk_open_menu_offers_every_view(self):
+        """右键批量打开按视图选（2026-10-09）：勾选/整组两条都挂四种视图。
+
+        此前写死 1D——原图三类超限后连手动全开的入口都没有（用户：
+        "原图功能无法批量出超过防爆图数字，应该怎么优化"）。菜单内容与
+        exec 分开，离屏测试直接查这份映射。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            actions = gui_file_dock._entry_menu_actions(
+                QMenu(w), w, w.file_list.raw_group)
+            wanted = {("open_checked", v) for v in gui_file_dock.OPEN_BULK_VIEWS}
+            wanted |= {("open_group", v) for v in gui_file_dock.OPEN_BULK_VIEWS}
+            self.assertTrue(
+                wanted.issubset(set(actions.values())),
+                "「打开勾选的 N 张图」与「打开整组图」都该给 "
+                f"1D/2D/剖面/瀑布（{gui_file_dock.OPEN_BULK_VIEWS}）")
+        finally:
+            w.close()
+
+    def test_open_checked_two_d_skips_product_entries(self):
+        """批量打开选 2D：产物条目挑出去、日志说清（产物只能出 1D）。
+
+        2026-10-09 扩展入口时定的口径：非 1D 视图要原始图像，勾选里的
+        产物条目跳过并记日志——与视图按钮 _plot_selected 同一套说法，
+        不静默少开。
+        """
+        w = create_window()
+        try:
+            raw = gui_sources.make_source("/tmp/a.tif", display="a.tif",
+                                          kind=gui_sources.RAW)
+            bg = gui_sources.make_source("/tmp/a.tif", display="a.tif 处理产物",
+                                         kind=gui_sources.BG, key="k1")
+            got = {}
+            w.open_view_group = lambda sources, name: got.update(
+                n=len(sources), name=name)
+            with mock.patch.object(gui_file_dock.gui_sources,
+                                   "checked_sources",
+                                   return_value=[raw, bg]):
+                gui_file_dock._open_checked_views(w, "2D")
+            self.assertEqual(got.get("n"), 1, "只交原始条目")
+            self.assertEqual(got.get("name"), "2D")
+            self.assertIn("跳过 1 个产物条目", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -4876,11 +4928,15 @@ class TestDuplicateFiles(unittest.TestCase):
         finally:
             w.close()
 
-    def test_duplicate_entries_share_one_product_with_a_note(self):
-        """重复条目出 1D：产物按数据只存一份，日志要说这件事（2026-10-07）。
+    def test_duplicate_entries_compute_once_with_a_note(self):
+        """重复条目出 1D：同一份数据只算一遍、只开一张图，日志要说这件事。
 
-        用户："重复的原始数据生成产物时会只生成一个，在日志里提到这个事情"
-        ——以前一个字都不说，只看见"勾了两条、文件栏只长出 1 条"。"""
+        用户 2026-10-07："重复的原始数据生成产物时会只生成一个，在日志里
+        提到这个事情"——以前一个字都不说，只看见"勾了两条、文件栏只长出
+        1 条"。**2026-10-09** 用户："去重，减少工作量，出图速度永远是越快
+        越好"——从"两条各算一遍、共用产物"再进一步：后来那条整条跳过
+        （连面板都不建），双击它随时单独开（1D 从产物缓存秒开）。
+        """
         w = create_window()
         try:
             add_checked(w, ["data/fake_b.tif"])
@@ -4892,15 +4948,43 @@ class TestDuplicateFiles(unittest.TestCase):
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
-                    lambda: w.log_text.toPlainText().count("积分完成") >= 2))
-            self.assertIn("是同一文件的重复条目", w.log_text.toPlainText())
-            self.assertIn("产物按数据只存一份", w.log_text.toPlainText())
-            # 产物台账真的一份（键 = 文件指纹，两条条目共用）
-            from xrd_toolkit.services import stage_cache
-            keys = [k for k in stage_cache._read_index().get("1d", {})
-                    ] if hasattr(stage_cache, "_read_index") else []
-            if keys:      # 老实现细节变了也不误伤：至少不崩
-                self.assertLessEqual(len(keys), 1)
+                    lambda: w.log_text.toPlainText().count("积分完成") >= 1))
+            log = w.log_text.toPlainText()
+            self.assertIn("是同一文件的重复条目", log)
+            self.assertIn("只算一遍", log)
+            # 只开了一张图：重复的那条是**整条跳过**，不是"两条都算"
+            self.assertEqual(
+                len([k for k in w.plot_docks if k.startswith("1D")]), 1)
+        finally:
+            w.close()
+
+    def test_duplicate_note_repeats_on_the_batch_summary(self):
+        """带重复条目的批：只算一遍（8 张），批完成那行提一句（2026-10-09）。
+
+        用户实测：勾选 83 条 → 同一份数据算了 83 遍、文件栏 81 条，
+        盯着日志尾巴问"这个昨天不是也做了吗"——原来那句打在按 [1D] 的
+        那一刻，几十行进度之前，没人会往回翻。现在：重复条目整条跳过
+        （批的张数 = 不重复的文件数），批完成行再提一句。
+        """
+        files = [str(p) for p in _tmp_files(10)]
+        w = create_window()
+        try:
+            add_checked(w, files[:9])
+            with mock.patch.object(gui_file_dock, "_ask_duplicate",
+                                   return_value="rename"):
+                add_checked(w, files[:1])       # 第 10 条 = 同一文件第二条
+            self.assertEqual(w.file_list.count(), 10)
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: "批完成" in w.log_text.toPlainText(), 60000),
+                    "批要跑到收尾那行")     # 10 条勾选 → 9 份数据 > 合并阈值
+            log = w.log_text.toPlainText()
+            self.assertIn("批完成：9 张", log)      # 10 条勾选、9 份数据
+            self.assertIn("是同一文件的重复条目", log)
+            self.assertEqual(log.count("开始积分"), 9,
+                             "重复的那条不该再算一遍")
         finally:
             w.close()
 
@@ -4929,7 +5013,7 @@ class TestDuplicateFiles(unittest.TestCase):
                     lambda: sum(1 for k, d in w.plot_docks.items()
                                 if k.startswith("1D")
                                 and getattr(d, "last_tth", None)
-                                is not None) >= 2), "两张面板都算完再切")
+                                is not None) >= 1), "面板算完再切")
                 # 出图即产 1D 产物 → 既有规则"新产物 = 勾选清零"（甲）；
                 # 重新勾上「原始数据」整组（两条重复条目都在里面；
                 # 它恒在顶行——groups() 只列产物组，不含它）
@@ -5058,7 +5142,13 @@ class TestDuplicateFiles(unittest.TestCase):
             w.close()
 
     def test_renamed_entry_gets_own_panel(self):
-        """改名条目与原条目各自成图：点 1D 出两张面板，互不当过期。"""
+        """改名条目：批里只算一遍、只开一张；单独开仍是自己的面板。
+
+        2026-09-24 的老坑：两条条目抢同一个键、只出一张图（后来者把先开
+        的那张当过期刷掉）——所以键补显示名区分、"互不当过期"。2026-10-09
+        用户"去重，减少工作量"后：批里重复条目**整条跳过**（连面板都不
+        建），要看它双击单独开——那时仍然是自己的键、自己的图，互不顶掉。
+        """
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
@@ -5068,15 +5158,22 @@ class TestDuplicateFiles(unittest.TestCase):
                                        return_value="rename"):
                     add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
-                drawn1 = _wait_until(
-                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0)
-                # 改名条目的面板键 = 视图|路径|显示名
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0),
+                    "原条目应出图")
+                # 批里只开这一张：改名那条整条跳过（日志说明）
+                self.assertEqual(
+                    len([k for k in w.plot_docks if k.startswith("1D")]), 1)
+                self.assertIn("只算一遍", w.log_text.toPlainText())
+                # 双击改名条目单独开：键 = 视图|路径|显示名，曲线照画
+                item2 = w.file_list.raw_group.child(1)
+                gui_file_dock._open_entry_view(w, item2, explicit=True)
                 key2 = "1D|data/fake_a.tif|fake_a (1).tif"
-                drawn2 = _wait_until(
+                self.assertTrue(_wait_until(
                     lambda: key2 in w.plot_docks
-                    and len(gui_panel_state._content(w.plot_docks[key2]).axes_1d.lines) > 0)
-                self.assertTrue(drawn1, "原条目应出图")
-                self.assertTrue(drawn2, "改名条目应有自己的面板和曲线")
+                    and len(gui_panel_state._content(
+                        w.plot_docks[key2]).axes_1d.lines) > 0),
+                    "单独打开的改名条目仍是自己的面板")
             self.assertEqual(len(w.plot_docks), 2)
             self.assertEqual(w.plot_docks[key2].windowTitle(),
                              "1D_fake_a (1).tif")
@@ -12883,10 +12980,11 @@ class TestBatchProgress(unittest.TestCase):
         finally:
             w.close()
 
-    def test_the_batch_cap_is_twenty_four(self):
-        """防爆线 = 24 张（2026-10-08 晚用户拍的："24 全画"）：24 张照画、
-        25 张起防爆。数字是用户点名的，钉住。"""
-        self.assertEqual(gui_views.MAX_PANELS_PER_BATCH, 24)
+    def test_the_batch_cap_is_twenty_five(self):
+        """防爆线 = 25 张（2026-10-09 用户："超过一次最多画的 24 张改为
+        最多25"，此前是 10-08 拍的 24 全画）：25 张照画、26 张起防爆。
+        数字是用户点名的，钉住。"""
+        self.assertEqual(gui_views.MAX_PANELS_PER_BATCH, 25)
 
     def test_pixel_views_also_refuse_the_whole_batch_over_the_cap(self):
         """原图（2D/剖面/瀑布）超上限也**一张都不弹**（2026-10-08 用户：

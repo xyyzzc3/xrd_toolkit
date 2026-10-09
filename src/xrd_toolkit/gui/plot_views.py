@@ -598,8 +598,14 @@ def _batch_step(window: QMainWindow, key: str, name: str = ""):
             dt = time.time() - batch.get("start", time.time())
             cached = batch.get("cached", 0)
             extra = f"；其中复用缓存 {cached} 张" if cached else ""
+            # 重复条目**这里再说一遍**：按 [1D] 那一刻的提示在几十行进度
+            # 之前，用户盯的是尾巴（2026-10-09：83 条勾选 → 81 条新产物，
+            # 用户问"这个昨天不是也做了吗"——做了，但没长在他看的地方）
+            dupe = batch.get("dupe", 0)
+            dupe_note = (f"；勾选里有 {dupe} 条是同一文件的重复条目"
+                         "——同一份数据只算一遍") if dupe else ""
             _log(window, f"{batch['view']} 批完成：{total} 张"
-                         f"（用时 {dt:.1f} s{extra}）")
+                         f"（用时 {dt:.1f} s{extra}{dupe_note}）")
         del window._batch   # 批走完：清账，之后零散任务回到无计数
         # 1D 批走完 → 文件栏的「1D 产物」分组该长出来了（这次算的这批
         # 现在有产物了）；别的视图没有产物，刷了也没变化
@@ -2071,12 +2077,15 @@ def _refresh_name_labels(window: QMainWindow) -> None:
 # 一次批量作图的防爆线（2026-09-24 用户"图一多就很卡"；开图是唯一随数量
 # 变慢的成本：第 1 张 136 ms、第 100 张 287 ms——每开一张都要把已开的子窗口
 # 重排一遍——而且每张 ≈15 MB，真机 81 张 ≈1.4 GB）。**超过这个数一张都不画**
-# （边界 = **24 张全画、25 张起防爆**——2026-10-08 晚用户拍的："24 全画"；
-# 同一天从"只有 1D 防爆、原图只画前 N 张"统一到**所有视图同款防爆**，
+# （边界 = **25 张全画、26 张起防爆**——2026-10-08 晚用户先拍的"24 全画"，
+# 2026-10-09 用户改为"最多 25"："超过一次最多画的 24 张改为最多25"；
+# 10-08 同一天从"只有 1D 防爆、原图只画前 N 张"统一到**所有视图同款防爆**，
 # 用户："原图批量出图没有防爆图"）。1D 超限照旧全部只算不画、进文件栏
 # 「1D 产物」；其余视图没有产物可留，直接不弹面板——出口都在日志里写明
-# （[热图]/[对比] 一张图放完整批）。
-MAX_PANELS_PER_BATCH = 24
+# （[热图]/[对比] 一张图放完整批；想一张张全开走文件栏右键的
+# 「打开勾选的 N 张图」→ 选视图，没有上限、只弹确认——2026-10-09 起
+# 四种视图都有，见 file_dock._open_checked_views）。
+MAX_PANELS_PER_BATCH = 25
 
 # 批量多大之后"日志合并"（2026-09-25 用户："81 张 = 81 行「打开面板」+
 # 81 行「积分完成」，把日志刷没了"）：超过这个张数就不再逐张写，改成
@@ -2111,13 +2120,17 @@ def _resolve_dock(window: QMainWindow, name: str, item):
     return key, dock
 
 
-def _pending_products(window: QMainWindow, name: str, rest: list) -> list:
+def _pending_products(window: QMainWindow, name: str, rest: list,
+                      seen=None) -> list:
     """超限文件里**还需要算**的那些（1D 专用；其余视图返回空表）。
 
     为什么只认 1D：只有 1D 有产物可留（2D/剖面/瀑布是显示阶段，见
     services/stage_cache 的说明），"只算不画"对它们没有意义。
     已有产物的直接跳过——不重算，**也不计进这一批的总数**：总数为 0
     的批不该开进度条，更不该让 k/n 永远到不了 n。
+    **同一路径的重复条目也只算一遍**（2026-10-09 用户："去重，减少
+    工作量，出图速度永远是越快越好"）——勾 83 条里有 2 条重复，这批
+    就是 81 张，产物也是 81 条，数字处处对得上。
     """
     if name != "1D" or not rest:
         return []
@@ -2127,8 +2140,13 @@ def _pending_products(window: QMainWindow, name: str, rest: list) -> list:
               tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
     _consume_data_params(window)   # 按这把范围取数：这组值用掉了
     todo = []
+    done = set(seen or ())    # 已在面板那批开算的路径（重复条目被防爆线
+    #                           劈开时，后半截也不能再算一遍）；同批内同理
     for source in rest:                       # rest = 来源对象（已按原始数据过滤）
         path = Path(source.path)
+        if path in done:
+            continue
+        done.add(path)
         if not stage_cache.has_1d(path, **kw):
             todo.append(path)
     return todo
@@ -2272,9 +2290,12 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     # 只有 1D 视图能出，其余视图点名跳过（不静默少画）
     raw = [s for s in checked if s.kind == gui_sources.RAW]
     products = [s for s in checked if s.kind != gui_sources.RAW]
+    n_dupe = 0            # 同一路径的重复条目数（批完成时还要再提一句）
     if name == "1D" and raw:
-        # 重复条目（同一条数据以 xxx.tif / xxx (1).tif 加了两次）：产物按
-        # **数据**只存一份（键 = 文件指纹），几个条目共用它——[1D] 这条路
+        # 重复条目（同一条数据以 xxx.tif / xxx (1).tif 加了两次）：本批
+        # **只算一遍**（2026-10-09 用户："去重，减少工作量，出图速度永远
+        # 是越快越好"）——第一次出现照常，后来的条目整条跳过（下面的
+        # repeat_items），产物也按**数据**只存一份（键 = 文件指纹）。
         # 以前一个字都不说，只看见"勾了两条、文件栏只长出 1 条"（用户
         # 2026-10-07："重复的原始数据生成产物时会只生成一个，在日志里
         # 提到这个事情"）。[批量处理] 那条路已有逐条"同一文件只扣一份"
@@ -2283,7 +2304,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         n_dupe = len(paths) - len(set(paths))
         if n_dupe:
             _log(window, f"注意：勾选里有 {n_dupe} 条是同一文件的重复条目"
-                         "——产物按数据只存一份，这几个条目共用它")
+                         "——同一份数据只算一遍、只开一张图，产物共用"
+                         "（要看重复的那条：双击它单独开）")
     if products and name != "1D":
         _log(window, f"跳过 {len(products)} 个产物条目：{name} 要从原始图像"
                      "算（产物是 1D 曲线，只能出 1D 图 / 对比 / 热图）")
@@ -2299,18 +2321,37 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     # 只算不画的文件**照样算完入库**：1D 有产物可留，之后单独点开就是
     # 复用缓存；已有产物的直接跳过（不重算、也不占进度总数）。
     # 其余视图（2D/剖面/瀑布）是显示阶段、没有产物可留，就只记日志。
-    pending = _pending_products(window, name, rest)
+    pending = _pending_products(window, name, rest,
+                                seen={Path(s.path) for s in targets})
     if rest:
         why = (f"这批 {len(raw)} 张超过一次最多画的 {MAX_PANELS_PER_BATCH} 张"
                "（每张 ≈ 15 MB、越开越慢）")
+        # 出口：右键「打开勾选的 N 张图」→ 选视图（2026-10-09 起四种视图
+        # 都有——此前只有 1D 一条入口，原图三类超限后没有任何手动全开的
+        # 路，用户："原图功能无法批量出超过防爆图数字"）
         if name == "1D":
             _log(window, f"{why}：全部只算不画——结果进文件栏"
                          "「1D 产物」，双击看一张；想一次全开：右键文件栏"
-                         "（或「原始数据」组）→「打开勾选的 N 张 1D 图」")
+                         "（或「原始数据」组）→「打开勾选的 N 张图」→ 1D")
         else:
             _log(window, f"{why}：这次一张都不弹——要看整批用 [热图] / "
-                         "[对比]（一张图看完），或减少勾选分批看")
-    total_tasks = len(targets) + len(pending)
+                         f"[对比]（一张图看完）；想一张张全开：右键文件栏 →"
+                         f"「打开勾选的 N 张图」→ {name}（先弹确认）；"
+                         "或减少勾选分批看")
+    # 同一文件的重复条目：**本批只算一遍、只开一张图**（2026-10-09 用户：
+    # "去重，减少工作量，出图速度永远是越快越好"）。第一次出现照常，后来
+    # 的条目整条跳过（连面板都不建——面板就是那份计算本身），日志汇总
+    # 一句；要看第二条条目：双击它单独开（1D 从产物缓存秒开）。
+    repeat_items = set()
+    if n_dupe:
+        seen_paths = set()
+        for source in targets:
+            p = str(Path(source.path))
+            if p in seen_paths:
+                repeat_items.add(source.item)
+            else:
+                seen_paths.add(p)
+    total_tasks = len(targets) - len(repeat_items) + len(pending)
     # 只开**一张**新图：2θ/点数默认用该文件自己上次的（甲，见 _apply_range_memory）；
     # 批量（≥2 张）仍用坞顶那行当输入——一组图总得有一个共同范围
     single_new = total_tasks == 1
@@ -2318,7 +2359,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         # 批量进度记账：这一批的总数/视图名/起算时刻；每个任务结束回调
         # 计数一次（k/n 后缀与进度条都靠它，批走完自动清账）
         window._batch = {"view": name, "total": total_tasks, "done": 0,
-                         "start": time.time(), "cached": 0}
+                         "start": time.time(), "cached": 0, "dupe": n_dupe}
         _progress_show(window, total_tasks)
     opened = []          # 新开的面板显示名（大批量时合并成一行）
     merged = total_tasks > BATCH_LOG_MERGE_AFTER
@@ -2326,7 +2367,11 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     # 产物条目先画：读盘画线（毫秒级）不需要排队等积分，也不进进度条
     for source in products:
         _open_product_panel(window, source)
+    skipped_repeats = 0
     for i, source in enumerate(targets):
+        if source.item in repeat_items:
+            skipped_repeats += 1     # 同一文件本批已开/已算：整条跳过
+            continue
         path = Path(source.path)
         display = source.display
         key, dock = _resolve_dock(window, name, source.item)
@@ -2358,7 +2403,10 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     if opened:
         head = "、".join(opened[:5]) + ("…" if len(opened) > 5 else "")
         _log(window, f"打开{view_word}面板 {len(opened)} 张：{head}")
-    if len(targets) + len(pending) > 1:
-        _progress_show(window, len(targets) + len(pending))   # 进入计算阶段
+    if skipped_repeats:
+        _log(window, f"{skipped_repeats} 条重复条目本批只算一遍：同一文件的"
+                     "图只开一张（要看那一条：双击它的名字单独开）")
+    if total_tasks > 1:
+        _progress_show(window, total_tasks)   # 进入计算阶段（总数已按去重算）
     for path in pending:
         _spawn_headless(window, name, path)
