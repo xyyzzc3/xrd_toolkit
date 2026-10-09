@@ -16,13 +16,12 @@ docs/使用说明.md）：
     gui_welcome     刚打开软件：中间空白、参数坞收起        → 使用说明 §1
     gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
     gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README / 使用说明 §3
-    gui_heatmap     三个数据集的热图 + 旁边一条 1D            → README / 使用说明 §7
+    gui_compare_heat 同一批 8 个文件：堆叠对比（左）+ 热图（右）→ README / 使用说明 §7
     gui_compare     同一条曲线的原始 vs 扣背景产物（短名图例）→ NOTES
-    gui_compare_stack 八条 LMFP 堆叠对比（纵轴短名）          → README / 使用说明 §7
     gui_customize   Customize 对话框（单张，460×542）         → NOTES
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
-    gui_background  自动基线 + 几个锚点校正（原始/基线/结果）→ README / 使用说明 §6
+    gui_background  自动基线（不加锚点，原始/基线/结果三线）  → README / 使用说明 §6
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**
@@ -314,31 +313,6 @@ def shot_compare(window) -> None:
     save(window, "gui_compare")
 
 
-def shot_compare_stack(window) -> None:
-    """对比·堆叠：八条 LMFP 上下错开 + 纵轴短名（使用说明 §7）。
-
-    堆叠与显示数据名都是**即改即画**的显示参数，必须**面板出来之后**
-    再勾（新面板的显示参数从默认起步，先勾会被盖掉——同 shot_compare
-    那处注释）。行高 = 第二高的行峰 × 0.7（services.stacking 的口径），
-    八条几乎重合的帧就是八条平行线——这正是"堆叠"要展示的样子。
-    """
-    paths = find_data("LMFP*.tif", 8)
-    add_all(window, paths, entrance="对比")
-    window.compare_btn.click()
-    wait_for(lambda: any(k.startswith("对比")
-                         and len(content_of(window, k).axes_1d.lines) >= 8
-                         for k in window.plot_docks), timeout_s=240)
-    window.params["对比堆叠"].setChecked(True)     # 控件文字是「堆叠显示」
-    settle(400)
-    window.params["显示数据名"].setChecked(True)   # 纵轴短名（默认关）
-    settle(400)
-    window.resize(1600, 1000)
-    settle(400)
-    fit_panel(window, next(k for k in window.plot_docks
-                           if k.startswith("对比")))
-    save(window, "gui_compare_stack")
-
-
 def shot_customize(window) -> None:
     """Customize 对话框（只有对话框本体，460×542）。
 
@@ -439,53 +413,54 @@ def shot_batch(window) -> None:
     save(window, "gui_batch")
 
 
-def shot_heatmap(window) -> None:
-    """热图：三个数据集 + 旁边一条 1D（README 图注就是这么写的）。"""
-    add_all(window, LMFP, entrance="对比")
+def shot_compare_heat(window) -> None:
+    """第 7 步：堆叠对比 + 热图，同一批 8 个文件、一张截图两个面板。
+
+    用户 2026-10-09："热图和对比堆叠图放一张图片里，gui 里只有这两张
+    [面板]"——原来是两张分开的截图（八条堆叠 / 三张热图）；现在合成
+    一张：**同一批**文件、左边堆叠右边热图，窗口里不出现别的面板。
+    堆叠与显示数据名都是即改即画的显示参数，必须在**面板出来之后**再勾
+    （新面板的显示参数从默认起步——同 shot_compare 那处注释）。
+    """
+    paths = find_data("LMFP*.tif", 8)
+    add_all(window, paths, entrance="对比")
+    window.compare_btn.click()
+    wait_for(lambda: any(k.startswith("对比")
+                         and len(content_of(window, k).axes_1d.lines) >= 8
+                         for k in window.plot_docks), timeout_s=240)
     window.heat_btn.click()
     wait_for(lambda: any(k.startswith("热图") for k in window.plot_docks),
              timeout_s=240)
-    hkey = next((k for k in window.plot_docks if k.startswith("热图")), None)
-    if hkey is not None:
-        ax = content_of(window, hkey).axes_heat
-        wait_for(lambda: len(ax.images) > 0
-                 and ax.images[0].get_array() is not None, timeout_s=240)
-    # 行名（默认关）：面板出来之后才勾——先勾会被新面板的默认盖掉
-    # （原因见 shot_compare 那处注释）
+    hkey = next(k for k in window.plot_docks if k.startswith("热图"))
+    ax = content_of(window, hkey).axes_heat
+    wait_for(lambda: len(ax.images) > 0
+             and ax.images[0].get_array() is not None, timeout_s=240)
+    # 两个开关**都在热图开出来之后**再勾：热图面板一建，焦点切过去、
+    # 参数坞按它的快照回放，会把先勾的「堆叠显示」冲回未勾选（它住在
+    # 对比页、两类面板快照各存一份——2026-10-09 初拍实测：左边那八条
+    # 又叠成了一条）。显示数据名（默认关）管两处：堆叠纵轴短名 + 热图行名。
+    window.params["对比堆叠"].setChecked(True)     # 控件文字是「堆叠显示」
+    settle(400)
     window.params["显示数据名"].setChecked(True)
     settle(400)
-    # 热图那一步按各文件自己的设置补算了 1D（新产物 → 勾选清零，甲）：
-    # 不重勾这一步点 1D 只会静默少一块（图注要求的 parallel 1D）。
-    # **只勾第一条**：图注是"旁边一条 1D"，全勾会开出三块互相挤
-    check_only(window, [LMFP[0]])
-    window.view_buttons["1D"].click()
-    wait_for(lambda: "1D|" + LMFP[0] in window.plot_docks
-             and len(content_of(window, "1D|" + LMFP[0]).axes_1d.lines) > 0,
-             timeout_s=240)
-    check_only(window, LMFP)   # 拍图时文件栏回到"三条都选中"的样子
-    # 热图大块在左、那条 1D 在右，两块铺满
+    check_only(window, paths)   # 文件栏回到"八条都选中"的样子
+    # 只留这两个面板：左右并排铺满（窗口里没有 1D / 别的图）
     window.resize(1600, 1000)
     settle(400)
     force_layout(window)
     vw, vh = area_size(window)
-    heat_w = int(vw * 0.60)
-    fit_panel(window, hkey, (4, 4, heat_w, vh - 12))
-    fit_panel(window, "1D|" + LMFP[0],
-              (heat_w + 8, 4, vw - heat_w - 16, vh - 12))
-    # 编辑对象拨回热图：中间点过一次 1D，焦点跑到那条 1D 面板上，参数坞
-    # 会回放成"显示数据名未勾选"，跟图上画着的行名打架。走"点面板"的
-    # 同一条路（app 的 eventFilter 也是调它）拨回来，坞里就自洽了
-    gui_state._set_focus(window, hkey, window.plot_docks[hkey].windowTitle())
-    settle(300)
-    save(window, "gui_heatmap")
+    ckey = next(k for k in window.plot_docks if k.startswith("对比"))
+    half = (vw - 12) // 2
+    fit_panel(window, ckey, (4, 4, half, vh - 12))
+    fit_panel(window, hkey, (half + 8, 4, vw - half - 16, vh - 12))
+    save(window, "gui_compare_heat")
 
 
 def shot_background(window) -> None:
-    """背景扣除：自动基线 + 几个手动锚点校正。
+    """背景扣除：自动基线——**不点任何锚点**。
 
-    用户 2026-10-09："在自动扣背景的基础上，选几个点，类似我现在的 gui
-    的状态"——默认工作流（自动基线、窗口 0.2°）加四个校正锚点，
-    原始 / 基线 / 结果三线同在。
+    用户 2026-10-09："扣背景的图不要手动选点了，就自动扣背景。"——
+    模式切到自动基线（窗口 0.2° 默认），原始 / 基线 / 结果三线同在。
     """
     path = LMFP[0]
     add_all(window, [path], entrance="处理")
@@ -494,7 +469,9 @@ def shot_background(window) -> None:
     wait_for(lambda: key in window.plot_docks
              and len(content_of(window, key).axes_1d.lines) > 0)
     ax = content_of(window, key).axes_1d
-    _set_manual_anchors(window, key, mode="auto")
+    combo = window.params["背景扣除模式"]
+    combo.setCurrentIndex(combo.findData("auto"))
+    settle(500)
     window.resize(1600, 1000)
     settle(400)
     fit_panel(window, key)
@@ -576,9 +553,9 @@ def shot_calib(window) -> None:
 
 
 SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
-         "gui_compare": shot_compare, "gui_compare_stack": shot_compare_stack,
+         "gui_compare": shot_compare, "gui_compare_heat": shot_compare_heat,
          "gui_customize": shot_customize, "gui_views": shot_views,
-         "gui_batch": shot_batch, "gui_heatmap": shot_heatmap,
+         "gui_batch": shot_batch,
          "gui_background": shot_background, "gui_calib": shot_calib}
 
 

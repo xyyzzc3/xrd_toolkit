@@ -3949,6 +3949,24 @@ class TestBackgroundFromProduct(unittest.TestCase):
         finally:
             w.close()
 
+    def test_recipe_line_hides_the_anchor_note_without_anchors(self):
+        """零锚点的配方行不挂"（锚点本图手点）"（2026-10-09）。
+
+        自动基线 / 空扫都不靠锚点；重拍说明书背景图时看到"自动基线、
+        窗口 0.2°（锚点本图手点）"的尾巴——零锚点却说"手点"，像动过点。
+        """
+        plain = {"chain": "自动基线、窗口 0.2°", "anchors": [],
+                 "anchor_source": None}
+        self.assertEqual(gui_views.recipe_text(plain),
+                         "本图配方：自动基线、窗口 0.2°")
+        hand = {"chain": "自动基线、锚点 2 个", "anchors": [(1.0, 2.0),
+                                                            (3.0, 4.0)],
+                "anchor_source": None}
+        self.assertIn("（锚点本图手点）", gui_views.recipe_text(hand))
+        borrowed = {"chain": "手动锚点、锚点 1 个", "anchors": [(1.0, 2.0)],
+                    "anchor_source": "a.tif"}
+        self.assertIn("（锚点来处：a.tif）", gui_views.recipe_text(borrowed))
+
     def test_batch_redoes_a_bg_product_from_its_source_curve(self):
         """处理产物在批里**按它底下的原始 1D 曲线重做**，不跳过、也不二次相减。
 

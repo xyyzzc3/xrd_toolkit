@@ -939,9 +939,15 @@ def recipe_text(recipe: dict) -> str:
     """配方给人看的一行字（处理页那行提示用）。"""
     if not recipe:
         return "本图还没处理过（本页参数只作用于当前这张图）"
+    head = f"本图配方：{recipe.get('chain') or '未处理'}"
+    if not recipe.get("anchors"):
+        # 零锚点就没有"锚点来处"这回事（自动基线 / 空扫都不靠锚点）——
+        # 别挂着"（锚点本图手点）"让人以为动过点（2026-10-09 重拍背景图
+        # 时看到：自动基线、零锚点，尾巴还在）
+        return head
     from_src = recipe.get("anchor_source")
     tail = f"（锚点来处：{from_src}）" if from_src else "（锚点本图手点）"
-    return f"本图配方：{recipe.get('chain') or '未处理'}{tail}"
+    return f"{head}{tail}"
 
 
 def note_proc_recipe(window: QMainWindow, path, recipe: dict) -> None:

@@ -56,8 +56,14 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
       <sub>校准工作台——当前几何与对比位 A / B 三列并排，带引擎指标与结论行</sub>
     </td>
     <td align="center" width="50%">
-      <img src="../showcase/gui/gui_heatmap.png" width="100%"><br>
-      <sub>批量热图——三个数据集拼成一张 2θ×样品 强度图</sub>
+      <img src="../showcase/gui/gui_background.png" width="100%"><br>
+      <sub>真 LMFP 图谱上的背景扣除——自动基线与扣完的曲线；原始、基线、结果同框</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="../showcase/gui/gui_compare_heat.png" width="100%"><br>
+      <sub>一批图一眼扫完——同一批 8 个文件：左边八条曲线堆叠对比，右边 2θ×样品 热图</sub>
     </td>
   </tr>
 </table>
