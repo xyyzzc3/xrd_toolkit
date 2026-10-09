@@ -24,8 +24,8 @@ class TestIntegratorReuse(unittest.TestCase):
     """同一几何的 integrator 只建一次（pyFAI 首调用要算映射表，最贵）。"""
 
     def setUp(self):
-        # 每个测试从空缓存开始（threading.local）
-        it._integrator_cache.items = {}
+        # 每个测试从空缓存开始（按 OS 线程号分桶的普通 dict）
+        it._integrator_cache.clear()
         it._backend["name"] = None
 
     def test_same_geometry_reuses_one_integrator(self):
@@ -56,7 +56,7 @@ class TestMethodFallback(unittest.TestCase):
     """算法回退链：cython 最快；它不可用时回退 numpy，且**只回退一次**。"""
 
     def setUp(self):
-        it._integrator_cache.items = {}
+        it._integrator_cache.clear()
         it._backend["name"] = None
 
     def test_uses_cython_when_available(self):

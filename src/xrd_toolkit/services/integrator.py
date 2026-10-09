@@ -528,7 +528,19 @@ def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
 # 0.3%、个别箱离群——它们用查找表分箱，边界与 numpy 不同）→ 会让
 # 已发布的展示图/测试基线悄悄变数，不能作为回退。
 _INTEGRATOR_METHODS = ("cython", "numpy")
-_integrator_cache = threading.local()
+# 几何 → integrator 的缓存，**键 = (OS 线程号, 几何指纹)**（2026-10-09 改）。
+# 原先是 threading.local()，但 GUI 的任务池跑在 **QThread** 上：PySide6
+# 的排队槽调用之间会重建 Python 线程状态——实测同一条 OS 线程连续 4 次
+# 调用，threading.local() 里的标记每次都回到"第 1 次见到本线程"。于是
+# "本线程的缓存"实际退化成"本任务的缓存"：**每张图都新建一个
+# AzimuthalIntegrator、pyFAI 的几何数组（center/position/solid-angle）
+# 重建一遍**，实测 +300 ms/张（批量慢 4 倍；2026-09-23 tasks.py 记的
+# "积分实测 0.43 s/张"量到的就是它）。改成手动按 get_ident() 分桶：
+# 每个 OS 线程仍各用各的 integrator（线程安全性与原先相同——pyFAI 的
+# 引擎带锁、几何缓存只读），但缓存不再随 Python 线程状态消亡。普通
+# 线程（CLI / 测试）行为不变。
+_integrator_cache = {}
+_integrator_lock = threading.Lock()
 _backend = {"name": None}
 
 
@@ -551,21 +563,24 @@ def _integrator_key(pixel_size_m, wavelength_m, dist_m, poni1_m, poni2_m,
 
 def _integrator_for(key, *, dist_m, poni1_m, poni2_m, rot1_deg, rot2_deg,
                     pixel_size_m, wavelength_m) -> dict:
-    """取（或新建）本线程该几何的 integrator 条目 {"ai", "method"}。"""
-    cache = getattr(_integrator_cache, "items", None)
-    if cache is None:
-        cache = _integrator_cache.items = {}
-    entry = cache.get(key)
-    if entry is None:
-        entry = {
-            "ai": AzimuthalIntegrator(
-                dist=dist_m, poni1=poni1_m, poni2=poni2_m,
-                rot1=np.radians(rot1_deg), rot2=np.radians(rot2_deg),
-                rot3=0.0, pixel1=pixel_size_m, pixel2=pixel_size_m,
-                wavelength=wavelength_m),
-            "method": _INTEGRATOR_METHODS[0],
-        }
-        cache[key] = entry
+    """取（或新建）本线程该几何的 integrator 条目 {"ai", "method"}。
+
+    缓存键 = (OS 线程号, 几何指纹)——**不用 threading.local()**，原因见
+    上面 `_integrator_cache` 那段（QThread 的槽调用之间线程局部量会丢）。
+    """
+    slot = (threading.get_ident(), key)
+    with _integrator_lock:
+        entry = _integrator_cache.get(slot)
+        if entry is None:
+            entry = {
+                "ai": AzimuthalIntegrator(
+                    dist=dist_m, poni1=poni1_m, poni2=poni2_m,
+                    rot1=np.radians(rot1_deg), rot2=np.radians(rot2_deg),
+                    rot3=0.0, pixel1=pixel_size_m, pixel2=pixel_size_m,
+                    wavelength=wavelength_m),
+                "method": _INTEGRATOR_METHODS[0],
+            }
+            _integrator_cache[slot] = entry
     return entry
 
 
