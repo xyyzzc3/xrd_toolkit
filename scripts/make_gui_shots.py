@@ -10,18 +10,19 @@
 ② 要认线的图（对比/热图/瀑布）勾上 [显示数据名]（默认关，展示图得
 看得出哪条是哪条）。
 
-场景与文档里的图注一一对应（改图注前先看这里；2026-09-25 起 README
-只放三张 GUI 图，其余在 docs/NOTES.md）：
+场景与文档里的图注一一对应（改图注前先看这里；2026-10-09 起 README
+放五张 GUI 图 = 下面标 README 的那五张，其余在 docs/NOTES.md 与
+docs/使用说明.md）：
     gui_welcome     刚打开软件：中间空白、参数坞收起        → 使用说明 §1
     gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
-    gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README
-    gui_heatmap     三个数据集的热图 + 旁边一条 1D            → README
+    gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README / 使用说明 §3
+    gui_heatmap     三个数据集的热图 + 旁边一条 1D            → README / 使用说明 §7
     gui_compare     同一条曲线的原始 vs 扣背景产物（短名图例）→ NOTES
-    gui_compare_stack 八条 LMFP 堆叠对比（纵轴短名）          → 使用说明 §7
+    gui_compare_stack 八条 LMFP 堆叠对比（纵轴短名）          → README / 使用说明 §7
     gui_customize   Customize 对话框（单张，460×542）         → NOTES
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
-    gui_background  自动基线 + 几个锚点校正（原始/基线/结果）→ 使用说明 §6
+    gui_background  自动基线 + 几个锚点校正（原始/基线/结果）→ README / 使用说明 §6
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**

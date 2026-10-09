@@ -63,6 +63,16 @@ own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
       <sub>Calibration workbench — current geometry beside comparison slots A / B, engine metrics and a verdict line</sub>
     </td>
     <td align="center" width="50%">
+      <img src="showcase/gui/gui_background.png" width="100%"><br>
+      <sub>Background subtraction on a real LMFP pattern — the auto baseline corrected through four manual anchors; raw, baseline and result in one frame</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="showcase/gui/gui_compare_stack.png" width="100%"><br>
+      <sub>A whole batch at a glance — eight frames stacked in the compare panel, sample names on the axis</sub>
+    </td>
+    <td align="center" width="50%">
       <img src="showcase/gui/gui_heatmap.png" width="100%"><br>
       <sub>Batch heatmap — three datasets as one 2θ × sample intensity map</sub>
     </td>
