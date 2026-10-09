@@ -36,6 +36,32 @@ NEEDED = ("XRD_STAGE_CACHE", "XRD_RECIPES")
 
 
 class TestScriptsDoNotPolluteOutputs(unittest.TestCase):
+    def test_gui_scripts_keep_demo_exports_out_of_the_repo(self):
+        """演示导出不许落进仓库的 outputs/（2026-10-09 加）。
+
+        make_gui_shots 的批处理图把导出对话框指向 `ROOT / "outputs"`，
+        于是每重拍一次就在仓库里留一个 `导出_时间戳_原始/`——翻出来有
+        四个（10-04 起）。和产物缓存同一条规矩：脚本自己跑的演示导出
+        该指到临时目录。静态判定按 AST 认 `ROOT / "outputs"` 这个具体
+        写法（注释里提到 outputs 不算，文本匹配会误伤）。
+        """
+        bad = []
+        for path in sorted(SCRIPTS.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.BinOp)
+                        and isinstance(node.op, ast.Div)
+                        and isinstance(node.right, ast.Constant)
+                        and node.right.value == "outputs"
+                        and isinstance(node.left, ast.Name)
+                        and node.left.id == "ROOT"):
+                    bad.append(path.name)
+                    break
+        self.assertEqual(
+            [], bad,
+            "这些脚本把演示导出写进仓库 outputs/（应改指系统临时目录，"
+            "抄 make_gui_shots.py 的 _EXPORT_DEMO）：" + "、".join(bad))
+
     def test_gui_scripts_isolate_product_cache(self):
         bad = []
         for path in sorted(SCRIPTS.glob("*.py")):
