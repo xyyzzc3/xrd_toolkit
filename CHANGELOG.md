@@ -3,6 +3,21 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
 版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
 
+## [Unreleased]
+
+### 模拟
+
+- **新增 XRD 模拟模块**（RY04 第六周并入）：`xrd_toolkit.simulation` 从 CIF 计算理论
+  粉末 XRD 图谱。手写版（布拉格定律 + 结构因子，公式全自写）与 pymatgen
+  `XRDCalculator` 参考版并存；Si / LaB₆ / Al₂O₃ 三个材料逐峰对答案一致
+  （max Δ2θ = 0.0000°）
+- **新增命令行入口** `scripts/simulate_xrd.py`：出谱图、`--annotate` 峰位 (hkl)
+  标注、`--wavelength` 换波长、`--compare` 现场复核两版一致
+- 参考结构入库 `data/structures/`（COD 公有领域）；展示图入库 `showcase/simulation/`
+- 依赖：模拟功能走可选依赖 `pip install 'xrd-toolkit[simulation]'`（pymatgen），
+  主程序不受影响
+- 单元测试 11 项：峰位 / 波长效应 / 消光 / 散射因子自检 / 多重性 / 两版一致性
+
 ## [0.1.3] — 2026-10-10
 
 一版"把界面收拾干净、操作更顺手"的更新；另有说明书重写为跟做教程、
