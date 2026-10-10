@@ -2,6 +2,8 @@
 .venv/
 data/*
 !data/.gitkeep
+# 例外：参考晶体结构文件（COD 公有领域、每个几 KB，供 tests / 示例 / 周报使用）
+!data/structures/
 outputs/
 # outputs/ 是脚本的本地工作区（按数据文件名分文件夹，带运行编号），不上传
 # （保护实验数据隐私）；README 展示用的精选图统一放在 showcase/ 里提交
