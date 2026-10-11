@@ -7,6 +7,7 @@
 用法示例：
     python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_xrd_Si.png
     python scripts/simulate_xrd.py ... --annotate             # 峰位标注 (hkl)
+    python scripts/simulate_xrd.py ... --annotate --three-index  # 六方三位指数（卡片写法）
     python scripts/simulate_xrd.py ... --wavelength 0.7093    # 换 Mo Kα
     python scripts/simulate_xrd.py ... --compare              # 两版对答案（不画图）
 """
@@ -41,12 +42,16 @@ def main() -> None:
     ap.add_argument("--two-theta", nargs=2, type=float, default=(10.0, 80.0),
                     metavar=("MIN", "MAX"))
     ap.add_argument("--annotate", action="store_true",
-                    help="在峰顶标注 (hkl)（六方用四位指数）")
+                    help="在峰顶标注 (hkl)（六方默认四位指数，--three-index 可切三位）")
+    ap.add_argument("--three-index", action="store_true",
+                    help="六方晶系峰写三位指数（如 (104)、(116)，与 PDF 卡片一致；"
+                         "默认四位 (h k i l)）")
     ap.add_argument("--pymatgen", action="store_true",
                     help="改用 pymatgen XRDCalculator 参考实现")
     ap.add_argument("--compare", action="store_true",
                     help="打印手写版与 pymatgen 版的逐峰偏差（不画图）")
     args = ap.parse_args()
+    four_index = not args.three_index
 
     structure = core.load_structure(args.cif)
     print(f"material  : {structure.composition.reduced_formula}")
@@ -79,12 +84,13 @@ def main() -> None:
     print("-" * 62)
     print(f"{'2theta(deg)':>11} {'I(%)':>6}   hkl x multiplicity")
     for tt, inten, refs in peaks:
-        print(f"{tt:11.3f} {inten:6.1f}   {core.format_hkls(refs, is_hex)}")
+        print(f"{tt:11.3f} {inten:6.1f}   {core.format_hkls(refs, is_hex, four_index)}")
 
     title = (f"{structure.composition.reduced_formula} — simulated XRD "
              f"(λ = {args.wavelength:.4f} Å)")
     if args.annotate:
-        plots.plot_annotated(two_thetas, intensities, peaks, is_hex, title, args.out)
+        plots.plot_annotated(two_thetas, intensities, peaks, is_hex, title, args.out,
+                             four_index=four_index)
     else:
         plots.plot_pattern(two_thetas, intensities, title, args.out)
     print(f"saved: {args.out}")

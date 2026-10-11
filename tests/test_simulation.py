@@ -6,6 +6,8 @@
   - 金刚石结构消光：(200)、(222) 的 |F|² 为 0，(111)、(220) 显著非零；
   - 散射因子自检 f(s=0) = 原子序数；
   - 多重性：Si (111) 轨道 8 个、LaB₆ (100) 轨道 6 个；
+  - 指数代表与排版：刚玉取 h≥k≥0 规范写法（110 / 113 / 116 / 214 / 300）；
+    六方标签默认四位，可切三位卡片式；
   - 手写版与 pymatgen 版三个材料逐峰一致（峰数相等、2θ 偏差 < 1e-3°）。
 
 运行：python -m unittest tests.test_simulation -v（或 scripts/run_tests.py）。
@@ -105,6 +107,44 @@ class TestManualMatchesPymatgen(unittest.TestCase):
 
     def test_al2o3(self):
         self._check("Al2O3_1000032.cif")
+
+
+class TestHexRepresentatives(unittest.TestCase):
+    """刚玉的显示代表面取规范正指数写法（与 PDF 卡片常见行号一致）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _, _, cls.peaks, _ = core.pattern_from_cif(
+            STRUCT_DIR / "Al2O3_1000032.cif", CU_KA, (10.0, 80.0))
+
+    def _rep_at(self, two_theta):
+        peak = min(self.peaks, key=lambda p: abs(p[0] - two_theta))
+        return peak[2][0][0]
+
+    def test_conventional_representatives(self):
+        expect = {35.140: (1, 0, 4), 37.764: (1, 1, 0), 43.340: (1, 1, 3),
+                  57.481: (1, 1, 6), 66.495: (2, 1, 4), 68.185: (3, 0, 0)}
+        for tt, hkl in expect.items():
+            self.assertEqual(self._rep_at(tt), hkl)
+
+
+class TestHklFormatting(unittest.TestCase):
+    """峰位标签排版：六方默认四位 (h k i l)；三位模式写卡片式正指数；立方不受影响。"""
+
+    def test_hex_four_index_default(self):
+        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True), "(1 1 -2 6) x12")
+
+    def test_hex_three_index_card_style(self):
+        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True, four_index=False),
+                         "(116) x12")
+
+    def test_three_index_multi_digit_keeps_spaces(self):
+        self.assertEqual(core.format_hkls([((1, 0, 10), 12)], True, four_index=False),
+                         "(1 0 10) x12")
+
+    def test_cubic_three_index_unchanged(self):
+        self.assertEqual(core.format_hkls([((1, 1, 1), 8)], False, four_index=False),
+                         "(111) x8")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
 - `plot_pattern`：竖线（棒状）谱图。理论峰是无限窄的，模拟谱的标准画法
   就是一排竖线；
-- `plot_annotated`：在每根峰上方竖排标注 (hkl)（六方用四位指数 hkil），
+- `plot_annotated`：在每根峰上方竖排标注 (hkl)（六方默认四位 hkil，可切三位卡片式），
   相邻标签过近时自动抬高一档，避免叠字。
 """
 import matplotlib
@@ -34,10 +34,12 @@ def plot_pattern(two_thetas, intensities, title, out_path):
     return out_path
 
 
-def plot_annotated(two_thetas, intensities, peaks, is_hex, title, out_path):
+def plot_annotated(two_thetas, intensities, peaks, is_hex, title, out_path,
+                   four_index=True):
     """带 (hkl) 标注的谱图（第六周最终交付图的画法）。
 
-    peaks 用 core.pattern_from_structure 返回的峰表（含代表 hkl 与多重性）。
+    peaks 用 core.pattern_from_structure 返回的峰表（含代表 hkl 与多重性）；
+    four_index=False 时六方晶系改用三位指数（如 (104)），与 PDF 卡片行号对照方便。
     返回输出路径。
     """
     fig, ax = plt.subplots(figsize=(10, 5.5))
@@ -53,7 +55,7 @@ def plot_annotated(two_thetas, intensities, peaks, is_hex, title, out_path):
             last_x.append(tt)
         else:
             last_x[tier] = tt
-        ax.text(tt, ii + 3 + tier * TIER_GAP, format_hkls(refs, is_hex),
+        ax.text(tt, ii + 3 + tier * TIER_GAP, format_hkls(refs, is_hex, four_index),
                 rotation=90, ha="center", va="bottom",
                 fontsize=8.5, color="#333333")
 
@@ -62,7 +64,7 @@ def plot_annotated(two_thetas, intensities, peaks, is_hex, title, out_path):
     ax.set_xlabel(r"2$\theta$ (degrees)")
     ax.set_ylabel("Intensity (a.u.)")
     ax.set_title(title)
-    ax.text(0.012, 0.02, "peak labels: (hkl) — hand-written implementation",
+    ax.text(0.012, 0.02, "peak labels: (hkl) — in-house simulation from CIF",
             transform=ax.transAxes, ha="left", fontsize=7.5, color="0.45")
     ax.grid(alpha=0.25, linestyle=":")
     fig.tight_layout()

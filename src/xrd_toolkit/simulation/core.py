@@ -133,21 +133,50 @@ def _conventionalize_refs(refs):
     return [(groups[key][0], groups[key][1]) for key in order]
 
 
-def format_hkls(refs, is_hex):
-    """把 (代表 hkl, 多重性) 列表排成 '(111) x8'、'(300)/(221) x6' 式短文本。
+def format_hkls(refs, is_hex, four_index=True):
+    """把 (代表 hkl, 多重性) 列表排成 '(111) x8'、'(300) x6, (221) x24' 式短文本。
 
-    六方晶系写成四位指数 (h k i l)（i = -h-k），和晶体学表一致。
+    六方晶系默认写四位指数 (h k i l)（i = -h-k），和晶体学表一致；
+    four_index=False 时写三位 (hkl)（卡片常见的正指数写法，如 (104)、(116)）。
     """
     parts = []
     for (h, k, l), m in refs:
-        if is_hex:
+        if is_hex and four_index:
             s = f"({h} {k} {-h - k} {l})"
-        else:
+        elif all(abs(v) <= 9 for v in (h, k, l)):
             s = f"({h}{k}{l})"
+        else:                      # 两位数的指数留空格防歧义（如 1 0 10）
+            s = f"({h} {k} {l})"
         if m:
             s += f" x{m}"
         parts.append(s)
     return ", ".join(parts)
+
+
+# ---------------- 显示代表 ----------------
+
+def _positive_representative(orbit):
+    """"正半边"里最大的一个（其它晶系用；(111) 家族显示成 (111) 而不是 (1-11)）。"""
+    halves = [cand for cand in orbit
+              if cand[0] > 0 or (cand[0] == 0 and cand[1] > 0)
+              or (cand[0] == 0 and cand[1] == 0 and cand[2] > 0)]
+    return max(halves) if halves else max(orbit)   # 后者是非中心对称的兜底
+
+
+def _hex_representative(orbit):
+    """六方晶系的显示代表：优先 h ≥ k ≥ 0（并列取 l 大者）。
+
+    与晶体学表常用的正指数写法一致——(110)、(113)、(116)、(214)、(300) 等，
+    也是 PDF 卡片上最常见的行号形式。注意：同一族面在不同卡片里可能出现
+    等价但数字不同的写法（例如 (102) 与 (012)，2θ 相同），本函数只保证
+    自身一致，不逐字复刻某张特定卡片。找不到非负组合时退回正半边规则。
+    """
+    cands = [m for m in orbit if m[0] >= m[1] >= 0]
+    if not cands:
+        cands = [m for m in orbit if m[0] >= 0 and m[1] >= 0]
+    if cands:
+        return max(cands)          # 元组比较：先 h 再 k 再 l
+    return _positive_representative(orbit)
 
 
 # ---------------- 主流程 ----------------
@@ -183,12 +212,10 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
                 F = structure_factor((h, k, l), structure, s)
                 intensity = m * abs(F) ** 2 * lp_factor(theta)
 
-                # 报告用的代表：取"正的"那半边里最大的一个（这样 (111) 家族
-                # 显示成 (111) 而不是 (1-11)）
-                halves = [cand for cand in orbit
-                          if cand[0] > 0 or (cand[0] == 0 and cand[1] > 0)
-                          or (cand[0] == 0 and cand[1] == 0 and cand[2] > 0)]
-                rep = max(halves) if halves else max(orbit)  # 后者是非中心对称的兜底
+                # 报告用的代表：六方晶系取规范正指数写法（见 _hex_representative），
+                # 其它晶系取"正半边"里最大的（(111) 家族显示成 (111) 而不是 (1-11)）
+                rep = (_hex_representative(orbit) if is_hex
+                       else _positive_representative(orbit))
                 candidates.append((tt, intensity, rep, m))
 
     candidates.sort(key=lambda r: r[0])
