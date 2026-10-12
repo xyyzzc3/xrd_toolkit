@@ -403,11 +403,8 @@ def shot_views(window) -> None:
     ax_w = content_of(window, "瀑布|" + LAB6).axes_waterfall
     wait_for(lambda: len(ax_w.lines) > 0, timeout_s=240)
     settle(600)
-    # 瀑布 χ 刻度（默认关）：面板出来之后才勾——先勾会被新面板的默认
-    # 盖掉（原因见 shot_compare 那处注释）；勾上由 _refresh_name_labels
-    # 就地重画瀑布
-    window.params["显示数据名"].setChecked(True)
-    settle(500)
+    # 瀑布 χ 刻度 2026-10-12 起默认就画（用户拍板"甲"：那是纵轴的刻度，
+    # 不是"数据名字"）——出这张图不用再勾开关
     # 布局：左上近方形的 2D，右上剖面，底下整行给瀑布（36 个扇区横着
     # 才看得清）。旧场景按"每类一行"平铺，三块挤在左上角、右边和
     # 底下全是灰（2026-10-09 重拍时改）。
@@ -512,13 +509,16 @@ def shot_compare_heat(window) -> None:
     ax = content_of(window, hkey).axes_heat
     wait_for(lambda: len(ax.images) > 0
              and ax.images[0].get_array() is not None, timeout_s=240)
-    # 两个开关**都在热图开出来之后**再勾：热图面板一建，焦点切过去、
+    # 三个开关**都在热图开出来之后**再勾：热图面板一建，焦点切过去、
     # 参数坞按它的快照回放，会把先勾的「堆叠显示」冲回未勾选（它住在
     # 对比页、两类面板快照各存一份——2026-10-09 初拍实测：左边那八条
-    # 又叠成了一条）。显示数据名（默认关）管两处：堆叠纵轴短名 + 热图行名。
+    # 又叠成了一条）。两把"显示数据名"（2026-10-12 拆开，各自默认关）：
+    # 对比页那把管堆叠纵轴短名，热图小节那把管热图行名。
     window.params["对比堆叠"].setChecked(True)     # 控件文字是「堆叠显示」
     settle(400)
-    window.params["显示数据名"].setChecked(True)
+    window.params["显示数据名"].setChecked(True)      # 堆叠纵轴短名
+    settle(400)
+    window.params["热图显示数据名"].setChecked(True)   # 热图行名
     settle(400)
     # 只留这两个面板：左右并排铺满（窗口里没有 1D / 别的图）
     window.resize(1600, 1000)

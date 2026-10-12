@@ -125,7 +125,7 @@ from xrd_toolkit.gui.plot_views import (
     _apply_params, _proc_batch_apply, _proc_keep_this, _proc_save,
     _compute_integration, _draw_1d, _open_source_group, _open_source_view,
     _plot_view, _refresh_1d_display, _refresh_image_display,
-    _refresh_name_labels, _refresh_profile_angle, _refresh_proc,
+    _refresh_heatmap_names, _refresh_profile_angle, _refresh_proc,
     _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task,
     apply_recipe, chain_label_of, recipe_text)
@@ -1210,20 +1210,22 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     step_mult.valueChanged.connect(lambda _v: _refresh_compare(window))
 
     # 「显示数据名」（2026-10-08 用户："做按钮，默认不显示，点击开启后按
-    # 条件显示"）：**四处**的名字一起管——平铺的图例、堆叠的纵轴样品名、
-    # 热图的行名、瀑布的 χ 刻度（后两处是当晚扩的，用户拍板"四处一起
-    # 受控、默认关"）。默认关——名字多了糊成一条黑带（原来只有对比有这
-    # 毛病；81 条堆叠实测全名占图宽 29%）；勾上按"放得下"的条件显示。
-    # 认线/认行兜底 = 悬停读数（全名）。即改即画，同上面那组。
+    # 条件显示"）：默认关——名字多了糊成一条黑带（原来只有对比有这毛病；
+    # 81 条堆叠实测全名占图宽 29%）；勾上按"放得下"的条件显示。
+    # 认线兜底 = 悬停读数（全名）。即改即画，同上面那组。
+    # 2026-10-12 用户拍板"甲，拆开"（原话："对比热图现在共用一个显示数据
+    # 名，但是是在对比的板块"）：热图行名拆给「热图显示」小节自己的同名
+    # 勾选（键 =「热图显示数据名」），这把从此只管对比的两处（平铺图例 /
+    # 堆叠纵轴名）；瀑布的 χ 刻度同日也拍板"甲"——那是**纵轴的刻度**不是
+    # "名字"，退出开关、默认就画（见 plot_views._draw_waterfall）。
     name_chk = QCheckBox("显示数据名")
-    name_chk.setToolTip("默认不显示（认线/认行看悬停读数）。勾上按放得下"
-                        "的方式显示：平铺画短名图例（12 条以内）、堆叠画"
-                        "短名+抽稀的纵轴样品名、热图画行名、瀑布画 χ 刻度。"
-                        "勾上立刻重画")
+    name_chk.setToolTip("默认不显示（认线看悬停读数）。勾上按放得下的"
+                        "方式显示：平铺画短名图例（12 条以内）、堆叠画"
+                        "短名+抽稀的纵轴样品名。热图行名在「热图显示」"
+                        "小节有自己的同名勾选，两把互不影响。勾上立刻重画")
     window.params["显示数据名"] = name_chk
     form_cmp.addRow(name_chk)
     name_chk.toggled.connect(lambda _on: _refresh_compare(window))
-    name_chk.toggled.connect(lambda _on: _refresh_name_labels(window))
     # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法
@@ -1680,6 +1682,22 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         _box.valueChanged.connect(lambda _v=0.0: _refresh_heat(window))
     sync_heatlim(True)   # 初始状态：自动开 → 输入框置灰
 
+    # 「显示数据名」（**热图自己的那把**，2026-10-12 用户："对比热图现在
+    # 共用一个显示数据名，但是是在对比的板块" → 拍板"甲，拆开"）：热图行名
+    # 从「对比显示」小节那把里分出来，开关就住在本小节——看热图参数不用再
+    # 跑回上半页。键独立成「热图显示数据名」（同 2θ 那对的拆法），默认关、
+    # 勾上立刻重画（_refresh_heatmap_names，同上面这组显示参数）。
+    heat_name_chk = QCheckBox("显示数据名")
+    heat_name_chk.setToolTip("默认不显示（认行看悬停读数）。勾上按放得下"
+                             "的方式显示热图行名（行数多时按面板高度抽稀）；"
+                             "与「对比显示」小节的同名勾选相互独立——那里"
+                             "管平铺图例/堆叠纵轴名，这里只管热图行名。"
+                             "勾上立刻重画")
+    window.params["热图显示数据名"] = heat_name_chk
+    form_cmp.addRow(heat_name_chk)
+    heat_name_chk.toggled.connect(
+        lambda _on: _refresh_heatmap_names(window))
+
     # 视图 2θ：**热图自己的**一对（2026-10-08 晚用户："对比与热图分开
     # 管理"——此前两图共用一对老键，改一边动两边）。用户 2026-10-05：
     # "热图添加回 2theta 改变视图的功能，就是重看，不是重算"：图上缩放/
@@ -1728,6 +1746,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "曲线配色": "高对比",
         "对比堆叠": False,
         "显示数据名": False,
+        "热图显示数据名": False,
         "手动行距": False,
         "行距倍数": 1.0,
         "瀑布手动行距": False,
@@ -1767,6 +1786,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
             window.params["曲线配色"].findData(img_defaults["曲线配色"]))
         window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
         window.params["显示数据名"].setChecked(img_defaults["显示数据名"])
+        window.params["热图显示数据名"].setChecked(
+            img_defaults["热图显示数据名"])
         window.params["手动行距"].setChecked(img_defaults["手动行距"])
         window.params["行距倍数"].setValue(img_defaults["行距倍数"])
         window.params["瀑布手动行距"].setChecked(img_defaults["瀑布手动行距"])

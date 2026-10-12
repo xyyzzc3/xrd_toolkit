@@ -820,12 +820,14 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
         im = ax.imshow(shown, aspect="auto", origin="lower", cmap=cmap,
                        norm=norm, extent=[float(tth[0]), float(tth[-1]),
                                           -0.5, n - 0.5])
-        if _panel_param(window, dock, "显示数据名", False):
+        if _panel_param(window, dock, "热图显示数据名", False):
             ax.set_yticks(range(n))
             ax.set_yticklabels(_short_labels(stems, ax), fontsize=7)
         else:
-            # 行名默认关、由 [显示数据名] 统一管（2026-10-08 晚扩到热图：
-            # 行照样认得出——悬停读数读的是行名，与刻度无关）
+            # 行名默认关、由「热图显示」小节自己的 [显示数据名] 管
+            # （2026-10-12 "甲，拆开"：原先是「对比显示」小节那把四处
+            # 一起管，看热图参数够不着它）；行照样认得出——悬停读数读的
+            # 是行名，与刻度无关
             ax.set_yticks([])
         # 视图窗口：与 1D/对比同一套口径（缩放/平移写回快照，重画按它摆回去）
         #

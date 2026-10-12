@@ -197,15 +197,18 @@ def check_single_views(window, lab6: str) -> None:
     axw = content_of(window, "瀑布|" + lab6).axes_waterfall
     wait_until(lambda: len(axw.lines) > 0)
     report(len(axw.lines) == 36, "瀑布出图（36 扇区）", len(axw.lines))
+    # 2026-10-12 回归位：束心空箱的 0 曾把 155/165/175 三条曲线整条
+    # 截空（用户："只有 33 条"）——真数据上 36 行每一行都必须真有曲线
+    empty = [i for i, ln in enumerate(axw.lines) if len(ln.get_xdata()) == 0]
+    report(not empty, "瀑布 36 行行行有曲线（无被空箱 0 截空的行）",
+           f"空行序号 {empty}" if empty else "")
 
     # 瀑布行距的手动倍数（2026-10-07）：勾上 [手动行距] + 倍数 ×2 →
     # y 刻度（= 各行基线）间距翻倍，即改即画
     #
-    # 2026-10-10：先勾 [显示数据名] —— χ 刻度（就是这里读间距用的 y 刻度）
-    # 自 10-08 起默认关，不勾 `get_yticks()` 是空的（探针当时量到 0.0）；
-    # 量完记得关回去——C 段要验"对比默认不画图例"。
-    window.params["显示数据名"].setChecked(True)
-    QApplication.processEvents()
+    # 2026-10-12：χ 刻度回归"纵轴刻度"、默认就画（用户拍板"甲"——36 行
+    # 瀑布图行与行的区别就是角度，刻度藏了没法读）——这里量的 y 刻度
+    # 不用再先勾 [显示数据名]（10-10 那条临时勾选随"退开关"一起删）
     ticks0 = [float(t) for t in axw.get_yticks()]
     step0 = (ticks0[1] - ticks0[0]) if len(ticks0) > 1 else 0.0
     window.params["瀑布手动行距"].setChecked(True)
@@ -217,7 +220,6 @@ def check_single_views(window, lab6: str) -> None:
            "瀑布 [手动行距] ×2：行距翻倍（即改即画）",
            f"{step0:.1f} → {step1:.1f}")
     window.params["瀑布手动行距"].setChecked(False)
-    window.params["显示数据名"].setChecked(False)
     QApplication.processEvents()
 
 
@@ -266,6 +268,25 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
            "热图有图像矩阵")
     report(getattr(dock, "_heat_colorbar", None) is not None,
            "热图带颜色条")
+
+    # 行名（2026-10-12 "甲，拆开"）：默认关，由「热图显示」小节自己的
+    # [显示数据名] 即改即画；「对比显示」小节那把不参与——两把独立
+    # （C 段上面的图例验的就是对比那把）
+    window.params["显示数据名"].setChecked(True)   # 先把对比那把打开
+    for _ in range(30):
+        QApplication.processEvents()
+    labels_off = [t.get_text() for t in axh.get_yticklabels()]
+    report(not labels_off,
+           "热图行名默认关（对比那把开着也不参与——甲拆分）")
+    window.params["热图显示数据名"].setChecked(True)   # 即改即画
+    for _ in range(30):
+        QApplication.processEvents()
+    labels_on = [t.get_text() for t in axh.get_yticklabels()]
+    report(bool(labels_on), "勾「热图显示」那把 → 行名出现",
+           f"{len(labels_on)} 个行名")
+    window.params["热图显示数据名"].setChecked(False)
+    for _ in range(30):
+        QApplication.processEvents()
 
     # 视图 2θ 框（2026-10-07）：填数 → 立刻裁剪重画（重看，不是重算）；
     # 反方向——图上的缩放实时写回这两个框。

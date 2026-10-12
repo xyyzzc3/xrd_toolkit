@@ -201,13 +201,22 @@ def main() -> None:
         # 下一格直接为 0），故每条曲线画到自身的第一个 0；未截断的
         # 曲线画到 hi。右端呈阶梯状，直观展示方形探测器对环的截断
         # 几何：指向边缘的扇区先被截断。
+        # 2026-10-12（与 GUI plot_views._draw_waterfall 同款修复）：**开头
+        # 的 0 不是截断**——束心附近头几格是空箱（亚像素半径，dummy=0），
+        # 按"第一个 0"截会把 155/165/175 这类扇区整条截空；从第一个非零
+        # 箱起画，再从那里往后找真正的截断点。
         colors = plt.cm.viridis(np.linspace(0, 1, n))
         curves = []              # [(tth_cut, I_cut, k), ...] 每条曲线的作图段
         for k in range(n):
             v = I2d_plot[:, k]
-            dead = ~np.isfinite(v) | (v == 0)
-            end = int(np.argmax(dead)) if dead.any() else len(v)
-            curves.append((tth_plot[:end], v[:end], k))
+            alive = np.isfinite(v) & (v != 0)
+            if not alive.any():
+                curves.append((tth_plot[:0], v[:0], k))   # 整列死区：空行
+                continue
+            start = int(np.argmax(alive))
+            dead = ~np.isfinite(v[start:]) | (v[start:] == 0)
+            end = start + int(np.argmax(dead)) if dead.any() else len(v)
+            curves.append((tth_plot[start:end], v[start:end], k))
 
         # ---- 瀑布图：36 条原强度曲线沿 Y 轴错开堆叠 ----
         # 每条曲线画到自身首个零强度点，使用原强度（不取根号）。

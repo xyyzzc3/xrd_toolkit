@@ -772,6 +772,11 @@ class TestNewViews(unittest.TestCase):
             tth = np.linspace(1.0, 8.0, 30)
             i2d = np.ones((30, 36))
             chi = np.linspace(-175.0, 175.0, 36)   # 真引擎惯例：χ 从 -175° 起
+            # 束心空箱的 0：真数据里 155/165/175 这些扇区的前 1~3 箱
+            # 是空的（亚像素半径没有像素中心落进去，dummy=0）——开头的 0
+            # 不是探测器边缘截断，不许把整条曲线截空（2026-10-12 用户：
+            # "只有 33 条"，就是这三条被截没了）
+            i2d[:2, 33] = 0.0
 
             def fake_sectors(image, **kw):
                 self.assertEqual(kw["n_sectors"], 36)
@@ -789,16 +794,25 @@ class TestNewViews(unittest.TestCase):
             dock = _dock(w, "瀑布", "data/fake_b.tif")
             ax = gui_panel_state._content(dock).axes_waterfall
             self.assertEqual(len(ax.lines), 36, "36 条扇区曲线")
-            # χ 刻度默认关（2026-10-08 晚起 [显示数据名] 四处一起管：
-            # 对比图例/堆叠纵轴名 + 热图行名 + 瀑布 χ）；曲线名照旧 =
-            # 扇区名（悬停读数，与刻度无关）
-            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
-                             "χ 刻度默认不显示")
+            # 每一行都真有数据：k=33 开头两格是空箱 0，曲线应从第 3 个点
+            # 起画（28 点）而不是整条被截空；其余各行 30 点
+            self.assertEqual([len(ln.get_xdata()) for ln in ax.lines],
+                             [30] * 33 + [28, 30, 30],
+                             "开头的空箱 0 不截曲线（155° 行从第 3 点起画）")
+            # χ 刻度 = 纵轴的刻度，默认就画（2026-10-12 用户拍板"甲"：
+            # "瀑布图只能看一个文件的不同角度，而且现在不知道每条线代表
+            # 什么"——那是一轴的读数不是"数据名字"，从此退出开关）；曲线
+            # 名照旧 = 扇区名（悬停读数，与刻度无关）
+            self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°",
+                             "χ 刻度默认就画（第一条 -175°）")
+            self.assertEqual(ax.get_yticklabels()[-1].get_text(), "175°",
+                             "首尾锚定：最上一行永远有数字（抽稀只在中间）")
             self.assertEqual(ax.lines[0].get_label(), "-175°")
-            w.params["显示数据名"].setChecked(True)   # 即改即画
+            w.params["显示数据名"].setChecked(True)   # 对比那把：与瀑布无关
             QApplication.processEvents()
             self.assertEqual(ax.get_yticklabels()[0].get_text(), "-175°",
-                             "勾上 [显示数据名] → χ 刻度出现（第一条 -175°）")
+                             "对比那把开着也不动瀑布刻度")
+            w.params["显示数据名"].setChecked(False)
             self.assertIn("扇形积分完成：fake_b.tif（36 扇区 × 30 点）",
                           w.log_text.toPlainText())
         finally:
@@ -14378,10 +14392,11 @@ class TestHeatmap(unittest.TestCase):
             w.close()
 
     def test_row_names_default_off_and_toggle_live(self):
-        """热图行名默认关、由 [显示数据名] 即改即画（2026-10-08 晚扩四处）。
+        """热图行名默认关、由「热图显示」小节自己的 [显示数据名] 即改即画。
 
-        四处的口径统一：对比图例、堆叠纵轴名、热图行名、瀑布 χ 刻度——
-        默认都不显示（名字多了糊成黑带），勾上立刻按"放得下"显示。
+        2026-10-12 用户拍板"甲，拆开"（原话："对比热图现在共用一个显示
+        数据名，但是是在对比的板块"）：热图行名不再挂「对比显示」小节
+        那把——两把互不影响（那把 = 平铺图例/堆叠纵轴名 + 瀑布 χ）。
         """
         w = create_window()
         try:
@@ -14393,14 +14408,19 @@ class TestHeatmap(unittest.TestCase):
             ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
                              "行名默认关")
-            w.params["显示数据名"].setChecked(True)     # 即改即画
+            w.params["显示数据名"].setChecked(True)   # 对比那把：管不到热图
+            QApplication.processEvents()
+            self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
+                             "「对比显示」那把不参与热图行名（甲：拆开）")
+            w.params["热图显示数据名"].setChecked(True)   # 即改即画
             QApplication.processEvents()
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a", "fake_b"], "勾上 → 短名出现")
-            w.params["显示数据名"].setChecked(False)
+            w.params["热图显示数据名"].setChecked(False)
             QApplication.processEvents()
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
                              "取消 → 名字收回")
+            w.params["显示数据名"].setChecked(False)   # 还原对比那把
         finally:
             w.close()
 
@@ -14425,13 +14445,14 @@ class TestHeatmap(unittest.TestCase):
             self.assertIn("复用已有 1D 结果，后台积分 0 个", log)
             self.assertIn("热图完成：2 个文件 × 3 点", log)
             # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
-            # （行名默认关、由 [显示数据名] 统一管——2026-10-08 晚起；
-            # 这里勾上才读得到短名，"默认关"本身由专门测试钉）
+            # （行名默认关、由「热图显示」小节自己的 [显示数据名] 管——
+            # 2026-10-12 从对比那把拆出；这里勾上才读得到短名，"默认关"
+            # 本身由专门测试钉）
             dock = self._heat_dock(w)
             ax = gui_panel_state._content(dock).axes_heat
             self.assertEqual(len(ax.images), 1)
             self.assertIsNotNone(dock._heat_colorbar)
-            w.params["显示数据名"].setChecked(True)
+            w.params["热图显示数据名"].setChecked(True)
             QApplication.processEvents()
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()],
                              ["fake_a", "fake_b"])

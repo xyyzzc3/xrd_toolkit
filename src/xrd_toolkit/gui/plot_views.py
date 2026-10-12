@@ -1873,13 +1873,19 @@ def _chi_tick_labels(ax, chi) -> list:
     真实像素高），每个标签留 ~9 px；放得下就全标（CLI 那张 12×8 英寸的
     36 个全在），放不下就每隔 k 个标一个——**抽掉的标签留空串**，刻度线
     还在，读数靠悬停（曲线名仍是各自的 χ）。
+
+    **首尾锚定**（2026-10-12，用户把 χ 刻度打开后问"155-175 为什么是
+    空的"）：抽稀原先从底部起每 k 行标一个，最上面那行常落在没标的一档
+    ——看起来像"轴到 155° 就没了、上面是空的"（其实行行都有曲线）。现在
+    最下一行与最上一行**永远有数字**，抽稀只发生在中间；空着的行 = 没标
+    数字，行与行固定差 10°（every=2 时没标的那行 = 相邻已标数字 ±10°）。
     """
     n = len(chi)
     if not n:
         return []
     h_px = float(ax.figure.get_size_inches()[1]) * float(ax.figure.dpi)
     every = max(1, int(np.ceil(n * 9.0 / max(h_px * 0.8, 1.0))))
-    return [f"{float(c):.0f}°" if k % every == 0 else ""
+    return [f"{float(c):.0f}°" if (k % every == 0 or k == n - 1) else ""
             for k, c in enumerate(chi)]
 
 
@@ -1900,7 +1906,9 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         峰就看得清了"）。
 
     每条曲线画到自身第一个 0（被探测器切掉的位置）——右端阶梯即截断
-    几何；y 刻度 = 各扇区 χ 基线，曲线名 = 扇区 χ（悬停读数用，无图例）。
+    几何；y 刻度 = 各扇区 χ 基线（**默认就画**——2026-10-12 用户拍板
+    "甲"：那是一轴的刻度不是"名字"，36 行唯一的分辨办法，抽稀见
+    _chi_tick_labels），曲线名 = 扇区 χ（悬停读数用，无图例）。
     纵轴显示参数不适用（行偏移由数据决定），范围写回不连（同 2D）。
     """
     ax = _content(dock).axes_waterfall
@@ -1939,13 +1947,23 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         colors = cm.viridis(np.linspace(0, 1, n))
         # 每条曲线画到自身第一个 0（截断几何）；未截断的画到末尾。
         # 截断位置要看**原始**数据：扣背景后原来的 0 会变成 -基线（非零），
-        # 拿扣除后的值判 0 会把所有曲线都画到末尾
+        # 拿扣除后的值判 0 会把所有曲线都画到末尾。
+        # 2026-10-12（用户："155-175 为什么是空的／只有 33 条"）：**开头的
+        # 0 不是截断**——束心附近头几格是亚像素半径，空箱 dummy = 0（实测
+        # 这批数据 155/165/175 三个扇区的前 1~3 箱恒为 0、其余箱正常），
+        # 按"第一个 0"截就把这三条整条截空，36 条只剩 33 条。现在从第一个
+        # 非零箱起画，再从那里往后找真正的截断点；整列没数据的仍是空行。
         curves = []
         for k in range(n):
             v = i2d[:, k]
-            dead = ~np.isfinite(raw2d[:, k]) | (raw2d[:, k] == 0)
-            end = int(np.argmax(dead)) if dead.any() else len(v)
-            curves.append((tth[:end], v[:end], k))
+            alive = np.isfinite(raw2d[:, k]) & (raw2d[:, k] != 0)
+            if not alive.any():
+                curves.append((tth[:0], v[:0], k))   # 整列死区：空行
+                continue
+            start = int(np.argmax(alive))            # 跳过束心空箱的 0
+            dead = ~np.isfinite(raw2d[start:, k]) | (raw2d[start:, k] == 0)
+            end = start + int(np.argmax(dead)) if dead.any() else len(v)
+            curves.append((tth[start:end], v[start:end], k))
         # 行距统一：所有行同一个行高（等行距 → 各行的强弱能横向比，
         # y 刻度也均匀分布；裁剪过的巨峰不再撑高自己那一行）。
         # 行距怎么定见 services/stacking：**按第二高的行峰**，不按全场
@@ -1964,13 +1982,14 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         for t_cut, v_cut, k in curves:
             ax.plot(t_cut, np.clip(v_cut, 0.0, None) + offsets[k],
                     color=colors[k], lw=0.5)
-        if _panel_param(window, dock, "显示数据名", False):
-            ax.set_yticks(offsets)
-            ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=6)
-        else:
-            # χ 刻度默认关、由 [显示数据名] 统一管（2026-10-08 晚扩到瀑布：
-            # 曲线照样认得出——悬停读数读的是曲线名，与刻度无关）
-            ax.set_yticks([])
+        # χ 刻度 = 纵轴的刻度，**默认就画**（2026-10-12 用户拍板"甲"：
+        # 瀑布是一个文件 36 个扇区，行与行的区别就是方位角——刻度一藏
+        # 就"不知道每条线代表什么"；轴不是"数据名字"，那把 [显示数据名]
+        # 开关从此退出瀑布，只管对比的两处名字）。抽稀照旧
+        # （_chi_tick_labels：矮面板每 k 行标一个、抽掉的留空；曲线名
+        # 仍贴在线上供悬停读数，与刻度无关）
+        ax.set_yticks(offsets)
+        ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=7)
         zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
@@ -2052,40 +2071,33 @@ def _refresh_waterfalls(window: QMainWindow) -> None:
         _draw_waterfall(window, dock, tth, i2d, chi)
 
 
-def _refresh_name_labels(window: QMainWindow) -> None:
-    """[显示数据名] 改了 → 各热图 / 瀑布面板就地重画（不重算）。
+def _refresh_heatmap_names(window: QMainWindow) -> None:
+    """「热图显示」小节的 [显示数据名] 改了 → 各热图面板就地重画（不重算）。
 
-    2026-10-08 晚用户拍板：这个开关从只管对比（图例 + 堆叠纵轴名）扩到
-    **热图行名 + 瀑布 χ 刻度**——"四处一起受控、默认关"。对比那半仍走
-    `plot_compare._refresh_compare`（它本来就管对比那组即改即画）；这里
-    只写「显示数据名」这一个键、再按已有数据重画——**不整包套用别的
-    显示参数**（控件是所有面板共用的一份，整包写会把别的图的设置串
-    过来，同 _refresh_waterfalls 的判例）。
+    2026-10-12 用户拍板"甲，拆开"（原话："对比热图现在共用一个显示数据
+    名，但是是在对比的板块"）——热图行名从「对比显示」小节那把开关里分
+    出来，勾选框住在「热图显示」小节，键 =「热图显示数据名」，改哪边只
+    动自己那一类图。做法同前身：只写这一个键、再按已有数据重画——
+    **不整包套用别的显示参数**（控件是所有面板共用的一份，整包写会把
+    别的图的设置串过来，同 _refresh_waterfalls 的判例）。
     """
     if getattr(window, "_param_replaying", False):
         return   # 回放快照期间控件值正被程序改写，不是用户改动
-    chk = window.params.get("显示数据名")
+    chk = window.params.get("热图显示数据名")
     if chk is None:
         return   # 裸窗口（测试里没建这个控件）
     on = bool(chk.isChecked())
     from xrd_toolkit.gui.plot_compare import (   # 破循环：只取这一个
         _draw_heatmap)
     for key, dock in list(window.plot_docks.items()):
-        view = key.split("|", 1)[0]
-        if view not in ("热图", "瀑布"):
+        if not key.startswith("热图"):
             continue
         snap = getattr(dock, "params_snapshot", None)
         if snap is not None:
-            snap["显示数据名"] = on
-        if view == "热图":
-            data = getattr(dock, "heat_data", None)
-            if data is not None:
-                _draw_heatmap(window, dock, data[0], data[1], data[2])
-        else:
-            data = getattr(dock, "last_waterfall", None)
-            if data is not None:
-                tth, i2d, chi = data
-                _draw_waterfall(window, dock, tth, i2d, chi)
+            snap["热图显示数据名"] = on
+        data = getattr(dock, "heat_data", None)
+        if data is not None:
+            _draw_heatmap(window, dock, data[0], data[1], data[2])
 
 
 # 一次批量作图的防爆线（2026-09-24 用户"图一多就很卡"；开图是唯一随数量
