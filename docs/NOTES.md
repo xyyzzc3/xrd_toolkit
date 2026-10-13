@@ -185,7 +185,9 @@ triggered by a parameter change will **not** reset a view you have zoomed into. 
 duplicate entrances went the same way on 2026-10-01 ("都删了，保存图片在图片自身的工具栏有"): [导出图片…]
 was the same act as a panel's [保存图片…] and the close-window prompt (the batch saver `_save_figures` still
 exists, it just no longer costs a button), and [清空缓存] was the file bar's right-click 「删除所有缓存…」
-under another name (that one stays — it asks for confirmation first). The 原图 page now has exactly one
+under another name (that one stays — since 2026-10-13 it confirms by asking you to click it a second time
+instead of popping a dialog, which on this machine took seconds to appear and swallowed three attempts as
+"cancelled"). The 原图 page now has exactly one
 product button, [出图].
 
 **Each entrance button has two faces** (2026-10-01): the active one reads **「退出某某」** ([校准] →

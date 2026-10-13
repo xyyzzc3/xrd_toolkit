@@ -320,8 +320,9 @@
 <h2>8. 缓存与"第二次打开"</h2>
 <p><strong>缓存是什么</strong>：所有算过的 1D 结果都存在本机 <code>XRD_Toolkit/_stage</code> 里。</p>
 <ul>
-<li><strong><code>_stage</code> 可以删</strong>（右键文件栏空白处 →「删除所有缓存…」）：删了不发
-  生错误，只是下次点 <code>[1D]</code> 要重新算、慢一点；适合清理磁盘空间。</li>
+<li><strong><code>_stage</code> 可以删</strong>（右键文件栏空白处 →「删除所有缓存…」，<strong>点两次</strong>：
+  第一下只在日志里告诉你有多少文件、再点一次才真删）：删了不发生错误，
+  只是下次点 <code>[1D]</code> 要重新算、慢一点；适合清理磁盘空间。</li>
 <li><strong>不建议删</strong>：<code>config_user.json</code>（你的标定配置——删了要重新校准）；
   导出好的数据文件（你自己管理）。</li>
 <li>「最近打开」记录（<code>recent.json</code>）随便删，只是少了快捷入口。</li>
@@ -392,7 +393,7 @@
 </tr>
 <tr>
 <td>想清理缓存释放空间</td>
-<td>文件栏右键 →「删除所有缓存…」（导出和配置不受影响，第 8 节）</td>
+<td>文件栏右键 →「删除所有缓存…」，<strong>点两次</strong>才真删（导出和配置不受影响，第 8 节）</td>
 </tr>
 <tr>
 <td>程序出错</td>

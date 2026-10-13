@@ -21,6 +21,7 @@
 import itertools
 import json
 import re
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
@@ -1277,7 +1278,7 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
         actions[menu.addAction("导出这一条（txt / chi）")] = "export_item"
     if actions:
         menu.addSeparator()
-    actions[menu.addAction("删除所有缓存…")] = "clear_cache"
+    actions[menu.addAction(_clear_cache_label(window))] = "clear_cache"
     return actions
 
 
@@ -1478,31 +1479,63 @@ def _remove_from_list(window: QMainWindow, items) -> None:
     _log(window, f"已从文件栏移除 {len(items)} 个文件（硬盘上的文件未改动）")
 
 
-def ask_clear_cache(window: QMainWindow) -> None:
-    """「删除所有缓存…」：二次确认后再清（菜单里点错比按钮上点错更容易）。
+# 「删除所有缓存…」的二次确认（2026-10-13）：第一次点只在日志里提醒并
+# 记一笔，时限内再点一次才真删。秒数写进了日志文案，改要一起改。
+CLEAR_CACHE_CONFIRM_SECONDS = 60.0
 
-    没显示的窗口（测试/无头）不弹模态框、直接清——与 _ask_duplicate 同理。
+
+def _clear_cache_armed(window: QMainWindow) -> int:
+    """上膛状态里记着的文件数；没上膛 / 过了确认时限 → 0。
+
+    状态放在窗口属性上（与 refresh_groups 那批回调同一路数）：一个窗口
+    一份，测试里多窗口互不串。
+    """
+    state = getattr(window, "_clear_cache_armed", None)
+    if not state:
+        return 0
+    stamp, n_files = state
+    if time.time() - stamp > CLEAR_CACHE_CONFIRM_SECONDS:
+        return 0
+    return int(n_files)
+
+
+def _clear_cache_label(window: QMainWindow) -> str:
+    """右键菜单里清缓存那一行的写法：上膛后写成「确认删除所有缓存（N 个文件）」。
+
+    用户 2026-10-13：既然第二下就真删，就把"这一下是干什么的"写在菜单行上
+    ——不然用户得翻日志才知道自己点的是第一下还是第二下。
+    """
+    n = _clear_cache_armed(window)
+    return f"确认删除所有缓存（{n} 个文件）" if n else "删除所有缓存…"
+
+
+def ask_clear_cache(window: QMainWindow) -> None:
+    """「删除所有缓存…」：日志里提醒一次，再点一次才真删（2026-10-13 起）。
+
+    为什么不再弹确认框（用户 2026-10-13："gui 现在无法删除所有缓存"，
+    日志里连着三条「已取消删除缓存」、一个文件没删）：这台机器上（真
+    cocoa 实测）QMessageBox 从 exec() 到真正画上屏要好几秒——界面已经
+    吃住输入却什么都看不见，用户按 Esc 或瞎点就落进"取消"那条路（全屏
+    下更久，实测 5 秒级）。改成"再点一次"后整条路不进任何系统对话框，
+    这个坑从根上不存在；误点保护还在——连着点中同一条菜单两次，基本
+    等于真想删。空缓存照旧只报一声；上膛过了 CLEAR_CACHE_CONFIRM_SECONDS
+    秒自动作废，重新从提醒开始。
     """
     from xrd_toolkit.services import stage_cache
     info = stage_cache.describe()
     if not info["files"]:
+        window._clear_cache_armed = None      # 没东西可删：上一程的记账也作废
         _log(window, "缓存本来就是空的（还没有生成过产物）")
         return
     n_prod = int(info["files"])
-    if window.isVisible():
-        box = QMessageBox(window)
-        box.setWindowTitle("删除所有缓存")
-        box.setText(f"要删掉全部 {n_prod} 个缓存文件吗"
-                    f"（约 {info['bytes'] / 1e6:.1f} MB）？")
-        box.setInformativeText("删掉的是处理产物与 1D 产物（缓存目录 "
-                               "outputs/_stage）。"
-                               "下次出图会重新积分——只慢一点，不会算错。")
-        ok = box.addButton("删除", QMessageBox.DestructiveRole)
-        box.addButton("取消", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is not ok:
-            _log(window, "已取消删除缓存")
-            return
+    if _clear_cache_armed(window):
+        window._clear_cache_armed = None      # 用掉就作废
+    else:
+        window._clear_cache_armed = (time.time(), n_prod)
+        _log(window, f"缓存里共 {n_prod} 个文件（约 {info['bytes'] / 1e6:.1f} MB）"
+                     "——确定要删就再点一次 [删除所有缓存…]（一分钟内再点才有效）；"
+                     "只删处理产物与 1D 产物，下次出图重新积分，不会算错")
+        return
     cleared = stage_cache.clear()
     window.refresh_groups()
     _log(window, f"已删除所有缓存：{cleared} 个缓存文件")
