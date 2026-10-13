@@ -117,9 +117,12 @@ _DISPLAY_DEFAULTS = {
     # "归一化目标" = file 模式用哪个文件
     "对比归一化": "off",
     "归一化目标": "",
-    # 曲线配色 = 多曲线（对比/瀑布）的分类色调色板："高对比"（默认，
-    # 固定顺序 8 槽、色盲友好）或 "默认"（matplotlib 自带循环）
-    "曲线配色": "高对比",
+    # 渐变色系 = 对比曲线的配色（2026-10-13 用户："对比图的颜色改为一种
+    # 颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先的分类色板与
+    # "逐条自定义色"一起退休）：同一种颜色的深浅渐变，按勾选顺序从深到
+    # 浅（第 1 条 = 基色、最后一条最浅）；单曲线面板（1D/剖面）用基色。
+    # 色系取值见 _GRADIENT_FAMILIES。
+    "渐变色系": "蓝",
     # 对比堆叠 = 瀑布式错开叠放（每条曲线抬到自己的行上，y 刻度 =
     # 样品名；堆叠下纵轴范围/对数不适用，同瀑布）
     "对比堆叠": False,
@@ -195,27 +198,81 @@ _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 _VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
                      "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)")
 
-# 曲线配色表：分类色固定顺序、颜色跟着文件走不跟排序走（第一个
-# 文件永远是蓝，过滤/增删文件不会把幸存者重涂）。"高对比" 8 槽按
-# OKLab 校验色盲安全（相邻对 CVD ΔE ≥ 9.1），浅色底上可用；槽用尽
-# （第 9 条曲线起）回到槽 0 复用——曲线再多靠图例文字分辨，不生成
-# 近似第 9 色。"默认" = matplotlib 传统（单曲线蓝 b、多曲线 C 循环）。
-_CURVE_PALETTES = {
-    "高对比": ("#2a78d6", "#eb6834", "#1baf7a", "#eda100",
-               "#e87ba4", "#008300", "#4a3aa7", "#e34948"),
-    "默认": None,
+# 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为
+# 一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先的 8 槽分类
+# 色板与"逐条自定义色"一起退休，用户原话："不是每个数据都能改颜色，
+# 非常无效"）。基色 = 每系最深的一头；第 1 条曲线用基色本身，往后渐浅
+# （浅端向白混合封顶 _GRADIENT_LIGHT_MIX，保证最浅的一条在白底上仍
+# 看得见）。"蓝"沿用原来第一个文件的蓝，老用户的视觉是连续的。
+_GRADIENT_FAMILIES = {
+    "蓝": "#2a78d6",
+    "绿": "#1baf7a",
+    "橙": "#eb6834",
+    "紫": "#4a3aa7",
+    "灰": "#595959",
 }
+_GRADIENT_LIGHT_MIX = 0.55   # 最浅一条 = 基色与白混到 55%（再浅就看不见）
 
 
-def _curve_color(palette: str, i: int, single: bool = False) -> str:
-    """第 i 条曲线的颜色（palette = 面板快照里的"曲线配色"）。
+def _gradient_color(family: str, i: int, n: int) -> str:
+    """第 i 条（共 n 条）曲线的渐变色：第 0 条 = 基色最深，往后渐浅。
 
-    single=True = 单曲线面板（1D/剖面）。未知色板名兜底成高对比。
+    n <= 1（单曲线面板 / 只有一条对比曲线）用基色本身——1D/剖面拿它
+    当"这条曲线的颜色"。i 越界夹回范围（防御）；未知色系兜底蓝。
     """
-    if palette == "默认":
-        return "b" if single else f"C{i % 10}"   # C 循环只有 C0~C9
-    slots = _CURVE_PALETTES.get(palette) or _CURVE_PALETTES["高对比"]
-    return slots[i % len(slots)]
+    base = _GRADIENT_FAMILIES.get(family) or _GRADIENT_FAMILIES["蓝"]
+    if n <= 1:
+        return base
+    t = min(max(i / (n - 1), 0.0), 1.0)
+    mix = _GRADIENT_LIGHT_MIX * t
+    r = int(base[1:3], 16)
+    g = int(base[3:5], 16)
+    b = int(base[5:7], 16)
+    r = int(round(r + (255 - r) * mix))
+    g = int(round(g + (255 - g) * mix))
+    b = int(round(b + (255 - b) * mix))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _stash_pending_display(window: QMainWindow, keys) -> None:
+    """即改即画时**没有面板能接住**的改动：把控件现值记进窗口级"待应用"
+    小账本（window.pending_display）。
+
+    用户 2026-10-13："对比热图页面如果在出图之前调整参数会无效，出图瞬间
+    所有的参数都会恢复默认，怀疑所有实时改变的参数都会有这种情况"——属实：
+    没有对应面板时各家 handler 都早退/空转（改动只留在控件上），出图时
+    新面板显示参数统一从 _DISPLAY_DEFAULTS 起步，焦点一回写就"瞬间恢复
+    默认"。账本让"先调好、再出图"成立：出图（_data_snapshot base=None）
+    时叠在默认值上；**不主动清**——出图后焦点回放若把该键刷成与账本不同
+    的值，说明控件已改属别的图，那时才逐键作废（见 _load_params_snapshot_
+    body 的收尾）；handler 有面板可接时也顺手清掉自己那几个键
+    （_drop_pending_display）——同一个键不能同时"已生效"又"待应用"。
+
+    keys = 键名可迭代（各家 handler 自己知道自己管哪几个键）；控件不在
+    （裸窗口/测试）就跳过该键。
+    """
+    store = getattr(window, "pending_display", None)
+    if store is None:
+        store = window.pending_display = {}
+    for name in keys:
+        w = window.params.get(name)
+        if w is not None:
+            store[name] = _widget_value(w)
+
+
+def _drop_pending_display(window: QMainWindow, keys) -> None:
+    """把某几个键从"待应用"账本里清掉（改动已有面板接住 / 用户重拨）。
+
+    清空后连空的容器也收掉（window.pending_display 没了 = 没账可记，
+    _load_params_snapshot_body 的收尾据此短路）。
+    """
+    store = getattr(window, "pending_display", None)
+    if not store:
+        return
+    for name in keys:
+        store.pop(name, None)
+    if not store:
+        window.pending_display = {}
 
 
 def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
@@ -225,6 +282,11 @@ def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
     base = 面板自己的旧快照（重算时传入）：显示参数每张图各记各的，
     重算不改它的长相；新面板（base=None）显示参数从默认起步——不
     受上一张焦点图的设置影响（开新图永远是"默认长相"）。
+
+    **base=None 时叠"待应用"账本**（2026-10-13）：用户先在没有对应
+    面板的时候调好的显示参数，出图时作为新面板的起点（_stash_pending_
+    display 记的账）。账本不清在这里——一次 [出图] 可能连开好几张
+    （批量），一组图该有同一套设置；作废时机见 _stash_pending_display。
     """
     snap = _snapshot_params(window)
     for name in _DISPLAY_PARAMS:
@@ -232,6 +294,12 @@ def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
             snap[name] = base[name]
         else:
             snap[name] = _DISPLAY_DEFAULTS[name]
+    if base is None:
+        pending = getattr(window, "pending_display", None)
+        if pending:
+            for name, value in pending.items():
+                if name in _DISPLAY_PARAMS:
+                    snap[name] = value
     return snap
 
 
@@ -604,6 +672,20 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
     bg_sync = getattr(window, "_bg_rows_sync", None)
     if bg_sync is not None:
         bg_sync(window)
+    # 「待应用」账本收尾（2026-10-13）：回放把某个键刷成了与账本**不同**
+    # 的值 = 控件从此显示这张图的设置 ≠ 用户先调好的那套 → 那个键作废
+    # （"切走 = 放弃"）。值相同的不动：刚出的图采纳的就是账本值，回放
+    # 出来当然相等——批量出图时账本要留着给同批的下几张用。
+    pending = getattr(window, "pending_display", None)
+    if pending:
+        for name in list(pending):
+            w = window.params.get(name)
+            if w is None:
+                continue
+            if _widget_value(w) != pending[name]:
+                pending.pop(name, None)
+        if not pending:
+            window.pending_display = {}
 
 
 # 未选中编辑对象时坞顶灰字的文案（2026-10-07 用户："最上方灰字在未选中时

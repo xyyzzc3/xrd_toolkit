@@ -164,12 +164,11 @@ def _restore_line_styles(ax, old_lines, restore_color=True):
     用户改过的线型/线宽/标记/图例名不被重画盖掉）。数量变了
     就按顺序对前面几条（新多的曲线用默认样式）。
 
-    restore_color=False = 1D/剖面/对比视图：颜色由"曲线配色"参数
-    + 逐条自定义色（dock.curve_colors）管——参数本身就是用户改色
-    的入口，重画时按新参数着色；旧快照的颜色套回会把换配色方案
-    的 [应用] 打回原形。用户颜色保护不丢——自定义色存在
-    curve_colors 里，画图时优先于色板（瀑布的 χ 渐变色是程序
-    自定、与配色参数无关，仍走 restore_color=True）。
+    restore_color=False = 1D/剖面/对比视图：颜色由「渐变色系」参数
+    管（参数本身就是用户改色的入口，重画时按新参数着色；旧快照的
+    颜色套回会把换色系的 [应用] 打回原形。2026-10-13 起逐条自定义
+    色退休，保护对象只剩线型/线宽/标记；瀑布的 χ 渐变色是程序自定、
+    与色系参数无关，仍走 restore_color=True）。
     """
     for i, line in enumerate(_data_lines(ax)):
         if i >= len(old_lines):
@@ -278,7 +277,7 @@ def _home_key_reset(window: QMainWindow) -> None:
         action.trigger()
 
 
-def _refresh_home(dock, ax=None, mode_y=False):
+def _refresh_home(dock, ax=None, mode_y=False, mode_ylim=None):
     """程序自己重画后：维护这张面板的"家"视图（`dock.view_home`）。
 
     面板自己那条 [Home] 不跟任何历史栈（程序重画会把栈清掉，按下去常常
@@ -300,6 +299,12 @@ def _refresh_home(dock, ax=None, mode_y=False):
     （手势缩出来的 x 不算家，这条不变）。y 是模式算的，与"这次重画是不
     是手势来的"无关，所以 mode_y 分支不理会 from_gesture 旗标。
 
+    **`mode_ylim`（2026-10-13 加）**：mode_y 分支记的 y 改从它取——传的是
+    "钉住缩放窗口**之前**"的自然量程。以前直接取 `ax.get_ylim()`，一旦
+    缩放窗口已套上，家的 y 就变成缩放窗口本身（瀑布"先缩放后调行距"的
+    拍尾巴：窗口会被封成家，Home 也回不去）。不传仍取当前 ylim，旧行为
+    不变。
+
     旧版这里还顺手刷一下 mpl 工具栏的按钮状态、清它的历史栈——面板工具栏
     换成自绘的 _SlimToolbar（自己拿四个 QAction）之后，那套机件不在场了。
     """
@@ -309,7 +314,8 @@ def _refresh_home(dock, ax=None, mode_y=False):
         return
     home = getattr(dock, "view_home", None)
     if mode_y and home is not None:
-        dock.view_home = (home[0], tuple(ax.get_ylim()), ax.get_yscale())
+        y = tuple(mode_ylim) if mode_ylim is not None else tuple(ax.get_ylim())
+        dock.view_home = (home[0], y, ax.get_yscale())
         return
     if not from_gesture:
         dock.view_home = (tuple(ax.get_xlim()), tuple(ax.get_ylim()),
@@ -478,7 +484,16 @@ class _SlimToolbar(QWidget):
         # 等于白按。纵轴**只在本来就是手动时**跟着写——绝不替用户翻
         # "纵轴自动"开关（那是用户的选择，不是 Home 的事）。
         _on_xlim_changed(window, self._panel_key, ax)
-        if not _panel_param(window, dock, "纵轴自动", True):
+        # y 同样要写回快照（缩放/平移写回的也是这一处，快照才是权威）。
+        # 强度轴视图（1D/对比/剖面）仍只在**本来就是手动纵轴**时写：那支
+        # 回调会顺带把"纵轴自动"关掉、把上下限框填成家的值——Home 不许动
+        # 设置。像素/行号轴视图（2D/瀑布/热图）的 y 写回只落"视图 y 范围"
+        # 这一个键（视图窗口本身，与 x 同性质），照写——不然缩放过的图按
+        # 过 Home 之后，下一次重画（如瀑布调行距、2D 换对比度）会拿快照里
+        # 的旧缩放窗口接着画，等于 Home 白按（2026-10-13 修"先缩放后调
+        # 行距"时一并修出）。
+        if (self._panel_key.split("|", 1)[0] not in _INTENSITY_Y_VIEWS
+                or not _panel_param(window, dock, "纵轴自动", True)):
             _on_ylim_changed(window, self._panel_key, ax)
         ax.figure.canvas.draw_idle()
         _log(window, f"[复位视图] 已回到最初的样子：{title}")

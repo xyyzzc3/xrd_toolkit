@@ -9,6 +9,7 @@ from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
                                QPushButton, QVBoxLayout, QWidget)
@@ -138,11 +139,27 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     chk_fit.setCheckable(True)
     chk_fit.setToolTip("把视野放大到包住全部理论环（默认关：图像始终是"
                        "那一框、不随几何变；环全跑到图像外时勾上它，"
-                       "才看得到环在哪儿）")
+                       "才看得到环在哪儿）。翻它 = 换回这种视野；"
+                       "[放大镜] 点亮后可框选放大 / 滚轮缩放")
     chk_fit.toggled.connect(lambda on: _set_fit_rings(window, on))
     fit_row = QHBoxLayout()
     fit_row.setContentsMargins(4, 2, 4, 2)
     fit_row.addWidget(chk_fit)
+    # 放大镜（2026-10-13 用户："校准图添加放大功能"）：与普通图面板同一个
+    # 姿势——点亮 = 左键拖框选放大、滚轮以光标为中心缩放；未点亮 = 点图
+    # 选点（一点即记，老行为）。状态记 window.calib_zoom_on；视野记
+    # window.calib_view（手势写，整幅重画时优先回放——不然换几何重画会
+    # 把缩放弹回图像框）。新面板新起一轮：开关复位成关。
+    window.calib_zoom_on = False
+    window.calib_view = None
+    chk_zoom = QPushButton("放大镜")
+    chk_zoom.setObjectName("calib_zoom_btn")
+    chk_zoom.setCheckable(True)
+    chk_zoom.setToolTip("<b>点亮</b> = 左键拖 = 框选放大、滚轮 = 以光标为"
+                        "中心缩放、左键点 = 选点；<b>未点亮</b> = 点图选点"
+                        "（同现在）。[看环全貌] 可把视野复位")
+    chk_zoom.toggled.connect(lambda on: _set_calib_zoom(window, on))
+    fit_row.addWidget(chk_zoom)
     # [保存图片…]（2026-10-10 用户："校准的图保存不了"——这张面板此前
     # 压根没有保存入口：面板顶栏那套按钮只装在普通图面板上）。复用
     # plot_panels._save_panel 的整套流程（分辨率/格式弹窗 + 默认名 +
@@ -180,10 +197,18 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     window.calib_display = path.name
     window.calib_canvas = canvas
     window.calib_ax = fig.add_subplot(111)
-    # 只接鼠标点击：点环 = 选点（mpl_connect 事件模式）。面板销毁
-    # 时回调随画布一起失效，无需显式断开
+    # 鼠标事件（mpl_connect 事件模式；面板销毁时回调随画布一起失效，
+    # 无需显式断开）：按下/拖动/松开/滚轮四个——按下分流"选点"与
+    # "框选放大"（见 _on_calib_press 的分工说明），滚轮只在放大镜
+    # 点亮时缩放。
     canvas.mpl_connect(
-        "button_press_event", lambda ev: _on_calib_click(window, key, ev))
+        "button_press_event", lambda ev: _on_calib_press(window, key, ev))
+    canvas.mpl_connect(
+        "motion_notify_event", lambda ev: _on_calib_motion(window, key, ev))
+    canvas.mpl_connect(
+        "button_release_event", lambda ev: _on_calib_release(window, key, ev))
+    canvas.mpl_connect(
+        "scroll_event", lambda ev: _on_calib_scroll(window, key, ev))
     # 整幅画完就拍一帧当贴图底图（选点走增量贴图，见 _add_calib_marker）
     window.calib_bg = None
     canvas.mpl_connect("draw_event", lambda ev: _cache_calib_bg(window, ev))
@@ -224,6 +249,13 @@ def _close_calib_panel(window: QMainWindow) -> None:
     # 视野开关随面板一起弃：下次开面板回到"锁定图像"（关闭即遗忘）。
     # 控件跟着子窗口销毁，只清状态位（读悬空控件会 RuntimeError）
     window.calib_fit_rings = False
+    window.calib_zoom_on = False
+    window.calib_view = None
+    # 框选可能正拖到一半就被关掉：把拖动期的临时态清干净
+    for attr in ("calib_box_start", "calib_box_axes", "calib_box_event",
+                 "calib_box_patch", "calib_drag_bg"):
+        if hasattr(window, attr):
+            setattr(window, attr, None)
     # 选点/结果全清（关闭即遗忘）：删属性让 _calib_state 下次懒重建，
     # 否则重开面板会带出旧点标记和旧结果几何
     if hasattr(window, "calib_state"):
@@ -254,8 +286,9 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
 
     几何把环全推出图像时（距离/像素/波长填错、校准跑出离谱解）不静默
     画一堆看不见的线，而是红字 + 日志说清楚原因（_warn_rings_off_image）
-    ——**视野不动**：图像是这张图上唯一不动的参照系（要放大到看得见环，
-    得自己勾面板上的 [看环全貌]，见 _set_fit_rings / _fit_view_to_rings）。
+    ——**视野不动**：图像是这张图上唯一不动的参照系（要放大到看得见环：
+    勾面板上的 [看环全貌]，或点亮 [放大镜] 后框选放大，见 _set_fit_rings
+    / _fit_view_to_rings / _on_calib_press）。
     """
     ax = window.calib_ax
     ax.clear()
@@ -313,30 +346,62 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
                  fontsize=10)
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
-    # 视野（必须在所有画线之后设）：默认锁死 = 图像那一框；面板上勾了
-    # [看环全貌] 才放大到包住环。为什么不默认跟着环走——环画到图像外
-    # 时 matplotlib 的自动缩放会把坐标范围撑大（实测像素填 20 µm：视野
-    # 2048 → 21258 px，图像在画布上只剩 10% 宽），看着像"图动了/图被迫
-    # 变小"（2026-09-26 晚用户报）。图像是这张图上唯一不动的参照系：
-    # 环围着它动，跑到框外就老实被裁掉，由红字说明。
-    # 范围取 imshow（origin="lower"、无 extent）给的那一框。
-    if getattr(window, "calib_fit_rings", False):
+    # 视野（必须在所有画线之后设），三档优先：
+    #   ① 用户自己缩过/框过（window.calib_view，放大镜手势写的）——回放它，
+    #      重画不弹回（2026-10-13 加放大功能后的新一档）；
+    #   ② [看环全貌] 勾着 → 放大到包住环；
+    #   ③ 默认锁死 = 图像那一框。
+    # 为什么不默认跟着环走——环画到图像外时 matplotlib 的自动缩放会把
+    # 坐标范围撑大（实测像素填 20 µm：视野 2048 → 21258 px，图像在画布上
+    # 只剩 10% 宽），看着像"图动了/图被迫变小"（2026-09-26 晚用户报）。
+    # 图像是这张图上唯一不动的参照系：环围着它动，跑到框外就老实被裁掉，
+    # 由红字说明。范围取 imshow（origin="lower"、无 extent）给的那一框。
+    view = getattr(window, "calib_view", None)
+    if view is not None:
+        try:
+            ax.set_xlim(*view[0])
+            ax.set_ylim(*view[1])
+        except (TypeError, ValueError):   # 坏窗口（防御）：退回下面几档
+            window.calib_view = None
+            view = None
+    if view is None and getattr(window, "calib_fit_rings", False):
         _fit_view_to_rings(ax, image, paths)
-    else:
+    elif view is None:
         ax.set_xlim(-0.5, w - 0.5)
         ax.set_ylim(-0.5, h - 0.5)
     window.calib_canvas.draw_idle()
 
 
 def _set_fit_rings(window: QMainWindow, on: bool) -> None:
-    """[看环全貌] 开关：翻状态 + 重画。
+    """[看环全貌] 开关：翻状态 + 清掉手势缩放 + 重画。
 
     状态记在 window.calib_fit_rings（布尔）而不是读控件：面板一关，
     控件就是悬空对象，读它 RuntimeError（同 calib_ax 那个坑）。
+
+    翻它 = 用户显式要"看环全貌/锁回图像"这一种视野——先把放大镜手势
+    留下的 calib_view 清掉（2026-10-13），否则新开的视野会被旧缩放窗口
+    盖住，按钮看着"没反应"。
     """
     window.calib_fit_rings = bool(on)
+    window.calib_view = None
     _log(window, "视野：看环全貌" if on else "视野：锁定图像（看环全貌已关）")
     _redraw_calib_if_open(window)
+
+
+def _calib_zoom_on(window: QMainWindow) -> bool:
+    """校准图上的放大镜是否点亮（状态位，不读控件——控件随面板销毁）。"""
+    return bool(getattr(window, "calib_zoom_on", False))
+
+
+def _set_calib_zoom(window: QMainWindow, on: bool) -> None:
+    """放大镜开关：翻状态 + 写日志（与普通图面板同一句话的校准版）。
+
+    手势不下传到 Qt：状态位由各事件处理函数现读。
+    """
+    window.calib_zoom_on = bool(on)
+    _log(window, "放大镜已" + ("开启" if on else "关闭") + "："
+                 + ("左键拖 = 框选放大，滚轮以光标为中心缩放" if on
+                    else "左键点图选点（滚轮不缩放）"))
 
 
 def _fit_view_to_rings(ax, image, paths) -> None:
@@ -374,17 +439,27 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
     """
     h, w = image.shape
     fit = getattr(window, "calib_fit_rings", False)
+    zoomed = getattr(window, "calib_view", None) is not None
     head = (f"当前几何下 {len(paths['rings'])} 条环全部落在图像外"
             f"（环半径 {paths['r_min_px']:.0f}–{paths['r_max_px']:.0f} px）")
-    how = ("视野已按 [看环全貌] 放大到看得见它们" if fit
-           else "图上不会出现青线（想看环在哪：勾上面的 [看环全貌]）")
+    if fit:
+        how = "视野已按 [看环全貌] 放大到看得见它们"
+    elif zoomed:
+        how = ("视野由缩放掌握——环不在当前视野里就框选/滚轮找，"
+               "或勾 [看环全貌]")
+    else:
+        how = ("图上不会出现青线（想看环在哪：勾上面的 [看环全貌]，"
+               "或点亮 [放大镜] 后框选放大）")
     tail = f"图像 {w}×{h} —— 请核对像素尺寸 / 波长 / 距离"
     # 图上用英文（图内文字一律英文），日志保留同一句话的中文
     fig_head = (f"{len(paths['rings'])} rings fall outside the image under the "
                 f"current geometry (ring radius "
                 f"{paths['r_min_px']:.0f}–{paths['r_max_px']:.0f} px)")
     fig_how = ("view zoomed out to include them ([看环全貌] on)" if fit
-               else "no rings are drawn (turn on [看环全貌] to see them)")
+               else "view is set by zoom: box-zoom or wheel to find them, "
+                    "or turn on [看环全貌]" if zoomed
+               else "no rings are drawn (turn on [看环全貌] or use the "
+                    "[放大镜] box zoom to find them)")
     fig_tail = f"image {w}×{h} — check pixel size / wavelength / distance"
     # 折行写：默认视野锁在图像那一框（不放大），一行写不下会被右边缘裁掉
     ax.text(0.02, 0.98, "\n".join([f"⚠ {fig_head}", fig_how, fig_tail]),
@@ -544,6 +619,171 @@ _LAB6_MAX_RING = 15
 # 右键选中：落点离某个选点多近算"点中了这个点"（px）。选点标记是 9 px 的
 # 圆圈，12 px 给触控板留点余量
 _MARKER_PICK_PX = 12.0
+# 框选放大：位移小于它 = 一次点击（按松开判，与 plot_panels.BOX_MIN_PX
+# 同一口径的 6 px；那边从模块常量取，这里同值自持，不想为一个数把整个
+# plot_panels 拉进本模块的 import 链）
+_BOX_MIN_PX = 6.0
+# 滚轮每格 10%（1.1 的倒数；与 plot_panels._wheel_zoom 同口径——1.25
+# 太猛，触摸板两指一滑是连续好多小格）
+_ZOOM_STEP = 1.1
+
+
+def _draw_calib_box(window: QMainWindow, ax, x0: float, y0: float,
+                    x1: float, y1: float) -> None:
+    """框选放大的选框：画成"坐标轴分数坐标"的矩形（跟着轴缩放），拖动
+    期只贴图（见 _blit_calib_box），松开时由 _on_calib_release 撤掉。
+    """
+    inv = ax.transAxes.inverted()
+    (u0, v0), (u1, v1) = inv.transform([(x0, y0), (x1, y1)])
+    left, bottom = min(u0, u1), min(v0, v1)
+    box = getattr(window, "calib_box_patch", None)
+    if box is None or box.axes is not ax:
+        if box is not None:
+            try:
+                box.remove()
+            except Exception:                              # noqa: BLE001
+                pass
+        box = Rectangle((left, bottom), abs(u1 - u0), abs(v1 - v0),
+                        transform=ax.transAxes, facecolor="none",
+                        edgecolor="#2a78d6", linewidth=1.0, linestyle="--",
+                        zorder=20)
+        ax.add_patch(box)
+        window.calib_box_patch = box
+    else:
+        box.set_bounds(left, bottom, abs(u1 - u0), abs(v1 - v0))
+    _blit_calib_box(window, ax, box)
+
+
+def _blit_calib_box(window: QMainWindow, ax, box) -> None:
+    """框选拖动期的一帧：贴回按下时拍的底图 → 只画选框 → 上屏（几毫秒）。
+
+    底图在按下时拍（window.calib_drag_bg），**含**已贴上去的选点标记
+    ——拖动期选框过去、标记都还在。没有底图（后端不支持贴图）就不画
+    预览帧：松开时框选照样生效，只是拖动期看不到框。
+    """
+    canvas = getattr(window, "calib_canvas", None)
+    bg = getattr(window, "calib_drag_bg", None)
+    if canvas is None or bg is None:
+        return
+    canvas.restore_region(bg)
+    ax.draw_artist(box)
+    canvas.blit(ax.figure.bbox)
+
+
+def _on_calib_press(window: QMainWindow, key: str, event) -> None:
+    """左键按下。放大镜**点亮**：起框选（松开且位移小于阈值 = 一次点击，
+    按按下处选点）；熄灭：立即走选点（一点即记，老行为原样）。
+    右键按老规矩：选中最近的已有点（改环号的前半步）。
+    """
+    if event.xdata is None or event.ydata is None:
+        return   # 点在坐标轴外
+    if event.inaxes is not getattr(window, "calib_ax", None):
+        return
+    if getattr(window, "calib_dock", None) is None \
+            or getattr(window, "calib_key", None) != key:
+        return   # 面板已关/换过：迟到点击忽略
+    if getattr(event, "button", None) == MouseButton.RIGHT:
+        _on_calib_click(window, key, event)   # 右键选中（原路径，不动）
+        return
+    if event.button != 1:
+        return
+    if not _calib_zoom_on(window):
+        _on_calib_click(window, key, event)   # 熄灭：一点即记（老行为）
+        return
+    # 点亮：起框选。拍底图 → 画零尺寸框（拖动期只贴这一帧+选框）。
+    # 同时记下**按下事件**：位移小于阈值时按按下处的位置选点
+    # （松开事件的数据坐标可能已经偏出去了）
+    window.calib_box_start = (event.x, event.y)
+    window.calib_box_axes = event.inaxes
+    window.calib_box_event = event
+    window.calib_drag_bg = _calib_take_shot(window, event.inaxes)
+    _draw_calib_box(window, event.inaxes, event.x, event.y, event.x, event.y)
+
+
+def _calib_take_shot(window: QMainWindow, ax):
+    """拍一张拖动期底图（整图 bbox，含当时已贴上的标记）；不支持就 None。"""
+    canvas = getattr(window, "calib_canvas", None)
+    if canvas is None or not hasattr(canvas, "copy_from_bbox"):
+        return None
+    try:
+        return canvas.copy_from_bbox(ax.figure.bbox)
+    except Exception:                                      # noqa: BLE001
+        return None
+
+
+def _on_calib_motion(window: QMainWindow, key: str, event) -> None:
+    """左键拖动：放大镜点亮时拉伸选框（熄灭时没有拖动动作）。"""
+    start = getattr(window, "calib_box_start", None)
+    if start is None or getattr(event, "button", None) != 1:
+        return
+    ax = getattr(window, "calib_box_axes", None)
+    if ax is None:
+        return
+    _draw_calib_box(window, ax, start[0], start[1], event.x, event.y)
+
+
+def _on_calib_release(window: QMainWindow, key: str, event) -> None:
+    """松开左键：位移够大 = 放大到框内（只改坐标范围，不碰数据点）；
+    位移小于阈值 = 其实是一次点击 → 按**按下处**选点（走老入口）。
+    """
+    start = getattr(window, "calib_box_start", None)
+    if start is None:
+        return
+    ax = getattr(window, "calib_box_axes", None)
+    patch = getattr(window, "calib_box_patch", None)
+    press_ev = getattr(window, "calib_box_event", None)
+    window.calib_box_start = None
+    window.calib_box_axes = None
+    window.calib_box_event = None
+    window.calib_box_patch = None
+    window.calib_drag_bg = None
+    if patch is not None:
+        try:
+            patch.remove()          # 选框是临时的：松开就撤，不留痕迹
+        except Exception:                                  # noqa: BLE001
+            pass
+    if ax is None:
+        return
+    if (abs(event.x - start[0]) < _BOX_MIN_PX
+            or abs(event.y - start[1]) < _BOX_MIN_PX):
+        # 其实是点击：按按下处选点（老入口原样），随后贴回底图把拖动期
+        # 的框帧擦掉（成功选点会自带一次贴图，这里兜住"没吸上环"那支）
+        if press_ev is not None:
+            _on_calib_click(window, key, press_ev)
+        _refresh_calib_markers(window)
+        return
+    inv = ax.transData.inverted()
+    (cx0, cy0), (cx1, cy1) = inv.transform([start, (event.x, event.y)])
+    ax.set_xlim(min(cx0, cx1), max(cx0, cx1))
+    ax.set_ylim(min(cy0, cy1), max(cy0, cy1))
+    window.calib_view = (tuple(ax.get_xlim()), tuple(ax.get_ylim()))
+    _log(window, "视野：已框选放大（想换视野再框一处；[看环全貌] 复位）")
+    ax.figure.canvas.draw_idle()
+
+
+def _on_calib_scroll(window: QMainWindow, key: str, event) -> None:
+    """滚轮：放大镜点亮时以光标为中心缩放（每格 10%）；熄灭时不缩。"""
+    if not _calib_zoom_on(window):
+        return   # 熄灭：滚轮不归这张图管（事件照旧穿透给绘图区）
+    gui = getattr(event, "guiEvent", None)
+    if gui is not None and gui.modifiers() & Qt.ControlModifier:
+        return   # 总缩放不归这里（Ctrl+滚轮在校准图上照旧无效果）
+    ax = getattr(window, "calib_ax", None)
+    if ax is None or event.xdata is None or event.ydata is None:
+        return
+    if event.inaxes is not ax:
+        return
+    if getattr(window, "calib_dock", None) is None \
+            or getattr(window, "calib_key", None) != key:
+        return
+    factor = 1.0 / _ZOOM_STEP if event.button == "up" else _ZOOM_STEP
+    x, y = float(event.xdata), float(event.ydata)
+    xlo, xhi = ax.get_xlim()
+    ylo, yhi = ax.get_ylim()
+    ax.set_xlim(x - (x - xlo) * factor, x + (xhi - x) * factor)
+    ax.set_ylim(y - (y - ylo) * factor, y + (yhi - y) * factor)
+    window.calib_view = (tuple(ax.get_xlim()), tuple(ax.get_ylim()))
+    ax.figure.canvas.draw_idle()
 
 
 def _normalize_selection(window: QMainWindow) -> None:

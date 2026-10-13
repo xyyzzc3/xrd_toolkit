@@ -21,8 +21,9 @@ from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS,
     _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
     _collect_geometry,
-    _compare_shown_curves, _content, _curve_color, _data_snapshot,
-    _display_snapshot, _heat_shown, _log, _panel_param,
+    _compare_shown_curves, _content, _data_snapshot, _drop_pending_display,
+    _gradient_color, _display_snapshot, _heat_shown, _log, _panel_param,
+    _stash_pending_display,
     _param_box_set, _proc_params, _refresh_pending_labels,
     _set_focus)
 from xrd_toolkit.gui.plot_panels import (
@@ -167,12 +168,13 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         ax.clear()
         curves = _compare_shown_curves(window, dock)
         # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
-        # 颜色序号稳定（i 由 _compare_shown_curves 携带）。颜色 =
-        # 逐条自定义色（dock.curve_colors，Customize 对话框改）优先，
-        # 否则按面板快照里的配色参数取槽色（颜色跟着文件走，见
-        # _curve_color）
-        palette = _panel_param(window, dock, "曲线配色", "高对比")
-        overrides = getattr(dock, "curve_colors", None) or {}
+        # 颜色序号稳定（i 由 _compare_shown_curves 携带）。颜色 = 单色
+        # 渐变的第 i 条（「渐变色系」参数，按勾选顺序从深到浅；2026-10-13
+        # 起，逐条自定义色退休）。n 用**全部**勾选文件数——热图联动隐藏
+        # 的行不重排色号，重新显示回来颜色不变。
+        family = _panel_param(window, dock, "渐变色系", "蓝")
+        files = getattr(dock, "compare_files", None) or []
+        n_color = len(files) or (max((c[3] for c in curves), default=0) + 1)
         stack = _panel_param(window, dock, "对比堆叠", False)
         if stack:
             # 瀑布式错开叠放，行距统一：所有行同一个行高（= 各行峰值的
@@ -192,7 +194,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 step *= float(_panel_param(window, dock, "行距倍数", 1.0))
             offsets = [i * step for i in range(len(curves))]
             for (tth, shown, display, i, _ref), off in zip(curves, offsets):
-                color = overrides.get(display) or _curve_color(palette, i)
+                color = _gradient_color(family, i, n_color)
                 ax.plot(tth, shown + off, color=color, lw=0.8,
                         label=display)
             ax.set_yticks(offsets)
@@ -207,9 +209,9 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 ax.set_yticks([])
         else:
             for tth, shown, display, i, _ref in curves:
-                color = overrides.get(display) or _curve_color(palette, i)
+                color = _gradient_color(family, i, n_color)
                 ax.plot(tth, shown, color=color, lw=0.8, label=display)
-        # 颜色不套旧快照（配色参数/自定义色在画图时已定），其余样式
+        # 颜色不套旧快照（渐变色系参数在画图时已定），其余样式
         # 照旧保护（图例在下面读标签，先套回样式）
         _restore_line_styles(ax, old_lines, restore_color=False)
         xlo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
@@ -303,13 +305,27 @@ def _refresh_compare(window: QMainWindow) -> None:
     """
     if getattr(window, "_param_replaying", False):
         return   # 回放快照期间控件值正被程序改写，不是用户改动（同 _refresh_proc）
+    # handler 管的这几个键（app.py 里接上 _refresh_compare 的那几件控件）
+    keys = ("对比归一化", "归一化目标", "渐变色系", "对比堆叠",
+            "手动行距", "行距倍数", "显示数据名")
+    handled = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("对比"):
             continue
+        # 先写快照再查数据（2026-10-13 对齐 _refresh_heat 的顺序）：算图
+        # 期间改的参数落进快照、算完那一下按新值画；否则"还在算"的
+        # 面板会被当成没人接，改动丢在账本里、这张图白算一趟
+        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+        handled += 1
         if not getattr(dock, "compare_data", None):
             continue     # 还没算完：等它自己画
-        dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
         _redraw_compare(window, key)
+    if handled:
+        _drop_pending_display(window, keys)   # 有面板接住：账本里这几个键作废
+    else:
+        # 一张对比面板都没有：改动记进"待应用"账本，出图时当新面板起点
+        # （用户 2026-10-13："在出图之前调整参数会无效"）
+        _stash_pending_display(window, keys)
     # 这几项从此没有"未应用"这一态：灰字量的是"控件 vs 快照"的差，
     # 而这里刚把控件值写进了快照（同 _refresh_heat 的收尾）
     _refresh_pending_labels(window)
@@ -1057,17 +1073,27 @@ def _refresh_heat(window: QMainWindow) -> None:
     if getattr(window, "_param_replaying", False) \
             or getattr(window, "_param_box_sync", False):
         return   # 回放 / 程序回填不是用户改动
+    keys = ("热图色图", "热图归一化", "热图对数", "热图自动范围",
+            "热图下限", "热图上限")
     touched = 0
+    handled = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("热图"):
             continue
         dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
+        handled += 1     # 快照已收下改动（含还在算的：算完自己按新值画）
         data = _heat_data(window, dock)
         if data is None:
             continue
         dock.heat_data = data            # 与画的同源（画热图也从这里取）
         _draw_heatmap(window, dock, data[0], data[1], data[2])
         touched += 1
+    if handled:
+        _drop_pending_display(window, keys)   # 有面板接住：账本里这几个键作废
+    else:
+        # 一张热图面板都没有：记进"待应用"账本（用户 2026-10-13："在出图
+        # 之前调整参数会无效"——此前这几项改了直接丢）
+        _stash_pending_display(window, keys)
     if touched:
         _apply_auto_heatlim(window)      # 对数/自动范围改了 → 置灰框跟着更新
 
@@ -1101,6 +1127,7 @@ def _apply_view_boxes(window: QMainWindow, lo_name: str, hi_name: str,
     lo, hi = float(lo_w.value()), float(hi_w.value())
     if lo >= hi:
         return   # 还没填好（如先改了上限）：画个空窗口不如不动
+    handled = 0
     for key, dock in list(window.plot_docks.items()):
         view = key.split("|", 1)[0]
         if view not in views:
@@ -1108,20 +1135,27 @@ def _apply_view_boxes(window: QMainWindow, lo_name: str, hi_name: str,
         snap = getattr(dock, "params_snapshot", None)
         if not snap:
             continue
+        # 先写快照再查数据（2026-10-13，同 _refresh_compare）：算图期间改
+        # 的窗口算数，算完那一下自己按新窗口画
+        snap[lo_name] = lo
+        snap[hi_name] = hi
+        handled += 1
         if view == "热图":
             data = _heat_data(window, dock)
             if data is None:
                 continue         # 还没算完：等它自己画
-            snap[lo_name] = lo
-            snap[hi_name] = hi
             dock.heat_data = data   # 与画的同源（同 _refresh_heat）
             _draw_heatmap(window, dock, data[0], data[1], data[2])
         else:
             if not getattr(dock, "compare_data", None):
                 continue
-            snap[lo_name] = lo
-            snap[hi_name] = hi
             _redraw_compare(window, key)
+    if handled:
+        _drop_pending_display(window, (lo_name, hi_name))
+    else:
+        # 一张对得上号的面板都没有：这本窗口记进账本（2026-10-13，
+        # "出图前调参数无效"）
+        _stash_pending_display(window, (lo_name, hi_name))
 
 
 def _refresh_heat_view(window: QMainWindow) -> None:

@@ -82,7 +82,7 @@ own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
 - **Background subtraction, live** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors that set the level while the auto baseline supplies the shape; smoothing (boxcar / Savitzky–Golay) and interval cuts on top. Negatives are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ.
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
 - **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
-- **Desktop app over the same engine** — five stage entrances, a live parameter panel, hover readout, box zoom, per-curve styling, `.poni` in/out, PNG/TIF export.
+- **Desktop app over the same engine** — five stage entrances, a live parameter panel, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF export.
 
 ## Install (from source)
 

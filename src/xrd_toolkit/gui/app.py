@@ -109,7 +109,8 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
-    _apply_config, _bg_geom_sig, _collect_geometry, _content, _log,
+    _apply_config, _bg_geom_sig, _collect_geometry, _content,
+    _GRADIENT_FAMILIES, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
@@ -1153,16 +1154,19 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cmp_norm.currentIndexChanged.connect(sync_norm_target)
     sync_norm_target()   # 初始 = 不归一化 → 目标下拉框置灰
 
-    # 曲线配色（显示参数）：多曲线的分类色。"高对比" = 固定顺序
-    # 8 槽色盲友好（颜色跟着文件走，第一个文件永远是蓝）；
-    # "默认" = matplotlib 自带循环。逐条自定义色走 Customize。
+    # 渐变色系（显示参数）：对比曲线的单色渐变（2026-10-13 用户："对比图
+    # 的颜色改为一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先
+    # 的分类色板下拉与"逐条自定义色"一起退休）。同一色系按勾选顺序从深
+    # 到浅，第 1 条 = 基色；1D/剖面单曲线用基色。逐图的色系也可在「外观」
+    # 里选（同一参数，两处改的是同一件事）。
     curve_palette = QComboBox()
-    for text, data in (("高对比（推荐）", "高对比"),
-                       ("默认（matplotlib）", "默认")):
-        curve_palette.addItem(text, data)
-    curve_palette.setToolTip("多曲线配色：高对比：色盲友好固定色序"
-                             "（颜色跟着文件走）/ matplotlib 默认循环")
-    window.params["曲线配色"] = curve_palette
+    for name in _GRADIENT_FAMILIES:
+        curve_palette.addItem(f"{name}色渐变（推荐）" if name == "蓝"
+                              else f"{name}色渐变", name)
+    curve_palette.setToolTip("对比曲线配色：同一色系按勾选顺序从深到浅；"
+                             "第 1 条 = 基色，单条曲线用它。逐图的色系"
+                             "在面板标题栏的 [外观…] 里换")
+    window.params["渐变色系"] = curve_palette
     form_cmp.addRow(curve_palette)
 
     cmp_stack = QCheckBox("堆叠显示")
@@ -1743,7 +1747,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         "纵轴自动": True,
         "对比归一化": "off",
         "归一化目标": "",
-        "曲线配色": "高对比",
+        "渐变色系": "蓝",
         "对比堆叠": False,
         "显示数据名": False,
         "热图显示数据名": False,
@@ -1782,8 +1786,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.params["对比归一化"].setCurrentIndex(
             window.params["对比归一化"].findData(img_defaults["对比归一化"]))
         window.params["归一化目标"].setCurrentIndex(0)
-        window.params["曲线配色"].setCurrentIndex(
-            window.params["曲线配色"].findData(img_defaults["曲线配色"]))
+        window.params["渐变色系"].setCurrentIndex(
+            window.params["渐变色系"].findData(img_defaults["渐变色系"]))
         window.params["对比堆叠"].setChecked(img_defaults["对比堆叠"])
         window.params["显示数据名"].setChecked(img_defaults["显示数据名"])
         window.params["热图显示数据名"].setChecked(

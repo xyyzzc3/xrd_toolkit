@@ -30,13 +30,14 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
     立即出现并自动选中（几何填进参数坞）。内置 config.py 注册表
     仍走 CLI 模板人工登记（见 config.py 文件头）。
   - 中央校准图面板 = _CalibSubWindow（MDI 子窗口，imshow + 理论环
-    路径 + 控制点/用户点标记 + 一个 [看环全貌] 视野开关，只接鼠标
-    点击）。理论环由 theoretical_ring_paths 精确反解（倾斜时是椭圆、
-    圆心是直射束落点），不用"圆心 + 半径"的正圆近似——后者会整体偏
-    8~23 px。视野默认锁在图像那一框（图像是唯一不动的参照系，环跑
-    到框外由红字说明），要放大到看得见环得自己勾 [看环全貌]。
-    不进 plot_docks：不掺和编辑对象焦点、平铺、总缩放；无手势无
-    抓手（v1 从简）。
+    路径 + 控制点/用户点标记 + [看环全貌] 视野开关 + [放大镜]，接
+    鼠标点击（选点）与放大镜手势）。理论环由 theoretical_ring_paths
+    精确反解（倾斜时是椭圆、圆心是直射束落点），不用"圆心 + 半径"
+    的正圆近似——后者会整体偏 8~23 px。视野默认锁在图像那一框
+    （图像是唯一不动的参照系，环跑到框外由红字说明）；放大镜点亮后
+    可框选放大 / 滚轮缩放（2026-10-13 用户："校准图添加放大功能"），
+    [看环全貌] 照旧是复位/看全部环的开关。不进 plot_docks：不掺和
+    编辑对象焦点、平铺、总缩放；无抓手（v1 从简）。
 
 状态（都挂在 window 上）：
   calib_dock / calib_key / calib_path / calib_display / calib_canvas
@@ -429,8 +430,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
       操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
-      自动取点  定位束心并精修
       手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
+      自动取点  定位束心并精修
       三列表  当前配置说明行（框顶）+ 灰字列头 + 三个槽下拉（当前配置 /
               A / B——各贴自己那一列；都从累积结果里选；当前配置还能借
               条目或手输，只是不在这个下拉里表达）+ 8 行数值 + 2 行 Δ
@@ -439,6 +440,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
 
     数据表在**最下**（用户 2026-09-30："校准数据放最下，跟自动手动换位置"）：
     流程上先跑自动/手动、再回头看结果，所以动作区在上、结果区在下。
+    手动区在自动区**上面**（用户 2026-10-13："校准顺序调为手动在上，自动在下"）：
+    手动选点是常用路径，打开校准页第一眼就看到它。
 
     操作区排在最上面（用户 2026-09-26 晚定）：里面的 [加载参数][保存参数]
     [删除] 作用的就是坞顶「几何配置」那一行选中的条目，紧挨着它才看得出
@@ -640,7 +643,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     tb.addWidget(hint)
     lay.addWidget(intro)
     # 数据表（三列表 + Δ + 结论）**放最下**（用户 2026-09-30："校准数据放最下，
-    # 跟自动手动换位置"）：页面顺序 = 介绍 → 自动 → 手动 → 数据。
+    # 跟自动手动换位置"）：页面顺序 = 介绍 → 手动 → 自动 → 数据（手动在
+    # 上是用户 2026-10-13 定的："校准顺序调为手动在上，自动在下"）。
     # 它在最后才 addWidget（见下），这里只留引用
     window.calib_verdict = verdict
 
@@ -659,9 +663,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_auto.setObjectName("start_auto_calib")
     btn_auto.clicked.connect(lambda: _start_auto_calib(window))
     al.addWidget(btn_auto)
-    lay.addWidget(auto_box)
     window.calib_start_auto = btn_auto
-    # （数据表在手动区之后才加进布局——见本函数末尾，用户要求放最下）
+    # （自动区在手动区**下面**才加进布局——用户 2026-10-13："手动在上、自动
+    # 在下"；数据表照旧在最后，见本函数末尾）
 
     # ── 手动选点 ─────────────────────────────────────────────
     manual_box = QGroupBox("手动选点")
@@ -706,7 +710,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
                           f"那行说明；都判成同一个环号了：右键选中那个点，"
                           f"把环号改掉）")
     ml.addWidget(btn_manual)
-    lay.addWidget(manual_box)
+    lay.addWidget(manual_box)     # 手动在上、自动在下（用户 2026-10-13 定）
+    lay.addWidget(auto_box)
     lay.addWidget(table_box)      # 数据表放最下（用户 2026-09-30 定）
     window.calib_points_label = points_label
     window.calib_selected_lbl = sel_lbl

@@ -988,6 +988,71 @@ class TestNewViews(unittest.TestCase):
         finally:
             w.close()
 
+    def test_waterfall_row_step_rescales_the_zoomed_y_window(self):
+        """先缩放、后调行距：钉住的 y 窗口跟着行距一起换算（同一批行留下）。
+
+        用户 2026-10-13："瀑布图在先缩放后调整行距时会 yoff 失效"——偏移
+        每次都按新行距重算（那一环没毛病），坏的是缩放窗口按旧行距的坐标
+        数值原样套回，视野里换成了另一段角度的行；修后窗口 × 倍数、并写回
+        快照，Home 也记得新行距下的天然量程（不是缩放窗口）。
+        """
+        w = create_window()
+        try:
+            tth = np.linspace(1.0, 8.0, 60)
+            i2d = np.full((60, 4), 10.0)
+            i2d[(tth >= 1.0) & (tth <= 2.0), 0] = 100.0
+            i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0
+            chi = np.linspace(-175.0, 175.0, 4)
+            with mock.patch.object(gui_views, "load_diffraction_image",
+                                   return_value=np.zeros((10, 10))), \
+                 mock.patch.object(gui_views, "integrate_sectors",
+                                   return_value=(tth, i2d, chi)):
+                add_checked(w, ["data/fake_b.tif"])
+                _open_view(w, "瀑布")
+                dock = _dock(w, "瀑布", "data/fake_b.tif")
+                content = gui_panel_state._content(dock)
+                ax = content.axes_waterfall
+                self.assertTrue(_wait_until(lambda: len(ax.lines) > 0))
+                step_auto = 12.0 * 0.7
+                # 模拟手势缩放：只框住第 0.8~3.2 行的窗口（走真实写回槽）
+                lo, hi = 0.8 * step_auto, 3.2 * step_auto
+                ax.set_ylim(lo, hi)
+                QApplication.processEvents()
+                snap = dock.params_snapshot
+                self.assertAlmostEqual(snap["视图 y 范围"][0], lo, places=6)
+                # 调倍数 ×2 → 窗口换算 = 旧窗口 ×2（同一批行仍留在视野）
+                w.params["瀑布手动行距"].setChecked(True)
+                w.params["瀑布行距倍数"].setValue(2.0)
+                QApplication.processEvents()
+                ylo, yhi = ax.get_ylim()
+                self.assertAlmostEqual(ylo, lo * 2.0, places=5,
+                                       msg="缩放窗口该跟着行距换算")
+                self.assertAlmostEqual(yhi, hi * 2.0, places=5)
+                self.assertAlmostEqual(snap["视图 y 范围"][0], lo * 2.0,
+                                       places=5, msg="换算结果要写回快照")
+                # Home：回新行距下的天然量程（最上一行峰顶可见），
+                # 而不是停在缩放窗口
+                content.toolbar._actions["home"].trigger()
+                QApplication.processEvents()
+                hylo, hyhi = ax.get_ylim()
+                top_row = 10.0 + 3.0 * step_auto * 2.0
+                self.assertGreaterEqual(hyhi, top_row * 0.95,
+                                        "Home 该看到整个瀑布（含最上一行）")
+                self.assertLess(hylo, lo * 2.0, "Home 不该停在缩放窗口")
+                # Home 后快照写回的 ≈ 家窗口（天然量程）：再调行距时该
+                # **丢弃**、让新行距自己量程——不是把天然窗口按比例放大
+                self.assertIn("视图 y 范围", snap,
+                              "Home 后快照该写回视图窗口（与 x 同待遇）")
+                w.params["瀑布行距倍数"].setValue(3.0)
+                QApplication.processEvents()
+                self.assertNotIn("视图 y 范围", snap,
+                                 "≈ 家的窗口该丢弃、交给自动量程")
+                top_row3 = 10.0 + 3.0 * step_auto * 3.0
+                self.assertGreaterEqual(ax.get_ylim()[1], top_row3 * 0.95,
+                                        "×3 行距下整条瀑布都在视野里")
+        finally:
+            w.close()
+
     def test_waterfall_display_change_redraws_without_recompute(self):
         """瀑布面板改显示参数：只重画已有结果，不重新扇形积分。"""
         w = create_window()
@@ -1645,29 +1710,31 @@ class TestSaveOptions(unittest.TestCase):
 
 
 class TestCurveColors(unittest.TestCase):
-    """任务六·色彩：曲线配色参数（固定色序色板）+ Customize 逐条自定义色。"""
+    """色彩（2026-10-13 改版）：单色渐变配色参数 +「外观」渐变色系。
 
-    # 高对比色板 8 槽（OKLab 校验色盲安全；颜色跟着文件走不跟排序走）
-    _SLOTS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100",
-              "#e87ba4", "#008300", "#4a3aa7", "#e34948")
+    用户当天："对比图的颜色改为一种颜色的渐变过程，用户在 customize
+    里面可以自行选择……只留渐变顺序，颜色这种选项"（原话里对旧逐条
+    改色的评价："不是每个数据都能改颜色，非常无效"）——原先的 8 槽
+    分类色板与"逐条自定义色"一起退休。
+    """
 
-    def test_curve_color_slots(self):
-        """高对比固定顺序、槽尽回槽 0 复用；默认 = C 循环/单曲线蓝；
-        未知色板兜底高对比。"""
-        self.assertEqual([gui_state._curve_color("高对比", i)
-                          for i in range(8)], list(self._SLOTS))
-        self.assertEqual(gui_state._curve_color("高对比", 8),
-                         self._SLOTS[0])   # 第 9 条回槽 0（靠图例文字分辨）
-        self.assertEqual(gui_state._curve_color("默认", 0), "C0")
-        self.assertEqual(gui_state._curve_color("默认", 10), "C0")   # 越界复用
-        self.assertEqual(gui_state._curve_color("高对比", 0, single=True),
-                         self._SLOTS[0])
-        self.assertEqual(gui_state._curve_color("默认", 0, single=True), "b")
-        self.assertEqual(gui_state._curve_color("乱写的", 2),
-                         self._SLOTS[2])   # 未知色板兜底
+    # 蓝基色与白混 55% —— 2 条对比曲线里第 2 条的颜色（_gradient_color）
+    _LIGHT_2 = "#9fc2ed"
 
-    def test_draw_1d_follows_palette_param(self):
-        """1D 单曲线：默认高对比 = 第 1 槽蓝；快照切"默认"重画 = 传统蓝 b。"""
+    def test_gradient_color_sampling(self):
+        """单条 = 基色；多条按序号从深到浅；未知色系兜底蓝；越界夹回。"""
+        self.assertEqual(gui_state._gradient_color("蓝", 0, 1), "#2a78d6")
+        self.assertEqual(gui_state._gradient_color("绿", 0, 1), "#1baf7a")
+        self.assertEqual([gui_state._gradient_color("蓝", i, 2)
+                          for i in range(2)],
+                         ["#2a78d6", self._LIGHT_2])
+        # 越界夹回范围（防御）：负索引 → 第 0 条、超界 → 最后一条
+        self.assertEqual(gui_state._gradient_color("蓝", -3, 2), "#2a78d6")
+        self.assertEqual(gui_state._gradient_color("蓝", 99, 2), self._LIGHT_2)
+        self.assertEqual(gui_state._gradient_color("乱写的", 0, 1), "#2a78d6")
+
+    def test_draw_1d_follows_gradient_family(self):
+        """1D 单曲线：默认蓝基色；快照切绿重画 = 绿基色。"""
         w = create_window()
         try:
             with mock.patch.object(gui_views, "_compute_integration",
@@ -1677,11 +1744,11 @@ class TestCurveColors(unittest.TestCase):
                 self.assertTrue(_wait_until(
                     lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
             ax = _axes(w, "1D", "data/fake_b.tif")
-            self.assertEqual(ax.lines[0].get_color(), self._SLOTS[0])
+            self.assertEqual(ax.lines[0].get_color(), "#2a78d6")
             dock = _dock(w, "1D", "data/fake_b.tif")
-            dock.params_snapshot["曲线配色"] = "默认"
+            dock.params_snapshot["渐变色系"] = "绿"
             gui_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
-            self.assertEqual(ax.lines[0].get_color(), "b")
+            self.assertEqual(ax.lines[0].get_color(), "#1baf7a")
         finally:
             w.close()
 
@@ -1696,42 +1763,37 @@ class TestCurveColors(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
-    def test_compare_uses_palette_slots_and_override(self):
-        """对比曲线按色板槽着色；自定义色优先；换色板重画不被打回旧色。"""
+    def test_compare_uses_the_gradient(self):
+        """对比曲线按勾选顺序渐变（第 1 条 = 基色）；换色系重画不被打回。"""
         w = create_window()
         try:
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
             self.assertEqual([line.get_color() for line in ax.lines],
-                             [self._SLOTS[0], self._SLOTS[1]])
-            # 逐条自定义：第一条换红 → 重画时自定义优先
-            dock.curve_colors = {"fake_a.tif": "#ff0000"}
+                             ["#2a78d6", self._LIGHT_2])
+            # 换橙 → 重画按新参数着色（旧色不被套回）
+            dock.params_snapshot["渐变色系"] = "橙"
             gui_plot_compare._redraw_compare(w, key)
-            self.assertEqual(ax.lines[0].get_color(), "#ff0000")
-            self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
-            # 换"默认"配色 → 颜色按新参数重画（旧色不被套回）
-            dock.params_snapshot["曲线配色"] = "默认"
-            gui_plot_compare._redraw_compare(w, key)
-            self.assertEqual([line.get_color() for line in ax.lines],
-                             ["#ff0000", "C1"])
+            self.assertEqual(ax.lines[0].get_color(), "#eb6834")
+            self.assertNotEqual(ax.lines[1].get_color(), self._LIGHT_2,
+                                "第 2 条的浅色应跟着色系换")
         finally:
             w.close()
 
-    def test_palette_widget_and_reset(self):
-        """参数坞有配色下拉框；[恢复默认] 回高对比；默认表收录新参数。"""
+    def test_family_widget_and_reset(self):
+        """参数坞有渐变色系下拉；[恢复默认] 回蓝；默认表收录新参数。"""
         w = create_window()
         try:
-            w.params["曲线配色"].setCurrentIndex(
-                w.params["曲线配色"].findData("默认"))
+            w.params["渐变色系"].setCurrentIndex(
+                w.params["渐变色系"].findData("绿"))
             w.findChild(QPushButton, "reset_image_btn").click()
-            self.assertEqual(w.params["曲线配色"].currentData(), "高对比")
-            self.assertEqual(gui_state._DISPLAY_DEFAULTS["曲线配色"], "高对比")
+            self.assertEqual(w.params["渐变色系"].currentData(), "蓝")
+            self.assertEqual(gui_state._DISPLAY_DEFAULTS["渐变色系"], "蓝")
         finally:
             w.close()
 
-    def test_customize_compare_color_section(self):
-        """对比面板 Customize：曲线颜色小节逐条换色（应用才写回）、
-        取消不动图、恢复默认配色清掉自定义。"""
+    def test_customize_compare_family_section(self):
+        """对比面板「外观」：渐变色系单选（应用才写回、随即重画）。"""
         w = create_window()
         try:
             key, ax = self._plot_compare(w)
@@ -1739,35 +1801,170 @@ class TestCurveColors(unittest.TestCase):
             content = gui_panel_state._content(dock)
             dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
-            swatches = [dlg.findChild(QPushButton, f"swatch_{i}")
-                        for i in range(2)]
-            self.assertTrue(all(s is not None for s in swatches),
-                            "对比面板应有逐条色块")
-            with mock.patch.object(gui_customize.QColorDialog, "getColor",
-                                   return_value=QColor("#00ff00")):
-                swatches[0].click()
-            self.assertIn("fake_a.tif", dlg._color_picks)
-            # [恢复默认配色] 清空暂存
-            dlg.findChild(QPushButton, "clear_colors_btn").click()
-            self.assertEqual(dlg._color_picks, {})
-            # 重新选红 → 应用 → 写回 dock + 重画
-            with mock.patch.object(gui_customize.QColorDialog, "getColor",
-                                   return_value=QColor("#ff0000")):
-                swatches[0].click()
+            combo = dlg.findChild(QComboBox, "gradient_family_combo")
+            self.assertIsNotNone(combo, "对比面板应有渐变色系单选")
+            self.assertEqual(combo.currentData(), "蓝", "预填当前色系")
+            combo.setCurrentIndex(combo.findData("紫"))
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
-            self.assertEqual(dock.curve_colors, {"fake_a.tif": "#ff0000"})
-            self.assertEqual(ax.lines[0].get_color(), "#ff0000")
-            self.assertEqual(ax.lines[1].get_color(), self._SLOTS[1])
-            # 再开对话框：色块预填自定义色；清空后应用 → 回色板色
-            dlg2 = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
-                                                   content.figure)
-            self.assertEqual(dlg2._color_picks, {"fake_a.tif": "#ff0000"})
-            dlg2.findChild(QPushButton, "clear_colors_btn").click()
-            gui_customize._apply_customize(w, dock, content.axes_1d,
-                                     content.figure, dlg2)
-            self.assertFalse(hasattr(dock, "curve_colors"))
-            self.assertEqual(ax.lines[0].get_color(), self._SLOTS[0])
+            self.assertEqual(dock.params_snapshot["渐变色系"], "紫")
+            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+        finally:
+            w.close()
+
+
+class TestPendingDisplayParams(unittest.TestCase):
+    """出图前调好的显示参数 = 新图的起点（2026-10-13）。
+
+    用户："对比热图页面如果在出图之前调整参数会无效，出图瞬间所有的
+    参数都会恢复默认，怀疑所有实时改变的参数都会有这种情况"——属实：
+    没有对应面板时各家 handler 早退/空转，改动只留在控件上（出图时
+    新面板统一从默认起步，焦点一回写就"瞬间恢复默认"）。现在记进
+    窗口级"待应用"账本（panel_state._stash_pending_display），出图
+    （_data_snapshot base=None）时叠在默认值上；焦点回放把控件刷成
+    别的图的设置时作废（"切走 = 放弃"）。
+    """
+
+    def test_heat_params_set_before_plotting_are_used(self):
+        """一张图都没有时改热图色图/对数 → 出热图时就是这套值，不回弹。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                # 先调参数（此时一张图都没有；此前这些改动直接丢）
+                combo = w.params["热图色图"]
+                combo.setCurrentIndex(combo.findData("viridis"))
+                w.params["热图对数"].setChecked(True)
+                self.assertEqual(w.pending_display.get("热图色图"), "viridis",
+                                 "无面板可接：改动该记进待应用账本")
+                # 再出图：新面板就用这套值
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.heat_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: any(k.startswith("热图")
+                                and getattr(d, "heat_data", None) is not None
+                                for k, d in w.plot_docks.items())))
+            key = next(k for k in w.plot_docks if k.startswith("热图"))
+            dock = w.plot_docks[key]
+            self.assertEqual(dock.params_snapshot["热图色图"], "viridis")
+            self.assertTrue(dock.params_snapshot["热图对数"])
+            self.assertEqual(w.params["热图色图"].currentData(), "viridis",
+                             "控件不许被弹回默认")
+            ax = gui_panel_state._content(dock).axes_heat
+            self.assertEqual(ax.images[0].get_cmap().name, "viridis",
+                             "画出来就该是出图前的色图")
+        finally:
+            w.close()
+
+    def test_compare_params_set_before_plotting_are_used(self):
+        """渐变色系 / 堆叠 / 视图 2θ 框：出图前调好，出图时就是它。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                combo = w.params["渐变色系"]
+                combo.setCurrentIndex(combo.findData("绿"))
+                w.params["对比堆叠"].setChecked(True)
+                w.params["视图 2θ 下限 (°)"].setValue(2.0)
+                w.params["视图 2θ 上限 (°)"].setValue(5.0)
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: any(k.startswith("对比")
+                                and len(gui_panel_state._content(
+                                    w.plot_docks[k]).axes_1d.lines) >= 2
+                                for k in w.plot_docks), 60000))
+            key = next(k for k in w.plot_docks if k.startswith("对比"))
+            dock = w.plot_docks[key]
+            snap = dock.params_snapshot
+            self.assertEqual(snap["渐变色系"], "绿")
+            self.assertTrue(snap["对比堆叠"])
+            ax = gui_panel_state._content(dock).axes_1d
+            self.assertEqual(ax.lines[0].get_color(), "#1baf7a",
+                             "渐变按出图前的色系画")
+            self.assertAlmostEqual(ax.get_xlim()[0], 2.0, places=1,
+                                   msg="出图前的视图窗口该生效")
+        finally:
+            w.close()
+
+    def test_1d_display_set_before_plotting_is_used(self):
+        """对数纵轴：一张图都没有时勾上 → 新 1D 图就是对数轴。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.params["对数纵轴"].setChecked(True)
+                self.assertTrue(w.pending_display.get("对数纵轴"))
+                add_checked(w, ["data/fake_a.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
+            dock = _dock(w, "1D", "data/fake_a.tif")
+            self.assertTrue(dock.params_snapshot["对数纵轴"])
+            self.assertEqual(_axes(w, "1D", "data/fake_a.tif").get_yscale(),
+                             "log", "新图该按出图前的对数设置画")
+        finally:
+            w.close()
+
+    def test_pending_applies_to_a_whole_batch(self):
+        """批量出图：账本给同批的**每一张**当起点（不是只喂第一张）。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                w.params["对数纵轴"].setChecked(True)
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: all(len(_axes(w, "1D", p).lines) > 0
+                                for p in ("data/fake_a.tif",
+                                          "data/fake_b.tif"))))
+            for path in ("data/fake_a.tif", "data/fake_b.tif"):
+                self.assertTrue(
+                    _dock(w, "1D", path).params_snapshot["对数纵轴"],
+                    f"{path} 该也拿到出图前的对数设置")
+        finally:
+            w.close()
+
+    def test_processing_params_set_before_plotting_are_used(self):
+        """处理页参数：没有编辑对象时把背景调成自动基线 → 新图就按它画。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                combo = w.params["背景扣除模式"]
+                combo.setCurrentIndex(combo.findData("auto"))
+                self.assertEqual(w.pending_display.get("背景扣除模式"), "auto",
+                                 "无编辑对象：处理参数该记进账本")
+                add_checked(w, ["data/fake_a.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
+            dock = _dock(w, "1D", "data/fake_a.tif")
+            self.assertEqual(dock.params_snapshot["背景扣除模式"], "auto",
+                             "新图该按出图前的处理设置画")
+        finally:
+            w.close()
+
+    def test_pending_dropped_when_widget_replayed_with_other_values(self):
+        """切到别的图（焦点回放刷成不同值）= 待应用值作废。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compute):
+                add_checked(w, ["data/fake_a.tif"])
+                _open_view(w, "1D")
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
+            w.focus_panel = None    # 模拟"刚才没在看任何面板"
+            combo = w.params["热图色图"]
+            combo.setCurrentIndex(combo.findData("viridis"))
+            self.assertEqual(w.pending_display.get("热图色图"), "viridis")
+            # 焦点回放到已有 1D 面板（快照里是默认 magma）→ 作废
+            gui_panel_state._set_focus(w, "1D|data/fake_a.tif", "fake_a.tif")
+            self.assertNotIn("热图色图",
+                             getattr(w, "pending_display", None) or {},
+                             "控件已被刷成别的图的值：待应用值该作废")
         finally:
             w.close()
 
@@ -1991,12 +2188,12 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
             self.assertEqual([l.get_label() for l in ax.lines],
                              ["fake_a.tif"])
             self.assertIn("对比面板隐藏该曲线", w.log_text.toPlainText())
-            # 再点一次 → 恢复，颜色序号不变（fake_b 仍是第 2 槽）
+            # 再点一次 → 恢复，颜色序号不变（fake_b 仍是渐变第 2 条）
             gui_plot_compare._heat_row_press(w, key, self._synthetic_event(ax, 1))
             gui_plot_compare._heat_row_release(w, key, self._synthetic_event(ax, 1))
             self.assertEqual(dock.compare_hidden, set())
             self.assertEqual(len(ax.lines), 2)
-            self.assertEqual(ax.lines[1].get_color(), "#eb6834")
+            self.assertEqual(ax.lines[1].get_color(), "#9fc2ed")
         finally:
             w.close()
 
@@ -8957,36 +9154,26 @@ class TestCustomizeDialog(unittest.TestCase):
     def test_dialog_scrolls_when_content_overflows(self):
         """内容多时进滚动区、按钮行钉在滚动区外（2026-10-08）。
 
-        复现场景（用户报"有时包含图例、看不全"）：对比面板勾 30 条 →
-        「曲线颜色」30 行——修前对话框撑出屏幕，底部 [应用] 都够不着。
+        起因（用户报"有时包含图例、看不全"）：对比面板的「逐曲线颜色」
+        每曲线一行、勾 81 条就是 81 行，对话框撑出屏幕、底部 [应用] 都
+        够不着。2026-10-13 逐曲线色块退休（改「渐变色系」单选），滚动
+        区留着兜底小屏幕——这里用"把对话框缩矮"复现内容超出。
         """
         w = create_window()
-        files = _tmp_files(30)
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                w.add_files([str(p) for p in files], select=True)
-                w.compare_btn.click()
-                key = next((k for k in w.plot_docks
-                            if k.startswith("对比")), None)
-                self.assertIsNotNone(key)
-                ax = gui_panel_state._content(w.plot_docks[key]).axes_1d
-                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 30))
-            dock = w.plot_docks[key]
-            content = gui_panel_state._content(dock)
-            dlg = gui_customize._build_customize_dialog(
-                w, dock, content.axes_1d, content.figure)
+            self._open_one(w)
+            dock, dlg = self._build(w)
             scroll = dlg.findChild(QScrollArea)
             self.assertIsNotNone(scroll, "对话框该有滚动区")
             apply_btn = next(b for b in dlg.findChildren(QPushButton)
                              if b.text() == "应用")
             self.assertFalse(scroll.isAncestorOf(apply_btn),
                              "[应用] 钉在滚动区外，永远够得着")
-            color_box = next(b for b in dlg.findChildren(QGroupBox)
-                             if b.title() == "曲线颜色")
-            self.assertTrue(scroll.isAncestorOf(color_box),
-                            "逐条颜色列表在滚动区里")
-            dlg.resize(460, 360)
+            text_box = next(b for b in dlg.findChildren(QGroupBox)
+                            if b.title() == "标题与轴标签")
+            self.assertTrue(scroll.isAncestorOf(text_box),
+                            "内容区（标题与轴标签）在滚动区里")
+            dlg.resize(460, 150)
             dlg.show()
             QApplication.processEvents()
             self.assertGreater(scroll.verticalScrollBar().maximum(), 0,
@@ -9814,7 +10001,7 @@ class TestCustomizeProtection(unittest.TestCase):
             w.close()
 
     def test_curve_style_survives_redraw(self):
-        """改过的线型/线宽重画不覆盖；颜色跟"曲线配色"参数走
+        """改过的线型/线宽重画不覆盖；颜色跟"渐变色系"参数走
         （任务六起颜色有了参数入口，不再按旧快照保护）。"""
         w = create_window()
         try:
@@ -9827,7 +10014,7 @@ class TestCustomizeProtection(unittest.TestCase):
             self._redraw(w, dock)
             new = ax.lines[0]
             self.assertEqual(new.get_color(), "#2a78d6",
-                             "颜色跟配色参数（默认高对比第 1 槽）")
+                             "颜色跟配色参数（默认蓝基色）")
             self.assertEqual(new.get_linestyle(), "--")
             self.assertEqual(new.get_linewidth(), 3)
             self._redraw(w, dock)
@@ -10576,24 +10763,42 @@ class TestCalibration(unittest.TestCase):
     }
     FAKE_CENTER = {"cx": 1022.0, "cy": 1021.5}
 
-    def _click_rings(self, w, specs):
-        """按 lmfp1 配置几何在指定 (环号, 方位角) 处模拟校准图点击
-        （等价于点图时点中该环：吸附判环应判回同一环）。
+    def _ring_xy(self, ring, ang):
+        """(环号, 方位角°) → 图像坐标 (x=列, y=行)，按 lmfp1 配置几何。
 
         行列注意：配置里 poni1_m↔行/y、poni2_m↔列/x，而点击坐标是
         (x=列, y=行)——x 用 poni2、y 用 poni1。
         """
         cfg = gui_app.CONFIGS["lmfp1_lab6"]["geometry"]
         theo = lab6_theoretical_2theta(cfg["wavelength_m"])
+        r = cfg["dist_m"] * np.tan(np.radians(theo[ring])) \
+            / cfg["pixel_size_m"]
+        a = np.radians(ang)
+        return (cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.cos(a),
+                cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.sin(a))
+
+    def _click_rings(self, w, specs):
+        """按 lmfp1 配置几何在指定 (环号, 方位角) 处模拟校准图点击
+        （等价于点图时点中该环：吸附判环应判回同一环）。"""
         for ring, ang in specs:
-            r = cfg["dist_m"] * np.tan(np.radians(theo[ring])) \
-                / cfg["pixel_size_m"]
-            a = np.radians(ang)
-            x = cfg["poni2_m"] / cfg["pixel_size_m"] + r * np.cos(a)
-            y = cfg["poni1_m"] / cfg["pixel_size_m"] + r * np.sin(a)
+            x, y = self._ring_xy(ring, ang)
             gui_calib_panel._on_calib_click(w, w.calib_key,
                                       SimpleNamespace(xdata=x, ydata=y,
                                                       inaxes=w.calib_ax))
+
+    def _calib_drag(self, w, data0, data1):
+        """在中央校准图上按真事件的形状拖一个框（同 TestBoxZoom._drag_box：
+        press 带 button、move 带 buttons、release 带 button）。"""
+        ax, canvas = w.calib_ax, w.calib_canvas
+        p0 = ax.transData.transform(data0)
+        p1 = ax.transData.transform(data1)
+        canvas.callbacks.process("button_press_event", MouseEvent(
+            "button_press_event", canvas, p0[0], p0[1], button=1))
+        canvas.callbacks.process("motion_notify_event", MouseEvent(
+            "motion_notify_event", canvas, p1[0], p1[1],
+            buttons=frozenset({1})))
+        canvas.callbacks.process("button_release_event", MouseEvent(
+            "button_release_event", canvas, p1[0], p1[1], button=1))
 
     def _logs(self, w):
         return w.log_text.toPlainText()
@@ -11260,6 +11465,123 @@ class TestCalibration(unittest.TestCase):
             self.assertLess(names.index("像素确认"), names.index("数据"))
         finally:
             w.close()
+
+    def test_manual_section_sits_above_auto_section(self):
+        """校准页顺序：手动选点在自动取点**上面**。
+
+        用户 2026-10-13："校准顺序调为手动在上，自动在下"——手动选点
+        是常用路径，打开校准页第一眼就该看到它；数据表照旧在最下。
+        """
+        w = create_window()
+        try:
+            page = w.calib_scroll.widget()
+            layout = page.layout()
+            names = []
+            for i in range(layout.count()):
+                wid = layout.itemAt(i).widget()
+                if isinstance(wid, QGroupBox):
+                    names.append(wid.title())
+            self.assertLess(names.index("手动选点"), names.index("自动取点"))
+            self.assertLess(names.index("自动取点"), names.index("数据"))
+        finally:
+            w.close()
+
+    def test_calib_zoom_box_wheel_and_fit_reset(self):
+        """校准图放大镜：框选放大 / 滚轮缩放 / [看环全貌] 复位，重画不弹回。
+
+        用户 2026-10-13："校准图添加放大功能"——放大镜点亮 = 左键拖 =
+        框选放大、滚轮以光标为中心缩放；手势视野存 window.calib_view，
+        换几何等整幅重画时回放（不弹回图像框）；[看环全貌] 翻面即复位。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                zoom_btn = w.findChild(QPushButton, "calib_zoom_btn")
+                self.assertIsNotNone(zoom_btn, "校准图该有 [放大镜]")
+                ax = w.calib_ax
+                zoom_btn.setChecked(True)
+                QApplication.processEvents()
+                self._calib_drag(w, (60.0, 60.0), (120.0, 120.0))
+                QApplication.processEvents()
+                xlo, xhi = ax.get_xlim()
+                self.assertAlmostEqual(xlo, 60.0, delta=6.0)
+                self.assertAlmostEqual(xhi, 120.0, delta=6.0)
+                self.assertAlmostEqual(ax.get_ylim()[0], 60.0, delta=6.0)
+                self.assertAlmostEqual(ax.get_ylim()[1], 120.0, delta=6.0)
+                self.assertIsNotNone(w.calib_view, "手势视野该被记住")
+                # 整幅重画（换几何/改环号走的那条路）不弹回图像框
+                gui_calib_panel._redraw_calib(w)
+                QApplication.processEvents()
+                self.assertAlmostEqual(ax.get_xlim()[0], 60.0, delta=6.0)
+                # 滚轮（点亮时）以光标为中心放大
+                span0 = ax.get_xlim()[1] - ax.get_xlim()[0]
+                canvas = w.calib_canvas
+                px, py = ax.transData.transform((90.0, 90.0))
+                canvas.callbacks.process("scroll_event", MouseEvent(
+                    "scroll_event", canvas, px, py, step=1, button="up"))
+                QApplication.processEvents()
+                self.assertLess(ax.get_xlim()[1] - ax.get_xlim()[0], span0,
+                                "上滚该放大")
+                # [看环全貌] 翻面 = 复位（手势窗口清掉，视野交给该开关）
+                w.findChild(QPushButton, "calib_fit_rings").setChecked(True)
+                QApplication.processEvents()
+                self.assertIsNone(w.calib_view)
+                self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 200.0,
+                                   "看环全貌下视野比框选大得多")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_zoom_click_pick_behaviour(self):
+        """放大镜未点亮 = 按下即记（老行为）；点亮后小位移松开也算点击
+        选点（按**按下处**判环）、拖大了是框选（不加点）。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                ax = w.calib_ax
+                state = w.calib_state
+                # 环坐标（真实 2048 探测器几何）都在 256² 假图外：先开
+                # [看环全貌] 把视野放大到包住环，后面真事件才点得到它们
+                w.findChild(QPushButton, "calib_fit_rings").setChecked(True)
+                QApplication.processEvents()
+                # 熄灭：一点即记（左键按下直接走选点）
+                x, y = self._ring_xy(2, 0.0)
+                gui_calib_panel._on_calib_press(
+                    w, w.calib_key,
+                    SimpleNamespace(xdata=x, ydata=y, x=10.0, y=10.0,
+                                    inaxes=ax, button=1))
+                self.assertEqual([int(p[2]) for p in state["points"]], [2],
+                                 "未点亮：按下即记（老行为）")
+                # 点亮：小位移松开 = 点击 → 按按下处选点
+                w.findChild(QPushButton, "calib_zoom_btn").setChecked(True)
+                QApplication.processEvents()
+                x4, y4 = self._ring_xy(4, 90.0)
+                canvas = w.calib_canvas
+                p = ax.transData.transform((x4, y4))
+                canvas.callbacks.process("button_press_event", MouseEvent(
+                    "button_press_event", canvas, p[0], p[1], button=1))
+                canvas.callbacks.process("button_release_event", MouseEvent(
+                    "button_release_event", canvas, p[0] + 2.0, p[1] + 1.0,
+                    button=1))
+                QApplication.processEvents()
+                self.assertEqual([int(pp[2]) for pp in state["points"]],
+                                 [2, 4], "小位移松开按按下处选点")
+                # 点亮：拖大 = 框选放大、不加点（框在 [看环全貌] 视野内）
+                self._calib_drag(w, (1000.0, 1000.0), (1100.0, 1100.0))
+                QApplication.processEvents()
+                self.assertEqual(len(state["points"]), 2, "框选不加点")
+                self.assertIsNotNone(w.calib_view)
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
 
     def test_right_click_selects_then_panel_edits_the_ring(self):
         """右键某个选点 = 选中它；环号在「手动」小节里改（2026-10-03 起不弹框）。

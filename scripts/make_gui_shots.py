@@ -370,8 +370,8 @@ def shot_customize(window) -> None:
     循环，offscreen 下会一直等在那儿 ✗ 踩过）：自己建、show、抓、关。
     """
     from xrd_toolkit.gui.customize import _build_customize_dialog
-    # 用**对比面板**：只有它多出"曲线颜色"一节（2026-10-08 对话框加了
-    # 滚动区之后那一节落在打开时的视口以下，图拍的就是打开时的样子）
+    # 用**对比面板**：只有它多出「渐变色系」一节（2026-10-13 起逐曲线
+    # 色块退休；对话框的滚动区留着兜底小屏幕）
     add_all(window, LMFP[:2], entrance="对比")
     window.compare_btn.click()
     wait_for(lambda: any(k.startswith("对比")

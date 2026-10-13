@@ -14,14 +14,13 @@ layout 引擎（fig.set_layout_engine(None)），否则每次 draw
 引擎都把用户边距算回去。
 """
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame,
+    QGroupBox, QHBoxLayout, QLineEdit, QMainWindow, QPushButton,
     QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import (
-    _content, _curve_color, _log, _panel_param)
+    _content, _GRADIENT_FAMILIES, _log, _panel_param)
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
 _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
@@ -90,9 +89,11 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     dlg.setMinimumWidth(460)
     root = QVBoxLayout(dlg)
     # 内容区套滚动区（2026-10-08 用户："有时包含图例，但是会看不全，添加
-    # 滚动轮"）：对比面板的「曲线颜色」是**每曲线一行**——勾 81 条就是 81
-    # 行，没有滚动时对话框撑出屏幕，底部 [应用] 都点不到。滚动区高度按
-    # 屏幕可用高度封顶；按钮行钉在滚动区**外面**，永远够得着。
+    # 滚动轮"）：原起因是对比面板的「逐曲线颜色」是每曲线一行、勾 81 条
+    # 就是 81 行，对话框撑出屏幕连 [应用] 都点不到。2026-10-13 逐曲线
+    # 色块退休（改成「渐变色系」单选），滚动区**留着兜底**——小屏幕上
+    # 内容仍然可能高过视口。滚动区高度按屏幕可用高度封顶；按钮行钉在
+    # 滚动区**外面**，永远够得着。
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.NoFrame)
@@ -180,60 +181,29 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     margin_form.addRow("上边距", fields["top"])
     body_lay.addWidget(margin_box)
 
-    # 对比面板专属：逐条自定义曲线颜色。参数坞的"曲线配色"只给
-    # 整套色板，这里允许"某一条换色"（任务六的"自定义选取色彩"）。
-    # 选择结果暂存 dlg._color_picks，点 [应用] 才写回 dock（取消 =
-    # 图保持原样，与其余字段同规矩）。色块初值 = 自定义色，没有
-    # 就按当前配色参数取该条槽色。
+    # 对比面板专属：渐变色系（2026-10-13 用户："对比图的颜色改为一种
+    # 颜色的渐变过程，用户在 customize 里面可以自行选择……只留渐变顺序，
+    # 颜色这种选项"——原来这里"逐条换色"，用户反馈"不是每个数据都能改
+    # 颜色，非常无效"，整段换成色系单选；参数坞那个下拉是同一参数，
+    # 两处改的是同一件事）。暂存进 dlg._fields，点 [应用] 才写回 dock
+    # （取消 = 图保持原样，与其余字段同规矩）。
     view = dock.panel_key.split("|", 1)[0]
+    family = None
     if view == "对比" and getattr(dock, "compare_files", None):
-        palette = _panel_param(window, dock, "曲线配色", "高对比")
-        staged = dict(getattr(dock, "curve_colors", None) or {})
-        color_box = QGroupBox("曲线颜色")
+        color_box = QGroupBox("渐变色系")
         color_form = QFormLayout(color_box)
         color_form.setLabelAlignment(label_align)
         color_form.setFormAlignment(form_align)
-        swatches = {}
-        # macOS 按钮样式会在纯背景色上叠一层高光渐变，把色块洗淡
-        # （#2a78d6 → #6fadf4）；带 border 声明即改用纯色渲染（真机
-        # 探针实测），细灰边也让浅色块在白底上有个轮廓。
-        _swatch_qss = lambda c: f"background-color: {c}; border: 1px solid #999"
-        for i, src in enumerate(dock.compare_files):
-            display = src.display
-            swatch = QPushButton()
-            swatch.setObjectName(f"swatch_{i}")
-            swatch.setFixedSize(30, 20)
-
-            def pick(checked=False, display=display, swatch=swatch, i=i):
-                initial = staged.get(display) or _curve_color(palette, i)
-                picked = QColorDialog.getColor(
-                    QColor(initial), window, f"选择 {display} 的颜色")
-                if picked.isValid():
-                    staged[display] = picked.name()
-                    swatch.setStyleSheet(_swatch_qss(picked.name()))
-
-            swatch.clicked.connect(pick)
-            swatch.setStyleSheet(_swatch_qss(
-                staged.get(display) or _curve_color(palette, i)))
-            swatches[i] = swatch
-            row = QWidget()
-            row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(0, 0, 0, 0)
-            row_lay.addWidget(QLabel(display), 1)
-            row_lay.addWidget(swatch)
-            color_form.addRow(row)
-
-        def clear_colors():
-            staged.clear()
-            for i, swatch in swatches.items():
-                swatch.setStyleSheet(_swatch_qss(_curve_color(palette, i)))
-
-        clear_btn = QPushButton("恢复默认配色")
-        clear_btn.setObjectName("clear_colors_btn")
-        clear_btn.clicked.connect(clear_colors)
-        color_form.addRow("", clear_btn)
+        family = QComboBox()
+        family.setObjectName("gradient_family_combo")
+        for name in _GRADIENT_FAMILIES:
+            family.addItem(f"{name}色渐变", name)
+        cur = _panel_param(window, dock, "渐变色系", "蓝")
+        idx = family.findData(cur)
+        family.setCurrentIndex(idx if idx >= 0 else 0)
+        family.setToolTip("对比曲线按勾选顺序从深到浅渐变；第 1 条 = 基色")
+        color_form.addRow("色系", family)
         body_lay.addWidget(color_box)
-        dlg._color_picks = staged
 
     btn_row = QHBoxLayout()
     reset = QPushButton("恢复默认")
@@ -253,6 +223,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
                    "scale": scale, **fields}
     if cmap is not None:
         dlg._fields["cmap"] = cmap
+    if family is not None:
+        dlg._fields["family"] = family
     return dlg
 
 
@@ -301,16 +273,15 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
         image = getattr(dock, "last_image", None)
         if image is not None:
             _draw_2d(window, dock, image)
-    picks = getattr(dlg, "_color_picks", None)
-    if picks is not None:
-        # 逐条自定义色：点 [应用] 才真正写回 dock，随后按新色重画
-        # 整张对比图（_redraw_compare 自带重画与记账；惰性导入防
-        # 模块环——plot_views 反向 import 本模块）
-        if picks:
-            dock.curve_colors = dict(picks)
-        elif hasattr(dock, "curve_colors"):
-            del dock.curve_colors
-        from xrd_toolkit.gui.plot_compare import _redraw_compare
-        _redraw_compare(window, dock.panel_key)
+    fam_box = f.get("family")
+    if fam_box is not None:
+        # 渐变色系：点 [应用] 才写进**面板快照**（每张图各记各的），
+        # 变了才重画（_redraw_compare 自带重画与记账；惰性导入防模块
+        # 环——plot_views 反向 import 本模块）
+        fam = fam_box.currentData()
+        if fam and fam != _panel_param(window, dock, "渐变色系", "蓝"):
+            dock.params_snapshot["渐变色系"] = fam
+            from xrd_toolkit.gui.plot_compare import _redraw_compare
+            _redraw_compare(window, dock.panel_key)
     _content(dock).draw()
     _log(window, f"已应用外观设置：{dock.windowTitle()}")

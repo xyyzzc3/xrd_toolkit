@@ -49,10 +49,11 @@ from xrd_toolkit.core.processor import line_profile
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _auto_contrast_values, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
-    _collect_geometry, _content, _curve_color, _proc_params, _proc_settings,
-    _data_snapshot, _display_snapshot, _log, _note_params_consumed,
+    _collect_geometry, _content, _gradient_color, _proc_params, _proc_settings,
+    _data_snapshot, _display_snapshot, _drop_pending_display, _log,
+    _note_params_consumed,
     _panel_param, _param_box_set, _refresh_pending_labels,
-    _set_focus)
+    _set_focus, _stash_pending_display)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.plot_panels import (
@@ -335,12 +336,15 @@ def _refresh_image_display(window: QMainWindow) -> None:
     if getattr(window, "_param_replaying", False) \
             or getattr(window, "_param_box_sync", False):
         return   # 回放快照 / 程序回填（自动对比度算值进框）不是用户改动
+    keys = ("自动对比度", "对比度下限", "对比度上限", "显示束心")
     key = window.focus_panel
-    if key is None:
-        return   # 没有编辑对象：控件值先留着（新开图会从默认/记忆起步）
-    dock = window.plot_docks.get(key)
+    dock = window.plot_docks.get(key) if key is not None else None
     if dock is None:
-        return   # 焦点面板已关：静默（值变只发生在控件上，没有可重画的东西）
+        # 没有编辑对象：控件值先记进"待应用"账本——别的地方改法见
+        # _stash_pending_display（用户 2026-10-13："出图之前调整参数会无效"）
+        _stash_pending_display(window, keys)
+        return
+    _drop_pending_display(window, keys)   # 有面板接住：账本里这几个键作废
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
     _redraw_panel(window, key)   # 还没算完时它自己知道，这里不打扰
 
@@ -356,12 +360,13 @@ def _refresh_profile_angle(window: QMainWindow) -> None:
     if getattr(window, "_param_replaying", False) \
             or getattr(window, "_param_box_sync", False):
         return   # 回放快照 / 程序同步写控件不是用户改动
+    keys = ("剖面角度 (°)",)
     key = window.focus_panel
-    if key is None:
-        return
-    dock = window.plot_docks.get(key)
+    dock = window.plot_docks.get(key) if key is not None else None
     if dock is None:
+        _stash_pending_display(window, keys)   # 无编辑对象：记进待应用账本
         return
+    _drop_pending_display(window, keys)        # 有面板接住：账本里的角度作废
     dock.params_snapshot = _display_snapshot(window, dock.params_snapshot)
     if key.split("|", 1)[0] != "剖面":
         return   # 焦点不是剖面：快照已带上新角度，将来算它时用
@@ -1499,7 +1504,20 @@ def _refresh_proc(window: QMainWindow) -> None:
     # 用得到的三个
     from xrd_toolkit.gui.plot_compare import (
         _draw_heatmap, _heat_data, _redraw_compare)
+    # 「待应用」账本（2026-10-13，同各家显示参数 handler）：没有编辑对象
+    # 时处理参数变了原本谁都没接（配方要按文件记、写不进去；下一张图的
+    # 快照也不会带上它）——记进账本，出图时当新面板的起点；有编辑对象
+    # 就照旧推进那张图的快照（同时把账本里这几个键清掉）
+    keys = ("背景扣除模式", "背景窗口 (°)", "空扫归一化", "锚点拟合方式",
+            "背景显示原始", "负值截断为 0", "平滑曲线", "平滑窗口 (°)",
+            "平滑方法", "平滑阶数", "裁剪区间", "裁剪起点 (°)",
+            "裁剪终点 (°)")
     dock = window.plot_docks.get(window.focus_panel)
+    if not getattr(window, "_param_replaying", False):
+        if dock is None:
+            _stash_pending_display(window, keys)
+        else:
+            _drop_pending_display(window, keys)
     # 回放面板快照期间不许回写快照：那一刻控件值正被程序逐个改写（切焦点
     # 时 _load_params_snapshot 在跑），把"回放了一半"的控件状态当成用户的
     # 设置写进当前面板，就会把上一个面板的显示参数串过来（实测串的是
@@ -1618,9 +1636,9 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     window._setting_limits = True
     try:
         ax.clear()
-        # 单曲线颜色跟配色参数走（高对比第 1 槽蓝 / 默认 = 传统蓝 b）
-        palette = _panel_param(window, dock, "曲线配色", "高对比")
-        ax.plot(tth, intensity, color=_curve_color(palette, 0, single=True),
+        # 单曲线颜色 = 渐变色系的基色（默认蓝，与对比第 1 条同色）
+        family = _panel_param(window, dock, "渐变色系", "蓝")
+        ax.plot(tth, intensity, color=_gradient_color(family, 0, 1),
                 lw=0.8)
         if base is not None:
             _draw_bg_overlay(window, dock, ax, tth, raw, base, path)
@@ -1691,7 +1709,7 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         if ylo < yhi:
             ax.set_ylim(ylo, yhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
-        # 颜色跟"曲线配色"参数走（参数本身就是用户改色的入口），
+        # 颜色跟"渐变色系"参数走（参数本身就是用户改色的入口），
         # 线型/线宽/标记照旧保护
         _restore_line_styles(ax, old_lines, restore_color=False)
         ax.grid(alpha=0.3)
@@ -1819,8 +1837,8 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
     window._setting_limits = True
     try:
         ax.clear()
-        palette = _panel_param(window, dock, "曲线配色", "高对比")
-        ax.plot(t, intensity, color=_curve_color(palette, 0, single=True),
+        family = _panel_param(window, dock, "渐变色系", "蓝")
+        ax.plot(t, intensity, color=_gradient_color(family, 0, 1),
                 lw=0.8)
         log_y = _panel_param(window, dock, "对数纵轴", False)
         scale = _settle_scale(dock, keep_scale, log_y)
@@ -1850,7 +1868,7 @@ def _draw_profile(window: QMainWindow, dock, t, intensity) -> None:
         if zoomed:
             ax.set_xlim(xlo, xhi)
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
-        # 颜色跟"曲线配色"参数走（参数本身就是用户改色的入口），
+        # 颜色跟"渐变色系"参数走（参数本身就是用户改色的入口），
         # 线型/线宽/标记照旧保护
         _restore_line_styles(ax, old_lines, restore_color=False)
         ax.grid(alpha=0.3)
@@ -1990,6 +2008,38 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         # 仍贴在线上供悬停读数，与刻度无关）
         ax.set_yticks(offsets)
         ax.set_yticklabels(_chi_tick_labels(ax, chi), fontsize=7)
+        # 行距换台阶 → 缩放时钉下的 y 窗口一起换算（× 新 step/旧 step）：
+        # 保留**同一批行**留在视野里。用户 2026-10-13 报"瀑布图在先缩放后
+        # 调整行距时会 yoff 失效"——偏移每次重画都按新行距重算（那一环没
+        # 毛病），坏的是钉住的窗口按旧台阶的坐标数值原样套回，视野里换成
+        # 了另一段角度的行。处理链改行高（第二高峰变了 → 自动行距跟着变）
+        # 走同一条路，一起修。
+        # 与"家"重合的窗口（缩放后又按过 Home ≈ 天然量程）不换算、直接
+        # 丢掉：那是自动量程的窗口，让新行距自己重新量程，才不会被按比例
+        # 放大/缩小（行距相对数据很小时差得出来）。
+        snap = getattr(dock, "params_snapshot", None)
+        prev_step = getattr(dock, "_wf_step", None)
+        if (snap is not None and prev_step is not None
+                and np.isfinite(prev_step) and float(prev_step) > 0
+                and np.isfinite(step) and step > 0):
+            rng = snap.get("视图 y 范围")
+            lo = hi = None
+            try:
+                lo, hi = float(rng[0]), float(rng[1])
+            except (TypeError, IndexError, ValueError):
+                pass
+            if lo is not None and lo < hi:
+                home = getattr(dock, "view_home", None)
+                if (home is not None and len(home) >= 2
+                        and np.isclose(lo, home[1][0], rtol=1e-6)
+                        and np.isclose(hi, home[1][1], rtol=1e-6)):
+                    snap.pop("视图 y 范围", None)   # ≈ 天然窗口：丢给自动量程
+                else:
+                    ratio = float(step) / float(prev_step)
+                    if abs(ratio - 1.0) > 1e-12:
+                        snap["视图 y 范围"] = [lo * ratio, hi * ratio]
+        dock._wf_step = float(step)
+        natural_ylim = ax.get_ylim()   # 钉住缩放窗口**之前**的量程：家的 y 用它
         zoomed = _apply_plain_view(window, dock, ax)   # 摆回缩放的窗口
         _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel)
         _restore_line_styles(ax, old_lines)
@@ -2004,8 +2054,10 @@ def _draw_waterfall(window: QMainWindow, dock, tth, i2d, chi) -> None:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"
     # 瀑布的 y 是**模式算出来的**（36 行的错开行距，[手动行距]/倍数一改
     # 就换高矮），与对比·堆叠同款：家的 y 跟着换（2026-10-09，原因见
-    # _refresh_home 的 mode_y 说明）
-    _refresh_home(dock, ax, mode_y=True)
+    # _refresh_home 的 mode_y 说明）。传 natural_ylim：家的 y 取**钉住
+    # 缩放窗口之前**的量程，不然缩放后调行距会把缩放窗口封成"家"
+    # （2026-10-13，"先缩放后调行距"修复的另一半）
+    _refresh_home(dock, ax, mode_y=True, mode_ylim=natural_ylim)
     dock.figure_saved = False
 
 
@@ -2024,9 +2076,14 @@ def _refresh_1d_display(window: QMainWindow) -> None:
     if getattr(window, "_param_replaying", False) \
             or getattr(window, "_param_box_sync", False):
         return   # 回放快照 / 程序同步写控件（缩放写回等）都不是用户改动
+    keys = ("对数纵轴", "纵轴自动", "纵轴下限", "纵轴上限")
     dock = window.plot_docks.get(window.focus_panel)
     if dock is None:
-        return   # 没有编辑对象：控件值先留着（新开图会从默认/记忆起步）
+        # 没有编辑对象：记进"待应用"账本，出图时当新面板的起点
+        # （用户 2026-10-13："出图之前调整参数会无效"）
+        _stash_pending_display(window, keys)
+        return
+    _drop_pending_display(window, keys)   # 有面板接住：账本里这几个键作废
     snap = _display_snapshot(window, dock.params_snapshot)
     if snap.get("裁剪区间"):
         snap["裁剪区间"] = list(getattr(window, "cut_list", []) or [])
@@ -2053,22 +2110,29 @@ def _refresh_waterfalls(window: QMainWindow) -> None:
     """
     if getattr(window, "_param_replaying", False):
         return   # 回放快照期间控件值正被程序改写，不是用户改动
+    keys = ("瀑布手动行距", "瀑布行距倍数")
     chk = window.params.get("瀑布手动行距")
     mult = window.params.get("瀑布行距倍数")
     if chk is None or mult is None:
         return   # 裸窗口（测试里没建这对控件）
+    handled = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("瀑布"):
             continue
-        data = getattr(dock, "last_waterfall", None)
-        if data is None:
-            continue     # 还没算完：等它自己画
         snap = getattr(dock, "params_snapshot", None)
         if snap is not None:
             snap["瀑布手动行距"] = bool(chk.isChecked())
             snap["瀑布行距倍数"] = float(mult.value())
+        handled += 1     # 快照已收下（含还在算的：算完自己按新值画）
+        data = getattr(dock, "last_waterfall", None)
+        if data is None:
+            continue     # 还没算完：等它自己画
         tth, i2d, chi = data
         _draw_waterfall(window, dock, tth, i2d, chi)
+    if handled:
+        _drop_pending_display(window, keys)
+    else:
+        _stash_pending_display(window, keys)   # 没有瀑布面板：记进待应用账本
 
 
 def _refresh_heatmap_names(window: QMainWindow) -> None:
@@ -2089,15 +2153,21 @@ def _refresh_heatmap_names(window: QMainWindow) -> None:
     on = bool(chk.isChecked())
     from xrd_toolkit.gui.plot_compare import (   # 破循环：只取这一个
         _draw_heatmap)
+    handled = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("热图"):
             continue
         snap = getattr(dock, "params_snapshot", None)
         if snap is not None:
             snap["热图显示数据名"] = on
+        handled += 1     # 快照已收下（含还在算的）
         data = getattr(dock, "heat_data", None)
         if data is not None:
             _draw_heatmap(window, dock, data[0], data[1], data[2])
+    if handled:
+        _drop_pending_display(window, ("热图显示数据名",))
+    else:
+        _stash_pending_display(window, ("热图显示数据名",))
 
 
 # 一次批量作图的防爆线（2026-09-24 用户"图一多就很卡"；开图是唯一随数量
