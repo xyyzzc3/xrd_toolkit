@@ -115,8 +115,8 @@ from xrd_toolkit.gui.panel_state import (
     _reload_config_combo, _set_focus)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
-    _plot_compare, _plot_heatmap, _refresh_compare, _refresh_heat,
-    _refresh_heat_view, _refresh_heatmap_view)
+    _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
+    _refresh_heat, _refresh_heat_view, _refresh_heatmap_view)
 from xrd_toolkit.gui.plot_export import _ask_save_options
 from xrd_toolkit.gui.plot_panels import (
     _home_key_reset, _hover_leave, _hover_motion, _magnifier_on,
@@ -1230,12 +1230,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["显示数据名"] = name_chk
     form_cmp.addRow(name_chk)
     name_chk.toggled.connect(lambda _on: _refresh_compare(window))
-    # 这四个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
+    # 这几个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法
     # （_refresh_heat）：显示参数不触发重算，"改了就该看见"。
-    for _w in (cmp_norm, norm_target, curve_palette):
+    for _w in (cmp_norm, norm_target):
         _w.currentIndexChanged.connect(lambda _i: _refresh_compare(window))
+    # 渐变色系走专用的写回（2026-10-14）：它不能跟着"控件值优先"的重建
+    # 走，否则「外观」里选好的色系会被下拉旧值打回默认（用户："对比图
+    # 颜色在改参数后会恢复默认"）——见 _refresh_compare_family 的说明
+    curve_palette.currentIndexChanged.connect(
+        lambda _i: _refresh_compare_family(window))
     cmp_stack.toggled.connect(lambda _on: _refresh_compare(window))
 
     # 视图 2θ（**对比那对**，老键）：对比横轴只看这一段——图上的缩放/

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import (
-    _content, _GRADIENT_FAMILIES, _log, _panel_param)
+    _content, _GRADIENT_FAMILIES, _log, _panel_param, _set_widget_value)
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
 _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
@@ -281,6 +281,19 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
         fam = fam_box.currentData()
         if fam and fam != _panel_param(window, dock, "渐变色系", "蓝"):
             dock.params_snapshot["渐变色系"] = fam
+            # 顺手把参数坞那把下拉刷成新值（编辑对象就是它时）——控件显示
+            # 什么 = 图用什么，别让下拉留着旧色系误导人。色系 2026-10-14
+            # 起不参与控件采集（见 _display_snapshot 的说明），这只是展示；
+            # 挂回放旗标，免触发 _refresh_compare_family 重入
+            if window.plot_docks.get(getattr(window, "focus_panel", None)) is dock:
+                pbox = window.params.get("渐变色系")
+                if pbox is not None:
+                    prev_rep = getattr(window, "_param_replaying", False)
+                    window._param_replaying = True
+                    try:
+                        _set_widget_value(pbox, fam)
+                    finally:
+                        window._param_replaying = prev_rep
             from xrd_toolkit.gui.plot_compare import _redraw_compare
             _redraw_compare(window, dock.panel_key)
     _content(dock).draw()

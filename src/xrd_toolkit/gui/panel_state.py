@@ -198,6 +198,13 @@ _DISPLAY_PARAMS = frozenset(_DISPLAY_DEFAULTS)   # 显示参数 = 以上全部
 _VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
                      "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)")
 
+# 校准图面板占 window._hover_panel_key 的哨兵值（Home 键的"认领"标记）：
+# 校准图不进 plot_docks（见 calib_panel 模块说明），鼠标停在它上面时把
+# "最后停留"标成这个值——plot_panels._home_key_reset 见到它就把 Home
+# 转给校准视野的复位（用户 2026-10-14："校准图添加 home 键，还是回到
+# 最初的视图"）。
+CALIB_HOVER_KEY = "校准图"
+
 # 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为
 # 一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先的 8 槽分类
 # 色板与"逐条自定义色"一起退休，用户原话："不是每个数据都能改颜色，
@@ -333,6 +340,14 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
     # 没旧值 = 跟随积分范围
     for name in _VIEW_WINDOW_KEYS:
         snap[name] = base[name] if name in base else _DISPLAY_DEFAULTS[name]
+    # 渐变色系同理不从控件采集（用户 2026-10-14："对比图颜色在改参数后会
+    # 恢复默认"）：它是**图自己**的显示项——改它的两条路各自显式写快照
+    # （参数坞那把下拉走 plot_compare._refresh_compare_family、「外观」
+    # 对话框直接写），谁都不许在下一次按控件重建时把它打回默认。原先从
+    # 控件采集：在「外观」里选完色系，随后任一显示参数走 _refresh_compare
+    # 重建，下拉还停着的旧值（默认蓝）就把快照里的色系盖掉了。
+    snap["渐变色系"] = (base["渐变色系"] if "渐变色系" in base
+                        else _DISPLAY_DEFAULTS["渐变色系"])
     # 没有控件的键从旧快照原样带过来：通用兜底——上面那圈按控件重建，
     # 带不过来的话 [应用] 一次就把显式值丢掉。视图 2θ 那两个键
     # 2026-09-27～10-07 控件撤掉的那段时期就靠这条活着（缩放/平移仍在

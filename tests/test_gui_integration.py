@@ -1812,6 +1812,65 @@ class TestCurveColors(unittest.TestCase):
         finally:
             w.close()
 
+    def test_compare_family_survives_param_change(self):
+        """「外观」选的色系，之后改别的显示参数不被参数坞下拉的旧值打回默认。
+
+        用户 2026-10-14："对比图颜色在改参数后会恢复默认"——「外观」[应用]
+        照设计只写快照（每张图各记各的），参数坞那把下拉还停在旧值；随后
+        任一显示参数一走 _refresh_compare 的"控件值优先"重建，色系就被
+        下拉的旧值打回去了。修法 = 色系退出控件采集（同视图窗口那套），
+        下拉自己那条路显式写快照（_refresh_compare_family）。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            content = gui_panel_state._content(dock)
+            dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
+                                                  content.figure)
+            combo = dlg.findChild(QComboBox, "gradient_family_combo")
+            combo.setCurrentIndex(combo.findData("紫"))
+            gui_customize._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+            # 真实控件路径：勾「显示数据名」→ 走 _refresh_compare 就地重画
+            w.params["显示数据名"].setChecked(True)
+            self.assertEqual(dock.params_snapshot["渐变色系"], "紫",
+                             "色系不该被参数坞下拉的旧值打回默认")
+            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+        finally:
+            w.close()
+
+    def test_family_widget_change_repaints(self):
+        """参数坞那把色系下拉拨一下 = 立刻按新色系重画（显式写快照那条路）。
+
+        下拉不参与"控件值优先"重建、要有自己的写回（2026-10-14 色系修复的
+        另一半）——防止修完复现路径后把这条正常路径改坏。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            box = w.params["渐变色系"]
+            box.setCurrentIndex(box.findData("绿"))
+            self.assertEqual(dock.params_snapshot["渐变色系"], "绿")
+            self.assertEqual(ax.lines[0].get_color(), "#1baf7a")
+        finally:
+            w.close()
+
+    def test_family_before_plotting_is_the_new_figures_start(self):
+        """没有对比面板时拨色系 → 进"待应用"账本，出图的新面板就用它。"""
+        w = create_window()
+        try:
+            box = w.params["渐变色系"]
+            box.setCurrentIndex(box.findData("橙"))
+            self.assertEqual(w.pending_display.get("渐变色系"), "橙")
+            key, ax = self._plot_compare(w)
+            self.assertEqual(w.plot_docks[key].params_snapshot["渐变色系"], "橙")
+            self.assertEqual(ax.lines[0].get_color(), "#eb6834")
+        finally:
+            w.close()
+
 
 class TestPendingDisplayParams(unittest.TestCase):
     """出图前调好的显示参数 = 新图的起点（2026-10-13）。
@@ -11609,6 +11668,64 @@ class TestCalibration(unittest.TestCase):
                 self.assertIsNone(w.calib_view)
                 self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 200.0,
                                    "看环全貌下视野比框选大得多")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_calib_home_key_resets_gesture_view(self):
+        """校准图 Home 键：回到最初的视野；[看环全貌] 开关不动。
+
+        用户 2026-10-14："校准图添加 home 键，还是回到最初的视图"。
+        认图方式与普通面板同一条线：鼠标停在图上（motion 记哨兵值
+        CALIB_HOVER_KEY）→ Home 复位这张图的手势缩放；开关状态是"模式"，
+        Home 不翻它——开着 [看环全貌] 时 Home 回到"包住环"那一框。
+        """
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                w.findChild(QPushButton, "calib_zoom_btn").setChecked(True)
+                QApplication.processEvents()
+                ax = w.calib_ax
+                x0 = tuple(ax.get_xlim())
+                log0 = self._logs(w)
+                w.home_shortcut.activated.emit()   # 还没缩放：本来就是最初
+                QApplication.processEvents()
+                self.assertEqual(self._logs(w), log0, "没缩放过不必记日志")
+                self._calib_drag(w, (60.0, 60.0), (120.0, 120.0))
+                QApplication.processEvents()
+                self.assertIsNotNone(w.calib_view, "前置条件：手势缩放过")
+                self.assertEqual(w._hover_panel_key,
+                                 gui_panel_state.CALIB_HOVER_KEY,
+                                 "拖动经过 motion → Home 该认这张图")
+                w.home_shortcut.activated.emit()
+                QApplication.processEvents()
+                self.assertIsNone(w.calib_view, "Home 该清掉手势视野")
+                self.assertEqual(tuple(ax.get_xlim()), x0, "回到最初的视野")
+                self.assertIn("视野：已复位到最初", self._logs(w))
+                # 开关是"模式"不是"视野"：开着 [看环全貌] 放大再按 Home，
+                # 回到的是包住环那一框、开关仍开着
+                fit_btn = w.findChild(QPushButton, "calib_fit_rings")
+                fit_btn.setChecked(True)
+                QApplication.processEvents()
+                # [看环全貌] 下视野可能远大于图像（环跑到图像外），按**当
+                # 前视野的比例**拖，保证像素位移够大（框选而不是点击）
+                xlo, xhi = ax.get_xlim()
+                ylo, yhi = ax.get_ylim()
+                self._calib_drag(
+                    w, (xlo + (xhi - xlo) * 0.3, ylo + (yhi - ylo) * 0.3),
+                    (xlo + (xhi - xlo) * 0.7, ylo + (yhi - ylo) * 0.7))
+                QApplication.processEvents()
+                self.assertIsNotNone(w.calib_view)
+                w.home_shortcut.activated.emit()
+                QApplication.processEvents()
+                self.assertIsNone(w.calib_view)
+                self.assertTrue(fit_btn.isChecked(), "Home 不翻 [看环全貌]")
+                self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 200.0,
+                                   "复位到的是看环全貌那一框")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):

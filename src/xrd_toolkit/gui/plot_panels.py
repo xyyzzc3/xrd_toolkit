@@ -34,7 +34,7 @@ from xrd_toolkit import paths
 from xrd_toolkit.gui.customize import _default_texts, _open_customize_dialog
 from xrd_toolkit.gui.panel_state import (_AUX_GID_PREFIX, _content,
                                             _log, _param_box_set,
-                                            _panel_param)
+                                            _panel_param, CALIB_HOVER_KEY)
 from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _close_panel, _install_resize_grip,
                                     _PanelBarFilter, _PanelResizeFilter,
@@ -259,13 +259,20 @@ def _home_key_reset(window: QMainWindow) -> None:
     复用的就是面板标题栏那个 [Home]（`_reset_view` → `dock.view_home`），
     所以"最初的样子"的定义只有一处，键盘与按钮不会各说各话。
 
-    认哪张图：鼠标最后停留过的面板，没有就退回高亮面板。
+    认哪张图：鼠标最后停留过的面板，没有就退回高亮面板。鼠标停在**校准
+    图**上时（哨兵 CALIB_HOVER_KEY，2026-10-14 用户："校准图添加 home
+    键，还是回到最初的视图"）转给校准视野的复位——校准图不进 plot_docks，
+    复位的是它自己的那条线（calib_panel.reset_calib_view）。
     作用范围由 app.create_window 里那个 QShortcut 限定：焦点在输入框里时
     Home 根本到不了这里（QLineEdit 会把 Home 吃掉变成"光标到行首"），
     所以在数值框里打字不会突然被复位。
     """
     docks = getattr(window, "plot_docks", {}) or {}
     key = getattr(window, "_hover_panel_key", None)
+    if key == CALIB_HOVER_KEY:
+        from xrd_toolkit.gui.calib_panel import reset_calib_view
+        reset_calib_view(window)
+        return
     if key not in docks:
         key = getattr(window, "focus_panel", None)
     dock = docks.get(key)

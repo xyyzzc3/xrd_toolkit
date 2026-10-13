@@ -19,7 +19,8 @@ from xrd_toolkit.gui.calib_model import (
     CP_COLOR, PANEL_SCALE, RING_COLOR, SELECT_COLOR, SNAP_TOL_DEG,
     _calib_state, _geom_px_keys, _metrics_dev, _result_by_name, _slot_label)
 from xrd_toolkit.gui.panels import _install_resize_grip, _settle
-from xrd_toolkit.gui.panel_state import (_auto_contrast_values,
+from xrd_toolkit.gui.panel_state import (CALIB_HOVER_KEY,
+                                         _auto_contrast_values,
                                          _collect_geometry, _log)
 from xrd_toolkit.gui.tasks import user_error_text
 from xrd_toolkit.services.data_loader import load_diffraction_image
@@ -388,6 +389,23 @@ def _set_fit_rings(window: QMainWindow, on: bool) -> None:
     _redraw_calib_if_open(window)
 
 
+def reset_calib_view(window: QMainWindow) -> None:
+    """Home 键的落点：校准图回到"最初的视野"（用户 2026-10-14）。
+
+    用户原话："校准图添加 home 键，还是回到最初的视图"。[看环全貌] 那个
+    开关管的是"看环 / 锁图像"这一种**模式**，Home 不翻它——只清掉放大镜
+    手势留下的缩放窗口（window.calib_view），回到进这张图时那个视野
+    （开关开着 = 包住环的那一框，关着 = 图像那一框）。别的图面板的 Home
+    也是这个分工："最初的样子"由视图自己那条线定义，键盘只负责回去。
+    视图本来就是最初的（没缩放过）就不动、不记日志——同普通面板的 Home。
+    """
+    if getattr(window, "calib_view", None) is None:
+        return
+    window.calib_view = None
+    _log(window, "视野：已复位到最初（[看环全貌] 开关不动）")
+    _redraw_calib_if_open(window)
+
+
 def _calib_zoom_on(window: QMainWindow) -> bool:
     """校准图上的放大镜是否点亮（状态位，不读控件——控件随面板销毁）。"""
     return bool(getattr(window, "calib_zoom_on", False))
@@ -712,7 +730,12 @@ def _calib_take_shot(window: QMainWindow, ax):
 
 
 def _on_calib_motion(window: QMainWindow, key: str, event) -> None:
-    """左键拖动：放大镜点亮时拉伸选框（熄灭时没有拖动动作）。"""
+    """鼠标在图上移动：记"最后停留"（Home 键认它，2026-10-14）；左键拖动
+    且放大镜点亮时拉伸选框（熄灭时没有拖动动作）。"""
+    # Home 键的认领标记：同普通图面板的 plot_panels._note_hover——鼠标在
+    # 哪张图上，Home 复位哪张图（这里标哨兵值，_home_key_reset 见到它就
+    # 转给 reset_calib_view）
+    window._hover_panel_key = CALIB_HOVER_KEY
     start = getattr(window, "calib_box_start", None)
     if start is None or getattr(event, "button", None) != 1:
         return

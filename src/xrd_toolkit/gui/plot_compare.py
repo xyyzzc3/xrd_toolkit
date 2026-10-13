@@ -25,7 +25,7 @@ from xrd_toolkit.gui.panel_state import (
     _gradient_color, _display_snapshot, _heat_shown, _log, _panel_param,
     _stash_pending_display,
     _param_box_set, _proc_params, _refresh_pending_labels,
-    _set_focus)
+    _set_focus, _widget_value)
 from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
@@ -289,8 +289,40 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 
+def _refresh_compare_family(window: QMainWindow) -> None:
+    """渐变色系下拉拨了（对比页那把）→ 写进快照再重画。
+
+    色系不参与 `_refresh_compare` 的"控件值优先"重建（理由见
+    `_display_snapshot` 里那段），所以它要有这条**专用写回**：只有"用户
+    真的拨了这把下拉"才把控件值写进快照——别的显示参数改动的重建一律
+    沿用快照里的旧值，不会再把「外观」里选好的色系打回默认
+    （用户 2026-10-14："对比图颜色在改参数后会恢复默认"，实测紫 → 蓝）。
+    """
+    if getattr(window, "_param_replaying", False):
+        return   # 回放快照期间控件值正被程序改写，不是用户改动（同 _refresh_proc）
+    box = window.params.get("渐变色系")
+    if box is None:
+        return   # 裸窗口/测试没这把下拉：没得拨
+    fam = _widget_value(box)
+    handled = False
+    for key, dock in list(window.plot_docks.items()):
+        if not key.startswith("对比"):
+            continue
+        snap = getattr(dock, "params_snapshot", None)
+        if snap is None:
+            continue     # 还没算完（快照都没拍）：跟 _refresh_compare 同款跳过
+        snap["渐变色系"] = fam
+        handled = True
+    if handled:
+        _drop_pending_display(window, ("渐变色系",))   # 有面板接住：账本作废
+    else:
+        # 一张对比面板都没有：记进"待应用"账本，出图时当新面板起点
+        _stash_pending_display(window, ("渐变色系",))
+    _refresh_compare(window)   # 用已有数据重画（它那几个键的账本收尾照旧）
+
+
 def _refresh_compare(window: QMainWindow) -> None:
-    """对比显示参数（归一化 / 归一化目标 / 配色 / 堆叠）改了 → 就地重画。
+    """对比显示参数（归一化 / 归一化目标 / 堆叠）改了 → 就地重画。
 
     用户 2026-10-02 第 1 条："堆叠显示无效"。实测画图那侧是好的（勾上
     [堆叠显示]、按 [应用显示设置]，y 刻度确实变成样品名、曲线按全场峰值
@@ -305,8 +337,10 @@ def _refresh_compare(window: QMainWindow) -> None:
     """
     if getattr(window, "_param_replaying", False):
         return   # 回放快照期间控件值正被程序改写，不是用户改动（同 _refresh_proc）
-    # handler 管的这几个键（app.py 里接上 _refresh_compare 的那几件控件）
-    keys = ("对比归一化", "归一化目标", "渐变色系", "对比堆叠",
+    # handler 管的这几个键（app.py 里接上 _refresh_compare 的那几件控件）。
+    # 渐变色系 2026-10-14 起不在这——它有自己的 _refresh_compare_family
+    # （从控件采集会被下拉旧值打回默认，见那里的说明）。
+    keys = ("对比归一化", "归一化目标", "对比堆叠",
             "手动行距", "行距倍数", "显示数据名")
     handled = 0
     for key, dock in list(window.plot_docks.items()):
