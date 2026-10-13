@@ -158,9 +158,20 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     chk_zoom.setCheckable(True)
     chk_zoom.setToolTip("<b>点亮</b> = 左键拖 = 框选放大、滚轮 = 以光标为"
                         "中心缩放、左键点 = 选点；<b>未点亮</b> = 点图选点"
-                        "（同现在）。[看环全貌] 可把视野复位")
+                        "（同现在）。放大过头了按 [复位视图]（或 Home 键）"
+                        "回到最初的视野")
     chk_zoom.toggled.connect(lambda on: _set_calib_zoom(window, on))
     fit_row.addWidget(chk_zoom)
+    # [复位视图]（用户 2026-10-14："校准没有 home 键"——别家面板标题栏
+    # 都有这一颗，校准图此前只能翻 [看环全貌] 才出得来，而那是**模式**
+    # 不是复位）。与 Home 键同一个落点：reset_calib_view 只清手势缩放；
+    # 本来就是最初的视野时按了不动作（同 Home 键，也同普通面板的语义）
+    btn_home = QPushButton("复位视图")
+    btn_home.setObjectName("calib_home_btn")
+    btn_home.setToolTip("回到最初的视野（清掉 [放大镜] 的框选/滚轮缩放；"
+                        "Home 键同效）。[看环全貌] 是视野模式，这个按钮不翻它")
+    btn_home.clicked.connect(lambda: reset_calib_view(window))
+    fit_row.addWidget(btn_home)
     # [保存图片…]（2026-10-10 用户："校准的图保存不了"——这张面板此前
     # 压根没有保存入口：面板顶栏那套按钮只装在普通图面板上）。复用
     # plot_panels._save_panel 的整套流程（分辨率/格式弹窗 + 默认名 +

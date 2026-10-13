@@ -11674,12 +11674,14 @@ class TestCalibration(unittest.TestCase):
                 w.close()
 
     def test_calib_home_key_resets_gesture_view(self):
-        """校准图 Home 键：回到最初的视野；[看环全貌] 开关不动。
+        """校准图复位视野：Home 键与 [复位视图] 按钮同一条路；[看环全貌] 开关不动。
 
-        用户 2026-10-14："校准图添加 home 键，还是回到最初的视图"。
-        认图方式与普通面板同一条线：鼠标停在图上（motion 记哨兵值
-        CALIB_HOVER_KEY）→ Home 复位这张图的手势缩放；开关状态是"模式"，
-        Home 不翻它——开着 [看环全貌] 时 Home 回到"包住环"那一框。
+        用户 2026-10-14："校准图添加 home 键，还是回到最初的视图"、
+        随后"校准没有 home 键"（别家面板标题栏都有 [复位视图]，校准图
+        此前只有 [看环全貌]——那是视野**模式**不是复位）。认图方式与
+        普通面板同一条线：鼠标停在图上（motion 记哨兵值 CALIB_HOVER_KEY）
+        → Home 复位这张图的手势缩放；开关状态是"模式"，复位不翻它——
+        开着 [看环全貌] 时回到"包住环"那一框。
         """
         w = create_window()
         try:
@@ -11726,6 +11728,21 @@ class TestCalibration(unittest.TestCase):
                 self.assertTrue(fit_btn.isChecked(), "Home 不翻 [看环全貌]")
                 self.assertGreater(ax.get_xlim()[1] - ax.get_xlim()[0], 200.0,
                                    "复位到的是看环全貌那一框")
+                # [复位视图] 按钮：与 Home 键同一个落点（同一张图、同样
+                # 不翻开关），两条路都钉住
+                home_btn = w.findChild(QPushButton, "calib_home_btn")
+                self.assertIsNotNone(home_btn, "校准图该有 [复位视图]")
+                xlo, xhi = ax.get_xlim()
+                ylo, yhi = ax.get_ylim()
+                self._calib_drag(
+                    w, (xlo + (xhi - xlo) * 0.3, ylo + (yhi - ylo) * 0.3),
+                    (xlo + (xhi - xlo) * 0.7, ylo + (yhi - ylo) * 0.7))
+                QApplication.processEvents()
+                self.assertIsNotNone(w.calib_view, "前置条件：按钮前先缩放过")
+                home_btn.click()
+                QApplication.processEvents()
+                self.assertIsNone(w.calib_view, "[复位视图] 该清掉手势视野")
+                self.assertTrue(fit_btn.isChecked(), "[复位视图] 也不翻开关")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
