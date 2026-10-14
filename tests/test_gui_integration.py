@@ -3937,11 +3937,12 @@ class TestProductGroups(unittest.TestCase):
             w.close()
 
     def test_clear_cache_action_empties_products(self):
-        """「删除所有缓存」：**点两次才删**（2026-10-13 起不再弹确认框）。
+        """「删除所有缓存」：**点一下就删**（2026-10-14 起）。
 
-        第一下只提醒（产物与分组都不动），第二下才清——确认框改为日志
-        提醒的原因见 gui_file_dock.ask_clear_cache 的说明（这台机器上
-        弹框好几秒才画上屏，用户按 Esc 就落进"取消"，日志连记三条）。
+        简化史见 gui_file_dock.ask_clear_cache：确认框（10-13 之前，
+        这台机器上它好几秒才画上屏、"取消"吃过三回冤枉）→ 日志提醒 +
+        再点一次（10-13）→ 一击即删（10-14 用户："删除全部缓存，改成
+        就一次"）。缓存只是重算得回来的产物，删掉代价 = 下次出图重积分。
         """
         w = create_window()
         try:
@@ -3950,14 +3951,12 @@ class TestProductGroups(unittest.TestCase):
             _store_product(w, files[0])
             w.refresh_groups()
             self.assertIsNotNone(_group_by_text(w, "1D 产物"))
-            gui_file_dock.ask_clear_cache(w)      # 第一下：只提醒、不删
-            self.assertIsNotNone(_group_by_text(w, "1D 产物"), "第一下不该删")
-            log = w.log_text.toPlainText()
-            self.assertIn("再点一次 [删除所有缓存…]", log)
-            self.assertNotIn("已删除所有缓存", log)
-            gui_file_dock.ask_clear_cache(w)      # 第二下：真删
+            gui_file_dock.ask_clear_cache(w)      # 一下就删
             self.assertIsNone(_group_by_text(w, "1D 产物"))
-            self.assertIn("已删除所有缓存", w.log_text.toPlainText())
+            log = w.log_text.toPlainText()
+            self.assertIn("已删除所有缓存", log)
+            self.assertNotIn("再点一次 [删除所有缓存…]", log,
+                             "一击即删后不该再出现'再点一次'的提示")
         finally:
             w.close()
 
@@ -4084,8 +4083,8 @@ class TestProductGroups(unittest.TestCase):
         """「删除所有缓存…」（文件栏右键）→ 产物分组跟着消失（台账也清了）。
 
         清缓存只剩这一处入口了：原图页那个 [清空缓存] 按钮已删
-        （用户 2026-10-01："都删了"）。二次确认 = 连点两次（2026-10-13
-        起不再弹确认框）：第一下分组不动，第二下连分组带台账一起清。
+        （用户 2026-10-01："都删了"）。2026-10-14 起一击即删——分组
+        与台账一起清，没有再点一次的中间态。
         """
         w = create_window()
         try:
@@ -4094,19 +4093,17 @@ class TestProductGroups(unittest.TestCase):
             _store_product(w, files[0])
             w.refresh_groups()
             self.assertIsNotNone(_group_by_text(w, "1D 产物"))
-            gui_file_dock.ask_clear_cache(w)   # 第一下：只提醒
-            QApplication.processEvents()
-            self.assertIsNotNone(_group_by_text(w, "1D 产物"), "第一下不该删")
-            gui_file_dock.ask_clear_cache(w)   # 第二下：真删
+            gui_file_dock.ask_clear_cache(w)   # 一下就删
             QApplication.processEvents()
             self.assertIsNone(_group_by_text(w, "1D 产物"))
         finally:
             w.close()
 
-    def test_clear_cache_menu_item_armed_label(self):
-        """右键那一行的两种写法：上膛后从「删除所有缓存…」变成「确认删除…（N 个文件）」。
+    def test_clear_cache_menu_item_keeps_its_plain_label(self):
+        """右键那一行恒为「删除所有缓存…」——一击即删后不再有"上膛"写法。
 
-        菜单行本身就是"你现在点的是第一下还是第二下"的说明（2026-10-13）。
+        （2026-10-13 那版会上膛成「确认删除所有缓存（N 个文件）」，
+        2026-10-14 用户拍板一击即删后整段退休。）
         """
         w = create_window()
         try:
@@ -4119,13 +4116,9 @@ class TestProductGroups(unittest.TestCase):
                 return next(a.text() for a, what in acts.items()
                             if what == "clear_cache")
 
-            self.assertEqual(clear_label(), "删除所有缓存…", "没上膛用默认写法")
-            n = int(stage_cache.describe()["files"])
-            gui_file_dock.ask_clear_cache(w)   # 第一下：上膛
-            self.assertEqual(clear_label(),
-                             f"确认删除所有缓存（{n} 个文件）")
-            gui_file_dock.ask_clear_cache(w)   # 第二下：真删 → 状态用掉
-            self.assertEqual(clear_label(), "删除所有缓存…", "删完回到默认写法")
+            self.assertEqual(clear_label(), "删除所有缓存…")
+            gui_file_dock.ask_clear_cache(w)   # 删完
+            self.assertEqual(clear_label(), "删除所有缓存…", "删后写法不变")
         finally:
             w.close()
 
@@ -8357,10 +8350,11 @@ class TestStageCacheFlow(unittest.TestCase):
             w.close()
 
     def test_clear_cache_entry_reports_and_empties(self):
-        """清缓存（文件栏右键那条）：连点两次才删，日志照实；空缓存时也提示。
+        """清缓存（文件栏右键那条）：点一下就删，日志照实；空缓存时也提示。
 
         按钮版已删（用户 2026-10-01）——这条测的是同一个功能的唯一入口。
-        2026-10-13 起二次确认 = 再点一次（不再弹确认框）：第一下只提醒。
+        2026-10-14 起一击即删（经 10-13 的"再点一次"简化，见
+        gui_file_dock.ask_clear_cache）。
         """
         from xrd_toolkit.services import stage_cache
         w = create_window()
@@ -8374,50 +8368,13 @@ class TestStageCacheFlow(unittest.TestCase):
                     _axes(w, "1D", path).lines) > 0))
             self.assertGreaterEqual(stage_cache.describe()["files"], 1,
                                     "算过就该有产物")
-            gui_file_dock.ask_clear_cache(w)   # 第一下：只提醒
-            QApplication.processEvents()
-            self.assertIn("再点一次 [删除所有缓存…]", w.log_text.toPlainText())
-            self.assertGreaterEqual(stage_cache.describe()["files"], 1,
-                                    "第一下不该删")
-            gui_file_dock.ask_clear_cache(w)   # 第二下：真删
+            gui_file_dock.ask_clear_cache(w)   # 一下就删
             QApplication.processEvents()
             self.assertIn("已删除所有缓存", w.log_text.toPlainText())
             self.assertEqual(stage_cache.describe()["files"], 0)
             gui_file_dock.ask_clear_cache(w)   # 再来一次：空缓存也不炸
             QApplication.processEvents()
             self.assertIn("缓存本来就是空的", w.log_text.toPlainText())
-        finally:
-            w.close()
-
-    def test_clear_cache_confirm_expires(self):
-        """过了确认时限：那一下不算数（重新提醒），不会删。
-
-        上膛 60 秒自动作废（CLEAR_CACHE_CONFIRM_SECONDS）——测试把它压成 0
-        模拟"隔了很久才点第二下"：这时再点只重新上膛；时限恢复后，接着
-        那一下（刚上的膛）才真删。
-        """
-        from xrd_toolkit.services import stage_cache
-        w = create_window()
-        path = self._real_file("cache_expire.tif")
-        try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, [path])
-                _open_view(w, "1D")
-                self.assertTrue(_wait_until(lambda: len(
-                    _axes(w, "1D", path).lines) > 0))
-            with mock.patch.object(gui_file_dock,
-                                   "CLEAR_CACHE_CONFIRM_SECONDS", 0.0):
-                gui_file_dock.ask_clear_cache(w)   # 上膛即过期
-                gui_file_dock.ask_clear_cache(w)   # 仍是"第一下"
-                QApplication.processEvents()
-                self.assertGreaterEqual(stage_cache.describe()["files"], 1,
-                                        "过期的上膛不该被当成第二下")
-                self.assertIn("再点一次 [删除所有缓存…]",
-                              w.log_text.toPlainText())
-            gui_file_dock.ask_clear_cache(w)   # 上一句刚重新上膛 → 这一下真删
-            QApplication.processEvents()
-            self.assertEqual(stage_cache.describe()["files"], 0)
         finally:
             w.close()
 
