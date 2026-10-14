@@ -51,6 +51,18 @@ AUTO_FLOOR_PERCENTILE = 20.0
 # 阶段 2 迭代次数与噪声带宽度 k（掩掉"高于局部下限 + kσ"的峰点）。
 AUTO_ITER = 2
 AUTO_NOISE_K = 2.0
+# 掩膜**保留率下限**（2026-10-14，用户："对比图热图在 1.75 附近出现明显断点"）：
+# 掩膜判据比的是**上一轮迭代的 base**，两阶段因此是双稳态的——base 一旦瞬时
+# 塌下 kσ 以上，窗口里的点会全被判成"峰"剔除，拟合饿死（窗口剩点 <3 时直接
+# 保留旧值），塌陷就此冻结、自锁（实测锁在数据下 30~70 counts、宽 ~0.1°，
+# 81 条里 5 条病态、~15 条轻症；好行完全不触发）。修法：任何窗口至少要留住
+# AUTO_MIN_KEEP_FRAC 的点参与拟合，不够就把带子 ×AUTO_MASK_WIDEN_STEP 重来
+# （最多 AUTO_MASK_WIDEN_TRIES 轮，各轮都判所有窗口）——饿死时优雅退化成
+# "无掩膜的局部直线"，而不是锁死在塌陷处。实测两个真峰高度与 lab6 谷底
+# 过扣基本不动（差 ≤0.1 counts，见 tests/test_background.py 的回归测试）。
+AUTO_MIN_KEEP_FRAC = 0.3
+AUTO_MASK_WIDEN_STEP = 1.5
+AUTO_MASK_WIDEN_TRIES = 6
 # 护栏包络的窗口宽度（度，2026-10-07 用户 (b)："基线不许高于局部下包络"）：
 # 收尾把基线夹到"窄窗滑动中位"以下（实现与实测见 estimate_baseline_sliding
 # 收尾）。0.05° 是实测选的——细到跟得上环间窄谷（lab6 环距 ~0.1°）、
@@ -72,7 +84,10 @@ GUARD_ENV_WINDOW_DEG = 0.05
 # 3（2026-10-07）：自动基线加了"不许高于局部下包络"的护栏（同一天的
 # 用户 (b)）——窄谷处不再被架高的基线压出负值；同一套设置算出的曲线
 # 与 2 不同，旧产物随之作废（实测对照见 estimate_baseline_sliding 收尾）。
-BG_ALGO_VERSION = 3
+# 4（2026-10-14）：掩膜加**保留率下限**（见 AUTO_MIN_KEEP_FRAC 的来历）——
+# 修掉"掩膜饿死自锁"在部分行上留下的幻影台阶（对比/热图 1.75° 的"断点"）。
+# 同一套设置算出的曲线与 3 不同（好行几乎不动、坏行不再塌），旧产物作废。
+BG_ALGO_VERSION = 4
 
 
 def _dtth_median(tth) -> float:
@@ -222,6 +237,31 @@ def _window_geometry(tth, window_deg, n):
     return half, np.arange(0, n, step)
 
 
+def _mask_with_coverage(y, base, band, lo, hi) -> np.ndarray:
+    """峰点掩膜 = `y ≤ base + band`，带回**保留率下限**（2026-10-14）。
+
+    为什么要有下限：判据比的是**上一轮迭代的 base**，迭代因此是双稳态的
+    ——base 一旦瞬时塌下 band 以上，窗口里的点会被全判成"峰"剔除，拟合
+    饿死（调用侧对剩点 <3 的窗口直接保留旧值），塌陷就此冻结、自锁（真
+    数据实测锁在数据下 30~70 counts、宽 ~0.1°，表现是处理页 1.75° 附近
+    的"断点"/热图短横线）。下限 = 任何窗口至少留住 AUTO_MIN_KEEP_FRAC 的
+    点，不够就把 band ×AUTO_MASK_WIDEN_STEP 重来（最多 AUTO_MASK_WIDEN_TRIES
+    轮）——饿死时优雅退化成"无掩膜的局部直线"，而不是锁死在塌陷处。
+
+    参数：y 曲线、base 上一轮基线、band 初始带宽（kσ）、lo/hi 各窗口
+    在数组上的 [起点, 终点) 下标（`_window_geometry` 抽稀后的锚点）。
+    """
+    keep = None
+    for _widen in range(AUTO_MASK_WIDEN_TRIES):
+        keep = y <= base + band
+        k = keep.astype(float)
+        kept = np.concatenate([[0.0], np.cumsum(k)])
+        if np.all(kept[hi] - kept[lo] >= AUTO_MIN_KEEP_FRAC * (hi - lo)):
+            break
+        band *= AUTO_MASK_WIDEN_STEP
+    return keep
+
+
 def estimate_baseline_sliding(tth, intensity, window_deg, *,
                               percentile: float = AUTO_FLOOR_PERCENTILE,
                               n_iter: int = AUTO_ITER,
@@ -254,6 +294,13 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
     **扣除不足**，残留一条可见的斜坡（实测中段 +15~+72，窗口越大越明显）。
     反过来，过度扣除会静默压低峰高、看起来还"更干净"，是更危险的错误
     方向。所以宁可偏高一点，让用户看得见、用锚点去修。
+
+    **掩膜保留率下限**（2026-10-14）：掩膜判据比的是上一轮的 base，存在
+    "饿死自锁"——base 瞬时塌下 kσ 后窗口里的点全被判成峰、拟合饿死，
+    塌陷冻结（实测锁在数据下 30~70 counts、宽 ~0.1°，在对比/热图上就是
+    1.75° 附近那列"断点"）。现在每个窗口至少留住 AUTO_MIN_KEEP_FRAC 的
+    点参与拟合，不够就把带子撑大重来；饿死时退化成"无掩膜的局部直线"。
+    实测：81 条病态行 5→0、两个真峰高度与 lab6 谷底过扣基本不动。
 
     参数：
         tth : np.ndarray
@@ -297,7 +344,17 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
         # 窗口中心比——下降背景的左半边整体高于中心值，用中心值当参考会
         # 把整片背景误判成峰掩掉），所以能一次算好，再用前缀和给每个窗口
         # 做最小二乘。
-        keep = y <= base + noise_k * sigma
+        #
+        # 保留率下限（2026-10-14）：判据比的是**上一轮的 base**——base 一旦
+        # 瞬时塌下 kσ，窗口里的点会全被判成"峰"剔除，拟合就此饿死、塌陷
+        # 冻结自锁（见 AUTO_MIN_KEEP_FRAC 的来历）。所以每个窗口至少留住
+        # AUTO_MIN_KEEP_FRAC 的点；不够就把带子撑大重来（撑到"基本不掩"
+        # 为止也该够了，撑不满 TRIES 轮就按现有 keep 走，维持旧行为兜底）。
+        lo = np.clip(idx - half, 0, n)
+        hi = np.clip(idx + half + 1, 0, n)
+        keep = _mask_with_coverage(y, base, noise_k * sigma, lo, hi)
+        k = keep.astype(float)
+        c0 = np.concatenate([[0.0], np.cumsum(k)])
         # 窗口内**直线拟合**、取窗口中心处的值（不是掩峰后取均值）。
         # 为什么：陡降段上掩峰会掩掉窗口高的一侧（那里的点都超过各自
         # 偏低的下限），均值因此落到真值以下——合成真值实测低角端偏
@@ -308,14 +365,10 @@ def estimate_baseline_sliding(tth, intensity, window_deg, *,
         # 向量化 = 五个前缀和数组各取一次差分 → 窗口内 Σ1、Σt、Σt²、Σy、
         # Σty → 解二元正规方程；10 万点 21 ms（逐窗 polyfit 的循环写法
         # 结果逐位相同，但点数一大就慢一个量级）
-        k = keep.astype(float)
-        c0 = np.concatenate([[0.0], np.cumsum(k)])
         ct = np.concatenate([[0.0], np.cumsum(tth * k)])
         ct2 = np.concatenate([[0.0], np.cumsum(tth * tth * k)])
         cy = np.concatenate([[0.0], np.cumsum(y * k)])
         cty = np.concatenate([[0.0], np.cumsum(tth * y * k)])
-        lo = np.clip(idx - half, 0, n)
-        hi = np.clip(idx + half + 1, 0, n)
         cnt = c0[hi] - c0[lo]
         st, st2 = ct[hi] - ct[lo], ct2[hi] - ct2[lo]
         sy, sty = cy[hi] - cy[lo], cty[hi] - cty[lo]

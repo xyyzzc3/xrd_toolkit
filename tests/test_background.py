@@ -19,9 +19,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.services.background import (
-    AUTO_WINDOW_DEG, compute_baseline, estimate_baseline_sliding,
-    estimate_baseline_snip, fit_anchor_baseline, interp_onto_grid,
-    subtract_background)
+    AUTO_WINDOW_DEG, _mask_with_coverage, compute_baseline,
+    estimate_baseline_sliding, estimate_baseline_snip, fit_anchor_baseline,
+    interp_onto_grid, subtract_background)
 
 TTH = np.linspace(0.0, 10.0, 2001)
 
@@ -373,6 +373,43 @@ class TestSlidingBaseline(unittest.TestCase):
         for bad in (0.0, -2.0, None):
             with self.assertRaises(ValueError):
                 estimate_baseline_sliding(TTH, TTH, bad)
+
+
+class TestMaskCoverageFloor(unittest.TestCase):
+    """掩膜保留率下限（2026-10-14）——防"饿死自锁"。
+
+    真实数据实测（用户 81 条 LMFP 批次，见 background.AUTO_MIN_KEEP_FRAC
+    与 BG_ALGO_VERSION 4 的来历）：掩膜判据比的是**上一轮 base**，base
+    一旦瞬时塌下 kσ，窗口里的点会被全判成峰剔除、拟合饿死，塌陷锁在
+    数据下 30~70 counts、宽 ~0.1°——在对比/热图上就是 1.75° 附近那列
+    "断点"/短横线。那个自锁依赖真数据的峰密度与噪声配合、合成形状复现
+    不出来（同 SNIP 塌陷那条先例，见 TestSnipBaseline 的说明），所以这里
+    **直接钉策略本身**：饿死的窗口必须把带子撑大到留住 ≥30% 的点；健康
+    窗口的掩膜必须与朴素判据一字不差（修复不许改正常路径的行为）。
+    """
+
+    def test_starved_window_widens_until_covered(self):
+        """窗口被饿死（一个点都留不下）时，带子必须撑大到有足够覆盖。"""
+        y = 1000.0 + np.linspace(0.0, 160.0, 400)
+        base = y - 60.0                # base 塌在数据下 60 counts
+        band = 18.0                    # 初始带子（≈2σ）够不着
+        lo, hi = np.array([0]), np.array([400])
+        plain = y <= base + band
+        self.assertEqual(float(plain.mean()), 0.0,
+                         "前提：朴素掩膜在这个窗口一个点都留不下")
+        keep = _mask_with_coverage(y, base, band, lo, hi)
+        self.assertGreaterEqual(float(keep.mean()), 0.3,
+                                "带子应撑大到至少留住 30% 的点")
+
+    def test_healthy_window_keeps_the_plain_mask(self):
+        """健康窗口（base 贴数据）覆盖率本来就够：掩膜与朴素判据完全一致。"""
+        rng = np.random.default_rng(3)
+        y = 500.0 + rng.normal(0.0, 5.0, 600)
+        base = y.copy()
+        band = 10.0
+        keep = _mask_with_coverage(y, base, band, np.array([0]),
+                                   np.array([600]))
+        np.testing.assert_array_equal(keep, y <= base + band)
 
 
 class TestAnchorBaseline(unittest.TestCase):
