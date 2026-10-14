@@ -1165,9 +1165,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         curve_palette.addItem(f"{name}色渐变（推荐）" if name == "蓝"
                               else f"{name}色渐变", name)
     curve_palette.setToolTip("对比曲线配色：单色系按勾选顺序从深到浅"
-                             "（第 1 条 = 基色）；彩虹是瀑布同款顺序色"
-                             "（深紫→黄），不循环。逐图的色系在面板标题栏的"
-                             " [外观…] 里换")
+                             "（第 1 条最深、最后一条最浅）；彩虹是瀑布同款"
+                             "顺序色（深紫→黄），不循环。逐图的色系在面板"
+                             "标题栏的 [外观…] 里换")
     window.params["渐变色系"] = curve_palette
     form_cmp.addRow(curve_palette)
 

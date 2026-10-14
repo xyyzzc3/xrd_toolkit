@@ -1718,18 +1718,20 @@ class TestCurveColors(unittest.TestCase):
     分类色板与"逐条自定义色"一起退休。
     """
 
-    # 蓝基色与白混 55% —— 2 条对比曲线里第 2 条的颜色（_gradient_color）
+    # 蓝渐变的两个端点（2026-10-14 加宽后）：第 1 条 = 基色与黑混 30%，
+    # 最后一条 = 基色与白混 55%（浅端不变，见 panel_state._GRADIENT_DARK_MIX）
+    _DARK_2 = "#1d5496"
     _LIGHT_2 = "#9fc2ed"
 
     def test_gradient_color_sampling(self):
-        """单条 = 基色；多条按序号从深到浅；未知色系兜底蓝；越界夹回。"""
+        """单条 = 基色；多条从最深一头到最浅一头；未知色系兜底蓝；越界夹回。"""
         self.assertEqual(gui_state._gradient_color("蓝", 0, 1), "#2a78d6")
         self.assertEqual(gui_state._gradient_color("绿", 0, 1), "#1baf7a")
         self.assertEqual([gui_state._gradient_color("蓝", i, 2)
                           for i in range(2)],
-                         ["#2a78d6", self._LIGHT_2])
+                         [self._DARK_2, self._LIGHT_2])
         # 越界夹回范围（防御）：负索引 → 第 0 条、超界 → 最后一条
-        self.assertEqual(gui_state._gradient_color("蓝", -3, 2), "#2a78d6")
+        self.assertEqual(gui_state._gradient_color("蓝", -3, 2), self._DARK_2)
         self.assertEqual(gui_state._gradient_color("蓝", 99, 2), self._LIGHT_2)
         self.assertEqual(gui_state._gradient_color("乱写的", 0, 1), "#2a78d6")
 
@@ -1771,7 +1773,8 @@ class TestCurveColors(unittest.TestCase):
             dock = _dock(w, "1D", "data/fake_b.tif")
             dock.params_snapshot["渐变色系"] = "绿"
             gui_views._draw_1d(w, dock, dock.last_tth, dock.last_intensity)
-            self.assertEqual(ax.lines[0].get_color(), "#1baf7a")
+            self.assertEqual(ax.lines[0].get_color(), "#1baf7a",
+                             "单曲线永远用基色本身（加宽只影响多条）")
         finally:
             w.close()
 
@@ -1787,17 +1790,17 @@ class TestCurveColors(unittest.TestCase):
         return keys[0], ax
 
     def test_compare_uses_the_gradient(self):
-        """对比曲线按勾选顺序渐变（第 1 条 = 基色）；换色系重画不被打回。"""
+        """对比曲线按勾选顺序渐变（第 1 条最深、最后一条最浅）；换色系重画不被打回。"""
         w = create_window()
         try:
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
             self.assertEqual([line.get_color() for line in ax.lines],
-                             ["#2a78d6", self._LIGHT_2])
+                             [self._DARK_2, self._LIGHT_2])
             # 换橙 → 重画按新参数着色（旧色不被套回）
             dock.params_snapshot["渐变色系"] = "橙"
             gui_plot_compare._redraw_compare(w, key)
-            self.assertEqual(ax.lines[0].get_color(), "#eb6834")
+            self.assertEqual(ax.lines[0].get_color(), "#a44924")
             self.assertNotEqual(ax.lines[1].get_color(), self._LIGHT_2,
                                 "第 2 条的浅色应跟着色系换")
         finally:
@@ -1831,7 +1834,7 @@ class TestCurveColors(unittest.TestCase):
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
             self.assertEqual(dock.params_snapshot["渐变色系"], "紫")
-            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+            self.assertEqual(ax.lines[0].get_color(), "#342975")
         finally:
             w.close()
 
@@ -1885,12 +1888,12 @@ class TestCurveColors(unittest.TestCase):
             combo.setCurrentIndex(combo.findData("紫"))
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
-            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+            self.assertEqual(ax.lines[0].get_color(), "#342975")
             # 真实控件路径：勾「显示数据名」→ 走 _refresh_compare 就地重画
             w.params["显示数据名"].setChecked(True)
             self.assertEqual(dock.params_snapshot["渐变色系"], "紫",
                              "色系不该被参数坞下拉的旧值打回默认")
-            self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+            self.assertEqual(ax.lines[0].get_color(), "#342975")
         finally:
             w.close()
 
@@ -1907,7 +1910,7 @@ class TestCurveColors(unittest.TestCase):
             box = w.params["渐变色系"]
             box.setCurrentIndex(box.findData("绿"))
             self.assertEqual(dock.params_snapshot["渐变色系"], "绿")
-            self.assertEqual(ax.lines[0].get_color(), "#1baf7a")
+            self.assertEqual(ax.lines[0].get_color(), "#137a55")
         finally:
             w.close()
 
@@ -1920,7 +1923,7 @@ class TestCurveColors(unittest.TestCase):
             self.assertEqual(w.pending_display.get("渐变色系"), "橙")
             key, ax = self._plot_compare(w)
             self.assertEqual(w.plot_docks[key].params_snapshot["渐变色系"], "橙")
-            self.assertEqual(ax.lines[0].get_color(), "#eb6834")
+            self.assertEqual(ax.lines[0].get_color(), "#a44924")
         finally:
             w.close()
 
@@ -1992,7 +1995,7 @@ class TestPendingDisplayParams(unittest.TestCase):
             self.assertEqual(snap["渐变色系"], "绿")
             self.assertTrue(snap["对比堆叠"])
             ax = gui_panel_state._content(dock).axes_1d
-            self.assertEqual(ax.lines[0].get_color(), "#1baf7a",
+            self.assertEqual(ax.lines[0].get_color(), "#137a55",
                              "渐变按出图前的色系画")
             self.assertAlmostEqual(ax.get_xlim()[0], 2.0, places=1,
                                    msg="出图前的视图窗口该生效")

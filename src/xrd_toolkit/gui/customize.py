@@ -202,7 +202,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         idx = family.findData(cur)
         family.setCurrentIndex(idx if idx >= 0 else 0)
         family.setToolTip("对比曲线按勾选顺序渐变：单色系由深到浅（第 1 条"
-                          " = 基色）；彩虹是瀑布同款（深紫→黄），不循环")
+                          "最深、最后一条最浅）；彩虹是瀑布同款（深紫→黄），"
+                          "不循环")
         color_form.addRow("色系", family)
         body_lay.addWidget(color_box)
 

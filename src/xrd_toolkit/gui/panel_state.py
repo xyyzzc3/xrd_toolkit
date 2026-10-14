@@ -208,9 +208,9 @@ CALIB_HOVER_KEY = "校准图"
 # 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为
 # 一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先的 8 槽分类
 # 色板与"逐条自定义色"一起退休，用户原话："不是每个数据都能改颜色，
-# 非常无效"）。基色 = 每系最深的一头；第 1 条曲线用基色本身，往后渐浅
-# （浅端向白混合封顶 _GRADIENT_LIGHT_MIX，保证最浅的一条在白底上仍
-# 看得见）。"蓝"沿用原来第一个文件的蓝，老用户的视觉是连续的。
+# 非常无效"）。每系一个基色（"蓝"沿用原来第一个文件的蓝，老用户的
+# 视觉是连续的）；多条曲线从"基色加深一档"过渡到"基色与白混 55%"
+# （两头各见下面两个常量；单条曲线仍用基色本身）。
 _GRADIENT_FAMILIES = {
     "蓝": "#2a78d6",
     "绿": "#1baf7a",
@@ -219,6 +219,12 @@ _GRADIENT_FAMILIES = {
     "灰": "#595959",
 }
 _GRADIENT_LIGHT_MIX = 0.55   # 最浅一条 = 基色与白混到 55%（再浅就看不见）
+# 最深一头的加深量（2026-10-14 加，用户："彩虹没问题，[其余色系]是对的，但是
+# 不明显"——实测 81 条橙色从底到顶只走了"基色→55% 白"这半段，肉眼一片同色）。
+# 现在跨度拉成整整一段：第 1 条 = 基色与黑混 _GRADIENT_DARK_MIX，最后一条
+# 不变（55% 白，保住"最浅的白底可辨"），中间线性过渡——8 条时每条明显拉开，
+# 大堆叠也比原来有层次。
+_GRADIENT_DARK_MIX = 0.30
 
 # 第六个色系「彩虹」（2026-10-14 用户："对比图不堆叠时颜色很难区分，要不要
 # 改成瀑布图的配色那种"＋"除了不要循环的颜色，按顺序的数据能获得有规律的
@@ -232,12 +238,23 @@ _RAINBOW_SINGLE_POS = 0.5    # 单曲线（1D/剖面/只有一条对比）取中
 _GRADIENT_FAMILY_ORDER = (*_GRADIENT_FAMILIES, _RAINBOW_FAMILY)
 
 
+def _mix_hex(a: str, b: str, t: float) -> str:
+    """两个 #rrggbb 按 t 线性混合（0 = 全 a，1 = 全 b）。"""
+    ar, ag, ab = (int(a[i:i + 2], 16) for i in (1, 3, 5))
+    br, bg, bb = (int(b[i:i + 2], 16) for i in (1, 3, 5))
+    return "#" + "".join(
+        f"{int(round(x + (y - x) * t)):02x}"
+        for x, y in ((ar, br), (ag, bg), (ab, bb)))
+
+
 def _gradient_color(family: str, i: int, n: int) -> str:
     """第 i 条（共 n 条）曲线的渐变色。
 
-    单色系（蓝/绿/橙/紫/灰）：第 0 条 = 基色最深，往后渐浅。「彩虹」：
-    与瀑布同款——viridis 全段等距（i 从 0 到 n-1 恰好走 linspace(0, 1, n)
-    那几档），顺序 = 序号、不循环，平铺压线时比单色系多一个色相辨认通道。
+    单色系（蓝/绿/橙/紫/灰）：从"基色加深一档"线性过渡到"基色与白混 55%"
+    （一头一尾见 _GRADIENT_DARK_MIX / _GRADIENT_LIGHT_MIX）——第 1 条最深、
+    最后一条最浅。「彩虹」：与瀑布同款——viridis 全段等距（i 从 0 到 n-1
+    恰好走 linspace(0, 1, n) 那几档），顺序 = 序号、不循环，平铺压线时比
+    单色系多一个色相辨认通道。
 
     n <= 1（单曲线面板 / 只有一条对比曲线）给一个稳妥的单曲线色：单色系
     用基色本身（1D/剖面拿它当"这条曲线的颜色"），彩虹取中段。i 越界夹回
@@ -253,14 +270,8 @@ def _gradient_color(family: str, i: int, n: int) -> str:
     if n <= 1:
         return base
     t = min(max(i / (n - 1), 0.0), 1.0)
-    mix = _GRADIENT_LIGHT_MIX * t
-    r = int(base[1:3], 16)
-    g = int(base[3:5], 16)
-    b = int(base[5:7], 16)
-    r = int(round(r + (255 - r) * mix))
-    g = int(round(g + (255 - g) * mix))
-    b = int(round(b + (255 - b) * mix))
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return _mix_hex(_mix_hex(base, "#000000", _GRADIENT_DARK_MIX),
+                    _mix_hex(base, "#ffffff", _GRADIENT_LIGHT_MIX), t)
 
 
 def _stash_pending_display(window: QMainWindow, keys) -> None:
