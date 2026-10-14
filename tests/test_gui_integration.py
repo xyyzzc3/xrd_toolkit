@@ -1733,6 +1733,29 @@ class TestCurveColors(unittest.TestCase):
         self.assertEqual(gui_state._gradient_color("蓝", 99, 2), self._LIGHT_2)
         self.assertEqual(gui_state._gradient_color("乱写的", 0, 1), "#2a78d6")
 
+    def test_rainbow_family_is_ordered_and_never_cycles(self):
+        """「彩虹」（2026-10-14）：瀑布同款 viridis——按顺序、不循环、可对表。
+
+        用户："对比图不堆叠时颜色很难区分，要不要改成瀑布图的配色那种"＋
+        "除了不要循环的颜色，按顺序的数据能获得有规律的按顺序颜色就可以"。
+        取样与瀑布（plot_views 的 `cm.viridis(linspace(0,1,n))`）逐位一致；
+        n 条就是 n 个互不重复的颜色；单曲线取中段青绿。
+        """
+        from matplotlib import cm
+        from matplotlib.colors import to_hex
+        for n in (2, 5, 8, 81):
+            mine = [gui_state._gradient_color("彩虹", i, n) for i in range(n)]
+            ref = [to_hex(c) for c in cm.viridis(np.linspace(0, 1, n))]
+            self.assertEqual(mine, ref, f"n={n} 应与瀑布取样一致")
+            self.assertEqual(len(set(mine)), n, "颜色不循环、不重复")
+        self.assertEqual(gui_state._gradient_color("彩虹", 0, 1), "#21918c",
+                         "单曲线取中段")
+        # 越界夹回（防御）
+        self.assertEqual(gui_state._gradient_color("彩虹", -1, 4),
+                         gui_state._gradient_color("彩虹", 0, 4))
+        self.assertEqual(gui_state._gradient_color("彩虹", 99, 4),
+                         gui_state._gradient_color("彩虹", 3, 4))
+
     def test_draw_1d_follows_gradient_family(self):
         """1D 单曲线：默认蓝基色；快照切绿重画 = 绿基色。"""
         w = create_window()
@@ -1809,6 +1832,36 @@ class TestCurveColors(unittest.TestCase):
                                      content.figure, dlg)
             self.assertEqual(dock.params_snapshot["渐变色系"], "紫")
             self.assertEqual(ax.lines[0].get_color(), "#4a3aa7")
+        finally:
+            w.close()
+
+    def test_rainbow_family_reaches_the_figure_via_customize(self):
+        """「彩虹」进两处下拉，走「外观」[应用] 真路径落到曲线上。
+
+        参数坞下拉（新图默认）与「外观」单选（这张图）都应列到「彩虹色
+        渐变」；选它 [应用] 后，两条对比曲线取 viridis 两端（深紫/黄）。
+        """
+        w = create_window()
+        try:
+            dock_combo = w.params["渐变色系"]
+            idx = dock_combo.findData("彩虹")
+            self.assertGreaterEqual(idx, 0, "参数坞下拉应有彩虹")
+            self.assertEqual(dock_combo.itemText(idx), "彩虹色渐变")
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            content = gui_panel_state._content(dock)
+            dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
+                                                  content.figure)
+            combo = dlg.findChild(QComboBox, "gradient_family_combo")
+            idx = combo.findData("彩虹")
+            self.assertGreaterEqual(idx, 0, "「外观」单选应有彩虹")
+            self.assertEqual(combo.itemText(idx), "彩虹色渐变")
+            combo.setCurrentIndex(idx)
+            gui_customize._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            self.assertEqual(dock.params_snapshot["渐变色系"], "彩虹")
+            self.assertEqual(ax.lines[0].get_color(), "#440154", "第 1 条 = 深紫")
+            self.assertEqual(ax.lines[1].get_color(), "#fde725", "第 2 条 = 黄")
         finally:
             w.close()
 

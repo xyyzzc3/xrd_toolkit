@@ -220,13 +220,35 @@ _GRADIENT_FAMILIES = {
 }
 _GRADIENT_LIGHT_MIX = 0.55   # 最浅一条 = 基色与白混到 55%（再浅就看不见）
 
+# 第六个色系「彩虹」（2026-10-14 用户："对比图不堆叠时颜色很难区分，要不要
+# 改成瀑布图的配色那种"＋"除了不要循环的颜色，按顺序的数据能获得有规律的
+# 按顺序颜色就可以"）：不走"基色混白"，而是**瀑布同一张色图 viridis 全段
+# 等距取样**（平铺 8 条实测：单色系八条挤在浅蓝里分不出，viridis 深紫→黄
+# 一条一色一眼认得出；81 条也能读出勾选顺序）。它不是被退休的那套分类色
+# （红绿蓝随便给），是顺序色——颜色严格跟序号走、不循环。
+_RAINBOW_FAMILY = "彩虹"
+_RAINBOW_SINGLE_POS = 0.5    # 单曲线（1D/剖面/只有一条对比）取中段青绿
+# UI 下拉按这个顺序列色系（app.py 参数坞 / customize.py「外观」共用）
+_GRADIENT_FAMILY_ORDER = (*_GRADIENT_FAMILIES, _RAINBOW_FAMILY)
+
 
 def _gradient_color(family: str, i: int, n: int) -> str:
-    """第 i 条（共 n 条）曲线的渐变色：第 0 条 = 基色最深，往后渐浅。
+    """第 i 条（共 n 条）曲线的渐变色。
 
-    n <= 1（单曲线面板 / 只有一条对比曲线）用基色本身——1D/剖面拿它
-    当"这条曲线的颜色"。i 越界夹回范围（防御）；未知色系兜底蓝。
+    单色系（蓝/绿/橙/紫/灰）：第 0 条 = 基色最深，往后渐浅。「彩虹」：
+    与瀑布同款——viridis 全段等距（i 从 0 到 n-1 恰好走 linspace(0, 1, n)
+    那几档），顺序 = 序号、不循环，平铺压线时比单色系多一个色相辨认通道。
+
+    n <= 1（单曲线面板 / 只有一条对比曲线）给一个稳妥的单曲线色：单色系
+    用基色本身（1D/剖面拿它当"这条曲线的颜色"），彩虹取中段。i 越界夹回
+    范围（防御）；未知色系兜底蓝。
     """
+    if family == _RAINBOW_FAMILY:
+        # 延迟导入：panel_state 是最底层共享层，模块级不拉 matplotlib
+        from matplotlib import colormaps
+        from matplotlib.colors import to_hex
+        pos = _RAINBOW_SINGLE_POS if n <= 1 else min(max(i / (n - 1), 0.0), 1.0)
+        return to_hex(colormaps["viridis"](pos))
     base = _GRADIENT_FAMILIES.get(family) or _GRADIENT_FAMILIES["蓝"]
     if n <= 1:
         return base

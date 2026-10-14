@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import (
-    _content, _GRADIENT_FAMILIES, _log, _panel_param, _set_widget_value)
+    _content, _GRADIENT_FAMILY_ORDER, _log, _panel_param, _set_widget_value)
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
 _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
@@ -196,12 +196,13 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         color_form.setFormAlignment(form_align)
         family = QComboBox()
         family.setObjectName("gradient_family_combo")
-        for name in _GRADIENT_FAMILIES:
+        for name in _GRADIENT_FAMILY_ORDER:
             family.addItem(f"{name}色渐变", name)
         cur = _panel_param(window, dock, "渐变色系", "蓝")
         idx = family.findData(cur)
         family.setCurrentIndex(idx if idx >= 0 else 0)
-        family.setToolTip("对比曲线按勾选顺序从深到浅渐变；第 1 条 = 基色")
+        family.setToolTip("对比曲线按勾选顺序渐变：单色系由深到浅（第 1 条"
+                          " = 基色）；彩虹是瀑布同款（深紫→黄），不循环")
         color_form.addRow("色系", family)
         body_lay.addWidget(color_box)
 
