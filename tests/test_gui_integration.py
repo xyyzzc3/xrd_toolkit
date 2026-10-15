@@ -1868,52 +1868,52 @@ class TestCurveColors(unittest.TestCase):
         finally:
             w.close()
 
-    def test_paper_family_rounds_and_lighten(self):
-        """「论文色」（2026-10-15 用户："对比图添加论文中常用颜色"）：
+    def test_classic_family_rounds_and_lighten(self):
+        """「经典色」（2026-10-15 用户："对比图添加论文中常用颜色"）：
         Okabe–Ito 前 8 条一色一条、互不重复；第 9 条起按轮压暗
         （×0.75）；黑色压不动改往白提亮（不然每轮长得一模一样）；
         单曲线取色 1；越界夹回。"""
-        first = [gui_state._gradient_color("论文色", i, 8) for i in range(8)]
+        first = [gui_state._gradient_color("经典色", i, 8) for i in range(8)]
         self.assertEqual(first, ["#0072B2", "#D55E00", "#009E73", "#E69F00",
                                  "#56B4E9", "#CC79A7", "#F0E442", "#000000"])
         self.assertEqual(len(set(first)), 8, "前 8 条互不重复")
-        self.assertEqual(gui_state._gradient_color("论文色", 8, 81),
+        self.assertEqual(gui_state._gradient_color("经典色", 8, 81),
                          "#005686", "第 9 条 = 色 1 压暗 25%（0.75 轮）")
-        self.assertEqual(gui_state._gradient_color("论文色", 15, 81),
+        self.assertEqual(gui_state._gradient_color("经典色", 15, 81),
                          "#404040", "黑色压不动 → 往白提亮 25%")
-        self.assertNotEqual(gui_state._gradient_color("论文色", 0, 81),
-                            gui_state._gradient_color("论文色", 8, 81),
+        self.assertNotEqual(gui_state._gradient_color("经典色", 0, 81),
+                            gui_state._gradient_color("经典色", 8, 81),
                             "第二轮不与第一轮同色")
-        self.assertEqual(gui_state._gradient_color("论文色", 0, 1), "#0072B2",
+        self.assertEqual(gui_state._gradient_color("经典色", 0, 1), "#0072B2",
                          "单曲线取色 1")
         # 越界夹回（防御）
-        self.assertEqual(gui_state._gradient_color("论文色", -1, 4),
-                         gui_state._gradient_color("论文色", 0, 4))
-        self.assertEqual(gui_state._gradient_color("论文色", 99, 4),
-                         gui_state._gradient_color("论文色", 3, 4))
+        self.assertEqual(gui_state._gradient_color("经典色", -1, 4),
+                         gui_state._gradient_color("经典色", 0, 4))
+        self.assertEqual(gui_state._gradient_color("经典色", 99, 4),
+                         gui_state._gradient_color("经典色", 3, 4))
 
-    def test_paper_family_reaches_the_figure_via_customize(self):
-        """「论文色」进两处下拉（显示名就叫「论文色」，不带"渐变"后缀），
+    def test_classic_family_reaches_the_figure_via_customize(self):
+        """「经典色」进两处下拉（显示名就叫「经典色」，不带"渐变"后缀），
         选它 [应用] 后，两条对比曲线取 Okabe–Ito 色 1 / 色 2。"""
         w = create_window()
         try:
             dock_combo = w.params["渐变色系"]
-            idx = dock_combo.findData("论文色")
-            self.assertGreaterEqual(idx, 0, "参数坞下拉应有论文色")
-            self.assertEqual(dock_combo.itemText(idx), "论文色")
+            idx = dock_combo.findData("经典色")
+            self.assertGreaterEqual(idx, 0, "参数坞下拉应有经典色")
+            self.assertEqual(dock_combo.itemText(idx), "经典色")
             key, ax = self._plot_compare(w)
             dock = w.plot_docks[key]
             content = gui_panel_state._content(dock)
             dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
             combo = dlg.findChild(QComboBox, "gradient_family_combo")
-            idx = combo.findData("论文色")
-            self.assertGreaterEqual(idx, 0, "「外观」单选应有论文色")
-            self.assertEqual(combo.itemText(idx), "论文色")
+            idx = combo.findData("经典色")
+            self.assertGreaterEqual(idx, 0, "「外观」单选应有经典色")
+            self.assertEqual(combo.itemText(idx), "经典色")
             combo.setCurrentIndex(idx)
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
-            self.assertEqual(dock.params_snapshot["渐变色系"], "论文色")
+            self.assertEqual(dock.params_snapshot["渐变色系"], "经典色")
             self.assertEqual(ax.lines[0].get_color(), "#0072B2")
             self.assertEqual(ax.lines[1].get_color(), "#D55E00")
         finally:
@@ -2044,6 +2044,42 @@ class TestCurveColors(unittest.TestCase):
             # [恢复默认] 把输入框带回默认文案
             gui_customize._reset_customize_fields(dock, dlg._fields)
             self.assertEqual(edit.text(), "颜色按文件名尾号顺序")
+        finally:
+            w.close()
+
+    def test_color_scale_direction_matches_the_caption(self):
+        """色标方向二选（用户 2026-10-16："显示色标的那一段话可以选择
+        横放竖放，还有色标也是，他两个保持一个方向最好"）：默认竖向 =
+        说明文字**竖排**（rotation 90，与竖条同方向）；在 [外观…] 里选
+        横向 → 说明横排（rotation 0）；[恢复默认] 回竖向。"""
+        w = create_window()
+        try:
+            n = gui_plot_compare.LEGEND_MAX_CURVES + 3
+            key, ax = self._plot_compare_n(w, n)
+            w.params["色标"].setChecked(True)
+            dock = w.plot_docks[key]
+            content = gui_panel_state._content(dock)
+
+            def caption_rot():
+                for t in ax.texts:
+                    if (t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG
+                            and t.get_text() == "颜色按文件名尾号顺序"):
+                        return t.get_rotation()
+                return None
+
+            self.assertEqual(caption_rot(), 90, "默认竖向：说明竖排")
+            dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
+                                                  content.figure)
+            dir_combo = dlg.findChild(QComboBox, "color_scale_dir_combo")
+            self.assertIsNotNone(dir_combo, "对比面板应有「色标方向」下拉")
+            self.assertEqual(dir_combo.currentData(), "竖向", "预填当前方向")
+            dir_combo.setCurrentIndex(dir_combo.findData("横向"))
+            gui_customize._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            self.assertEqual(dock.params_snapshot["色标方向"], "横向")
+            self.assertEqual(caption_rot(), 0, "横向：说明横排（同方向）")
+            gui_customize._reset_customize_fields(dock, dlg._fields)
+            self.assertEqual(dir_combo.currentData(), "竖向", "[恢复默认] 回竖向")
         finally:
             w.close()
 

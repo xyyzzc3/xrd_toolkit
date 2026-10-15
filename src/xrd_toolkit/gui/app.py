@@ -1159,7 +1159,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 的分类色板下拉与"逐条自定义色"一起退休）。单色系按文件名尾号从深到
     # 浅，第 1 条 = 基色；1D/剖面单曲线用基色。「彩虹」（2026-10-14 加）
     # 不属单色系——瀑布同款 viridis 顺序取样（平铺更好认，见 panel_state）。
-    # 「论文色」（2026-10-15 加）是 Okabe–Ito 8 色固定串色（色盲友好），
+    # 「经典色」（2026-10-15 加）是 Okabe–Ito 8 色固定串色（色盲友好），
     # 超过 8 条每轮压暗一档。逐图的色系也可在「外观」里选（同一参数，
     # 两处改的是同一件事）。
     curve_palette = QComboBox()
@@ -1168,7 +1168,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         curve_palette.addItem(label, name)
     curve_palette.setToolTip("对比曲线配色：单色系按文件名尾号从深到浅"
                              "（第 1 条最深、最后一条最浅）；彩虹是瀑布同款"
-                             "顺序色（深紫→黄），不循环；论文色是期刊常用的"
+                             "顺序色（深紫→黄），不循环；经典色是期刊常用的"
                              " Okabe–Ito 八色（色盲友好），超过八条每轮压暗"
                              "一档。逐图的色系在面板标题栏的 [外观…] 里换")
     window.params["渐变色系"] = curve_palette
