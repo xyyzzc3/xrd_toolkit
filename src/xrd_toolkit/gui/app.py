@@ -1156,7 +1156,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # 渐变色系（显示参数）：对比曲线的单色渐变（2026-10-13 用户："对比图
     # 的颜色改为一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先
-    # 的分类色板下拉与"逐条自定义色"一起退休）。单色系按文件栏顺序从深到
+    # 的分类色板下拉与"逐条自定义色"一起退休）。单色系按文件名尾号从深到
     # 浅，第 1 条 = 基色；1D/剖面单曲线用基色。「彩虹」（2026-10-14 加）
     # 不属单色系——瀑布同款 viridis 顺序取样（平铺更好认，见 panel_state）。
     # 「论文色」（2026-10-15 加）是 Okabe–Ito 8 色固定串色（色盲友好），
@@ -1166,7 +1166,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     for name in _GRADIENT_FAMILY_ORDER:
         label = _family_label(name) + ("（推荐）" if name == "蓝" else "")
         curve_palette.addItem(label, name)
-    curve_palette.setToolTip("对比曲线配色：单色系按文件栏顺序从深到浅"
+    curve_palette.setToolTip("对比曲线配色：单色系按文件名尾号从深到浅"
                              "（第 1 条最深、最后一条最浅）；彩虹是瀑布同款"
                              "顺序色（深紫→黄），不循环；论文色是期刊常用的"
                              " Okabe–Ito 八色（色盲友好），超过八条每轮压暗"
@@ -1236,27 +1236,20 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     form_cmp.addRow(name_chk)
     name_chk.toggled.connect(lambda _on: _refresh_compare(window))
 
-    # 「色标」（2026-10-15 用户："颜色代表数据顺序，用户可选择是否作为
-    # 图例放入图中"）：对比图右下角那条颜色刻度（颜色 ↔ 数据顺序的读数，
-    # 见 plot_compare._draw_compare_color_scale）的显示方式三选——
-    # 自动 = 超过 12 条（图例装不下）才画（默认，同天上午定的"甲"）；
-    # 总是 = 两三条也画（做论文图）；从不 = 不画（要干净图）。
+    # 「显示色标」（2026-10-15 晚用户："把这个改为显示图例的选项，默认
+    # 不显示"——上午的"自动（超过 12 条才画）"三选退休，简化成朴素开关）：
+    # 对比图右下角那条颜色刻度（颜色 ↔ 数据顺序的读数，见
+    # plot_compare._draw_compare_color_scale），勾上才画。叫"色标"不叫
+    # "图例"是为了跟 [显示数据名] 的图例（数据名）区分开。
     # 那条说明文字在面板 [外观…] 里可改（用户："自行更改描述方式"）。
-    scale_combo = QComboBox()
-    for label, value in (("自动（超过 12 条显示）", "auto"),
-                         ("总是显示", "always"),
-                         ("从不显示", "never")):
-        scale_combo.addItem(label, value)
-    scale_combo.setToolTip("对比图的「色标」：右下角那条颜色刻度，读出颜色"
-                           "跟数据的对应（下端第一条、上端最后一条，按"
-                           "文件栏顺序）。自动 = 超过 12 条（图例装不下）"
-                           "才画；总是 = 一直画；从不 = 不画。色标下方那行"
-                           "说明文字在面板标题栏的 [外观…] 里改。勾上立刻"
-                           "重画")
-    window.params["色标"] = scale_combo
-    form_cmp.addRow(scale_combo)
-    scale_combo.currentIndexChanged.connect(
-        lambda _i: _refresh_compare(window))
+    scale_chk = QCheckBox("显示色标")
+    scale_chk.setToolTip("对比图右下角那条颜色刻度（读颜色跟数据的对应："
+                         "下端 = 颜色最深的、上端 = 最浅的，颜色按文件名"
+                         "尾号排）。默认不显示；勾上两条也画。色标下方那行"
+                         "说明文字在面板标题栏的 [外观…] 里改。勾上立刻重画")
+    window.params["色标"] = scale_chk
+    form_cmp.addRow(scale_chk)
+    scale_chk.toggled.connect(lambda _on: _refresh_compare(window))
     # 这几个是**显示参数**：改了立刻重画对比面板，不需要 [应用]（用户
     # 2026-10-02 第 1 条"堆叠显示无效"的根因——它们住在「对比」页，而
     # [应用显示设置] 只在「原图」页，够不着）。照热图那组的老做法

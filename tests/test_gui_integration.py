@@ -1935,74 +1935,73 @@ class TestCurveColors(unittest.TestCase):
             self.assertTrue(_wait_until(lambda: len(ax.lines) >= n))
         return keys[0], ax
 
-    def test_color_scale_appears_above_the_legend_cap(self):
-        """色标（颜色 ↔ 数据顺序的读数条）：>12 条按默认「自动」画出来。
-
-        用户 2026-10-15："之前说的颜色变化代表从哪个数据到哪个数据，怎么
-        没落地"——颜色按文件栏顺序走是早有的**规则**（用户当天还指出旧文案
-        写"勾选顺序"不准确），但图上没有读数；平铺 >12 条又不画图例（名字
-        会糊）。短名两端 = 第一条/最末条；说明文字默认"颜色按文件栏顺序"。
-        """
+    def test_color_scale_is_a_toggle_default_off(self):
+        """「显示色标」= 朴素开关、默认不显示（用户 2026-10-15 晚："把这个
+        改为显示图例的选项，默认不显示"——上午的"自动 >12 才画"退休）。
+        勾上 → 画（条数不论），勾掉 → 不画。"""
         w = create_window()
         try:
+            chk = w.params["色标"]
+            self.assertFalse(chk.isChecked(), "默认不显示")
             n = gui_plot_compare.LEGEND_MAX_CURVES + 3      # 15 条
             key, ax = self._plot_compare_n(w, n)
-            arts = self._color_scale_artists(ax)
-            self.assertGreaterEqual(len(arts), 10, "色标图元该画出来")
-            texts = [t.get_text() for t in ax.texts
-                     if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
-            self.assertIn("颜色按文件栏顺序", texts, "默认说明文字")
-            self.assertNotIn("颜色按勾选顺序", texts, "旧措辞（不准确）已退休")
-            short = gui_plot_compare._short_labels(
-                [f"fake_{0:02d}.tif", f"fake_{n - 1:02d}.tif"], ax)
-            self.assertIn(short[0], texts, "下端 = 第一条的短名")
-            self.assertIn(short[-1], texts, "上端 = 最末条的短名")
+            self.assertEqual(self._color_scale_artists(ax), [], "默认不画")
+            chk.setChecked(True)                    # 即改即画（真控件路径）
+            self.assertTrue(self._color_scale_artists(ax), "勾上该画出来")
+            chk.setChecked(False)
+            self.assertEqual(self._color_scale_artists(ax), [], "勾掉不画")
         finally:
             w.close()
 
-    def test_color_scale_absent_at_or_below_the_legend_cap(self):
-        """≤12 条按默认「自动」不画色标：名字读图例，别多一块框挡图。"""
-        w = create_window()
-        try:
-            key, ax = self._plot_compare(w)      # 2 条
-            self.assertEqual(self._color_scale_artists(ax), [])
-        finally:
-            w.close()
-
-    def test_color_scale_modes_always_never_auto(self):
-        """「色标」三选（用户 2026-10-15："用户可选择是否作为图例放入图中"）：
-        auto 默认（>12 才画）、always 一直画、never 从不画；参数坞那把下拉
-        按 data 存 auto/always/never。"""
-        w = create_window()
-        try:
-            combo = w.params["色标"]
-            self.assertEqual([combo.itemData(i) for i in range(combo.count())],
-                             ["auto", "always", "never"])
-            self.assertEqual(combo.currentData(), "auto", "默认自动")
-            n = gui_plot_compare.LEGEND_MAX_CURVES + 3     # 15 条
-            key, ax = self._plot_compare_n(w, n)
-            dock = w.plot_docks[key]
-            self.assertTrue(self._color_scale_artists(ax), "auto：超上限该画")
-            dock.params_snapshot["色标"] = "never"
-            gui_plot_compare._redraw_compare(w, key)
-            self.assertEqual(self._color_scale_artists(ax), [], "never：不画")
-            dock.params_snapshot["色标"] = "always"
-            gui_plot_compare._redraw_compare(w, key)
-            self.assertTrue(self._color_scale_artists(ax), "always：画")
-        finally:
-            w.close()
-
-    def test_color_scale_always_shows_below_the_cap_too(self):
-        """「总是」：两三条也画（做论文图用），默认自动时这档是关的。"""
+    def test_color_scale_on_draws_for_any_count(self):
+        """开关打开时两条也画（做论文图用）；说明文字默认"颜色按文件名
+        尾号顺序"，两端短名 = 色号最小/最大的那条。"""
         w = create_window()
         try:
             key, ax = self._plot_compare(w)        # 2 条
-            self.assertEqual(self._color_scale_artists(ax), [],
-                             "默认自动：两条不画")
-            dock = w.plot_docks[key]
-            dock.params_snapshot["色标"] = "always"
-            gui_plot_compare._redraw_compare(w, key)
-            self.assertTrue(self._color_scale_artists(ax), "always：两条也画")
+            w.params["色标"].setChecked(True)
+            arts = self._color_scale_artists(ax)
+            self.assertGreaterEqual(len(arts), 10, "两条也该画")
+            texts = [t.get_text() for t in ax.texts
+                     if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
+            self.assertIn("颜色按文件名尾号顺序", texts, "默认说明文字")
+            short = gui_plot_compare._short_labels(
+                ["fake_a.tif", "fake_b.tif"], ax)
+            self.assertIn(short[0], texts, "下端 = 色号最小的短名")
+            self.assertIn(short[-1], texts, "上端 = 色号最大的短名")
+        finally:
+            w.close()
+
+    def test_color_order_follows_the_filename_number(self):
+        """颜色序号按**文件名尾号**排（用户 2026-10-15 晚："识别的不对，
+        应该是文件名最后几位数的顺序"）：勾选/文件栏顺序打乱也不影响谁
+        最深——尾号最小的拿最深色，色标下端/上端跟着它走。"""
+        w = create_window()
+        try:
+            paths = ["data/fake_20.tif", "data/fake_05.tif",
+                     "data/fake_11.tif"]   # 加的先后 ≠ 尾号顺序
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                add_checked(w, paths)
+                w.compare_btn.click()
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
+                ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+            by_label = {ln.get_label(): ln.get_color() for ln in ax.lines}
+            self.assertEqual(by_label["fake_05.tif"],
+                             gui_state._gradient_color("蓝", 0, 3),
+                             "尾号最小的拿最深色")
+            self.assertEqual(by_label["fake_11.tif"],
+                             gui_state._gradient_color("蓝", 1, 3))
+            self.assertEqual(by_label["fake_20.tif"],
+                             gui_state._gradient_color("蓝", 2, 3),
+                             "尾号最大的拿最浅色")
+            # 色标两端跟着色号走：下 = 05、上 = 20
+            w.params["色标"].setChecked(True)
+            texts = [t.get_text() for t in ax.texts
+                     if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
+            self.assertIn("05", texts, "下端 = 尾号最小的短名")
+            self.assertIn("20", texts, "上端 = 尾号最大的短名")
         finally:
             w.close()
 
@@ -2014,13 +2013,14 @@ class TestCurveColors(unittest.TestCase):
         try:
             n = gui_plot_compare.LEGEND_MAX_CURVES + 3     # 15 条
             key, ax = self._plot_compare_n(w, n)
+            w.params["色标"].setChecked(True)              # 说明要画出来才看得见
             dock = w.plot_docks[key]
             content = gui_panel_state._content(dock)
             dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
             edit = dlg.findChild(QLineEdit, "color_scale_note_edit")
             self.assertIsNotNone(edit, "对比面板应有「色标说明」输入框")
-            self.assertEqual(edit.text(), "颜色按文件栏顺序", "预填默认文案")
+            self.assertEqual(edit.text(), "颜色按文件名尾号顺序", "预填默认文案")
 
             def texts():
                 return [t.get_text() for t in ax.texts
@@ -2032,7 +2032,7 @@ class TestCurveColors(unittest.TestCase):
             self.assertEqual(dock.params_snapshot["色标说明"],
                              "第 1 条（下）到第 15 条（上）")
             self.assertIn("第 1 条（下）到第 15 条（上）", texts())
-            self.assertNotIn("颜色按文件栏顺序", texts())
+            self.assertNotIn("颜色按文件名尾号顺序", texts())
             # 清空 = 不画那行字；两端短名仍在（只剩 2 条文字）
             edit.setText("")
             gui_customize._apply_customize(w, dock, content.axes_1d,
@@ -2043,7 +2043,7 @@ class TestCurveColors(unittest.TestCase):
                              "只剩两端的短名")
             # [恢复默认] 把输入框带回默认文案
             gui_customize._reset_customize_fields(dock, dlg._fields)
-            self.assertEqual(edit.text(), "颜色按文件栏顺序")
+            self.assertEqual(edit.text(), "颜色按文件名尾号顺序")
         finally:
             w.close()
 

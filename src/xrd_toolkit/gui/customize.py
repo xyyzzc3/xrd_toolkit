@@ -203,13 +203,13 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         cur = _panel_param(window, dock, "渐变色系", "蓝")
         idx = family.findData(cur)
         family.setCurrentIndex(idx if idx >= 0 else 0)
-        family.setToolTip("对比曲线按文件栏顺序渐变：单色系由深到浅（第 1 条"
+        family.setToolTip("对比曲线按文件名尾号渐变：单色系由深到浅（第 1 条"
                           "最深、最后一条最浅）；彩虹是瀑布同款（深紫→黄），"
                           "不循环；论文色是 Okabe–Ito 八色（色盲友好），"
                           "超过八条每轮压暗一档")
         color_form.addRow("色系", family)
         # 色标说明（2026-10-15 用户："自行更改描述方式"，紧跟着"现在的
-        # 描述也不准确"——旧文案写"勾选顺序"，实际跟的是文件栏顺序）：
+        # 描述也不准确"——顺序口径当天晚些裁定为"文件名尾号"）：
         # 色标下方那行小字的文字，按图记进快照（同标题的机制），点
         # [应用] 才写回；清空 = 不画这行字（两端短名保留）。
         note = QLineEdit()
