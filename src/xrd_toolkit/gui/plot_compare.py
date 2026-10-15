@@ -51,7 +51,10 @@ def _strip_common(names) -> list:
     81 个 "LMFP_1_atten0-00029.tif" 里真正有信息的是 "00029"：共同前缀在
     纵轴上占掉半张图、还糊成一条黑带（用户 2026-09-26 的热图截图）。前缀
     在**最后一个非数字字符之后**切断，号段位数不丢；后缀（如 ".tif"）整段
-    剥掉。名字不足两个、或剥完会空则原样返回。
+    剥掉——**同样不许吃数字**（下面补的那道护栏；用户 2026-10-15 晚实测：
+    "00029.tif" 与 "00189.tif" 的公共尾巴是 "9.tif"，剥完变成 "0002"/
+    "0018"，色标两端、堆叠纵轴名与图例都受影响）。名字不足两个、或剥完
+    会空则原样返回。
     """
     if len(names) < 2:
         return list(names)
@@ -67,6 +70,14 @@ def _strip_common(names) -> list:
             n[len(prefix):len(prefix) + 1].isdigit() for n in names):
         out = [n[len(prefix):] for n in names]
     suffix = os.path.commonprefix([n[::-1] for n in out])[::-1]
+    # 后缀护栏（同前缀"切在分隔符处"的道理）：公共后缀若以数字打头，那
+    # 数字是各名字号段的尾巴（"…029.tif"/"…189.tif" 共享结尾 "9"），
+    # 剥掉就啃掉一位号段——截到第一个非数字为止，只留 ".tif" 这样的
+    # 真后缀。号段仍完整（"00029"/"00189"），重复尾号（29 与 29）也留得住。
+    i = 0
+    while i < len(suffix) and suffix[i].isdigit():
+        i += 1
+    suffix = suffix[i:]
     if len(suffix) >= MIN_SUFFIX_CHARS and all(len(n) > len(suffix)
                                                for n in out):
         out = [n[:-len(suffix)] for n in out]

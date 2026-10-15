@@ -7335,6 +7335,13 @@ class TestCompare(unittest.TestCase):
                          ["fake_a", "fake_b"])
         self.assertEqual(strip(["样品A", "样品B"]), ["样品A", "样品B"])
         self.assertEqual(strip(["只有一个"]), ["只有一个"])
+        # 公共后缀不许吃号段（2026-10-15 晚用户实测："00029/00189" 结尾
+        # 共享一个 "9"，剥后缀把号段啃掉一位、显示成 "0002/0018"）
+        self.assertEqual(
+            strip(["LMFP_1_atten0-00029.tif", "LMFP_1_atten0-00189.tif"]),
+            ["00029", "00189"])
+        self.assertEqual(strip(["a9.tif", "b9.tif"]), ["a9", "b9"],
+                         "只差前缀、同号段：号段保住")
 
     def test_compare_legend_hidden_when_too_many_curves(self):
         """勾了 [显示数据名]、但曲线超过 LEGEND_MAX_CURVES → 仍不画图例。
