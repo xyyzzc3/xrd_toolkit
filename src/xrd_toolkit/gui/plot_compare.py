@@ -135,7 +135,7 @@ COLOR_SCALE_TAG = "compare_color_scale"
 _COLOR_SCALE_STEPS = 32   # 渐变条画多少段（段间轻微重叠防白缝）
 
 
-def _draw_compare_color_scale(ax, family, names, caption, direction) -> None:
+def _draw_compare_color_scale(ax, family, names, caption, corner) -> None:
     """对比图的颜色刻度条：给"颜色跟数据对应"这条规则一个读数。
 
     用户 2026-10-15："之前说的颜色变化代表从哪个数据到哪个数据，
@@ -147,12 +147,12 @@ def _draw_compare_color_scale(ax, family, names, caption, direction) -> None:
 
     **顺序 = 文件名尾号**（用户当天晚些："识别的不对，应该是文件名最后
     几位数的顺序"；颜色分配见 _color_rank_by_number）——`names` 由调用
-    方**按色号排好**传进来（竖版最小值在下、横版最左；最大值在另一头）
-    。`caption` = 那行说明文字（默认"颜色按文件名尾号顺序"；在「外观…」
-    里改，空串 = 不画这行字）。`direction`（用户 2026-10-16："那一段话
-    可以选择横放竖放，还有色标也是，他两个保持一个方向最好"）：
-    "竖向"（默认）= 贴右缘的竖卡片、说明**竖排**（从下往上）；"横向" =
-    右下角的横卡片、说明横排——文字永远与色标条同方向。
+    方**按色号排好**传进来（最小值在左端、最大值在右端）。`caption` =
+    那行说明文字（默认"颜色按文件名尾号顺序"；在「外观…」里改，空串 =
+    不画这行字）。`corner`（用户 2026-10-16："实现色标仅保留横向以及
+    可以选择放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
+    卡片放图的哪个角，四选 "右下"（默认）/"左下"/"右上"/"左上"；未知值
+    兜底右下（老快照/手改文件不会把图弄坏）。
 
     画法：一个白底小框（框住曲线，与图例同理），里面一条**按当前色系
     按真实条数取样**的渐变条（彩虹=viridis 全段、单色系深→浅、经典色
@@ -165,20 +165,20 @@ def _draw_compare_color_scale(ax, family, names, caption, direction) -> None:
     n = len(names)
     if n < 2:
         return
+    if corner not in ("右下", "左下", "右上", "左上"):
+        corner = "右下"          # 未知值（老快照/手改文件）兜底默认角
     short = _short_labels([names[0], names[-1]], ax)
     first, last = short[0], short[-1]
     trans = ax.transAxes
-    horizontal = direction == "横向"
     # 全部位置用轴分数（0..1），数值都在对比图的数据范围之内，
     # 即便有意外也扩不到自动量程。尺寸按**开局面板**（5:3、约 400 px 宽）
-    # 估过：竖版框 0.225 ≈ 88 px，够"颜色按文件名尾号顺序"竖排；
-    # 横版框 0.40 ≈ 158 px（横排那行字约 80 px，两侧留空）
-    if horizontal:
-        box = (0.58, 0.28, 0.40, 0.19)     # 横版：右下角的横卡片
-        strip = (0.60, 0.405, 0.36, 0.045)
-    else:
-        box = (0.77, 0.30, 0.225, 0.55)    # 竖版：贴右缘的竖卡片
-        strip = (0.958, 0.42, 0.022, 0.37)
+    # 估过：横卡片 0.40 ≈ 158 px（横排那行字约 80 px，两侧留空）。
+    # 四角定位：左右边距 0.02、下边距 0.28（避开 x 轴刻度与轴名）、
+    # 上边距 0.02——卡片内部布局不随角落变，永远横版。
+    box_x = 0.58 if corner in ("右下", "右上") else 0.02
+    box_y = 0.28 if corner in ("右下", "左下") else 0.79
+    box = (box_x, box_y, 0.40, 0.19)
+    strip = (box_x + 0.02, box_y + 0.125, 0.36, 0.045)
     ax.add_patch(Rectangle((box[0], box[1]), box[2], box[3],
                            transform=trans, facecolor="white",
                            edgecolor="0.8", linewidth=0.5, zorder=4.8,
@@ -186,52 +186,28 @@ def _draw_compare_color_scale(ax, family, names, caption, direction) -> None:
     for k in range(_COLOR_SCALE_STEPS):
         t = int(round(k * (n - 1) / (_COLOR_SCALE_STEPS - 1)))
         color = _gradient_color(family, t, n)
-        if horizontal:
-            seg_w = strip[2] / _COLOR_SCALE_STEPS
-            ax.add_patch(Rectangle((strip[0] + k * seg_w, strip[1]),
-                                   seg_w + 0.001, strip[3],
-                                   transform=trans, facecolor=color,
-                                   edgecolor="none", zorder=5.0,
-                                   gid=COLOR_SCALE_TAG))
-        else:
-            seg_h = strip[3] / _COLOR_SCALE_STEPS
-            ax.add_patch(Rectangle((strip[0], strip[1] + k * seg_h),
-                                   strip[2], seg_h + 0.001,
-                                   transform=trans, facecolor=color,
-                                   edgecolor="none", zorder=5.0,
-                                   gid=COLOR_SCALE_TAG))
+        seg_w = strip[2] / _COLOR_SCALE_STEPS
+        ax.add_patch(Rectangle((strip[0] + k * seg_w, strip[1]),
+                               seg_w + 0.001, strip[3],
+                               transform=trans, facecolor=color,
+                               edgecolor="none", zorder=5.0,
+                               gid=COLOR_SCALE_TAG))
     ax.add_patch(Rectangle((strip[0], strip[1]), strip[2], strip[3],
                            transform=trans, facecolor="none",
                            edgecolor="0.6", linewidth=0.5, zorder=5.1,
                            gid=COLOR_SCALE_TAG))
-    if horizontal:
-        # 左端 = 色号最小（深）、右端 = 最大；说明文字横排在两端短名下面
-        # ——与色标**同方向**（用户 2026-10-16："他两个保持一个方向最好"）
-        ax.text(strip[0], strip[1] - 0.012, first, transform=trans,
-                ha="left", va="top", fontsize=6.5,
+    # 左端 = 色号最小（深）、右端 = 最大；说明文字横排在两端短名下面
+    ax.text(strip[0], strip[1] - 0.012, first, transform=trans,
+            ha="left", va="top", fontsize=6.5,
+            zorder=5.2, gid=COLOR_SCALE_TAG)
+    ax.text(strip[0] + strip[2], strip[1] - 0.012, last, transform=trans,
+            ha="right", va="top", fontsize=6.5,
+            zorder=5.2, gid=COLOR_SCALE_TAG)
+    if caption:
+        ax.text(box[0] + box[2] / 2, box[1] + 0.03, caption,
+                transform=trans,
+                ha="center", va="bottom", fontsize=6.5, color="0.25",
                 zorder=5.2, gid=COLOR_SCALE_TAG)
-        ax.text(strip[0] + strip[2], strip[1] - 0.012, last, transform=trans,
-                ha="right", va="top", fontsize=6.5,
-                zorder=5.2, gid=COLOR_SCALE_TAG)
-        if caption:
-            ax.text(box[0] + box[2] / 2, box[1] + 0.03, caption,
-                    transform=trans,
-                    ha="center", va="bottom", fontsize=6.5, color="0.25",
-                    zorder=5.2, gid=COLOR_SCALE_TAG)
-    else:
-        # 下 = 色号最小（深）、上 = 最大；说明文字**竖排**（rotation=90，
-        # 从下往上读）放在两端短名左侧的空档里——与竖条同方向（同上）
-        ax.text(strip[0] - 0.008, strip[1], first, transform=trans,
-                ha="right", va="center", fontsize=6.5,
-                zorder=5.2, gid=COLOR_SCALE_TAG)
-        ax.text(strip[0] - 0.008, strip[1] + strip[3], last, transform=trans,
-                ha="right", va="center", fontsize=6.5,
-                zorder=5.2, gid=COLOR_SCALE_TAG)
-        if caption:
-            ax.text(0.895, strip[1] + strip[3] / 2, caption, transform=trans,
-                    ha="center", va="center", rotation=90, rotation_mode="anchor",
-                    fontsize=6.5, color="0.25",
-                    zorder=5.2, gid=COLOR_SCALE_TAG)
 
 
 def _trailing_key(source) -> tuple:
@@ -434,8 +410,8 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 [ln.get_label() for ln in _data_lines(ax)])
         # 色标（颜色 ↔ 数据顺序的读数条）：朴素开关（用户 2026-10-15 晚：
         # "把这个改为显示图例的选项，默认不显示"），参数坞「显示色标」
-        # 勾选；说明文字在「外观…」里改。端点顺序 = 颜色序号（文件名尾号）
-        # ——与颜色实际怎么分同一个口径
+        # 勾选；说明文字与位置（放哪个角）在「外观…」里改。端点顺序 =
+        # 颜色序号（文件名尾号）——与颜色实际怎么分同一个口径
         if (len(curves) >= 2
                 and bool(_panel_param(window, dock, "色标", False))):
             ordered = sorted(curves, key=lambda c: rank.get(c[3], c[3]))
@@ -443,8 +419,8 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 ax, family, [c[2] for c in ordered],
                 str(_panel_param(window, dock, "色标说明",
                                  _DISPLAY_DEFAULTS["色标说明"]) or ""),
-                str(_panel_param(window, dock, "色标方向",
-                                 _DISPLAY_DEFAULTS["色标方向"])))
+                str(_panel_param(window, dock, "色标位置",
+                                 _DISPLAY_DEFAULTS["色标位置"])))
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:

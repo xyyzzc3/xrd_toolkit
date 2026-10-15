@@ -1967,15 +1967,15 @@ class TestCurveColors(unittest.TestCase):
             self.assertIn("颜色按文件名尾号顺序", texts, "默认说明文字")
             short = gui_plot_compare._short_labels(
                 ["fake_a.tif", "fake_b.tif"], ax)
-            self.assertIn(short[0], texts, "下端 = 色号最小的短名")
-            self.assertIn(short[-1], texts, "上端 = 色号最大的短名")
+            self.assertIn(short[0], texts, "左端 = 色号最小的短名")
+            self.assertIn(short[-1], texts, "右端 = 色号最大的短名")
         finally:
             w.close()
 
     def test_color_order_follows_the_filename_number(self):
         """颜色序号按**文件名尾号**排（用户 2026-10-15 晚："识别的不对，
         应该是文件名最后几位数的顺序"）：勾选/文件栏顺序打乱也不影响谁
-        最深——尾号最小的拿最深色，色标下端/上端跟着它走。"""
+        最深——尾号最小的拿最深色，色标左端/右端跟着它走。"""
         w = create_window()
         try:
             paths = ["data/fake_20.tif", "data/fake_05.tif",
@@ -1996,12 +1996,15 @@ class TestCurveColors(unittest.TestCase):
             self.assertEqual(by_label["fake_20.tif"],
                              gui_state._gradient_color("蓝", 2, 3),
                              "尾号最大的拿最浅色")
-            # 色标两端跟着色号走：下 = 05、上 = 20
+            # 色标两端跟着色号走：左 = 05、右 = 20
             w.params["色标"].setChecked(True)
-            texts = [t.get_text() for t in ax.texts
-                     if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
-            self.assertIn("05", texts, "下端 = 尾号最小的短名")
-            self.assertIn("20", texts, "上端 = 尾号最大的短名")
+            by_text = {t.get_text(): t for t in ax.texts
+                       if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG}
+            self.assertIn("05", by_text, "左端 = 尾号最小的短名")
+            self.assertIn("20", by_text, "右端 = 尾号最大的短名")
+            self.assertLess(by_text["05"].get_position()[0],
+                            by_text["20"].get_position()[0],
+                            "05 在左、20 在右")
         finally:
             w.close()
 
@@ -2026,12 +2029,12 @@ class TestCurveColors(unittest.TestCase):
                 return [t.get_text() for t in ax.texts
                         if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
 
-            edit.setText("第 1 条（下）到第 15 条（上）")
+            edit.setText("第 1 条（左）到第 15 条（右）")
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
             self.assertEqual(dock.params_snapshot["色标说明"],
-                             "第 1 条（下）到第 15 条（上）")
-            self.assertIn("第 1 条（下）到第 15 条（上）", texts())
+                             "第 1 条（左）到第 15 条（右）")
+            self.assertIn("第 1 条（左）到第 15 条（右）", texts())
             self.assertNotIn("颜色按文件名尾号顺序", texts())
             # 清空 = 不画那行字；两端短名仍在（只剩 2 条文字）
             edit.setText("")
@@ -2047,11 +2050,11 @@ class TestCurveColors(unittest.TestCase):
         finally:
             w.close()
 
-    def test_color_scale_direction_matches_the_caption(self):
-        """色标方向二选（用户 2026-10-16："显示色标的那一段话可以选择
-        横放竖放，还有色标也是，他两个保持一个方向最好"）：默认竖向 =
-        说明文字**竖排**（rotation 90，与竖条同方向）；在 [外观…] 里选
-        横向 → 说明横排（rotation 0）；[恢复默认] 回竖向。"""
+    def test_color_scale_corner_editable_via_customize(self):
+        """色标位置四选（用户 2026-10-16："实现色标仅保留横向以及可以选择
+        放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
+        默认右下角；在 [外观…] 里选"左上" → 卡片整块挪到左上角，说明
+        文字永远横排（rotation 0）；[恢复默认] 回右下。"""
         w = create_window()
         try:
             n = gui_plot_compare.LEGEND_MAX_CURVES + 3
@@ -2060,26 +2063,38 @@ class TestCurveColors(unittest.TestCase):
             dock = w.plot_docks[key]
             content = gui_panel_state._content(dock)
 
-            def caption_rot():
+            def card_xy():
+                for a in self._color_scale_artists(ax):
+                    fc = getattr(a, "get_facecolor", None)
+                    if fc is not None and tuple(fc()) == (1.0, 1.0, 1.0, 1.0):
+                        return tuple(a.get_xy())
+                return None
+
+            def caption():
                 for t in ax.texts:
                     if (t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG
                             and t.get_text() == "颜色按文件名尾号顺序"):
-                        return t.get_rotation()
+                        return t
                 return None
 
-            self.assertEqual(caption_rot(), 90, "默认竖向：说明竖排")
+            self.assertEqual(card_xy(), (0.58, 0.28), "默认右下角")
+            self.assertEqual(caption().get_rotation(), 0, "永远横排")
             dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
-            dir_combo = dlg.findChild(QComboBox, "color_scale_dir_combo")
-            self.assertIsNotNone(dir_combo, "对比面板应有「色标方向」下拉")
-            self.assertEqual(dir_combo.currentData(), "竖向", "预填当前方向")
-            dir_combo.setCurrentIndex(dir_combo.findData("横向"))
+            pos_combo = dlg.findChild(QComboBox, "color_scale_pos_combo")
+            self.assertIsNotNone(pos_combo, "对比面板应有「色标位置」下拉")
+            self.assertEqual(pos_combo.currentData(), "右下", "预填当前位置")
+            pos_combo.setCurrentIndex(pos_combo.findData("左上"))
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
-            self.assertEqual(dock.params_snapshot["色标方向"], "横向")
-            self.assertEqual(caption_rot(), 0, "横向：说明横排（同方向）")
+            self.assertEqual(dock.params_snapshot["色标位置"], "左上")
+            self.assertEqual(card_xy(), (0.02, 0.79), "卡片整块挪到左上角")
+            self.assertAlmostEqual(caption().get_position()[0], 0.22,
+                                   places=6, msg="说明文字跟着卡片走")
+            self.assertEqual(caption().get_rotation(), 0, "仍横排")
             gui_customize._reset_customize_fields(dock, dlg._fields)
-            self.assertEqual(dir_combo.currentData(), "竖向", "[恢复默认] 回竖向")
+            self.assertEqual(pos_combo.currentData(), "右下",
+                             "[恢复默认] 回右下")
         finally:
             w.close()
 

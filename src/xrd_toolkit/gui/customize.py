@@ -191,7 +191,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     view = dock.panel_key.split("|", 1)[0]
     family = None
     scale_note = None
-    scale_dir = None
+    scale_pos = None
     if view == "对比" and getattr(dock, "compare_files", None):
         color_box = QGroupBox("渐变色系")
         color_form = QFormLayout(color_box)
@@ -221,22 +221,22 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
                         "（两端的短名保留）")
         color_form.addRow("色标说明", note)
         scale_note = note
-        # 色标方向（2026-10-16 用户："那一段话可以选择横放竖放，还有
-        # 色标也是，他两个保持一个方向最好"）：色标条与说明文字一起
-        # 横/竖——一个选择管两个，省得方向打架。
-        direction = QComboBox()
-        direction.setObjectName("color_scale_dir_combo")
-        for label, value in (("竖向（贴右缘，文字竖排）", "竖向"),
-                             ("横向（右下角，文字横排）", "横向")):
-            direction.addItem(label, value)
-        cur_dir = _panel_param(window, dock, "色标方向",
-                               _DISPLAY_DEFAULTS["色标方向"])
-        didx = direction.findData(cur_dir)
-        direction.setCurrentIndex(didx if didx >= 0 else 0)
-        direction.setToolTip("色标条和那行说明文字一起换方向（两者永远"
-                             "同向）；默认竖向")
-        color_form.addRow("色标方向", direction)
-        scale_dir = direction
+        # 色标位置（2026-10-16 用户："实现色标仅保留横向以及可以选择
+        # 放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
+        # 卡片放图的哪个角，四选，默认右下。
+        corner = QComboBox()
+        corner.setObjectName("color_scale_pos_combo")
+        for label, value in (("右下（默认）", "右下"), ("左下", "左下"),
+                             ("右上", "右上"), ("左上", "左上")):
+            corner.addItem(label, value)
+        cur_pos = _panel_param(window, dock, "色标位置",
+                               _DISPLAY_DEFAULTS["色标位置"])
+        pidx = corner.findData(cur_pos)
+        corner.setCurrentIndex(pidx if pidx >= 0 else 0)
+        corner.setToolTip("色标卡片放在图的哪个角落（固定横版）；"
+                          "默认右下")
+        color_form.addRow("色标位置", corner)
+        scale_pos = corner
         body_lay.addWidget(color_box)
 
     btn_row = QHBoxLayout()
@@ -261,8 +261,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         dlg._fields["family"] = family
     if scale_note is not None:
         dlg._fields["scale_note"] = scale_note
-    if scale_dir is not None:
-        dlg._fields["scale_dir"] = scale_dir
+    if scale_pos is not None:
+        dlg._fields["scale_pos"] = scale_pos
     return dlg
 
 
@@ -281,10 +281,10 @@ def _reset_customize_fields(dock, fields) -> None:
         fields[name].setValue(value)
     if "scale_note" in fields:      # 对比面板才有（色标说明）
         fields["scale_note"].setText(_DISPLAY_DEFAULTS["色标说明"])
-    if "scale_dir" in fields:       # 对比面板才有（色标方向）
-        idx = fields["scale_dir"].findData(_DISPLAY_DEFAULTS["色标方向"])
+    if "scale_pos" in fields:       # 对比面板才有（色标位置）
+        idx = fields["scale_pos"].findData(_DISPLAY_DEFAULTS["色标位置"])
         if idx >= 0:
-            fields["scale_dir"].setCurrentIndex(idx)
+            fields["scale_pos"].setCurrentIndex(idx)
 
 
 def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
@@ -319,9 +319,9 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
             _draw_2d(window, dock, image)
     fam_box = f.get("family")
     note_edit = f.get("scale_note")
-    dir_box = f.get("scale_dir")
-    if fam_box is not None or note_edit is not None or dir_box is not None:
-        # 渐变色系 + 色标说明 + 色标方向：点 [应用] 才写进**面板快照**
+    pos_box = f.get("scale_pos")
+    if fam_box is not None or note_edit is not None or pos_box is not None:
+        # 渐变色系 + 色标说明 + 色标位置：点 [应用] 才写进**面板快照**
         # （每张图各记各的），任一变了整图重画一次（_redraw_compare 自带
         # 重画与记账；惰性导入防模块环——plot_views 反向 import 本模块）。
         # 色标说明空串 = 不画那行字（两端短名保留），照写。
@@ -352,11 +352,11 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
                                     _DISPLAY_DEFAULTS["色标说明"]):
                 dock.params_snapshot["色标说明"] = note
                 changed = True
-        if dir_box is not None:
-            direction = dir_box.currentData()
-            if direction and direction != _panel_param(
-                    window, dock, "色标方向", _DISPLAY_DEFAULTS["色标方向"]):
-                dock.params_snapshot["色标方向"] = direction
+        if pos_box is not None:
+            corner_val = pos_box.currentData()
+            if corner_val and corner_val != _panel_param(
+                    window, dock, "色标位置", _DISPLAY_DEFAULTS["色标位置"]):
+                dock.params_snapshot["色标位置"] = corner_val
                 changed = True
         if changed:
             from xrd_toolkit.gui.plot_compare import _redraw_compare
