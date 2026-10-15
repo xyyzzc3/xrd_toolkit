@@ -1919,6 +1919,50 @@ class TestCurveColors(unittest.TestCase):
         finally:
             w.close()
 
+    def _color_scale_artists(self, ax):
+        tag = gui_plot_compare.COLOR_SCALE_TAG
+        return [a for a in ax.get_children() if a.get_gid() == tag]
+
+    def test_color_scale_appears_above_the_legend_cap(self):
+        """色标（颜色 ↔ 数据顺序的读数条）：>12 条自动画出来。
+
+        用户 2026-10-15："之前说的颜色变化代表从哪个数据到哪个数据，怎么
+        没落地"——颜色按勾选顺序走是早有的**规则**，但图上没有读数；平铺
+        >12 条又不画图例（名字会糊）。拍板"甲"：与图例同一道界线，小批看
+        名字、大批看色标。短名两端 = 第一条/最末条。
+        """
+        w = create_window()
+        try:
+            n = gui_plot_compare.LEGEND_MAX_CURVES + 3      # 15 条
+            paths = [f"data/fake_{i:02d}.tif" for i in range(n)]
+            with mock.patch.object(gui_views, "_compute_integration",
+                                   side_effect=_fake_compare_compute):
+                add_checked(w, paths)
+                w.compare_btn.click()
+                keys = [k for k in w.plot_docks if k.startswith("对比")]
+                ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+                self.assertTrue(_wait_until(lambda: len(ax.lines) >= n))
+            arts = self._color_scale_artists(ax)
+            self.assertGreaterEqual(len(arts), 10, "色标图元该画出来")
+            texts = [t.get_text() for t in ax.texts
+                     if t.get_gid() == gui_plot_compare.COLOR_SCALE_TAG]
+            self.assertIn("颜色按勾选顺序", texts)
+            short = gui_plot_compare._short_labels(
+                [f"fake_{0:02d}.tif", f"fake_{n - 1:02d}.tif"], ax)
+            self.assertIn(short[0], texts, "下端 = 第一条的短名")
+            self.assertIn(short[-1], texts, "上端 = 最末条的短名")
+        finally:
+            w.close()
+
+    def test_color_scale_absent_at_or_below_the_legend_cap(self):
+        """≤12 条不画色标：名字读图例，别多一块框挡图。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)      # 2 条
+            self.assertEqual(self._color_scale_artists(ax), [])
+        finally:
+            w.close()
+
     def test_compare_family_survives_param_change(self):
         """「外观」选的色系，之后改别的显示参数不被参数坞下拉的旧值打回默认。
 
@@ -13911,6 +13955,41 @@ class TestBatchProgress(unittest.TestCase):
             for p in paths[2:]:
                 self.assertTrue(stage_cache.has_1d(Path(p), **kw),
                                 f"超限的 {Path(p).name} 该已算完入库")
+        finally:
+            w.close()
+
+    def test_over_cap_batch_fully_cached_still_has_a_closing(self):
+        """超限 + 产物全在（对比刚算完/上一轮刚算过）→ 点 [1D] 也要有下文：
+        刷新文件栏（产物进栏 + "出现 N 条新产物"一行）+ 一句收尾说明。
+
+        用户 2026-10-15："导入原始数据后，直接进行对比出图，然后再点击
+        1d 出图，就会卡住"——复现实测主线程没卡（看门狗 8 s 阈值没留档），
+        是这条**全缓存静默路**：0 个任务 → 没有进度条、也没有批收尾
+        （完成行与文件栏刷新都挂在批收尾上）、「1D 产物」不进文件栏，
+        看着就像死机（用户当天因此强退过两次）。
+        """
+        w = create_window()
+        try:
+            n = gui_views.MAX_PANELS_PER_BATCH + 2      # 27 张 > 上限 25
+            paths = _tmp_files(n, prefix="cap_")
+            add_checked(w, [str(p) for p in paths])
+            for p in paths:
+                _store_product(w, p)      # 结果都在（等价：对比/上一轮刚算完）
+            w._products_seen = set()      # 基线清零：这 27 条都算"新产物"
+            _open_view(w, "1D")
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("超过一次最多画的 25 张", log, "防爆线那行照旧在")
+            self.assertIn("都已经算好", log, "全缓存也要有收尾说明")
+            # 不断死数：缓存目录是整个测试模块共用的，别的用例留下的
+            # 产物也会被算成"新产物"（只认这行的机制发生过）
+            self.assertIn("文件栏出现 ", log, "产物要进文件栏")
+            self.assertEqual(
+                sorted(k for k in w.plot_docks if k.startswith("1D|")), [],
+                "超上限一张都不弹")
+            group = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(group, "「1D 产物」组该在文件栏里")
+            self.assertGreaterEqual(group.childCount(), n)
         finally:
             w.close()
 

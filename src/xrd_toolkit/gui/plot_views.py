@@ -2534,3 +2534,19 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             window._batch["deferred"] = list(deferred)
         else:
             _reload_deferred(window, name, deferred)
+    if name == "1D" and rest and not pending:
+        # 超限 + 产物全都在（刚做过对比、或上一轮 1D 刚算完，缓存全热）：
+        # 0 个任务 → 没有进度条、也不会有批收尾（_batch_step 的完成行与
+        # 文件栏刷新都挂在那上面）——不在这儿收尾，点 [1D] 就是"什么都
+        # 不发生"：日志只有上面那行防爆线提示、产物也不进文件栏。用户
+        # 2026-10-15 现场："导入原始数据后，直接进行对比出图，然后再点
+        # 击 1d 出图，就会卡住"——复现实测主线程没卡（看门狗 8 s 阈值
+        # 没留档），就是这条全缓存静默路。这里补一次与批正常走完同一个
+        # 出口的收尾：刷新文件栏（"文件栏出现 N 条新产物"由它写）+ 明说
+        # 一句，让这一次点击有下文。
+        window.refresh_groups()
+        _log(window, f"这 {len(rest)} 张的 1D 结果都已经算好（复用缓存，"
+                     "本次无需重算）——产物就在文件栏「1D 产物」：双击看"
+                     "一张；想一次开多张：勾上要看的产物 → 右键 →「打开"
+                     "勾选的 N 张图」→ 1D")
+        return
