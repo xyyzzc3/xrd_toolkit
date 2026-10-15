@@ -1258,6 +1258,11 @@ def _enter_calib(window: QMainWindow) -> None:
     # （[校准] 的 toggled 先于 clicked 触发，所以不能指望入口那边先
     # 露坞——2026-09-26 实测：以前量出来 327 px，远没到该有的宽度）
     window.param_dock.setVisible(True)
+    # 进校准露坞同理记意图（见 app._switch_entrance 的同款记账）：不记的话
+    # 意图还停在开局的 False，窗口状态一变（全屏/最小化恢复）就会被
+    # _resync_docks 收回去
+    if hasattr(window, "_dock_intent"):
+        window._dock_intent["参数"] = True
     # 出口按钮（坞顶那一行）：本模式的显式退出口，进来就亮出来。
     # 放在"没勾文件"的提前返回之前——没文件也要能退出去
     window.calib_exit_btn.setVisible(True)

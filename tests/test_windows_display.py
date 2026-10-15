@@ -120,6 +120,45 @@ class TestAppIconAndDockResync(unittest.TestCase):
             w.hide()
             w.close()
 
+    def test_window_state_change_keeps_the_param_dock(self):
+        """窗口状态一变（进全屏）不许把入口露出的参数坞收走。
+
+        用户 2026-10-16："全屏会导致参数栏隐藏"——[1D] 等入口是程序
+        setVisible(True) 露的坞、此前没记进 _dock_intent（一直是开局那个
+        False），而 changeEvent 对"任何非最小化的状态变化"都对一次显隐，
+        进全屏就把坞收回去。修法两层：入口/退出/校准三处显隐都记账 +
+        changeEvent 收窄成真的"最小化 → 恢复"那一步（见其 docstring）。
+        """
+        from PySide6.QtGui import QWindowStateChangeEvent
+        app = QApplication.instance() or QApplication([])
+        w = gui_app.create_window()
+        try:
+            w.entrance_buttons["1D"].click()       # 入口按钮：露出参数坞
+            self.assertTrue(w.param_dock.isVisibleTo(w), "入口该露出坞")
+            # 进全屏 = 一次 WindowStateChange（不最小化）。offscreen 里
+            # 真换状态不现实，直接构造事件走 changeEvent
+            w.changeEvent(QWindowStateChangeEvent(w.windowState()))
+            self.assertTrue(w.param_dock.isVisibleTo(w),
+                            "状态变化（全屏）不该把坞收走")
+            # 最小化 → 恢复那一步照旧要"对一次"（2026-10-04 的 Windows 防御）
+            w.param_dock.setVisible(False)         # 模拟系统把它藏了
+            w._was_minimized = True                # 上一步是最小化
+            w.changeEvent(QWindowStateChangeEvent(w.windowState()))
+            self.assertTrue(w.param_dock.isVisibleTo(w),
+                            "最小化恢复：按意图把坞找回来")
+            # 退出入口（再点一次 [1D]）= 用户意图收起：收拾干净
+            w.entrance_buttons["1D"].click()
+            self.assertFalse(w.param_dock.isVisibleTo(w), "再点一次该收起")
+            self.assertFalse(w._dock_intent["参数"], "收起要记成意图")
+            w.param_dock.setVisible(False)
+            w._was_minimized = True
+            w.changeEvent(QWindowStateChangeEvent(w.windowState()))
+            self.assertFalse(w.param_dock.isVisibleTo(w),
+                             "用户收起的坞不许被'修复'顶回来")
+        finally:
+            w.hide()
+            w.close()
+
 
 class TestIconShipsInBundle(unittest.TestCase):
     def test_spec_ships_icon_png(self):

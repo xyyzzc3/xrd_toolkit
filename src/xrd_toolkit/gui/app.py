@@ -152,13 +152,24 @@ class _MainWindow(QMainWindow):
     """
 
     def changeEvent(self, event):                 # noqa: N802（Qt 命名）
-        """从最小化/显示桌面回来的那次状态变化：对一次三个坞的显隐。
+        """从最小化/显示桌面回来（"最小化 → 恢复"）的那一步：对一次三个
+        坞的显隐（背景见 _resync_docks）。
 
-        背景见 _resync_docks；只在"不再是最小化"时动手，别的状态变化
-        一律放行（幂等，正常路径零影响）。
+        **只在真的"最小化 → 不最小化"那一步动手**：2026-10-04 写这版时
+        条件写成了"任何状态变化、只要当前不是最小化"，于是进/出 macOS
+        全屏（也是 WindowStateChange、也不最小化）会顺带对一次显隐
+        （用户 2026-10-16："全屏会导致参数栏隐藏"——坞是入口按钮露出来的、
+        当时意图没记上，一对就被收起）。现在按 docstring 的原意收窄成
+        最小化恢复的那一步；意图记账同时补齐（见 _switch_entrance /
+        _clear_entrance / calib._enter_calib），两层都不再漏。
         """
         super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange and not self.isMinimized():
+        if event.type() != QEvent.WindowStateChange:
+            return
+        now = self.isMinimized()
+        was = getattr(self, "_was_minimized", False)
+        self._was_minimized = now
+        if was and not now:
             _resync_docks(self)
 
     def __init__(self):
@@ -2015,6 +2026,11 @@ def _resync_docks(window: QMainWindow) -> None:
     按钮会跟着取消勾选——按按钮恢复等于"恢复成不显示"（写这版时测试
     当场逮到）。所以意图只在用户**真点击**按钮时记录（clicked 信号；
     setChecked 不触发它），系统把坞藏了也改不动它。
+
+    **程序自己按用户动作显隐坞的三处也记账**（2026-10-16 补：入口选了
+    曝坞、退出入口收坞、进校准曝坞——此前只有按钮点击记，入口露出来的
+    坞意图一直是开局那个 False，一对显隐就被收走），见 _switch_entrance /
+    _clear_entrance / calib._enter_calib。
     """
     for name, dock in (("文件", window.file_dock),
                        ("参数", window.param_dock),
@@ -2224,6 +2240,10 @@ def _clear_entrance(window: QMainWindow) -> None:
     # 而不是上一次停在的校准页（页号唯一来源就在入口切换这一处）
     window.param_stack.setCurrentIndex(window.PARAM_PAGES["1D"])
     window.param_dock.setVisible(False)
+    # 收起是**用户意图**（退出入口）：记进意图表，_resync_docks 才不会
+    # 在下一步（最小化恢复）把它顶回来（见 _switch_entrance 的同款记账）
+    if hasattr(window, "_dock_intent"):
+        window._dock_intent["参数"] = False
 
 
 def _sync_geom_row(window: QMainWindow) -> None:
@@ -2310,6 +2330,10 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
         _log(window, f"{_exit_text(name)}（收起参数面板；[参数] 按钮可以再展开）")
         return
     window.param_dock.setVisible(True)
+    # 入口"露坞"也是**用户意图**（选到谁看谁的参数）：记进意图表——不记
+    # 的话它一直是开局那个 False，_resync_docks 一跑（用户 2026-10-16：
+    # 进全屏）就把坞收回去（当年那条件宽、全屏也算"状态变化"）
+    window._dock_intent["参数"] = True
     if name != "校准":
         window._last_entrance = name
     if name == "校准":
