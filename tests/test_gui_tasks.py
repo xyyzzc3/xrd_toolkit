@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from PySide6.QtWidgets import QApplication
 
-from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 
 _app = QApplication.instance() or QApplication([])
 
@@ -87,6 +87,41 @@ class TestBackgroundTask(unittest.TestCase):
         self.assertIn("发给开发者", text)
         self.assertFalse(text.startswith("KeyError"), "不许裸异常打头")
         self.assertTrue(_wait_until(task.is_done))
+
+    def test_environment_errors_get_a_human_hint(self):
+        """常见环境类错误（读文件被系统拦、文件没了、内存不够、图片损坏…）
+        也带一句人话（用户 2026-10-15："加上。别的报错最好也加"——当天桌面
+        数据被 macOS 拦读，四条裸 "PermissionError: [Errno 1] Operation not
+        permitted" 让人以为数据坏了）：解释在最前、原文保留在括号里。"""
+        cases = [
+            (PermissionError(1, "Operation not permitted", "/x/y.tif"),
+             "被系统拦住了读取"),
+            (PermissionError(13, "Permission denied", "/x/y.tif"),
+             "没有访问权限"),
+            (FileNotFoundError(2, "No such file or directory", "/x/y.tif"),
+             "文件不在了"),
+            (IsADirectoryError(21, "Is a directory", "/x"),
+             "这是个文件夹"),
+            (MemoryError(), "内存不够"),
+            (OSError(28, "No space left on device"), "磁盘空间不够"),
+        ]
+        for exc, want in cases:
+            text = user_error_text(exc)
+            detail = (f"{type(exc).__name__}: {exc}" if str(exc)
+                      else type(exc).__name__)   # 空消息不带冒号（同出口的写法）
+            self.assertIn(want, text, f"{type(exc).__name__} 该带人话解释")
+            self.assertIn(detail, text, "原文保留在括号里，可复制反馈")
+            self.assertFalse(text.startswith(type(exc).__name__),
+                             "不许裸异常打头（解释在最前）")
+        # 图片读取库的异常按类名匹配（不 import 它们）
+        class FabioError(RuntimeError):
+            pass
+        text = user_error_text(FabioError("unknown format"))
+        self.assertIn("读不出这张图", text)
+        self.assertIn("FabioError: unknown format", text)
+        # 未收录的异常照旧原样（类型名给开发者定位）
+        self.assertEqual(user_error_text(ValueError("test boom")),
+                         "ValueError: test boom")
 
     def test_arguments_passed_through(self):
         results = []

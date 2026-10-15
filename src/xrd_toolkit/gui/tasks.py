@@ -26,6 +26,7 @@ Qt 对象要在**工作线程**里回调进 Python（shiboken 要 GIL）；主�
   - 结果经信号送回主线程，回调在主线程执行，可以安全更新界面。
 """
 import atexit
+import errno
 import threading
 
 from PySide6.QtCore import (QMetaObject, QObject, QThread, Qt, Signal, Slot)
@@ -113,10 +114,20 @@ atexit.register(_shutdown_pool)
 #     "不是你操作的问题"，异常类型与原文留在括号里（方便复制反馈）；
 #   * 其余异常（读文件失败、我们写给用户的规则提示）→ 原样"类型: 消息"，
 #     类型名是给开发者定位用的。
+# 2026-10-15 加第三类（用户："加上。别的报错最好也加"；当天真事：桌面上
+# 的数据被 macOS 拦读，四条裸 "PermissionError: [Errno 1] Operation not
+# permitted" 让人以为数据坏了）：常见**环境类**错误（见 _env_error_hint）
+# 配一句人话解释 + 一句短对策，格式 `解释；对策（类型: 原文）`——原文仍在
+# 括号里供复制反馈。这类错误的"怎么办"与出现场景无关（文件没了就是没了），
+# 所以放在这里而不是由调用方续写。
 # 所有用户可见的报错都从这里出口——改措辞只改这里，别各写各的。
 _INTERNAL_BUGS = (KeyError, AttributeError, TypeError, NameError,
                   UnboundLocalError, ImportError, IndexError,
                   ZeroDivisionError, AssertionError)
+
+# 图片读取库的异常按**类名**匹配（fabio 为底，可能包 tifffile/PIL 的异常）：
+# 不 import 它们（本模块保持轻依赖），名字对上就给"图片读不出来"那句。
+_IMAGE_READ_ERRORS = ("FabioError", "TiffFileError", "UnidentifiedImageError")
 
 
 def is_internal_bug(exc) -> bool:
@@ -124,11 +135,53 @@ def is_internal_bug(exc) -> bool:
     return isinstance(exc, _INTERNAL_BUGS)
 
 
+def _env_error_hint(exc):
+    """常见"环境类"错误 → 一句人话（没有匹配 → None）。
+
+    覆盖的是用户真会遇到、且光看异常名看不懂的几类：系统拦读（macOS 的
+    保护文件夹/iCloud 同步，2026-10-15 用户现场）、文件不在了、图片损坏、
+    内存/磁盘不够、配置文件读坏。每条 = 解释 + 短对策，措辞对着
+    docs/UI_COPY.zh-CN.md §4.6 的规矩（全角标点、中文人话）。
+    """
+    if isinstance(exc, PermissionError):
+        if exc.errno == errno.EPERM:
+            # macOS 的 TCC（桌面/文稿保护）与 iCloud 未下载文件都用这个码
+            return ("这个文件被系统拦住了读取（常见于桌面等受保护文件夹、或文件"
+                    "还没从 iCloud 下载完，不是数据或程序的问题）；等它下载完、"
+                    "或把数据移出桌面再试")
+        return ("这个文件没有访问权限（不是数据或程序的问题）；检查权限"
+                "（访达 显示简介 → 共享与权限），或换个位置再试")
+    if isinstance(exc, FileNotFoundError):
+        return "文件不在了（可能被移动、改名或删除）；确认文件还在，重新导入再试"
+    if isinstance(exc, IsADirectoryError):
+        return "这是个文件夹，不是文件；换一个文件再试"
+    if isinstance(exc, MemoryError):
+        return "内存不够了；先关掉一些别的程序，或分批处理"
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return "磁盘空间不够；清理一些空间再试"
+    name = type(exc).__name__
+    if name in _IMAGE_READ_ERRORS:
+        return ("读不出这张图（文件可能损坏、没下载完，或不是支持的格式"
+                " edf/tif/cbf）；换一张或确认文件完整再试")
+    if name == "JSONDecodeError":
+        return "配置文件读不出来（内容损坏或不是合法 JSON）；删掉这个文件或恢复默认设置再试"
+    return None
+
+
 def user_error_text(exc) -> str:
-    """异常 → 给用户看的报错诊断句（不含"怎么办"，怎么办由调用方按场景续写）。"""
+    """异常 → 给用户看的报错诊断句。
+
+    三类（见上面模块注释）：内部 bug → "程序内部出错（…，不是你操作的问题）"；
+    环境类（_env_error_hint 命中）→ "解释；对策（类型: 原文）"；其余 →
+    原样"类型: 消息"（类型名给开发者定位）。内部 bug 的"下一步"仍由
+    _task_error_text 按任务场景续写。
+    """
     detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
     if is_internal_bug(exc):
         return f"程序内部出错（{detail}，不是你操作的问题）"
+    hint = _env_error_hint(exc)
+    if hint:
+        return f"{hint}（{detail}）"
     return detail
 
 
