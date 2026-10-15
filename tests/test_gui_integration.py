@@ -1868,6 +1868,57 @@ class TestCurveColors(unittest.TestCase):
         finally:
             w.close()
 
+    def test_paper_family_rounds_and_lighten(self):
+        """「论文色」（2026-10-15 用户："对比图添加论文中常用颜色"）：
+        Okabe–Ito 前 8 条一色一条、互不重复；第 9 条起按轮压暗
+        （×0.75）；黑色压不动改往白提亮（不然每轮长得一模一样）；
+        单曲线取色 1；越界夹回。"""
+        first = [gui_state._gradient_color("论文色", i, 8) for i in range(8)]
+        self.assertEqual(first, ["#0072B2", "#D55E00", "#009E73", "#E69F00",
+                                 "#56B4E9", "#CC79A7", "#F0E442", "#000000"])
+        self.assertEqual(len(set(first)), 8, "前 8 条互不重复")
+        self.assertEqual(gui_state._gradient_color("论文色", 8, 81),
+                         "#005686", "第 9 条 = 色 1 压暗 25%（0.75 轮）")
+        self.assertEqual(gui_state._gradient_color("论文色", 15, 81),
+                         "#404040", "黑色压不动 → 往白提亮 25%")
+        self.assertNotEqual(gui_state._gradient_color("论文色", 0, 81),
+                            gui_state._gradient_color("论文色", 8, 81),
+                            "第二轮不与第一轮同色")
+        self.assertEqual(gui_state._gradient_color("论文色", 0, 1), "#0072B2",
+                         "单曲线取色 1")
+        # 越界夹回（防御）
+        self.assertEqual(gui_state._gradient_color("论文色", -1, 4),
+                         gui_state._gradient_color("论文色", 0, 4))
+        self.assertEqual(gui_state._gradient_color("论文色", 99, 4),
+                         gui_state._gradient_color("论文色", 3, 4))
+
+    def test_paper_family_reaches_the_figure_via_customize(self):
+        """「论文色」进两处下拉（显示名就叫「论文色」，不带"渐变"后缀），
+        选它 [应用] 后，两条对比曲线取 Okabe–Ito 色 1 / 色 2。"""
+        w = create_window()
+        try:
+            dock_combo = w.params["渐变色系"]
+            idx = dock_combo.findData("论文色")
+            self.assertGreaterEqual(idx, 0, "参数坞下拉应有论文色")
+            self.assertEqual(dock_combo.itemText(idx), "论文色")
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            content = gui_panel_state._content(dock)
+            dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
+                                                  content.figure)
+            combo = dlg.findChild(QComboBox, "gradient_family_combo")
+            idx = combo.findData("论文色")
+            self.assertGreaterEqual(idx, 0, "「外观」单选应有论文色")
+            self.assertEqual(combo.itemText(idx), "论文色")
+            combo.setCurrentIndex(idx)
+            gui_customize._apply_customize(w, dock, content.axes_1d,
+                                     content.figure, dlg)
+            self.assertEqual(dock.params_snapshot["渐变色系"], "论文色")
+            self.assertEqual(ax.lines[0].get_color(), "#0072B2")
+            self.assertEqual(ax.lines[1].get_color(), "#D55E00")
+        finally:
+            w.close()
+
     def test_compare_family_survives_param_change(self):
         """「外观」选的色系，之后改别的显示参数不被参数坞下拉的旧值打回默认。
 
@@ -2368,6 +2419,136 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
                              "颜色序号跟文件走（隐藏第一条，第二条仍是 1 号）")
             self.assertEqual([len(c[4]) for c in curves],
                              [len(c[1]) for c in curves], "ref 与 shown 等长")
+        finally:
+            w.close()
+
+
+class TestCompareStackView(unittest.TestCase):
+    """堆叠视图与平铺视图分开记（用户 2026-10-15："对比图在堆叠后取消
+    堆叠会导致视图不能回来"）。
+
+    缘起（复现实测）：堆叠的 y 是"第几行"（行偏移），不是强度。此前
+    堆叠里滚轮/平移写下的窗口冒充「纵轴自动/上下限」（平铺的设置），
+    取消堆叠时被原样套用——假数据偏一点、真数据（81 条垫到几千上万
+    counts、平铺才 0~310）画面直接空白/贴底；"家"也被换成堆叠量程，
+    按 Home 回不来。现在：堆叠的窗口记「堆叠视图 y 范围」（视图键一
+    类），家分两份（view_home / view_home_stack）——取消堆叠后视图
+    与 Home 都回平铺那份；堆叠里缩放也不再被任何重画丢掉。
+    """
+
+    def _plot_compare(self, w):
+        with mock.patch.object(gui_views, "_compute_integration",
+                               side_effect=_fake_compare_compute):
+            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
+            self.assertEqual(len(keys), 1)
+            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        return keys[0], ax
+
+    def _wheel(self, w, key, ax, notches=3):
+        """滚轮缩放（放大镜点亮）——同时动 x 和 y，与真手势一致。"""
+        content = gui_panel_state._content(w.plot_docks[key])
+        if not content.toolbar._actions["zoom"].isChecked():
+            content.toolbar._actions["zoom"].trigger()
+        px, py = ax.transData.transform((4.0, 2.0))
+        for _ in range(notches):
+            content.canvas.callbacks.process("scroll_event", MouseEvent(
+                "scroll_event", content.canvas, px, py, step=1, button="up"))
+        QApplication.processEvents()
+
+    def _home(self, w, key):
+        content = gui_panel_state._content(w.plot_docks[key])
+        content.toolbar._actions["home"].trigger()
+        QApplication.processEvents()
+
+    def test_stacked_gesture_writes_its_own_view_key(self):
+        """堆叠里滚轮：窗口记「堆叠视图 y 范围」；「纵轴自动/上下限」与
+        参数坞控件原封不动（那是平铺的设置，曾被抓成堆叠坐标）。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._wheel(w, key, ax)
+            snap = dock.params_snapshot
+            self.assertIn("堆叠视图 y 范围", snap)
+            lo, hi = snap["堆叠视图 y 范围"]
+            self.assertAlmostEqual(lo, ax.get_ylim()[0], places=3)
+            self.assertAlmostEqual(hi, ax.get_ylim()[1], places=3)
+            self.assertTrue(snap["纵轴自动"], "平铺的自动开关不许被碰")
+            self.assertTrue(w.params["纵轴自动"].isChecked(),
+                            "参数坞控件也不许被刷成堆叠值")
+        finally:
+            w.close()
+
+    def test_unstack_returns_to_the_flat_view(self):
+        """平铺缩放（窗口 W）→ 堆叠 → 堆叠里缩放 → 取消堆叠：视图回到
+        平铺那份 W（堆叠坐标的窗口不许套进来）。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            self._wheel(w, key, ax)                 # 平铺里缩放
+            flat_window = tuple(ax.get_ylim())
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._wheel(w, key, ax)                 # 堆叠里再缩放
+            self.assertNotEqual(tuple(ax.get_ylim()), flat_window,
+                                "前置条件：堆叠里确实缩过")
+            w.params["对比堆叠"].setChecked(False)
+            QApplication.processEvents()
+            # 平铺窗口经参数坞控件走了一趟（1 位小数），容差放到 0.1
+            self.assertAlmostEqual(ax.get_ylim()[0], flat_window[0], places=1)
+            self.assertAlmostEqual(ax.get_ylim()[1], flat_window[1], places=1)
+        finally:
+            w.close()
+
+    def test_home_follows_the_current_mode(self):
+        """堆叠里缩放 → 取消堆叠 → Home = 平铺最初视野；再堆叠 → Home =
+        整个堆叠（两份"家"各管各的模式）；堆叠里按过 Home 后窗口账
+        作废（免得下次重画又套回旧窗口）。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            flat_home = tuple(ax.get_ylim())        # 平铺最初视野
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._wheel(w, key, ax)
+            w.params["对比堆叠"].setChecked(False)
+            QApplication.processEvents()
+            self._home(w, key)
+            self.assertEqual(tuple(ax.get_ylim()), flat_home,
+                             "平铺的 Home 该回平铺最初视野（不是堆叠量程）")
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._home(w, key)
+            stacked_top = max(float(np.nanmax(ln.get_ydata()))
+                              for ln in ax.lines)
+            self.assertGreaterEqual(float(ax.get_ylim()[1]),
+                                    stacked_top * 0.95,
+                                    "堆叠的 Home = 整个堆叠，不裁上半截")
+            self.assertNotIn("堆叠视图 y 范围", dock.params_snapshot,
+                             "与家重合的窗口丢弃（防下次重画又套回来）")
+        finally:
+            w.close()
+
+    def test_stacked_zoom_survives_a_redraw(self):
+        """堆叠里缩放后切「显示数据名」（重画）：窗口还在——此前重画
+        按默认量程、放大白做。"""
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._wheel(w, key, ax)
+            window = tuple(ax.get_ylim())
+            w.params["显示数据名"].setChecked(True)   # 即改即画 → 重画
+            QApplication.processEvents()
+            self.assertAlmostEqual(ax.get_ylim()[0], window[0], places=3)
+            self.assertAlmostEqual(ax.get_ylim()[1], window[1], places=3)
         finally:
             w.close()
 
@@ -7965,7 +8146,9 @@ class TestHomeView(unittest.TestCase):
         ——家的 y 还是开堆叠前记的（没堆叠的强度范围），按 Home 恢复出来
         把堆叠上半截裁掉（实测 8 条时只剩 17% 可见），看着就是"Home 坏了"。
         修法：堆叠的 y 是**模式算出来的**，家的 y 跟着换（x 仍用家的 x，
-        手势缩的不算家——这条照旧）。
+        手势缩的不算家——这条照旧）。2026-10-15 起堆叠那份家记在
+        `view_home_stack`（平铺那份 `view_home` 原样留着，取消堆叠后
+        Home 回平铺——见 TestCompareStackView），断言跟着换到新家。
         """
         w = create_window()
         try:
@@ -7992,10 +8175,11 @@ class TestHomeView(unittest.TestCase):
             QApplication.processEvents()
             stacked_top = max(float(np.nanmax(ln.get_ydata()))
                               for ln in ax.lines)
-            self.assertGreaterEqual(float(w.plot_docks[key].view_home[1][1]),
+            stacked_home = w.plot_docks[key].view_home_stack
+            self.assertGreaterEqual(float(stacked_home[1][1]),
                                     stacked_top * 0.95,
-                                    "家的 y 该跟着堆叠换（不是旧范围）")
-            self.assertEqual(tuple(w.plot_docks[key].view_home[0]), x0,
+                                    "堆叠这份家的 y 该是整堆量程（不是旧范围）")
+            self.assertEqual(tuple(stacked_home[0]), x0,
                              "x 仍是家的 x（缩放不算家）")
             content.toolbar._actions["home"].trigger()
             QApplication.processEvents()

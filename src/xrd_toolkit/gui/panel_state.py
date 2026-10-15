@@ -234,8 +234,31 @@ _GRADIENT_DARK_MIX = 0.30
 # （红绿蓝随便给），是顺序色——颜色严格跟序号走、不循环。
 _RAINBOW_FAMILY = "彩虹"
 _RAINBOW_SINGLE_POS = 0.5    # 单曲线（1D/剖面/只有一条对比）取中段青绿
+
+# 第七个色系「论文色」（2026-10-15 用户："对比图添加论文中常用颜色"）：
+# Okabe–Ito 8 色——期刊图表规范最常点名的那套（色盲友好），顺序按
+# 相邻对比度排过（预览图给用户看过就是这个顺序）。它不是渐变、也
+# 不是"彩虹"那种顺序色，是**固定串色**：前 8 条一色一条，互不重复；
+# 超过 8 条**每轮整体压暗一档**（×0.75^轮，见 _PAPER_DARK_*）——不与
+# 上一轮任何一条同色、顺序仍然读得出（"不循环"精神与彩虹一致）；
+# 黑色压不动，改往白提亮（见 _PAPER_DARK_BRIGHT_FLOOR）。
+_PAPER_FAMILY = "论文色"
+_PAPER_COLORS = ("#0072B2", "#D55E00", "#009E73", "#E69F00",
+                 "#56B4E9", "#CC79A7", "#F0E442", "#000000")
+_PAPER_DARK_PER_ROUND = 0.75
+_PAPER_DARK_FLOOR = 0.15     # 压暗到底线就不再深（再深全成黑）
+_PAPER_DARK_BRIGHT_FLOOR = 0.22   # 亮度低于它 = 压不动了（黑色那格）
+_PAPER_LIGHT_CAP = 0.5            # 压不动的改往白提亮，混白 50% 封顶
+
 # UI 下拉按这个顺序列色系（app.py 参数坞 / customize.py「外观」共用）
-_GRADIENT_FAMILY_ORDER = (*_GRADIENT_FAMILIES, _RAINBOW_FAMILY)
+_GRADIENT_FAMILY_ORDER = (*_GRADIENT_FAMILIES, _RAINBOW_FAMILY,
+                          _PAPER_FAMILY)
+
+
+def _family_label(name: str) -> str:
+    """色系下拉的显示名。"论文色"不是渐变（固定串色 + 压暗轮换），
+    直接用名字；其余照旧"X色渐变"（含彩虹）。"""
+    return name if name == _PAPER_FAMILY else f"{name}色渐变"
 
 
 def _mix_hex(a: str, b: str, t: float) -> str:
@@ -254,11 +277,13 @@ def _gradient_color(family: str, i: int, n: int) -> str:
     （一头一尾见 _GRADIENT_DARK_MIX / _GRADIENT_LIGHT_MIX）——第 1 条最深、
     最后一条最浅。「彩虹」：与瀑布同款——viridis 全段等距（i 从 0 到 n-1
     恰好走 linspace(0, 1, n) 那几档），顺序 = 序号、不循环，平铺压线时比
-    单色系多一个色相辨认通道。
+    单色系多一个色相辨认通道。「论文色」：Okabe–Ito 8 色固定串色（按
+    序号一色一条，见 _PAPER_COLORS），超过 8 条每轮整体压暗一档
+    （_PAPER_DARK_PER_ROUND）——不与上一轮同色、顺序仍读得出。
 
     n <= 1（单曲线面板 / 只有一条对比曲线）给一个稳妥的单曲线色：单色系
-    用基色本身（1D/剖面拿它当"这条曲线的颜色"），彩虹取中段。i 越界夹回
-    范围（防御）；未知色系兜底蓝。
+    用基色本身（1D/剖面拿它当"这条曲线的颜色"），彩虹取中段，论文色取
+    色 1。i 越界夹回范围（防御）；未知色系兜底蓝。
     """
     if family == _RAINBOW_FAMILY:
         # 延迟导入：panel_state 是最底层共享层，模块级不拉 matplotlib
@@ -266,6 +291,24 @@ def _gradient_color(family: str, i: int, n: int) -> str:
         from matplotlib.colors import to_hex
         pos = _RAINBOW_SINGLE_POS if n <= 1 else min(max(i / (n - 1), 0.0), 1.0)
         return to_hex(colormaps["viridis"](pos))
+    if family == _PAPER_FAMILY:
+        if n <= 1:
+            return _PAPER_COLORS[0]
+        i = min(max(i, 0), n - 1)   # 越界夹回（防御，同彩虹）
+        color = _PAPER_COLORS[i % len(_PAPER_COLORS)]
+        rnd = i // len(_PAPER_COLORS)   # 第几轮（0 = 原色）
+        if rnd:
+            factor = max(_PAPER_DARK_FLOOR, _PAPER_DARK_PER_ROUND ** rnd)
+            bright = max(int(color[j:j + 2], 16)
+                         for j in (1, 3, 5)) / 255.0
+            if bright * factor < _PAPER_DARK_BRIGHT_FLOOR:
+                # 黑色那格压不动：改往白提亮（混白 50% 封顶），免得
+                # 每轮长得一模一样（"不与上一轮同色"要真成立）
+                color = _mix_hex(color, "#ffffff",
+                                 min(1.0 - factor, _PAPER_LIGHT_CAP))
+            else:
+                color = _mix_hex(color, "#000000", 1.0 - factor)
+        return color
     base = _GRADIENT_FAMILIES.get(family) or _GRADIENT_FAMILIES["蓝"]
     if n <= 1:
         return base

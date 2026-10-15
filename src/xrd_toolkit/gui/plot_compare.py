@@ -207,6 +207,19 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                     _short_labels([c[2] for c in curves], ax), fontsize=6)
             else:
                 ax.set_yticks([])
+            # "家"的自然量程 = 全堆叠刚好装下；在套用缩放窗口**之前**量
+            # （同瀑布 2026-10-13 的教训：窗口不许被封成"家"）
+            natural_y = tuple(ax.get_ylim())
+            # 堆叠自己的缩放窗口（视图键，见 plot_panels._on_ylim_changed）：
+            # 在堆叠里滚轮/平移过的位置记在这，重画（如切"显示数据名"）
+            # 套回去——此前不套，堆叠里放大的位置一动任何显示参数就丢。
+            # 它**不碰平铺的设置**（纵轴自动/上下限），所以取消堆叠时视图
+            # 回到堆叠前的样子（用户 2026-10-15："堆叠后取消堆叠会导致
+            # 视图不能回来"）
+            pinned = _panel_param(window, dock, "堆叠视图 y 范围", None)
+            if (isinstance(pinned, (list, tuple)) and len(pinned) == 2
+                    and float(pinned[0]) < float(pinned[1])):
+                ax.set_ylim(float(pinned[0]), float(pinned[1]))
         else:
             for tth, shown, display, i, _ref in curves:
                 color = _gradient_color(family, i, n_color)
@@ -282,10 +295,20 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
     _connect_axis_sync(window, dock.panel_key)   # ax.clear() 清掉了回调（见 helper 注释）
     if zoomed:
         dock._view_from_gesture = True   # 缩放的窗口不是"家"（同 _draw_1d）
-    # 程序重画 = 新"家"（见 helper 注释）；堆叠的 y 是**模式算出来的**
-    # （错开行高），家的 y 必须跟着换——否则先放大、再开堆叠后按 Home，
-    # 恢复的是没堆叠时的 y 窗口、把上半截裁掉（2026-10-09 用户实测）
-    _refresh_home(dock, ax, mode_y=stack)
+    # 程序重画 = 新"家"（见 helper 注释）。家的 y 分两份记（2026-10-15）：
+    # 平铺那份（view_home）原样留着——取消堆叠后按 Home 回到没堆叠时的
+    # 最初视图；堆叠这份记进 view_home_stack（y 取 natural_y，钉住的
+    # 缩放窗口不算"家"：用户 2026-10-09 实测"先放大、再开堆叠后按 Home"
+    # 恢复的必须是整个堆叠，不许裁掉上半截）。此前共用一份、由 mode_y
+    # 覆写，取消堆叠时家留在堆叠坐标上（用户 2026-10-15："堆叠后取消
+    # 堆叠会导致视图不能回来"的另一半）。
+    if stack:
+        home = getattr(dock, "view_home", None)
+        x = home[0] if home is not None else tuple(ax.get_xlim())
+        dock.view_home_stack = (x, natural_y, ax.get_yscale())
+        dock._view_from_gesture = False   # 堆叠的 y 与手势无关，消费掉（同 mode_y 分支）
+    else:
+        _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
 

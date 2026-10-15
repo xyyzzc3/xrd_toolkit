@@ -299,12 +299,16 @@ def _refresh_home(dock, ax=None, mode_y=False, mode_ylim=None):
     上次画的位置）。
 
     **`mode_y=True`（2026-10-09 加）**：这次画的 y 是**按当前显示模式算
-    出来的**（对比·堆叠的错开行高——每行的 y 含义都换了），家的 y 必须
-    跟着换，否则按 Home 恢复的是"没堆叠时"的旧 y 窗口、把堆叠上半截裁掉
-    （用户："对比子窗口的 home 键在先放大后开启堆叠后失效"——实测 8 条：
-    数据到 6165、Home 后只到 1045，可见 17%）。只换 y，**x 仍用家的 x**
-    （手势缩出来的 x 不算家，这条不变）。y 是模式算的，与"这次重画是不
-    是手势来的"无关，所以 mode_y 分支不理会 from_gesture 旗标。
+    出来的**（错开行高——每行的 y 含义都换了），家的 y 必须跟着换，否则
+    按 Home 恢复的是"没叠放时"的旧 y 窗口、把上半截裁掉（用户："对比
+    子窗口的 home 键在先放大后开启堆叠后失效"——实测 8 条：数据到 6165、
+    Home 后只到 1045，可见 17%）。只换 y，**x 仍用家的 x**（手势缩出来
+    的 x 不算家，这条不变）。y 是模式算的，与"这次重画是不是手势来的"
+    无关，所以 mode_y 分支不理会 from_gesture 旗标。
+    2026-10-15 起这分支只服务**瀑布**（行偏移轴，永久"堆叠"）；对比的
+    堆叠模式改用**两份家**（`dock.view_home_stack`，见 plot_compare.
+    _redraw_compare）——一份家的做法取消堆叠时会留在堆叠坐标上（用户
+    当天："堆叠后取消堆叠会导致视图不能回来"）。
 
     **`mode_ylim`（2026-10-13 加）**：mode_y 分支记的 y 改从它取——传的是
     "钉住缩放窗口**之前**"的自然量程。以前直接取 `ax.get_ylim()`，一旦
@@ -456,6 +460,12 @@ class _SlimToolbar(QWidget):
         会触发 _on_xlim_changed/_on_ylim_changed，把"纵轴自动"取消勾选、
         把纵轴上下限填成家的值——按一次 Home 就悄悄把面板改成手动纵轴，
         而且不可逆。
+
+        **堆叠中的对比面板用堆叠那份"家"**（2026-10-15）：家的 y 分两份
+        记（平铺的 `view_home` / 堆叠的 `view_home_stack`，见
+        plot_compare._redraw_compare）——Home 永远给**当前模式**的完整
+        视野，取消堆叠后回的是平铺那份（此前共用一份、堆叠的 y 覆写了
+        它，取消堆叠后 Home 还是堆叠坐标："视图不能回来"的另一半）。
         """
         if self._window is None or self._panel_key is None:
             return
@@ -464,7 +474,11 @@ class _SlimToolbar(QWidget):
         if dock is None:
             return
         title = dock.windowTitle()
-        home = getattr(dock, "view_home", None)
+        view = self._panel_key.split("|", 1)[0]
+        stacked = (view == "对比"
+                   and _panel_param(window, dock, "对比堆叠", False))
+        home = (getattr(dock, "view_home_stack", None) if stacked
+                else getattr(dock, "view_home", None))
         ax = _panel_axes(dock)
         if home is None or ax is None:
             from xrd_toolkit.gui.plot_views import _redraw_panel   # 破循环
@@ -499,7 +513,14 @@ class _SlimToolbar(QWidget):
         # 过 Home 之后，下一次重画（如瀑布调行距、2D 换对比度）会拿快照里
         # 的旧缩放窗口接着画，等于 Home 白按（2026-10-13 修"先缩放后调
         # 行距"时一并修出）。
-        if (self._panel_key.split("|", 1)[0] not in _INTENSITY_Y_VIEWS
+        if stacked:
+            # 堆叠的"家" = 自然量程：驻留的缩放窗口与家重合，直接丢弃
+            # （同瀑布"缩放后按 [复位视图] → 窗口丢弃"的先例），免得
+            # 下一次重画又把旧窗口套回来
+            snap = getattr(dock, "params_snapshot", None)
+            if snap is not None:
+                snap.pop("堆叠视图 y 范围", None)
+        elif (view not in _INTENSITY_Y_VIEWS
                 or not _panel_param(window, dock, "纵轴自动", True)):
             _on_ylim_changed(window, self._panel_key, ax)
         ax.figure.canvas.draw_idle()
@@ -818,6 +839,12 @@ def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
     用户手动定过的纵轴窗口由用户接管（自动不再覆盖）；纯 x 方向
     的缩放/平移不碰这里——只有真的动了纵轴才关自动。焦点面板
     同时刷新参数坞控件；程序自己画图（_setting_limits）跳过。
+
+    **堆叠中的对比面板走自己的视图键**（2026-10-15）：堆叠的 y 是
+    "第几行"（行偏移），不是强度——窗口记进「堆叠视图 y 范围」，
+    不碰「纵轴自动/上下限」（那是平铺的设置）。用户当天："堆叠后
+    取消堆叠会导致视图不能回来"——此前这份堆叠坐标的窗口冒充平铺
+    设置，取消堆叠时被原样套用（真数据下画面直接空白/贴底）。
     """
     if getattr(window, "_setting_limits", False):
         return
@@ -828,7 +855,11 @@ def _on_ylim_changed(window: QMainWindow, key: str, ax) -> None:
     if not snap:
         return
     ylo, yhi = ax.get_ylim()
-    if key.split("|", 1)[0] in _INTENSITY_Y_VIEWS:
+    view = key.split("|", 1)[0]
+    if view == "对比" and _panel_param(window, dock, "对比堆叠", False):
+        # 堆叠：视图窗口一类（同"视图 y 范围"），平铺的设置原封不动
+        snap["堆叠视图 y 范围"] = [float(ylo), float(yhi)]
+    elif view in _INTENSITY_Y_VIEWS:
         snap["纵轴自动"] = False
         snap["纵轴下限"] = float(ylo)
         snap["纵轴上限"] = float(yhi)
