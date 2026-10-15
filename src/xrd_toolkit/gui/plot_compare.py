@@ -122,25 +122,30 @@ COLOR_SCALE_TAG = "compare_color_scale"
 _COLOR_SCALE_STEPS = 32   # 渐变条画多少段（段间轻微重叠防白缝）
 
 
-def _draw_compare_color_scale(ax, family, names) -> None:
-    """对比图的颜色刻度条：给"颜色跟勾选顺序"这条规则一个读数。
+def _draw_compare_color_scale(ax, family, names, caption) -> None:
+    """对比图的颜色刻度条：给"颜色跟文件栏顺序"这条规则一个读数。
 
     用户 2026-10-15："之前说的颜色变化代表从哪个数据到哪个数据，
-    怎么没落地"——颜色按勾选顺序走是 2026-10-13/14 就定的**规则**，
-    但图上一直没有东西把"颜色 ↔ 哪条数据"标出来；平铺超过 12 条又不
-    画图例（2026-10-08 定：81 条全名糊成黑带），83 条叠在一起时肉眼
-    只剩悬停读数一条路。**自动出现**（用户拍板"甲"）：条数超过
-    LEGEND_MAX_CURVES 才画——小批看名字（图例）、大批看色标，不用记
-    开关；与图例同一道界线，两者不会同框。
+    怎么没落地"——颜色按顺序走是 2026-10-13/14 就定的**规则**，但图上
+    一直没有东西把"颜色 ↔ 哪条数据"标出来；平铺超过 12 条又不画图例
+    （2026-10-08 定：81 条全名糊成黑带），83 条叠在一起时肉眼只剩悬停
+    读数一条路。**显示方式三选**（用户当天拍板）：自动（条数超过
+    LEGEND_MAX_CURVES 才画，默认）/ 总是 / 从不，取值在「色标」参数、
+    判定在 _redraw_compare。
+
+    **顺序的准确说法是"文件栏顺序"**（用户："现在的描述也不准确"——
+    颜色实际跟的是文件栏树上先后，即可用 [排序▾] 控制；旧文案"勾选
+    顺序"只在全选时碰巧相同）。`caption` = 框底那行说明文字（默认
+    "颜色按文件栏顺序"；在「外观…」里改，空串 = 不画这行字）。
 
     画法：图右下角一个白底小框（框住曲线，与图例同理），里面一条
-    **按当前色系按真实条数取样**的竖渐变条（彩虹=virtidis 全段、
+    **按当前色系按真实条数取样**的竖渐变条（彩虹=viridis 全段、
     单色系深→浅、论文色含每轮压暗），下端 = 第一条、上端 = 最后一条
-    （与堆叠的行序同一方向：第 1 条在底下），两端各一个**短名**，
-    框底一行小字"颜色按勾选顺序"。全部图元挂 `transform=ax.transAxes`
-    ——不落数据坐标、不碰自动量程（mpl 对与 transData 无分支关系的
-    patch 直接跳过 _update_patch_limits），`ax.clear()` 一并清干净。
-    平铺/堆叠两种模式都画（堆叠下名字默认关，色标正好补上读数）。
+    （与堆叠的行序同一方向：第 1 条在底下），两端各一个**短名**。
+    全部图元挂 `transform=ax.transAxes`——不落数据坐标、不碰自动量程
+    （mpl 对与 transData 无分支关系的 patch 直接跳过 _update_patch_limits），
+    `ax.clear()` 一并清干净。平铺/堆叠两种模式都画（堆叠下名字默认关，
+    色标正好补上读数）。
     """
     names = [n for n in names if n]
     n = len(names)
@@ -151,7 +156,7 @@ def _draw_compare_color_scale(ax, family, names) -> None:
     trans = ax.transAxes
     # 全部位置用轴分数（0..1），数值都在对比图的数据范围之内，
     # 即便有意外也扩不到自动量程。宽度按**开局面板**（5:3、约 400 px 宽）
-    # 估过：框 0.195 ≈ 78 px，够"颜色按勾选顺序"这行字（约 50 px）居中
+    # 估过：框 0.195 ≈ 78 px，够"颜色按文件栏顺序"这行字（约 55 px）居中
     box = (0.80, 0.30, 0.195, 0.55)       # 白底小框 x, y, 宽, 高
     strip = (0.958, 0.42, 0.022, 0.37)    # 渐变条 x, y, 宽, 高
     ax.add_patch(Rectangle((box[0], box[1]), box[2], box[3],
@@ -177,10 +182,11 @@ def _draw_compare_color_scale(ax, family, names) -> None:
     ax.text(strip[0] - 0.008, strip[1] + strip[3], last, transform=trans,
             ha="right", va="center", fontsize=6.5,
             zorder=5.2, gid=COLOR_SCALE_TAG)
-    ax.text(box[0] + box[2] / 2, box[1] + 0.035, "颜色按勾选顺序",
-            transform=trans,
-            ha="center", va="bottom", fontsize=6.5, color="0.25",
-            zorder=5.2, gid=COLOR_SCALE_TAG)
+    if caption:
+        ax.text(box[0] + box[2] / 2, box[1] + 0.035, caption,
+                transform=trans,
+                ha="center", va="bottom", fontsize=6.5, color="0.25",
+                zorder=5.2, gid=COLOR_SCALE_TAG)
 
 
 def _sources_mix(files) -> str:
@@ -236,7 +242,7 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         curves = _compare_shown_curves(window, dock)
         # 画图顺序 = 文件列表顺序（不随各文件算完的先后变）→ 图例顺序、
         # 颜色序号稳定（i 由 _compare_shown_curves 携带）。颜色 = 单色
-        # 渐变的第 i 条（「渐变色系」参数，按勾选顺序从深到浅；2026-10-13
+        # 渐变的第 i 条（「渐变色系」参数，按文件栏顺序从深到浅；2026-10-13
         # 起，逐条自定义色退休）。n 用**全部**勾选文件数——热图联动隐藏
         # 的行不重排色号，重新显示回来颜色不变。
         family = _panel_param(window, dock, "渐变色系", "蓝")
@@ -355,10 +361,18 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
             _draw_compare_legend(
                 window, dock, ax,
                 [ln.get_label() for ln in _data_lines(ax)])
-        # 色标（颜色 ↔ 数据顺序的读数条）：条数超过图例上限时自动出现
-        # （用户 2026-10-15 拍板"甲"：小批看图例、大批看色标；见函数说明）
-        if len(curves) > LEGEND_MAX_CURVES:
-            _draw_compare_color_scale(ax, family, [c[2] for c in curves])
+        # 色标（颜色 ↔ 数据顺序的读数条）：显示方式三选（用户 2026-10-15
+        # 拍板）——自动 = 条数超过图例上限才画（默认；小批看名字、大批看
+        # 色标）、总是、从不；说明文字在「外观…」里改（见函数说明）
+        scale_mode = _panel_param(window, dock, "色标", "auto")
+        if (len(curves) >= 2
+                and (scale_mode == "always"
+                     or (scale_mode == "auto"
+                         and len(curves) > LEGEND_MAX_CURVES))):
+            _draw_compare_color_scale(
+                ax, family, [c[2] for c in curves],
+                str(_panel_param(window, dock, "色标说明",
+                                 "颜色按文件栏顺序") or ""))
         ax.grid(alpha=0.3)
         _content(dock).draw()
     finally:
@@ -435,7 +449,7 @@ def _refresh_compare(window: QMainWindow) -> None:
     # 渐变色系 2026-10-14 起不在这——它有自己的 _refresh_compare_family
     # （从控件采集会被下拉旧值打回默认，见那里的说明）。
     keys = ("对比归一化", "归一化目标", "对比堆叠",
-            "手动行距", "行距倍数", "显示数据名")
+            "手动行距", "行距倍数", "显示数据名", "色标")
     handled = 0
     for key, dock in list(window.plot_docks.items()):
         if not key.startswith("对比"):

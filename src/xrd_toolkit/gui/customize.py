@@ -20,8 +20,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import (
-    _content, _family_label, _GRADIENT_FAMILY_ORDER, _log, _panel_param,
-    _set_widget_value)
+    _content, _DISPLAY_DEFAULTS, _family_label, _GRADIENT_FAMILY_ORDER, _log,
+    _panel_param, _set_widget_value)
 
 # 各视图画布上坐标轴的属性名（plot_views 的 builder 按视图挂其一）
 _AXES_ATTRS = ("axes_1d", "axes_2d", "axes_profile", "axes_waterfall",
@@ -190,6 +190,7 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
     # （取消 = 图保持原样，与其余字段同规矩）。
     view = dock.panel_key.split("|", 1)[0]
     family = None
+    scale_note = None
     if view == "对比" and getattr(dock, "compare_files", None):
         color_box = QGroupBox("渐变色系")
         color_form = QFormLayout(color_box)
@@ -202,11 +203,23 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         cur = _panel_param(window, dock, "渐变色系", "蓝")
         idx = family.findData(cur)
         family.setCurrentIndex(idx if idx >= 0 else 0)
-        family.setToolTip("对比曲线按勾选顺序渐变：单色系由深到浅（第 1 条"
+        family.setToolTip("对比曲线按文件栏顺序渐变：单色系由深到浅（第 1 条"
                           "最深、最后一条最浅）；彩虹是瀑布同款（深紫→黄），"
                           "不循环；论文色是 Okabe–Ito 八色（色盲友好），"
                           "超过八条每轮压暗一档")
         color_form.addRow("色系", family)
+        # 色标说明（2026-10-15 用户："自行更改描述方式"，紧跟着"现在的
+        # 描述也不准确"——旧文案写"勾选顺序"，实际跟的是文件栏顺序）：
+        # 色标下方那行小字的文字，按图记进快照（同标题的机制），点
+        # [应用] 才写回；清空 = 不画这行字（两端短名保留）。
+        note = QLineEdit()
+        note.setObjectName("color_scale_note_edit")
+        note.setText(_panel_param(window, dock, "色标说明",
+                                  _DISPLAY_DEFAULTS["色标说明"]))
+        note.setToolTip("画在色标下方的那行说明文字；清空 = 不画这行"
+                        "（上下两端的短名保留）")
+        color_form.addRow("色标说明", note)
+        scale_note = note
         body_lay.addWidget(color_box)
 
     btn_row = QHBoxLayout()
@@ -229,6 +242,8 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         dlg._fields["cmap"] = cmap
     if family is not None:
         dlg._fields["family"] = family
+    if scale_note is not None:
+        dlg._fields["scale_note"] = scale_note
     return dlg
 
 
@@ -245,6 +260,8 @@ def _reset_customize_fields(dock, fields) -> None:
     for name, value in (("left", 0.125), ("bottom", 0.11),
                         ("right", 0.9), ("top", 0.88)):
         fields[name].setValue(value)
+    if "scale_note" in fields:      # 对比面板才有（色标说明）
+        fields["scale_note"].setText(_DISPLAY_DEFAULTS["色标说明"])
 
 
 def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
@@ -278,26 +295,40 @@ def _apply_customize(window: QMainWindow, dock, ax, fig, dlg) -> None:
         if image is not None:
             _draw_2d(window, dock, image)
     fam_box = f.get("family")
-    if fam_box is not None:
-        # 渐变色系：点 [应用] 才写进**面板快照**（每张图各记各的），
-        # 变了才重画（_redraw_compare 自带重画与记账；惰性导入防模块
-        # 环——plot_views 反向 import 本模块）
-        fam = fam_box.currentData()
-        if fam and fam != _panel_param(window, dock, "渐变色系", "蓝"):
-            dock.params_snapshot["渐变色系"] = fam
-            # 顺手把参数坞那把下拉刷成新值（编辑对象就是它时）——控件显示
-            # 什么 = 图用什么，别让下拉留着旧色系误导人。色系 2026-10-14
-            # 起不参与控件采集（见 _display_snapshot 的说明），这只是展示；
-            # 挂回放旗标，免触发 _refresh_compare_family 重入
-            if window.plot_docks.get(getattr(window, "focus_panel", None)) is dock:
-                pbox = window.params.get("渐变色系")
-                if pbox is not None:
-                    prev_rep = getattr(window, "_param_replaying", False)
-                    window._param_replaying = True
-                    try:
-                        _set_widget_value(pbox, fam)
-                    finally:
-                        window._param_replaying = prev_rep
+    note_edit = f.get("scale_note")
+    if fam_box is not None or note_edit is not None:
+        # 渐变色系 + 色标说明：点 [应用] 才写进**面板快照**（每张图各记
+        # 各的），任一变了整图重画一次（_redraw_compare 自带重画与记账；
+        # 惰性导入防模块环——plot_views 反向 import 本模块）。色标说明
+        # 空串 = 不画那行字（两端短名保留），照写。
+        changed = False
+        if fam_box is not None:
+            fam = fam_box.currentData()
+            if fam and fam != _panel_param(window, dock, "渐变色系", "蓝"):
+                dock.params_snapshot["渐变色系"] = fam
+                changed = True
+                # 顺手把参数坞那把下拉刷成新值（编辑对象就是它时）——控件
+                # 显示什么 = 图用什么，别让下拉留着旧色系误导人。色系
+                # 2026-10-14 起不参与控件采集（见 _display_snapshot 的
+                # 说明），这只是展示；挂回放旗标，免触发
+                # _refresh_compare_family 重入
+                if window.plot_docks.get(
+                        getattr(window, "focus_panel", None)) is dock:
+                    pbox = window.params.get("渐变色系")
+                    if pbox is not None:
+                        prev_rep = getattr(window, "_param_replaying", False)
+                        window._param_replaying = True
+                        try:
+                            _set_widget_value(pbox, fam)
+                        finally:
+                            window._param_replaying = prev_rep
+        if note_edit is not None:
+            note = note_edit.text().strip()
+            if note != _panel_param(window, dock, "色标说明",
+                                    _DISPLAY_DEFAULTS["色标说明"]):
+                dock.params_snapshot["色标说明"] = note
+                changed = True
+        if changed:
             from xrd_toolkit.gui.plot_compare import _redraw_compare
             _redraw_compare(window, dock.panel_key)
     _content(dock).draw()
