@@ -3,6 +3,15 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
 版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
 
+## [Unreleased]
+
+### 模拟
+
+- **六方晶系峰位标注默认改三位卡片式**（用户 2026-10-17："hkl 就显示三位，
+  图上不要写四位"）：如 (104)、(116)，与 PDF 卡片行号一致；四位 (h k i l)
+  是显式选项（CLI `--four-index` / `four_index=True`）。第 6 周那张刚玉
+  展示图（`showcase/simulation/final_xrd_Al2O3.png`）顺带重拍成三位版
+
 ## [0.1.4] — 2026-10-16
 
 一版"数据流更讲究、看图更清楚"的更新：对比 / 热图加栅栏（没出过 1D 的

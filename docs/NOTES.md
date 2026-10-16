@@ -323,10 +323,12 @@ structure factor, **written out by hand** (`simulation/core.py` does not depend 
 pymatgen), with a pymatgen `XRDCalculator` reference implementation alongside — Si /
 LaB₆ / Al₂O₃ were checked peak-for-peak (max Δ2θ = 0.0000°; `scripts/simulate_xrd.py
 --compare` re-runs the check any time). Plot with `scripts/simulate_xrd.py <cif>
-<png>`: `--annotate` labels (hkl), `--three-index` switches to card-style
-three-index labels for hexagonal cells (the default is four-index `(h k i l)`, with
-representatives in the conventional all-non-negative form h ≥ k ≥ 0), `--wavelength`
-changes λ (default Cu Kα 1.5406 Å), `--two-theta` changes the range. Reference
+<png>`: `--annotate` labels (hkl) — hexagonal cells default to **card-style
+three-index** labels ((104), (116) …), matching PDF-card line numbers, with
+representatives in the conventional all-non-negative form h ≥ k ≥ 0 (user,
+2026-10-17: "hkl 就显示三位，图上不要写四位"; `--four-index` opts back into the
+four-index `(h k i l)` form), `--wavelength` changes λ (default Cu Kα 1.5406 Å),
+`--two-theta` changes the range. Reference
 structures live in `data/structures/` (COD, public domain), example figures in
 `showcase/simulation/`. pymatgen is an **optional dependency**
 (`pip install 'xrd-toolkit[simulation]'`): only `--compare` / `--pymatgen` need it;

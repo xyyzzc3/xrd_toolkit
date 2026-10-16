@@ -167,11 +167,13 @@ def _conventionalize_refs(refs):
     return [(groups[key][0], groups[key][1]) for key in order]
 
 
-def format_hkls(refs, is_hex, four_index=True):
+def format_hkls(refs, is_hex, four_index=False):
     """把 (代表 hkl, 多重性) 列表排成 '(111) x8'、'(300) x6, (221) x24' 式短文本。
 
-    六方晶系默认写四位指数 (h k i l)（i = -h-k），和晶体学表一致；
-    four_index=False 时写三位 (hkl)（卡片常见的正指数写法，如 (104)、(116)）。
+    **默认三位卡片式**（用户 2026-10-17："hkl 就显示三位，图上不要写四位"）：
+    六方写与 PDF 卡片常见行号一致的三位正指数（如 (104)、(116)）；
+    four_index=True 才写四位的对称等价 (h k i l)（i = -h-k，晶体学表口径）。
+    非六方晶系本来就只有三位，不受这个开关影响。
     """
     parts = []
     for (h, k, l), m in refs:

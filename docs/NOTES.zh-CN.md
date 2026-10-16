@@ -283,9 +283,11 @@ SNIP 也实现了并实测过，但它在这些图谱上会过度扣除 43%–98
 公式全手写（`simulation/core.py` 不依赖 pymatgen），另有 pymatgen `XRDCalculator`
 参考版并存——Si / LaB₆ / Al₂O₃ 三个材料逐峰对过答案（max Δ2θ = 0.0000°，
 `scripts/simulate_xrd.py --compare` 可随时现场复核）。出谱走
-`scripts/simulate_xrd.py <cif> <png>`：`--annotate` 标峰位 (hkl)、`--three-index`
-切六方卡片式三位指数（默认四位 `(h k i l)`，六方取代表一律规范正指数写法
-h ≥ k ≥ 0）、`--wavelength` 换波长（默认 Cu Kα 1.5406 Å）、`--two-theta` 改区间。
+`scripts/simulate_xrd.py <cif> <png>`：`--annotate` 标峰位 (hkl)、六方**默认三位
+卡片式**（如 (104)、(116)，六方取代表一律规范正指数写法 h ≥ k ≥ 0，与 PDF 卡片
+行号一致；2026-10-17 用户："hkl 就显示三位，图上不要写四位"——`--four-index`
+才切四位 `(h k i l)`）、`--wavelength` 换波长（默认 Cu Kα 1.5406 Å）、
+`--two-theta` 改区间。
 参考结构在 `data/structures/`（COD 公有领域），展示图在 `showcase/simulation/`。
 pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只有 `--compare` /
 `--pymatgen` 两条路才需要它，主程序与其余功能不受影响。单元测试 16 项（峰位 / 波长

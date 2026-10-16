@@ -7,7 +7,7 @@
   - 散射因子自检 f(s=0) = 原子序数；
   - 多重性：Si (111) 轨道 8 个、LaB₆ (100) 轨道 6 个；
   - 指数代表与排版：刚玉取 h≥k≥0 规范写法（110 / 113 / 116 / 214 / 300）；
-    六方标签默认四位，可切三位卡片式；
+    六方标签默认三位卡片式（2026-10-17 起），四位 (h k i l) 为显式选项；
   - 手写版与 pymatgen 版三个材料逐峰一致（峰数相等、2θ 偏差 < 1e-3°）。
 
 运行：python -m unittest tests.test_simulation -v（或 scripts/run_tests.py）。
@@ -129,14 +129,23 @@ class TestHexRepresentatives(unittest.TestCase):
 
 
 class TestHklFormatting(unittest.TestCase):
-    """峰位标签排版：六方默认四位 (h k i l)；三位模式写卡片式正指数；立方不受影响。"""
+    """峰位标签排版：**默认三位卡片式**（用户 2026-10-17："hkl 就显示三位，
+    图上不要写四位"）；四位 (h k i l) 是显式选项；立方不受影响。"""
 
-    def test_hex_four_index_default(self):
-        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True), "(1 1 -2 6) x12")
+    def test_hex_three_index_is_the_default(self):
+        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True), "(116) x12")
 
-    def test_hex_three_index_card_style(self):
-        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True, four_index=False),
-                         "(116) x12")
+    def test_hex_four_index_opt_in(self):
+        self.assertEqual(core.format_hkls([((1, 1, 6), 12)], True, four_index=True),
+                         "(1 1 -2 6) x12")
+
+    def test_plot_defaults_stay_card_style(self):
+        """画图入口的默认也必须是三位（图上的口径由这里钉住）。"""
+        import inspect
+        from xrd_toolkit.simulation import plots
+        for fn in (plots.plot_annotated, plots.plot_profile):
+            self.assertIs(inspect.signature(fn).parameters["four_index"].default,
+                          False, f"{fn.__name__} 的默认应是三位卡片式")
 
     def test_three_index_multi_digit_keeps_spaces(self):
         self.assertEqual(core.format_hkls([((1, 0, 10), 12)], True, four_index=False),

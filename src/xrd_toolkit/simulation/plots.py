@@ -39,12 +39,13 @@ def plot_pattern(two_thetas, intensities, title, out_path):
 
 
 def plot_annotated(two_thetas, intensities, peaks, is_hex, title, out_path,
-                   four_index=True):
+                   four_index=False):
     """带 (hkl) 标注的谱图（第六周最终交付图的画法）。
 
     peaks 用 core.pattern_from_structure 返回的峰表（含代表 hkl 与多重性）；
-    four_index=False 时六方晶系改用三位指数（如 (104)），与 PDF 卡片行号对照方便。
-    返回输出路径。
+    **默认三位卡片式**（如 (116)，与 PDF 卡片行号对照方便——用户
+    2026-10-17："hkl 就显示三位，图上不要写四位"）；four_index=True 才写
+    四位的 (h k i l)。返回输出路径。
     """
     fig, ax = plt.subplots(figsize=(10, 5.5))
     ax.vlines(two_thetas, 0, intensities, color="#2b6cb0", lw=1.8)
@@ -107,7 +108,7 @@ def _fwhm_of_peak(tth, curve, center, half_span=0.8):
 
 
 def plot_profile(tth, curve, peaks, is_hex, title, out_path, *,
-                 sticks=None, zero_deg=0.0, four_index=True, zoom=None):
+                 sticks=None, zero_deg=0.0, four_index=False, zoom=None):
     """连续模拟谱（第七周画法）：细网格曲线 + 峰顶 (hkl) 标注。
 
     tth/curve = profile.simulate_pattern 的细网格输出；peaks = 它的峰表
