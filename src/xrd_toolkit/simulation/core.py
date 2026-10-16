@@ -14,6 +14,8 @@
 pymatgen 属可选依赖：`pip install pymatgen`，或 `pip install 'xrd-toolkit[simulation]'`。
 """
 import math
+import re
+from pathlib import Path
 
 import numpy as np
 
@@ -280,6 +282,33 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
     two_thetas = np.array([p[0] for p in peaks])
     intensities = np.array([p[1] for p in peaks])
     return two_thetas, intensities, peaks, is_hex
+
+
+def b_iso_from_cif(cif_path):
+    """从 CIF 原子行读**各向同性**温度因子 Uiso → {元素符号: B}（Å²）。
+
+    B = 8π²·Uiso（Debye-Waller 系数，室温典型 0.3~1 Å²）。热振动让每个
+    原子的散射振幅按 exp(−B·s²) 衰减（s = sinθ/λ），**高角度峰衰减最狠**——
+    这正是 RY04 第七周任务三"热振动"参数的数据来源：直接喂给
+    `simulate_pattern(b_iso=…)` / `structure_factor(..., b_iso=…)` 即可。
+
+    每元素取首次出现的 Uiso（如 LaB₆："La … Uiso .00858(29) 1"）。
+    两类情况返回**不含该元素**（调用方按理想刚性晶格处理即可）：
+      * CIF 没写 Uiso（如 Si_9008565，早期文献条目）；
+      * 只写了各向异性位移 U11/U22/…（如 Al₂O₃_1000032）——各向异性没实现，
+        不硬折算成假各向同性。
+    """
+    out = {}
+    for raw in Path(cif_path).read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if not s or s.startswith(("#", "_", "loop_")):
+            continue
+        parts = s.split()
+        if "Uiso" in parts:
+            u = float(parts[parts.index("Uiso") + 1].split("(")[0])
+            elem = re.match(r"[A-Za-z]+", parts[0]).group(0)
+            out.setdefault(elem, 8.0 * math.pi ** 2 * u)
+    return out
 
 
 def load_structure(cif_path):

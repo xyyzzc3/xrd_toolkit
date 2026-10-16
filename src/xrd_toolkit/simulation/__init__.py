@@ -5,6 +5,7 @@ plots 出图。pymatgen 属可选依赖（见 pyproject 的
 [project.optional-dependencies].simulation）。
 """
 from xrd_toolkit.simulation.core import (
+    b_iso_from_cif,
     d_spacing,
     distinct_rotations,
     format_hkls,
@@ -33,6 +34,7 @@ from xrd_toolkit.simulation.profile import (
 )
 
 __all__ = [
+    "b_iso_from_cif",
     "d_spacing", "two_theta_from_d", "scattering_factor", "structure_factor",
     "march_dollase",
     "distinct_rotations", "multiplicity", "lp_factor", "format_hkls",

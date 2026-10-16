@@ -156,6 +156,26 @@ class TestHklFormatting(unittest.TestCase):
                          "(111) x8")
 
 
+class TestCifThermalFactors(unittest.TestCase):
+    """CIF 温度因子读取（b_iso_from_cif）：Uiso → B = 8π²·Uiso。"""
+
+    def test_lab6_uiso_becomes_b(self):
+        b = core.b_iso_from_cif(str(STRUCT_DIR / "LaB6_1000055.cif"))
+        self.assertAlmostEqual(b["La"], 8 * math.pi ** 2 * 0.00858, places=9)
+        self.assertAlmostEqual(b["B"], 8 * math.pi ** 2 * 0.0090, places=9)
+        self.assertEqual(set(b), {"La", "B"})
+
+    def test_cif_without_uiso_returns_empty(self):
+        # Si_9008565 没写位移参数 → 当理想刚性晶格（空字典）
+        self.assertEqual(core.b_iso_from_cif(str(STRUCT_DIR / "Si_9008565.cif")),
+                         {})
+
+    def test_anisotropic_only_returns_empty(self):
+        # Al₂O₃ 只有各向异性 U11/U22/…（没有 Uiso 这个记号）→ 不硬折算
+        self.assertEqual(
+            core.b_iso_from_cif(str(STRUCT_DIR / "Al2O3_1000032.cif")), {})
+
+
 class TestInstrumentProfile(unittest.TestCase):
     """峰形公式层（第七周）：Caglioti / Lorentzian / 伪 Voigt / TCH 合成。"""
 

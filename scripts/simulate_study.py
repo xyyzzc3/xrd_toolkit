@@ -20,8 +20,6 @@
 主 CIF 默认 LaB₆（与第三周的实验数据同材料，任务四要对得上）。
 """
 import argparse
-import math
-import re
 import sys
 from pathlib import Path
 
@@ -31,8 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import (  # noqa: E402
-    d_spacing, format_hkls, load_structure, pattern_from_cif, plot_profile,
-    simulate_pattern, two_theta_from_d)
+    b_iso_from_cif, d_spacing, format_hkls, load_structure, pattern_from_cif,
+    plot_profile, simulate_pattern, two_theta_from_d)
 
 DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_1000055.cif"
 
@@ -214,26 +212,6 @@ def study_instrument(cif: Path, outdir: Path) -> None:
     print(f"  → {out}")
 
 
-def _uiso_from_cif(cif: Path) -> dict:
-    """从 CIF 原子行读 Uiso → {元素: B}（B = 8π²·Uiso，Å²）。
-
-    对拍时两面强度要同口径：GSAS-II 会自动用 CIF 里的 Uiso，我们的
-    `simulate_pattern(b_iso=…)` 得显式喂同样的值。（任务三会把这一步
-    固化进模块，这里先按对拍需要就地解析——行如"La .0 .0 .0 1.0 Uiso .00858(29) 1"。）
-    """
-    out = {}
-    for raw in Path(cif).read_text(encoding="utf-8").splitlines():
-        s = raw.strip()
-        if not s or s.startswith(("#", "_", "loop_")):
-            continue
-        parts = s.split()
-        if "Uiso" in parts:
-            u = float(parts[parts.index("Uiso") + 1].split("(")[0])
-            elem = re.match(r"[A-Za-z]+", parts[0]).group(0)
-            out[elem] = 8.0 * math.pi ** 2 * u
-    return out
-
-
 def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
                      g2_zero_npz: Path) -> None:
     """任务二·双引擎对拍：GSAS-II 与本引擎同参数叠图 + 逐个数字差。
@@ -248,7 +226,7 @@ def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
 
     material = _material_name(cif)
     structure = load_structure(str(cif))
-    b_iso = _uiso_from_cif(cif)               # 与 GSAS-II 自动用的 Uiso 对齐
+    b_iso = b_iso_from_cif(cif)               # 与 GSAS-II 自动用的 Uiso 对齐
     kw = dict(two_theta_range=(10.0, 80.0), step_deg=0.005, b_iso=b_iso)
     t_us, y_us, peaks, is_hex = simulate_pattern(structure, **kw)
     t_uz, y_uz, _, _ = simulate_pattern(structure, zero_deg=0.05, **kw)
@@ -305,10 +283,181 @@ def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
     print(f"  → {out}")
 
 
+def study_microstructure(cif: Path, outdir: Path) -> None:
+    """任务三：样品微结构参数——晶粒尺寸 / 微观应变 / 热振动 / 择优取向。
+
+    两张图：
+      `sim_xrd_microstructure_{材料}.png`（2×2）——四个参数**各与理想晶体对比**：
+        (a) 晶粒尺寸 50 nm：Scherrer 展宽（1/cosθ），放大 (110) 标 FWHM
+        (b) 尺寸 vs 应变怎么分：FWHM(2θ) 三条曲线（仪器 / +尺寸 / +应变，
+            1/cosθ 与 tanθ 的 θ 依赖不同——W-H 能把它俩分开的根）
+        (c) 热振动（CIF Uiso → Debye-Waller）：按 (110) 对齐看**高角度峰被压低**
+        (d) 择优取向（March-Dollase R=0.6、轴 (111)）：(111) 相对增强、(100) 变弱
+      `sim_xrd_realistic_vs_ideal_{材料}.png`（1×2）——"理想晶体 vs 全部真实效应
+        叠加"（50 nm + 0.2% 应变 + CIF 热振动）的全谱对比 + (110) 放大。
+    并打印每个条件的实测数字（FWHM、相对强度比）。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from xrd_toolkit.simulation import march_dollase, scherrer_fwhm_deg, strain_fwhm_deg
+
+    material = _material_name(cif)
+    structure = load_structure(str(cif))
+    b_iso = b_iso_from_cif(cif)
+    P110, P311 = 30.38, 75.82
+    NPT = dict(two_theta_range=(10.0, 80.0), step_deg=0.005)
+
+    t0, y0, peaks, _ = simulate_pattern(structure, **NPT)              # 理想
+    t_sz, y_sz, _, _ = simulate_pattern(structure, size_nm=50.0, **NPT)
+    t_st, y_st, _, _ = simulate_pattern(structure, strain=0.002, **NPT)
+    t_dw, y_dw, _, _ = simulate_pattern(structure, b_iso=b_iso, **NPT)
+    t_md, y_md, _, _ = simulate_pattern(structure, md=((1, 1, 1), 0.6), **NPT)
+    t_rz, y_rz, _, _ = simulate_pattern(
+        structure, size_nm=50.0, strain=0.002, b_iso=b_iso, **NPT)
+
+    def scale_by_110(t, y):
+        """按 (110) 峰高归一到 100——比相对强度（强度再分布）必须同一把尺，
+        各自按自己的最高峰归一反而会把效应归一化掉。"""
+        m = (t > P110 - 0.5) & (t < P110 + 0.5)
+        return y / y[m].max() * 100.0
+
+    def height_at(t, y, c):
+        m = (t > c - 0.5) & (t < c + 0.5)
+        return float(y[m].max())
+
+    # ── 图 A：四个参数各自与理想对比 ────────────────────────────────
+    fig, axes = plt.subplots(2, 2, figsize=(13.5, 9))
+    ax_a, ax_b, ax_c, ax_d = axes.ravel()
+
+    # (a) 晶粒尺寸：放大 (110)
+    for t, y_, color, lab in ((t0, y0, "#888888", "ideal crystal"),
+                              (t_sz, y_sz, "#2b6cb0", "crystallite size 50 nm")):
+        m = (t > 29.6) & (t < 31.2)
+        ax_a.plot(t[m], y_[m], color=color, lw=1.5, label=lab)
+        ax_a.text(30.38, y_[m].max() * 0.55 if color == "#2b6cb0" else y_[m].max() * 0.4,
+                  f"FWHM {_measure_fwhm(t, y_, P110):.3f}°", color=color,
+                  fontsize=9, ha="center")
+    ax_a.set_xlim(29.6, 31.2); ax_a.set_ylim(0, 115)
+    ax_a.legend(loc="upper left", fontsize=9)
+    ax_a.set_title("(a) crystallite size 50 nm — Scherrer (∝1/cosθ)",
+                   fontsize=10.5)
+    ax_a.set_xlabel(r"2$\theta$ (degrees)"); ax_a.set_ylabel("Intensity (a.u.)")
+
+    # (b) 尺寸 vs 应变：FWHM(2θ) 三条曲线 + 实测点
+    tt = np.linspace(10.0, 80.0, 200)
+    curves = (
+        (np.full_like(tt, 0.10), "#888888", "instrument only (0.1°)", t0, y0),
+        (np.sqrt(0.10 ** 2 + np.asarray(scherrer_fwhm_deg(tt, 50.0)) ** 2),
+         "#2b6cb0", "+ size 50 nm (∝1/cosθ)", t_sz, y_sz),
+        (np.sqrt(0.10 ** 2 + np.asarray(strain_fwhm_deg(tt, 0.002)) ** 2),
+         "#d94b2b", "+ strain 0.2% (∝tanθ)", t_st, y_st),
+    )
+    check = [p[0] for p in sorted(peaks, key=lambda q: -q[1])[:4]]
+    for fw, color, lab, t, y_ in curves:
+        ax_b.plot(tt, fw, color=color, lw=1.5, label=lab)
+        ax_b.plot(check, [_measure_fwhm(t, y_, c) for c in check], "o",
+                  color=color, ms=4)
+    ax_b.set_title("(b) size vs strain — different θ-dependence "
+                   "(dots = measured)", fontsize=10.5)
+    ax_b.set_xlim(10, 80); ax_b.set_ylim(0, 0.45)
+    ax_b.legend(loc="upper left", fontsize=8.5)
+    ax_b.set_xlabel(r"2$\theta$ (degrees)"); ax_b.set_ylabel("FWHM (degrees)")
+
+    # (c) 热振动：按 (110) 对齐
+    ax_c.plot(t0, scale_by_110(t0, y0), color="#888888", lw=1.4,
+              label="rigid lattice (no thermal motion)")
+    b_txt = " / ".join(f"{v:.2f}" for v in b_iso.values())
+    ax_c.plot(t_dw, scale_by_110(t_dw, y_dw), color="#d94b2b", lw=1.3,
+              label=f"Debye-Waller from CIF Uiso (B = {b_txt} Å² per element)")
+    ax_c.annotate("high-angle peaks damped", xy=(75.8, scale_by_110(t_dw, y_dw)[
+        int(np.argmin(np.abs(t_dw - 75.82)))]), xytext=(52, 45),
+        arrowprops=dict(arrowstyle="->", color="0.35"), fontsize=9.5,
+        color="0.25")
+    ax_c.set_xlim(10, 80); ax_c.set_ylim(0, 118)
+    ax_c.legend(loc="upper right", fontsize=8.5)
+    ax_c.set_title("(c) thermal motion — both curves scaled to the (110) peak",
+                   fontsize=10.5)
+    ax_c.set_xlabel(r"2$\theta$ (degrees)"); ax_c.set_ylabel("Intensity (a.u.)")
+
+    # (d) 择优取向：按 (110) 对齐
+    ax_d.plot(t0, scale_by_110(t0, y0), color="#888888", lw=1.4,
+              label="random powder")
+    ax_d.plot(t_md, scale_by_110(t_md, y_md), color="#2b6cb0", lw=1.3,
+              label="March-Dollase R = 0.6, axis (111)")
+    ax_d.set_xlim(20, 60); ax_d.set_ylim(0, 160)
+    ax_d.legend(loc="upper right", fontsize=8.5)
+    ax_d.set_title("(d) preferred orientation — (111) enhanced, (100) weakened",
+                   fontsize=10.5)
+    ax_d.set_xlabel(r"2$\theta$ (degrees)"); ax_d.set_ylabel("Intensity (a.u.)")
+
+    for ax in axes.ravel():
+        ax.grid(alpha=0.25, linestyle=":")
+    fig.suptitle(f"{material} — sample microstructure, one effect at a time "
+                 f"(compared with the ideal crystal)", fontsize=12.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    out_a = outdir / f"sim_xrd_microstructure_{material}.png"
+    fig.savefig(out_a, dpi=150)
+    plt.close(fig)
+
+    # ── 图 B：理想 vs 全部真实效应叠加 ─────────────────────────────
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 4.8),
+                                   gridspec_kw={"width_ratios": [2.2, 1]})
+    ax1.plot(t0, y0, color="#888888", lw=1.3, label="ideal crystal (0.1°)")
+    ax1.plot(t_rz, y_rz, color="#2b6cb0", lw=1.3,
+             label="50 nm + 0.2% strain + thermal (CIF)")
+    ax1.set_xlim(10, 80); ax1.set_ylim(0, 118)
+    ax1.legend(loc="upper right", fontsize=9)
+    ax1.set_title(f"{material} — ideal vs all real effects together", fontsize=10.5)
+    ax1.set_xlabel(r"2$\theta$ (degrees)"); ax1.set_ylabel("Intensity (a.u.)")
+    for t, y_, color, tx in ((t0, y0, "#888888", 30.02),
+                             (t_rz, y_rz, "#2b6cb0", 30.82)):
+        m = (t > 29.5) & (t < 31.3)
+        ax2.plot(t[m], y_[m], color=color, lw=1.5)
+        left, right, top = _fwhm_bounds(t, y_, P110, span=0.9)
+        ax2.hlines(top / 2, left, right, color=color, lw=1)
+        ax2.text(tx, 106, f"FWHM {right - left:.3f}°",
+                 ha="center", fontsize=9, color=color)
+    ax2.set_xlim(29.5, 31.3); ax2.set_ylim(0, 118)
+    ax2.set_title("(110) zoom", fontsize=10.5)
+    ax2.set_xlabel(r"2$\theta$ (degrees)")
+    for ax in (ax1, ax2):
+        ax.grid(alpha=0.25, linestyle=":")
+    fig.tight_layout()
+    out_b = outdir / f"sim_xrd_realistic_vs_ideal_{material}.png"
+    fig.savefig(out_b, dpi=150)
+    plt.close(fig)
+
+    # ── 实测数字表 ────────────────────────────────────────────────
+    lat = structure.lattice.matrix
+    p111 = march_dollase((1, 1, 1), (1, 1, 1), 0.6, lat)
+    p110 = march_dollase((1, 1, 0), (1, 1, 1), 0.6, lat)
+    p100 = march_dollase((1, 0, 0), (1, 1, 1), 0.6, lat)
+    r111_0 = height_at(t0, scale_by_110(t0, y0), 37.44)
+    r111_md = height_at(t_md, scale_by_110(t_md, y_md), 37.44)
+    r311_0 = height_at(t0, scale_by_110(t0, y0), P311)
+    r311_dw = height_at(t_dw, scale_by_110(t_dw, y_dw), P311)
+    print(f"{material} 任务三实测数字（理想 = 常数 0.1° + 刚性晶格 + 无取向）：")
+    print(f"  CIF 热振动  B = {b_iso}（B = 8π²·Uiso）")
+    print(f"  尺寸 50nm   FWHM(110) {_measure_fwhm(t0, y0, P110):.3f}° → "
+          f"{_measure_fwhm(t_sz, y_sz, P110):.3f}° ；"
+          f"FWHM(311) {_measure_fwhm(t_sz, y_sz, P311):.3f}°")
+    print(f"  应变 0.2%   FWHM(110) {_measure_fwhm(t_st, y_st, P110):.3f}° ；"
+          f"FWHM(311) {_measure_fwhm(t_st, y_st, P311):.3f}°（tanθ：高角涨得快）")
+    print(f"  热振动      (311) 相对 (110)：{r311_0:.1f}% → {r311_dw:.1f}%"
+          f"（高角度被压低）")
+    print(f"  取向 R=0.6  P(111)={p111:.2f} / P(110)={p110:.2f} / P(100)={p100:.2f}；"
+          f"(111)/(110) 实测 {r111_0:.1f}% → {r111_md:.1f}%")
+    print(f"  全部叠加    FWHM(110) {_measure_fwhm(t_rz, y_rz, P110):.3f}° ；"
+          f"FWHM(311) {_measure_fwhm(t_rz, y_rz, P311):.3f}°")
+    print(f"  → {out_a}")
+    print(f"  → {out_b}")
+
+
 STUDIES = {
     "basic": study_basic,
     "instrument": study_instrument,
-    # "microstructure": study_microstructure,  # 任务三
+    "microstructure": study_microstructure,
     # "compare": study_compare,              # 任务四
 }
 
