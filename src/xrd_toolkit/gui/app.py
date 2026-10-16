@@ -1762,10 +1762,17 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     cmp_row.setSpacing(4)
     btn_plot_cmp = QPushButton("出对比")
     btn_plot_cmp.setObjectName("plot_cmp_btn")
+    # 栅栏（2026-10-16）：对比只叠已经算好的曲线，没出过 1D 的原始数据
+    # 会被拦下并写日志——提示里先讲清，免得点了个寂寞
+    btn_plot_cmp.setToolTip("把勾选文件的曲线叠成一张图；只叠已经算好的"
+                            "曲线——还没出过 1D 的原始数据先点 [1D] 出图")
     window.plot_cmp_btn = btn_plot_cmp
     btn_plot_cmp.clicked.connect(lambda: _plot_compare(window))
     btn_plot_heat = QPushButton("出热图")
     btn_plot_heat.setObjectName("plot_heat_btn")
+    btn_plot_heat.setToolTip("把勾选文件拼成一张 2θ × 样品的强度图；只拼"
+                             "已经算好的曲线——还没出过 1D 的原始数据先"
+                             "点 [1D] 出图")
     window.plot_heat_btn = btn_plot_heat
     # 兼容别名（2026-10-07 类型行拆分）：compare_btn / heat_btn 从此指向
     # 本页这两颗产出按钮（旧名沿自「原图」页类型行，测试与探针按它们找）

@@ -228,6 +228,17 @@ def check_multi_views(window, lab6: str, lmfp: str) -> None:
     print("\nC. 多文件视图（plot_compare）")
     window.add_files([lmfp], select=True)   # 导入默认不勾选：探针要两个都选上
     check_all_raw(window)   # A 段出过图 → 有产物落盘 → 勾选已清零，重新摆
+    # 栅栏（2026-10-16 用户："原始数据不允许直接进行对比，必须先去 1d
+    # 积分"）：对比只叠已经算好的曲线——lab6 在 A 段已有产物，lmfp 还没
+    # 出过 1D，先走一遍 [1D]（真积分，顺带落产物）；出完新产物勾选会清零，
+    # 再摆一次输入集合。
+    window.view_buttons["1D"].click()
+    ok = wait_until(lambda: all(
+        k in window.plot_docks
+        and len(content_of(window, k).axes_1d.lines) > 0
+        for k in ("1D|" + lab6, "1D|" + lmfp)))
+    report(ok, "对比前先把 lmfp 也出过 1D（栅栏前置）")
+    check_all_raw(window)
     window.compare_btn.click()
     ok = wait_until(lambda: any(
         k.startswith("对比")
@@ -344,8 +355,8 @@ def check_batch_background(window, lab6: str, lmfp: str) -> None:
     log = window.log_text.toPlainText()
     report("批量处理完成" in log, "批量处理：跑完",
            [ln for ln in log.splitlines() if ln.startswith("批量处理完成")][:1])
-    # lmfp 未必开过 1D 面板（本探针前面只给它开了对比/热图）→ 从文件
-    # 列表拿它的路径字符串（面板键与锚点键都用这一份）
+    # 这个文件的路径从文件列表拿（面板键与锚点键都用同一份）——C 段
+    # 栅栏前置之后它的 1D 面板也开着，但键的写法不该依赖那个巧合
     other = [k for k in window.bg_anchors if k != key_a]
     report(len(other) == 1, "另一个文件也拿到了锚点", other[:1])
     if not other:

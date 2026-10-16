@@ -369,10 +369,18 @@ def shot_customize(window) -> None:
     不走 _open_customize_dialog 那条路（它会 dlg.exec() 开模态事件
     循环，offscreen 下会一直等在那儿 ✗ 踩过）：自己建、show、抓、关。
     """
+    from xrd_toolkit.gui import sources as gui_sources
     from xrd_toolkit.gui.customize import _build_customize_dialog
     # 用**对比面板**：只有它多出「渐变色系」一节（2026-10-13 起逐曲线
     # 色块退休；对话框的滚动区留着兜底小屏幕）
     add_all(window, LMFP[:2], entrance="对比")
+    # 栅栏（2026-10-16 用户："原始数据不允许直接进行对比，必须先去 1d
+    # 积分"）：对比只叠已经算好的曲线——先给这两张出过 1D（长出产物会
+    # 把勾选清零，再按来源勾回来），[出对比] 才放行
+    window.view_buttons["1D"].click()
+    wait_for(lambda: all(any(k == "1D|" + str(p) for k in window.plot_docks)
+                         for p in LMFP[:2]), timeout_s=240)
+    check_sources(window, kinds={gui_sources.RAW}, paths=LMFP[:2])
     window.compare_btn.click()
     wait_for(lambda: any(k.startswith("对比")
                          and len(content_of(window, k).axes_1d.lines) >= 2

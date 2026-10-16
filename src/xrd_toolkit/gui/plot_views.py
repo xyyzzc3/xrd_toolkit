@@ -309,9 +309,9 @@ def _apply_params(window: QMainWindow) -> None:
     # 说清重算的是谁）；摘身份之后再写，标题才是摘完的那个
     _log(window, f"[应用] 重算编辑对象：{dock.windowTitle()}")
     if view == "对比":
-        _run_compare(window, key)   # 一组文件全部重算
+        _run_compare(window, key)   # 一组文件全部重读+重画（栅栏：不现场积分）
     elif view == "热图":
-        _run_heatmap(window, key, force=True)   # 数据参数变了：全部重积分
+        _run_heatmap(window, key)   # 同上（force 已于 2026-10-16 栅栏随退休）
     else:
         _run_view(window, view, dock.panel_file, key)
     # 上面这些都会把控件当前值写进那张图的快照 → 数据组的「未应用」灰字
@@ -918,6 +918,36 @@ def _curve_for(window, path):
     got = stage_cache.load_1d(path, **kw)
     if got is not None:
         return got[0], got[1], "1D 产物"
+    return None
+
+
+def _ready_curve(window, path, display):
+    """这个文件**现在就能给对比 / 热图用**的那条曲线（"已经算好"的唯一判据）。
+
+    用户 2026-10-16："原始数据不允许直接进行对比，必须先去 1d 积分，日志
+    里记得写"——对比 / 热图从此**只画已经算好的**，现场积分那条路退休。
+    "已经算好"，两把来源按可靠度排：
+
+      1. 处理产物 / 1D 产物（`_curve_for`，按文件自己上次用过的参数键）
+         ——落盘的、跨会话都在的那份；
+      2. 本会话开着的 1D 面板上那条曲线（老热图 cache_of 的口径）——算完
+         就在这一趟里，哪怕产物还没落盘（写盘是尽力而为）。
+
+    栅栏（_plot_compare / _plot_heatmap 的拒绝判定）与取数用**同一把尺**：
+    能取到就放行、取不到就拦，免得"拦了画得出的 / 放了画不出的"。
+    顺序是选定的（2026-10-16）：**落盘那份优先**——两把来源不一致只会在
+    "写盘静默失败"这类异常态出现（见于 plot_views._spawn 的 worker），
+    那时宁可给旧的那份、也不让只看一眼就换数据（老热图 cache_of 是
+    面板优先，这里统一到产物优先，与对比的老口径 2026-09-24 同源）。
+    返回 (tth, intensity, 来源说明)，来源说明进日志；取不到 → None。
+    """
+    got = _curve_for(window, path)
+    if got is not None:
+        return got
+    for k in (f"1D|{path}", f"1D|{path}|{display}"):
+        d = window.plot_docks.get(k)
+        if d is not None and getattr(d, "last_tth", None) is not None:
+            return d.last_tth, d.last_intensity, "1D 面板"
     return None
 
 

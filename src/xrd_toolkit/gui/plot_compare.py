@@ -7,7 +7,6 @@
 """
 import os
 import re
-import time
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +21,6 @@ from xrd_toolkit.services.stacking import row_step
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS,
     _apply_auto_heatlim, _auto_y_range, _AUX_GID_PREFIX, _proc_curve,
-    _collect_geometry,
     _compare_shown_curves, _content, _data_snapshot, _DISPLAY_DEFAULTS,
     _drop_pending_display,
     _gradient_color, _display_snapshot, _heat_shown, _log, _panel_param,
@@ -33,8 +31,7 @@ from xrd_toolkit.gui.plot_panels import (
     _apply_text_guards, _connect_axis_sync, _data_lines, _open_plot_panel,
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
-    _apply_plain_view, _batch_step, _bg_path_of, _curve_for,
-    _file_data_params, _progress_show, _refresh_proc, _spawn)
+    _apply_plain_view, _bg_path_of, _ready_curve, _refresh_proc)
 
 
 # 对比面板图例最多列几条：再多就不画了（挡住图的是那 81 行名字）。
@@ -261,6 +258,24 @@ def _compare_title(files) -> str:
         base = f"对比_{displays[0]} 等 {len(files)} 个文件"
     kinds = len({s.kind for s in files})
     return f"{base}（{_sources_mix(files)}）" if kinds > 1 else base
+
+
+def _preview_names(sources) -> str:
+    """日志里点名的一小段名单："A" / "A 等 N 个"（同 _compare_title 惯例）。"""
+    first = sources[0].display
+    return first if len(sources) == 1 else f"{first} 等 {len(sources)} 个"
+
+
+def _raw_not_ready(window, files) -> list:
+    """勾选里"还没有 1D 曲线可用"的原始条目（栅栏判据，用户 2026-10-16）。
+
+    判据与取数完全同一把尺（plot_views._ready_curve）：能取到就放行、
+    取不到就拦。产物条目不在其列——它们本来就自带曲线（读不到是另一
+    回事，走各自的"产物不存在"跳过）。
+    """
+    return [s for s in files
+            if s.kind == gui_sources.RAW
+            and _ready_curve(window, s.path, s.display) is None]
 
 
 def _redraw_compare(window: QMainWindow, key: str) -> None:
@@ -533,19 +548,18 @@ def _finish_compare(window: QMainWindow, key: str) -> None:
         tally = {}
         for src in srcs.values():
             tally[src] = tally.get(src, 0) + 1
-        n_new = len(dock.compare_data) - sum(tally.values())
-        if n_new:
-            tally["新算"] = n_new
         # 来处的说法要对得上"我勾的是什么"：勾**原始条目**、曲线从 1D 缓存
         # 读出来的，写成"复用 1D 缓存"而不是"1D 产物"——后者会让人以为
-        # "我没勾 1D 产物啊，怎么冒出来的"（用户 2026-09-27 的原话）
-        label = {"1D 产物": "复用 1D 缓存", "处理产物": "复用处理产物"}
+        # "我没勾 1D 产物啊，怎么冒出来的"（用户 2026-09-27 的原话）。
+        # "新算"没了（2026-10-16 栅栏）：对比不再现场积分，每条曲线都有来处。
+        label = {"1D 产物": "复用 1D 缓存", "处理产物": "复用处理产物",
+                 "1D 面板": "复用 1D 面板"}
         detail = "、".join(f"{label.get(k, k)} {v} 条"
                           for k, v in sorted(tally.items()))
         _log(window, f"对比完成：{len(dock.compare_data)} 条曲线"
                      + (f"（{detail}）" if detail else ""))
     else:
-        _log(window, "对比失败：所有文件的积分都失败了，面板留空")
+        _log(window, "对比失败：没有一条曲线画得出来，面板留空")
 
 
 def _aggregate_snapshot(window: QMainWindow, base: dict) -> dict:
@@ -565,10 +579,16 @@ def _aggregate_snapshot(window: QMainWindow, base: dict) -> dict:
 
 
 def _run_compare(window: QMainWindow, key: str) -> None:
-    """对对比面板的每个文件各起一个后台积分，结果画到同一张图。
+    """把面板绑定的每个文件的曲线**读出来**叠到同一张图（只读已经算好的）。
 
-    代次（gen）防过期：重复点 [对比] 或数据 [应用] 时旧代任务
-    全部作废。快照开工前拍下（与单文件面板一致）。
+    用户 2026-10-16："原始数据不允许直接进行对比，必须先去 1d 积分，日志
+    里记得写"——现场积分那条路退休：按钮那头已经整批拦下没算过的原始
+    数据（_plot_compare），这里对取不到的再逐条跳过并写明（数据 [应用]
+    等直进路径的兜底）。全是读盘 / 读面板，这一趟完全同步：循环走完即
+    收尾（compare_pending 一路减到 0——`panels._PANEL_ATTRS` 与两个
+    测试还读它，别删）。快照开工前拍下（与单文件面板一致）；代次（gen）
+    与面板代数（epoch）的检查保留为安全网——同步之后它们已不可达
+    （迟到回调那类场景随现场积分一起退休），留着防将来又引入异步。
 
     **每个文件按它自己上次用过的数据参数取数**（甲，2026-10-03）：对比
     读的是每个文件**自己**的产物/范围，不看坞顶那行（那行在对比页也藏
@@ -617,18 +637,20 @@ def _run_compare(window: QMainWindow, key: str) -> None:
                 or panel.compare_gen != gen):
             return
         panel.compare_pending -= 1
-        _log(window, f"对比：{display} 积分失败 —— {msg}")
+        _log(window, f"对比：{display} 跳过 —— {msg}")
         if panel.compare_pending == 0:
             _finish_compare(window, key)
 
     # 取数分两种来源（用户 2026-09-25 定的"阶段文件夹"语义）：
     #   - 产物条目（"1D"/"扣背景"）说的是**那一份产物**：直接读盘，
     #     不比对设置、不重算（读不到就跳过并说清楚）；
-    #   - 原始数据条目照老规矩：**产物优先**（扣背景产物 / 1D 产物命中
-    #     就直接用，跨会话秒开，见 plot_views._curve_for），没有的才起
-    #     后台任务真算。
+    #   - 原始数据条目：**只认已经算好的**（处理产物 / 1D 产物 / 本会话
+    #     的 1D 面板，见 plot_views._ready_curve）——没算过的不再现场
+    #     积分（2026-10-16 栅栏），逐条跳过并指明"先点 [1D] 出图"。
     # 用了哪一份记进 compare_sources，收尾时写进日志（"看得见"）
     dock.compare_sources = {}
+    _log(window, f"开始对比 {len(dock.compare_files)} 个文件"
+                 "（只叠已经算好的曲线）")
     for source in dock.compare_files:
         path, display = source.path, source.display
         if source.kind != gui_sources.RAW:
@@ -639,43 +661,25 @@ def _run_compare(window: QMainWindow, key: str) -> None:
             dock.compare_sources[display] = gui_sources.describe_source(source)
             finish_one(path, display, got)
             continue
-        got = _curve_for(window, path)
+        got = _ready_curve(window, path, display)
         if got is not None:
             dock.compare_sources[display] = got[2]
             finish_one(path, display, (got[0], got[1]))
             continue
-
-        # 没有产物：照旧后台积分（默认参数绑定防闭包晚绑定——循环变量到
-        # 回调执行时已走到末尾）
-        def spawn_one(path=path, display=display):
-            def done(window_, key_, task, result):
-                finish_one(path, display, result)
-
-            def error(msg):
-                fail_one(path, display, msg)
-
-            # 这个文件的取数参数 = 它自己上次用过的（甲，与 _curve_for 同源）
-            lo, hi, npt = _file_data_params(path)
-            geom = dict(_collect_geometry(window),
-                        tth_min_deg=lo, tth_max_deg=hi)
-            window.status_text.setText(f"正在积分 {Path(path).name}…")
-            _spawn(window, path, geom, npt, key,
-                   on_done=done, on_error=error)
-
-        spawn_one()
-    n_cached = len(dock.compare_sources)
-    if dock.compare_pending <= 0:
-        return          # 全部命中产物：finish_one 已经把图收尾了
-    _log(window, f"开始对比 {len(dock.compare_files)} 个文件"
-                 f"（{n_cached} 个已复用产物，{dock.compare_pending} 个在后台计算）")
+        fail_one(path, display, "还没有 1D 曲线（先点 [1D] 出图）")
 
 
 def _plot_compare(window: QMainWindow) -> None:
     """[对比] 按钮：把勾选文件的 1D 曲线叠到同一张面板上。
 
-    只做 1D。勾选 ≥2 个文件，每个文件后台各算各的积分，结果陆续
-    画进同一张图（一个文件一条曲线，自动分色 + 图例显示名），
-    全部完成后该面板成为编辑对象。
+    只做 1D。勾选 ≥2 个文件，每个文件**读已经算好的**那条曲线
+    （处理产物 / 1D 产物 / 本会话的 1D 面板），画进同一张图（一个
+    文件一条曲线，自动分色 + 图例显示名），完成后该面板成为编辑对象。
+
+    **栅栏**（用户 2026-10-16："原始数据不允许直接进行对比，必须先去
+    1d 积分，日志里记得写"）：勾选里有还没出过 1D 的原始数据 → 整批
+    不出图，日志点名 + 指路——不现场积分、不开空面板、也不动已开着的
+    那张（拒绝在开/重绑之前，见下面 checked 之后的判定）。
 
     **面板是"单槽"：永远只有一张，每次按 [对比] = 按**当前**勾选重建。**
     （用户 2026-09-28："对比图就是实现文件区当前实际勾选的图的对比图…
@@ -688,6 +692,14 @@ def _plot_compare(window: QMainWindow) -> None:
         _log(window, "对比至少勾选两个文件（勾上的文件叠到一张图）")
         return
     files = list(checked)   # 来源条目：原始文件 + 各组产物混着也能对比
+    # 栅栏（见 docstring）：判据与取数同一把尺（_ready_curve）——拒绝要
+    # 发生在开/重绑面板**之前**，旧图才原样留着
+    missing = _raw_not_ready(window, files)
+    if missing:
+        _log(window, f"对比只叠已经算好的曲线：勾选里 {len(missing)} 个原始"
+                     f"数据还没有 1D 曲线（{_preview_names(missing)}）"
+                     "——先点 [1D] 出图，再来对比")
+        return
     key = "对比"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -1111,7 +1123,7 @@ def _finish_heatmap(window: QMainWindow, key: str) -> None:
     data = _heat_data(window, dock)
     dock.heat_data = data
     if data is None:
-        _log(window, "热图失败：所有文件的积分都失败了，面板留空")
+        _log(window, "热图失败：没有一条曲线画得出来，面板留空")
         return
     tth, matrix, stems, interp = data
     n_blank = int((~np.isfinite(np.asarray(matrix, dtype=float))).sum())
@@ -1126,16 +1138,16 @@ def _finish_heatmap(window: QMainWindow, key: str) -> None:
     _log(window, f"热图完成：{len(stems)} 个文件 × {len(tth)} 点")
 
 
-def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
-    """跑热图计算：已算好的 1D 面板缓存直接用，缺的后台补积分。
+def _run_heatmap(window: QMainWindow, key: str) -> None:
+    """把面板绑定的每个文件的曲线**读出来**拼成强度矩阵（只读已经算好的）。
 
-    缓存复用 = 用户点 [热图] 时把已经算过 1D 的文件直接拿结果，
-    只对没算过的文件起后台任务（进度计数走 _batch_step，批名
-    "热图"）；force = 数据 [应用] 重算：用户改了数据参数，全部文件
-    重新积分（缓存里的旧参数结果不可信）。代次（heat_gen）防过期：
-    重复点 [热图] 旧代任务全部作废；面板代数（_panel_epoch）防关过
-    重开。结果按文件列表顺序收进 dock.heat_results，全部到齐
-    （含失败）收尾。
+    用户 2026-10-16："原始数据不允许直接进行对比，必须先去 1d 积分，日志
+    里记得写"——现场积分那条路退休（force 参数随退休，见 plot_views.
+    _apply_params 的注释）：按钮那头对没算过的原始数据整批拦下
+    （_plot_heatmap），这里对取不到的逐条跳过并写明（数据 [应用] 等直进
+    路径的兜底）。全是读盘 / 读面板，完全同步：循环走完即收尾。结果按
+    文件列表顺序收进 dock.heat_results（跳过的是 None 占位，见
+    _heat_data）。
     """
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -1145,28 +1157,10 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
     # 显示参数刚被用掉，灰字立即刷新（重按 [热图] 时编辑对象没变、
     # _set_focus 直接 return，没人刷新就会留着陈旧的"未应用"）
     _refresh_pending_labels(window)
-    dock.heat_gen += 1
-    gen = dock.heat_gen
-    epoch = window._panel_epoch.get(key, 0)
     results = [None] * len(dock.heat_files)   # 文件顺序占位
-    missing = []
-
-    def cache_of(path, display):
-        """该文件的曲线：先看 1D 面板缓存，再看产物（扣背景 / 1D）。
-
-        产物那一步是跨会话的那一步（services/stage_cache）：参数没变
-        → 键不变 → 直接读，不用重积分。force（数据参数变了）时跳过
-        面板缓存（它按旧参数算的 ✗），但**产物仍然可查**——产物的键里
-        含参数，命中就说明这份正好是新参数算的，用它是正确的、也是快的。
-        """
-        if not force:
-            for k in (f"1D|{path}", f"1D|{path}|{display}"):
-                d = window.plot_docks.get(k)
-                if d is not None and getattr(d, "last_tth", None) is not None:
-                    return d.last_tth, d.last_intensity
-        got = _curve_for(window, path)
-        return (got[0], got[1]) if got is not None else None
-
+    # 总结行永远打：日志一眼看出这次热图拼了几个文件（栅栏后没有"新算"）
+    _log(window, f"开始热图：{len(dock.heat_files)} 个文件"
+                 "（只拼已经算好的曲线）")
     for i, source in enumerate(dock.heat_files):
         path, display = source.path, source.display
         if source.kind != gui_sources.RAW:
@@ -1178,71 +1172,14 @@ def _run_heatmap(window: QMainWindow, key: str, force: bool = False) -> None:
                 continue
             results[i] = (Path(path).stem, got[0], got[1])
             continue
-        cached = cache_of(str(path), display)
-        if cached is not None:
-            results[i] = (Path(path).stem, cached[0], cached[1])
+        got = _ready_curve(window, str(path), display)
+        if got is None:
+            _log(window, f"热图：{display} 还没有 1D 曲线（先点 [1D] 出图）"
+                         f"——跳过")
             continue
-        missing.append((i, path, display))
+        results[i] = (Path(path).stem, got[0], got[1])
     dock.heat_results = results
-    dock.heat_pending = len(missing)
-    # 总结行两种路径都打（全缓存 = 后台积分 0 个）：日志一眼看出
-    # 这次热图用了多少新算的结果
-    _log(window, f"开始热图：{len(dock.heat_files)} 个文件"
-                 f"（复用已有 1D 结果，后台积分 {len(missing)} 个）")
-    if missing:
-        if len(missing) > 1:
-            # 批量进度记账（同 _plot_view）：完成任务/失败各计一次，
-            # 批走完自动清账（进度条与合并日志也走同一套）
-            window._batch = {"view": "热图", "total": len(missing),
-                             "done": 0, "start": time.time(), "cached": 0}
-            _progress_show(window, len(missing))
-        else:
-            window._batch = {"view": "热图", "total": 1, "done": 0,
-                             "start": time.time(), "cached": 0}
-        for i, path, display in missing:
-            # 默认参数绑定防闭包晚绑定（循环变量到回调执行时已走到末尾）
-            def spawn_one(i=i, path=path, display=display):
-                def done(window_, key_, task, result):
-                    suffix, quiet = _batch_step(window, key_, display)
-                    panel = window.plot_docks.get(key)
-                    if (panel is None
-                            or window._panel_epoch.get(key, 0) != epoch
-                            or panel.heat_gen != gen):
-                        return   # 旧结果静默丢弃（整图已由新代次接管）
-                    tth, intensity = result
-                    panel.heat_results[i] = (Path(path).stem, tth, intensity)
-                    panel.heat_pending -= 1
-                    if not quiet:      # 大批量：逐张不写（见 _batch_step）
-                        _log(window, f"热图：{display} 积分完成（{len(tth)} 点）"
-                                     f"{suffix}")
-                    if panel.heat_pending == 0:
-                        _finish_heatmap(window, key)
-
-                def error(msg):
-                    suffix, _ = _batch_step(window, key)   # 失败永远逐条写
-                    # error 包装器只有
-                    # msg（key 取闭包外层；done 才有 key_ 形参）
-                    panel = window.plot_docks.get(key)
-                    if (panel is None
-                            or window._panel_epoch.get(key, 0) != epoch
-                            or panel.heat_gen != gen):
-                        return
-                    panel.heat_pending -= 1
-                    _log(window, f"热图：{display} 积分失败 —— {msg}{suffix}")
-                    if panel.heat_pending == 0:
-                        _finish_heatmap(window, key)
-
-                # 这个文件的取数参数 = 它自己上次用过的（甲，与 _curve_for 同源）
-                lo, hi, npt = _file_data_params(path)
-                geom = dict(_collect_geometry(window),
-                            tth_min_deg=lo, tth_max_deg=hi)
-                window.status_text.setText(f"正在积分 {Path(path).name}…")
-                _spawn(window, path, geom, npt, key,
-                       on_done=done, on_error=error)
-
-            spawn_one()
-    else:
-        _finish_heatmap(window, key)
+    _finish_heatmap(window, key)
 
 
 def _refresh_heat(window: QMainWindow) -> None:
@@ -1370,7 +1307,11 @@ def _plot_heatmap(window: QMainWindow) -> None:
     多文件 → 一张面板（同 [对比] 的流程形态）：横轴 2θ、纵轴样品
     （文件列表顺序，行标签 = 文件名）、颜色 = 强度——原位实验看
     峰位/强度/峰形随样品（时间/充电状态）的变化。勾选 ≥2 个文件；
-    已算好的 1D 结果直接复用，缺的后台补积分（见 _run_heatmap）。
+    只拼已经算好的 1D 曲线（见 _run_heatmap）。
+
+    **栅栏**（同 [对比]，用户 2026-10-16："原始数据不允许直接进行对比，
+    必须先去 1d 积分，日志里记得写"）：勾选里有还没出过 1D 的原始数据
+    → 整批不出图，日志点名 + 指路（拒绝在开/重绑面板之前）。
 
     **与 [对比] 一样是"单槽"**：永远只有一张，每次按 [热图] = 按**当前**
     勾选重建（用户 2026-09-28："无论什么时候，都是执行当前勾选，不存在
@@ -1381,6 +1322,14 @@ def _plot_heatmap(window: QMainWindow) -> None:
         _log(window, "热图至少勾选两个文件（多条 1D 曲线拼成一张强度图）")
         return
     files = list(checked)   # 来源条目：原始文件 + 各组产物混着也行
+    # 栅栏（见 docstring）：判据与取数同一把尺（_ready_curve），拒绝发生在
+    # 开/重绑面板**之前**，旧图才原样留着
+    missing = _raw_not_ready(window, files)
+    if missing:
+        _log(window, f"热图只拼已经算好的曲线：勾选里 {len(missing)} 个原始"
+                     f"数据还没有 1D 曲线（{_preview_names(missing)}）"
+                     "——先点 [1D] 出图，再来出热图")
+        return
     key = "热图"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)
     if dock is None:
@@ -1389,9 +1338,7 @@ def _plot_heatmap(window: QMainWindow) -> None:
         dock.panel_display = title   # 标题/日志/默认存盘名用
         dock.figure_saved = False
         dock.heat_files = files   # 面板绑定这组文件（重算用）
-        dock.heat_gen = 0
         dock.heat_results = []
-        dock.heat_pending = 0
         dock.heat_data = None
         # 新面板：显示参数从默认起步；数据参数不进快照（见 _aggregate_snapshot）
         dock.params_snapshot = _aggregate_snapshot(window, None)

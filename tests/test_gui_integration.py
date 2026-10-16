@@ -44,7 +44,8 @@
     （50%–200%），弹出去的不参与、平铺不碰它；新图左上角
     24px 小错位级联（6 档循环）、按当前总缩放开；
   - 关闭面板 = 关闭即遗忘：重开全新默认，关窗询问只算开着的图，
-    在飞任务/旧代对比结果迟到即作废；
+    在飞任务结果迟到即作废（对比/热图 2026-10-16 栅栏后不再有在飞
+    任务——只读已经算好的曲线）；
   - 背景扣除（TestBackgroundSubtraction）：三种模式 + 实时预览 + 辅助
     线隔离；锚点点选逐条调处理函数，另有一条从 canvas.callbacks 发真
     MouseEvent 的接线护栏——漏导入名字这类拆分伤只有真点画布才现形，
@@ -206,6 +207,28 @@ def add_checked(w, paths, **kw):
     是噪音。要测"导入默认不勾"本身，直接用 w.add_files。
     """
     w.add_files(paths, select=True, **kw)
+    return w
+
+
+def _prime_1d(w, paths, stub=None):
+    """栅栏前置（2026-10-16 用户："原始数据不允许直接进行对比，必须先去
+    1d 积分"）：先给这批文件点一遍 [1D] 出图，对比 / 热图才放行。
+
+    为什么这样就能放行：假路径（data/fake_*.tif）产物落不了盘（写产物
+    要先 stat 文件，静默失败），但积分出的曲线会落在各自 1D 面板的内存
+    里——栅栏与取数认的就是"本会话的 1D 面板"这条（plot_views.
+    _ready_curve）。假路径也不会**长出产物**，所以不会触发"新产物 =
+    勾选清零"，勾选集原样保留给后面的 [对比]/[热图]。
+    """
+    with mock.patch.object(gui_views, "_compute_integration",
+                           side_effect=stub or _fake_compare_compute):
+        add_checked(w, paths)
+        _open_view(w, "1D")
+        ready = _wait_until(
+            lambda: all(f"1D|{p}" in w.plot_docks
+                        and getattr(w.plot_docks[f"1D|{p}"], "last_tth", None)
+                        is not None for p in paths), timeout_ms=10000)
+    assert ready, f"1D 前置没算完：{paths}"
     return w
 
 
@@ -1779,14 +1802,14 @@ class TestCurveColors(unittest.TestCase):
             w.close()
 
     def _plot_compare(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-            w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比")]
-            self.assertEqual(len(keys), 1)
-            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        """勾 fake_a + fake_b：先各出过 1D（栅栏前置）再点 [对比]，
+        等两条曲线到齐 → 返回（面板键, 坐标轴）。"""
+        _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+        w.compare_btn.click()
+        keys = [k for k in w.plot_docks if k.startswith("对比")]
+        self.assertEqual(len(keys), 1)
+        ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+        self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
     def test_compare_uses_the_gradient(self):
@@ -1924,15 +1947,14 @@ class TestCurveColors(unittest.TestCase):
         return [a for a in ax.get_children() if a.get_gid() == tag]
 
     def _plot_compare_n(self, w, n):
-        """勾 n 个文件出一张对比图（>12 条时测色标用）。"""
+        """勾 n 个文件出一张对比图（>12 条时测色标用）；先各出过 1D
+        （栅栏前置）再点 [对比]。"""
         paths = [f"data/fake_{i:02d}.tif" for i in range(n)]
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, paths)
-            w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比")]
-            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-            self.assertTrue(_wait_until(lambda: len(ax.lines) >= n))
+        _prime_1d(w, paths)
+        w.compare_btn.click()
+        keys = [k for k in w.plot_docks if k.startswith("对比")]
+        ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+        self.assertTrue(_wait_until(lambda: len(ax.lines) >= n))
         return keys[0], ax
 
     def test_color_scale_is_a_toggle_default_off(self):
@@ -1980,13 +2002,11 @@ class TestCurveColors(unittest.TestCase):
         try:
             paths = ["data/fake_20.tif", "data/fake_05.tif",
                      "data/fake_11.tif"]   # 加的先后 ≠ 尾号顺序
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                add_checked(w, paths)
-                w.compare_btn.click()
-                keys = [k for k in w.plot_docks if k.startswith("对比")]
-                ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+            _prime_1d(w, paths)            # 栅栏前置：先各出过 1D
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
+            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
             by_label = {ln.get_label(): ln.get_color() for ln in ax.lines}
             self.assertEqual(by_label["fake_05.tif"],
                              gui_state._gradient_color("蓝", 0, 3),
@@ -2175,21 +2195,22 @@ class TestPendingDisplayParams(unittest.TestCase):
         """一张图都没有时改热图色图/对数 → 出热图时就是这套值，不回弹。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                # 先调参数（此时一张图都没有；此前这些改动直接丢）
-                combo = w.params["热图色图"]
-                combo.setCurrentIndex(combo.findData("viridis"))
-                w.params["热图对数"].setChecked(True)
-                self.assertEqual(w.pending_display.get("热图色图"), "viridis",
-                                 "无面板可接：改动该记进待应用账本")
-                # 再出图：新面板就用这套值
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(_wait_until(
-                    lambda: any(k.startswith("热图")
-                                and getattr(d, "heat_data", None) is not None
-                                for k, d in w.plot_docks.items())))
+            # 栅栏前置（2026-10-16）：先各出过 1D。顺序要紧——账本只记
+            # "没有面板可接"的改动，调参数必须排在出 1D 之后
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)
+            # 先调参数（此时没有热图面板；此前这些改动直接丢）
+            combo = w.params["热图色图"]
+            combo.setCurrentIndex(combo.findData("viridis"))
+            w.params["热图对数"].setChecked(True)
+            self.assertEqual(w.pending_display.get("热图色图"), "viridis",
+                             "无面板可接：改动该记进待应用账本")
+            # 再出图：新面板就用这套值
+            w.heat_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: any(k.startswith("热图")
+                            and getattr(d, "heat_data", None) is not None
+                            for k, d in w.plot_docks.items())))
             key = next(k for k in w.plot_docks if k.startswith("热图"))
             dock = w.plot_docks[key]
             self.assertEqual(dock.params_snapshot["热图色图"], "viridis")
@@ -2206,20 +2227,21 @@ class TestPendingDisplayParams(unittest.TestCase):
         """渐变色系 / 堆叠 / 视图 2θ 框：出图前调好，出图时就是它。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                combo = w.params["渐变色系"]
-                combo.setCurrentIndex(combo.findData("绿"))
-                w.params["对比堆叠"].setChecked(True)
-                w.params["视图 2θ 下限 (°)"].setValue(2.0)
-                w.params["视图 2θ 上限 (°)"].setValue(5.0)
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                self.assertTrue(_wait_until(
-                    lambda: any(k.startswith("对比")
-                                and len(gui_panel_state._content(
-                                    w.plot_docks[k]).axes_1d.lines) >= 2
-                                for k in w.plot_docks), 60000))
+            # 栅栏前置（2026-10-16）：先各出过 1D。顺序要紧——账本只记
+            # "没有面板可接"的改动，调参数必须排在出 1D 之后
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compare_compute)
+            combo = w.params["渐变色系"]
+            combo.setCurrentIndex(combo.findData("绿"))
+            w.params["对比堆叠"].setChecked(True)
+            w.params["视图 2θ 下限 (°)"].setValue(2.0)
+            w.params["视图 2θ 上限 (°)"].setValue(5.0)
+            w.compare_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: any(k.startswith("对比")
+                            and len(gui_panel_state._content(
+                                w.plot_docks[k]).axes_1d.lines) >= 2
+                            for k in w.plot_docks), 60000))
             key = next(k for k in w.plot_docks if k.startswith("对比"))
             dock = w.plot_docks[key]
             snap = dock.params_snapshot
@@ -2319,14 +2341,14 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
     """任务六·对比增强：瀑布式堆叠显示 + 热图行点击联动对比面板。"""
 
     def _plot_compare(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-            w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比")]
-            self.assertEqual(len(keys), 1)
-            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        """勾 fake_a + fake_b：先各出过 1D（栅栏前置）再点 [对比]，
+        等两条曲线到齐 → 返回（面板键, 坐标轴）。"""
+        _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+        w.compare_btn.click()
+        keys = [k for k in w.plot_docks if k.startswith("对比")]
+        self.assertEqual(len(keys), 1)
+        ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+        self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
     def _synthetic_event(self, ax, ydata, x=50, y=50, button=1):
@@ -2617,14 +2639,14 @@ class TestCompareStackView(unittest.TestCase):
     """
 
     def _plot_compare(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-            w.compare_btn.click()
-            keys = [k for k in w.plot_docks if k.startswith("对比")]
-            self.assertEqual(len(keys), 1)
-            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        """勾 fake_a + fake_b：先各出过 1D（栅栏前置）再点 [对比]，
+        等两条曲线到齐 → 返回（面板键, 坐标轴）。"""
+        _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+        w.compare_btn.click()
+        keys = [k for k in w.plot_docks if k.startswith("对比")]
+        self.assertEqual(len(keys), 1)
+        ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+        self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return keys[0], ax
 
     def _wheel(self, w, key, ax, notches=3):
@@ -3897,15 +3919,11 @@ class TestOpenFiguresGroup(unittest.TestCase):
         看得见的地方（用户点名："比如对比、热图、瀑布之类"）。"""
         w = create_window()
         try:
-            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                _open_view(w, "1D")        # 两张 1D 面板
-                self.assertTrue(_wait_until(lambda: any(
-                    k.startswith("1D|") for k in w.plot_docks)))
-                w.compare_btn.click()      # [对比] = 单槽多文件视图
-                self.assertTrue(_wait_until(lambda: any(
-                    k.startswith("对比") for k in w.plot_docks)))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 两张 1D 面板（栅栏前置）
+            w.compare_btn.click()              # [对比] = 单槽多文件视图
+            self.assertTrue(_wait_until(lambda: any(
+                k.startswith("对比") for k in w.plot_docks)))
             keys = [r.data(0, gui_file_dock.PANEL_KEY_ROLE)
                     for r in self._rows(w)]
             self.assertTrue(any(k.startswith("对比") for k in keys),
@@ -6943,6 +6961,9 @@ class TestImageDisplayLive(unittest.TestCase):
                     lambda: len(_axes(w, "1D", "data/fake_a.tif").lines)
                     > 0))
                 add_checked(w, ["data/fake_b.tif"])   # fake_a 仍勾着
+                _open_view(w, "1D")                   # 栅栏（2026-10-16）：fake_b 也没算过，先出过 1D
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_b.tif").lines) > 0))
                 w.compare_btn.click()
                 cax = gui_panel_state._content([d for k, d in w.plot_docks.items()
                                         if k.startswith("对比")][0]).axes_1d
@@ -7065,6 +7086,9 @@ class TestImageDisplayLive(unittest.TestCase):
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])   # fake_b 仍勾着
+                _open_view(w, "1D")                   # 栅栏（2026-10-16）：fake_a 也没算过，先出过 1D
+                self.assertTrue(_wait_until(
+                    lambda: len(_axes(w, "1D", "data/fake_a.tif").lines) > 0))
                 w.compare_btn.click()
                 cdock = [d for k, d in w.plot_docks.items()
                          if k.startswith("对比")][0]
@@ -7225,9 +7249,10 @@ def _fake_compare_compute(path_str, geom, npt):
 
 
 class TestCompare(unittest.TestCase):
-    """[对比] 按钮（仅 1D）：勾选 >= 2 个文件 → 每个文件后台各算各
-    的积分，曲线叠进同一张面板（自动分色 + 图例显示名）。同一勾选
-    集合重复点 = 复用面板刷新；"对比归一化到最强峰"只动显示层。"""
+    """[对比] 按钮（仅 1D）：勾选 >= 2 个文件 → 各读**已经算好的**
+    1D 曲线（先出过 1D 才放行——2026-10-16 栅栏），叠进同一张面板
+    （自动分色 + 图例显示名）。同一勾选集合重复点 = 复用面板刷新；
+    "对比归一化到最强峰"只动显示层。"""
 
     def _compare_axes(self, w):
         """取唯一的对比面板坐标轴（面板键就是 "对比"——单槽）。"""
@@ -7236,13 +7261,12 @@ class TestCompare(unittest.TestCase):
         return gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
 
     def _plot_compare(self, w):
-        """勾 fake_a + fake_b 点 [对比] 并等两条曲线到齐 → 返回坐标轴。"""
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-            w.compare_btn.click()
-            ax = self._compare_axes(w)
-            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
+        """勾 fake_a + fake_b：先各出过 1D（栅栏前置）再点 [对比]，
+        等两条曲线到齐 → 返回坐标轴。"""
+        _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+        w.compare_btn.click()
+        ax = self._compare_axes(w)
+        self.assertTrue(_wait_until(lambda: len(ax.lines) >= 2))
         return ax
 
     def test_the_data_row_shows_only_on_the_1d_page(self):
@@ -7329,21 +7353,19 @@ class TestCompare(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
-                                "data/fake_c.tif"])
-                w.compare_btn.click()
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
-                # 取消一个 → 再按 [对比]：还是同一张面板，只剩 2 条
-                w.file_list.raw_group.child(2).setCheckState(0, Qt.Unchecked)
-                QApplication.processEvents()
-                w.compare_btn.click()
-                ax2 = self._compare_axes(w)     # 数量断言在助手里面
-                self.assertTrue(_wait_until(lambda: len(ax2.lines) == 2),
-                                "取消勾选的曲线必须消失（没有记忆）")
-                self.assertIn("按当前勾选重建", w.log_text.toPlainText())
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif",
+                          "data/fake_c.tif"])       # 栅栏前置：先各出过 1D
+            w.compare_btn.click()
+            ax = self._compare_axes(w)
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+            # 取消一个 → 再按 [对比]：还是同一张面板，只剩 2 条
+            w.file_list.raw_group.child(2).setCheckState(0, Qt.Unchecked)
+            QApplication.processEvents()
+            w.compare_btn.click()
+            ax2 = self._compare_axes(w)     # 数量断言在助手里面
+            self.assertTrue(_wait_until(lambda: len(ax2.lines) == 2),
+                            "取消勾选的曲线必须消失（没有记忆）")
+            self.assertIn("按当前勾选重建", w.log_text.toPlainText())
         finally:
             w.close()
 
@@ -7405,13 +7427,13 @@ class TestCompare(unittest.TestCase):
         w = create_window()
         files = _tmp_files(gui_plot_compare.LEGEND_MAX_CURVES + 1)
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                w.add_files([str(p) for p in files], select=True)
-                w.compare_btn.click()
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(
-                    lambda: len(ax.lines) >= len(files)))
+            for p in files:   # 栅栏前置：真文件先各落一份 1D 产物
+                _store_product(w, p)
+            w.add_files([str(p) for p in files], select=True)
+            w.compare_btn.click()
+            ax = self._compare_axes(w)
+            self.assertTrue(_wait_until(
+                lambda: len(ax.lines) >= len(files)))
             self.assertIsNone(ax.get_legend(), "默认关：本来就不画")
             w.params["显示数据名"].setChecked(True)   # 勾上也放不下（超限）
             QApplication.processEvents()
@@ -7447,6 +7469,84 @@ class TestCompare(unittest.TestCase):
             self.assertIn("对比至少勾选两个文件", w.log_text.toPlainText())
             self.assertFalse(
                 [k for k in w.plot_docks if k.startswith("对比")])
+        finally:
+            w.close()
+
+    def test_compare_refuses_raw_without_1d(self):
+        """栅栏（用户 2026-10-16："原始数据不允许直接进行对比，必须先去
+        1d 积分，日志里记得写"）：没出过 1D 的原始数据 → 整批不出图、
+        不现场积分、不开面板；日志点名 + 指路。"""
+        w = create_window()
+        try:
+            with mock.patch.object(gui_views, "_compute_integration") as compute:
+                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                w.compare_btn.click()
+                QApplication.processEvents()
+                log = w.log_text.toPlainText()
+                self.assertIn("还没有 1D 曲线", log)
+                self.assertIn("先点 [1D] 出图，再来对比", log)
+                self.assertIn("fake_a.tif 等 2 个", log)
+                compute.assert_not_called()
+            self.assertFalse([k for k in w.plot_docks if k.startswith("对比")],
+                             "拒绝时不开面板")
+        finally:
+            w.close()
+
+    def test_compare_refusal_takes_the_whole_batch(self):
+        """混合勾选：一个已经算好 + 一个没出过 1D → **整批**拒绝，连算好
+        的也不画（栅栏是"不许少画"，不是"跳过没算的"）。"""
+        w = create_window()
+        try:
+            good = _tmp_files(1)[0]
+            _store_product(w, good)          # 这一份已经算好（真文件）
+            add_checked(w, [str(good), "data/fake_b.tif"])
+            w.compare_btn.click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("勾选里 1 个原始数据还没有 1D 曲线（fake_b.tif）",
+                          log)
+            self.assertFalse([k for k in w.plot_docks if k.startswith("对比")],
+                             "整批拒绝：一张图都不开")
+        finally:
+            w.close()
+
+    def test_compare_allows_raw_once_1d_is_done(self):
+        """出过 1D 之后再点 [对比] → 放行（栅栏只拦没算过的；曲线来自
+        本会话的 1D 面板，不现场积分）。"""
+        w = create_window()
+        try:
+            paths = ["data/fake_a.tif", "data/fake_b.tif"]
+            _prime_1d(w, paths)              # 先出 1D（这一步就是"去过 1D 积分"）
+            with mock.patch.object(gui_views, "_compute_integration") as compute:
+                w.compare_btn.click()
+                QApplication.processEvents()
+                compute.assert_not_called()
+            ax = self._compare_axes(w)
+            self.assertEqual(len(ax.lines), 2)
+            self.assertIn("对比完成：2 条曲线", w.log_text.toPlainText())
+            self.assertIn("复用 1D 面板", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+    def test_compare_apply_skips_a_curve_that_went_missing(self):
+        """直进 runner 的兜底（数据 [应用]）：曲线取不到了 → 逐条跳过并
+        写明"先点 [1D] 出图"，其余曲线照画。
+
+        按钮层的整批拒绝拦不到这条路（[应用] 直接调 _run_compare）——
+        所以 runner 里还留一道逐条收口（面板关了、产物又不在的情形）。
+        """
+        w = create_window()
+        try:
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            ax = self._compare_axes(w)
+            self.assertEqual(len(ax.lines), 2)
+            gui_panels._close_panel(w, "1D|data/fake_a.tif")   # 唯一来源关掉
+            w.findChild(QPushButton, "apply_btn").click()
+            QApplication.processEvents()
+            log = w.log_text.toPlainText()
+            self.assertIn("跳过 —— 还没有 1D 曲线（先点 [1D] 出图）", log)
+            self.assertEqual(len(ax.lines), 1, "取得到的照画")
         finally:
             w.close()
 
@@ -7657,41 +7757,48 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_compare_data_apply_reruns_all(self):
-        """对比面板是编辑对象时点数据 [应用] → 整组文件全部重算。"""
+        """对比面板是编辑对象时点数据 [应用] → 整组来源全部重读一遍重画
+        （栅栏后不现场积分——这条断言 0 次计算调用把新规矩钉住）。"""
         w = create_window()
         try:
             ax = self._plot_compare(w)
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
+            with mock.patch.object(gui_views, "_compute_integration") as c:
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
                     lambda: w.log_text.toPlainText().count("对比完成") >= 2))
+                c.assert_not_called()
             self.assertEqual(len(ax.lines), 2)
             self.assertIn("[应用] 重算编辑对象", w.log_text.toPlainText())
         finally:
             w.close()
 
     def test_compare_one_file_fails_others_still_drawn(self):
-        """一个文件积分失败 → 日志报错、其余曲线照常画完。"""
-        def boom(path_str, geom, npt):
-            if path_str.endswith("fake_a.tif"):
-                raise ValueError("积分炸了")
-            return np.array([0.5, 1.0, 8.5]), np.array([10.0, 20.0, 30.0])
+        """一个来源读不到 → 逐条跳过、其余曲线照常画完。
 
+        栅栏（2026-10-16）之后取数全是"读已经算好的"，失败只剩这一类：
+        勾的是产物条目、而那一份已经不在盘上（老路"某个文件积分炸了"
+        随现场积分一起退休——没算过的原始数据现在整批被拦，进不到这里）。
+        """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=boom):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(
-                    lambda: "对比完成" in w.log_text.toPlainText()))
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            keys = [_store_product(w, p) for p in files]
+            w.refresh_groups()
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            grp = _group_by_text(w, "1D 产物")
+            for i in range(grp.childCount()):
+                grp.child(i).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            stage_cache.drop_keys("1d", [keys[0]])   # 第一份被删
+            w.compare_btn.click()
+            QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("积分失败", log)
+            self.assertIn("跳过", log)
+            self.assertIn("产物不存在", log)
             self.assertIn("对比完成：1 条曲线", log)
+            ax = gui_panel_state._content(w.plot_docks["对比"]).axes_1d
             self.assertEqual(len(ax.lines), 1)
-            self.assertEqual(ax.lines[0].get_label(), "fake_b.tif")
         finally:
             w.close()
 
@@ -7704,13 +7811,11 @@ class TestCompare(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=fake3):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
-                             "data/fake_c.tif"])
-                w.compare_btn.click()
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif",
+                          "data/fake_c.tif"], stub=fake3)   # 栅栏前置
+            w.compare_btn.click()
+            ax = self._compare_axes(w)
+            self.assertTrue(_wait_until(lambda: len(ax.lines) >= 3))
             self.assertEqual([line.get_label() for line in ax.lines],
                              ["fake_a.tif", "fake_b.tif", "fake_c.tif"])
             self.assertIn("等 3 个文件", ax.get_title())
@@ -7721,42 +7826,27 @@ class TestCompare(unittest.TestCase):
             w.close()
 
     def test_compare_all_files_fail(self):
-        """所有文件积分都失败 → 面板留空 + 明说失败（不装成"完成"）。"""
-        def all_boom(path_str, geom, npt):
-            raise ValueError("全炸了")
+        """所有来源都读不到 → 面板留空 + 明说失败（不装成"完成"）。
 
+        栅栏后同前：只剩"产物全被删了"这一类（见上一个用例）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=all_boom):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(
-                    lambda: "对比失败" in w.log_text.toPlainText()))
-            self.assertIn("对比失败：所有文件的积分都失败了",
-                          w.log_text.toPlainText())
-            self.assertEqual(len(ax.lines), 0)
-        finally:
-            w.close()
-
-    def test_compare_stale_generation_dropped(self):
-        """旧一轮还在飞时重复点 [对比] → 旧结果全部作废，只收新代。"""
-        w = create_window()
-        try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compare_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                w.compare_btn.click()   # 第一代 fake_a 还在睡 0.2s
-                ax = self._compare_axes(w)
-                self.assertTrue(_wait_until(
-                    lambda: w.log_text.toPlainText().count("对比完成") >= 1))
-            time.sleep(0.4)   # 第一代的迟到结果此时早已落地
+            files = _tmp_files(2)
+            w.add_files([str(p) for p in files], select=True)
+            keys = [_store_product(w, p) for p in files]
+            w.refresh_groups()
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            grp = _group_by_text(w, "1D 产物")
+            for i in range(grp.childCount()):
+                grp.child(i).setCheckState(0, Qt.Checked)
             QApplication.processEvents()
-            # 只有第二代算数：一次"对比完成"、两条曲线
-            self.assertEqual(w.log_text.toPlainText().count("对比完成"), 1)
-            self.assertEqual(len(ax.lines), 2)
+            stage_cache.drop_keys("1d", keys)        # 两份都被删
+            w.compare_btn.click()
+            QApplication.processEvents()
+            self.assertIn("对比失败：没有一条曲线画得出来",
+                          w.log_text.toPlainText())
+            ax = gui_panel_state._content(w.plot_docks["对比"]).axes_1d
+            self.assertEqual(len(ax.lines), 0)
         finally:
             w.close()
 
@@ -8339,15 +8429,14 @@ class TestHomeView(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                self.assertTrue(_wait_until(
-                    lambda: any(k.startswith("对比")
-                                and len(gui_panel_state._content(
-                                    w.plot_docks[k]).axes_1d.lines) >= 2
-                                for k in w.plot_docks), 60000))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.compare_btn.click()
+            self.assertTrue(_wait_until(
+                lambda: any(k.startswith("对比")
+                            and len(gui_panel_state._content(
+                                w.plot_docks[k]).axes_1d.lines) >= 2
+                            for k in w.plot_docks), 60000))
             key = next(k for k in w.plot_docks if k.startswith("对比"))
             content = gui_panel_state._content(w.plot_docks[key])
             ax = content.axes_1d
@@ -8819,25 +8908,21 @@ class TestBoxZoomOnAggregateViews(unittest.TestCase):
     FILES = ["data/fake_a.tif", "data/fake_b.tif"]
 
     def _open_compare(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, self.FILES)
-            w.compare_btn.click()
-            self.assertTrue(_wait_until(
-                lambda: "对比完成" in w.log_text.toPlainText()))
+        _prime_1d(w, self.FILES)   # 栅栏前置：先各出过 1D
+        w.compare_btn.click()
+        self.assertTrue(_wait_until(
+            lambda: "对比完成" in w.log_text.toPlainText()))
         dock = next(d for k, d in w.plot_docks.items() if k.startswith("对比"))
         return dock, gui_panel_state._content(dock).axes_1d
 
     def _open_heatmap(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
-                               side_effect=_fake_compare_compute):
-            add_checked(w, self.FILES)
-            w.heat_btn.click()
-            key = next((k for k in w.plot_docks if k.startswith("热图")), None)
-            self.assertTrue(_wait_until(
-                lambda: key is not None and getattr(w.plot_docks[key],
-                                                    "heat_data", None)
-                is not None), "热图该算完")
+        _prime_1d(w, self.FILES)   # 栅栏前置：先各出过 1D
+        w.heat_btn.click()
+        key = next((k for k in w.plot_docks if k.startswith("热图")), None)
+        self.assertTrue(_wait_until(
+            lambda: key is not None and getattr(w.plot_docks[key],
+                                                "heat_data", None)
+            is not None), "热图该算完")
         dock = w.plot_docks[key]
         return dock, gui_panel_state._content(dock).axes_heat
 
@@ -9272,15 +9357,14 @@ class TestHoverDot(unittest.TestCase):
     def test_compare_hover_shows_filename(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                key = next(k for k in w.plot_docks
-                           if k.startswith("对比"))
-                dock = w.plot_docks[key]
-                _wait_until(
-                    lambda: len(gui_panel_state._content(dock).axes_1d.lines) >= 2)
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.compare_btn.click()
+            key = next(k for k in w.plot_docks
+                       if k.startswith("对比"))
+            dock = w.plot_docks[key]
+            self.assertTrue(_wait_until(
+                lambda: len(gui_panel_state._content(dock).axes_1d.lines) >= 2))
             ax = gui_panel_state._content(dock).axes_1d
             gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.5))
             text = w.coord_label.text()
@@ -11188,32 +11272,28 @@ class TestPanelClose(unittest.TestCase):
         finally:
             w.close()
 
-    def test_compare_epoch_prevents_stale_lines(self):
-        """对比在飞时关掉重开：旧代结果作废，新图只有 2 条曲线。"""
-        def slow(path_str, geom, npt):
-            time.sleep(0.5)
-            if path_str.endswith("fake_a.tif"):
-                return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
-            return np.array([0.5, 1.0, 8.5]), np.array([10.0, 20.0, 30.0])
+    def test_compare_reopen_after_close_draws_fresh(self):
+        """关掉对比面板再点 [对比]：重开一张、2 条曲线，旧面板的数据
+        不许混进新图。
 
+        老版本钉的是"在飞的旧代任务结果作废"——现场积分退休（2026-10-16
+        栅栏）后没有在飞任务了；epoch/gen 守卫保留为安全网但已不可达，
+        这条测试改钉 close→reopen 的结果隔离。
+        """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=slow):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                keys = [k for k in w.plot_docks if k.startswith("对比")]
-                self.assertTrue(_wait_until(lambda: keys))
-                gui_panels._close_panel(w, keys[0])   # 旧代任务还在飞
-                w.compare_btn.click()              # 重开新面板（新代）
-                keys = [k for k in w.plot_docks if k.startswith("对比")]
-                self.assertTrue(_wait_until(lambda: keys))
-                ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
-                self.assertTrue(_wait_until(lambda: len(ax.lines) == 2))
-            QApplication.processEvents()
-            self.assertEqual(len(ax.lines), 2, "旧代结果不应混进新图")
-            self.assertEqual(w.log_text.toPlainText().count("对比完成"), 1,
-                             "只有新一代算完，旧代应被作废")
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"])
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
+            self.assertTrue(keys)
+            gui_panels._close_panel(w, keys[0])
+            w.compare_btn.click()              # 重开新面板
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
+            self.assertTrue(_wait_until(lambda: keys))
+            ax = gui_panel_state._content(w.plot_docks[keys[0]]).axes_1d
+            self.assertEqual(len(ax.lines), 2)
+            self.assertEqual(w.log_text.toPlainText().count("对比完成"), 2,
+                             "两次点 [对比] 各完成一次；旧面板已关、不混线")
         finally:
             w.close()
 
@@ -15160,9 +15240,9 @@ class TestSavePoni(unittest.TestCase):
 class TestHeatmap(unittest.TestCase):
     """[热图]：勾选文件的 1D 曲线拼成 2θ×样品 强度热图。
 
-    已算好的 1D 面板缓存直接复用，缺的后台补积分（进度计数同
-    批量管线）；显示参数（色图/归一化/对数/范围）走面板快照，
-    图像 [应用] 只重画、数据 [应用] 全部重积分。
+    只拼已经算好的曲线（2026-10-16 栅栏：没出过 1D 的原始数据整批
+    拦下）；显示参数（色图/归一化/对数/范围）走面板快照，图像 [应用]
+    只重画、数据 [应用] 重读已经算好的曲线再画（不现场积分）。
     """
 
     def test_heatmap_labels_shorten_and_thin_out(self):
@@ -15233,11 +15313,10 @@ class TestHeatmap(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
             self.assertEqual(ax.images[0].get_cmap().name, "magma")
             combo = w.params["热图色图"]
@@ -15267,9 +15346,10 @@ class TestHeatmap(unittest.TestCase):
         """
         w = create_window()
         try:
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as c:
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
                 calls = c.call_count
@@ -15302,17 +15382,16 @@ class TestHeatmap(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.compare_btn.click()
-                keys = [k for k in w.plot_docks if k.startswith("对比")]
-                self.assertEqual(len(keys), 1)
-                cmp_ax = gui_panel_state._content(
-                    w.plot_docks[keys[0]]).axes_1d
-                self.assertTrue(_wait_until(lambda: len(cmp_ax.lines) >= 2))
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.compare_btn.click()
+            keys = [k for k in w.plot_docks if k.startswith("对比")]
+            self.assertEqual(len(keys), 1)
+            cmp_ax = gui_panel_state._content(
+                w.plot_docks[keys[0]]).axes_1d
+            self.assertTrue(_wait_until(lambda: len(cmp_ax.lines) >= 2))
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             heat_dock = self._heat_dock(w)
             heat_ax = gui_panel_state._content(heat_dock).axes_heat
             x0_heat = tuple(heat_ax.get_xlim())
@@ -15353,11 +15432,10 @@ class TestHeatmap(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             ax = gui_panel_state._content(self._heat_dock(w)).axes_heat
             self.assertEqual([t.get_text() for t in ax.get_yticklabels()], [],
                              "行名默认关")
@@ -15395,7 +15473,7 @@ class TestHeatmap(unittest.TestCase):
                 self.assertTrue(self._wait_heat(w))
             self.assertEqual(c.call_count, calls)   # 复用缓存：零新任务
             log = w.log_text.toPlainText()
-            self.assertIn("复用已有 1D 结果，后台积分 0 个", log)
+            self.assertIn("开始热图：2 个文件（只拼已经算好的曲线）", log)
             self.assertIn("热图完成：2 个文件 × 3 点", log)
             # 图真的画上去了：imshow + 颜色条 + 行标签 = 文件名
             # （行名默认关、由「热图显示」小节自己的 [显示数据名] 管——
@@ -15413,28 +15491,41 @@ class TestHeatmap(unittest.TestCase):
         finally:
             w.close()
 
-    def test_heatmap_integrates_missing_with_progress(self):
-        """没算过 1D → 后台补积分，进度计数（1/2）（2/2），完成出图。"""
+    def test_heatmap_refuses_raw_without_1d(self):
+        """栅栏（用户 2026-10-16："原始数据不允许直接进行对比，必须先去
+        1d 积分，日志里记得写"）：没出过 1D 的原始数据 → 热图整批不出图、
+        不现场积分、不开面板；日志点名 + 指路。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
+            with mock.patch.object(gui_views, "_compute_integration") as compute:
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+                QApplication.processEvents()
+                log = w.log_text.toPlainText()
+                self.assertIn("还没有 1D 曲线", log)
+                self.assertIn("先点 [1D] 出图，再来出热图", log)
+                compute.assert_not_called()
+            self.assertFalse([k for k in w.plot_docks if k.startswith("热图")],
+                             "拒绝时不开面板")
+        finally:
+            w.close()
+
+    def test_heatmap_apply_skips_a_curve_that_went_missing(self):
+        """直进 runner 的兜底（数据 [应用]，同对比那条）：曲线取不到了
+        → 逐条跳过并写明，其余照样成图。"""
+        w = create_window()
+        try:
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
+            gui_panels._close_panel(w, "1D|data/fake_a.tif")   # 唯一来源关掉
+            w.findChild(QPushButton, "apply_btn").click()
+            QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("开始热图：2 个文件（复用已有 1D 结果，"
-                          "后台积分 2 个）", log)
-            self.assertIn("热图：fake_b.tif 积分完成（3 点）", log)
-            self.assertIn("热图：fake_a.tif 积分完成（3 点）", log)
-            # 两条完成回调跑在独立 QThread，先后由调度决定（教训 12）：
-            # 只断言两条都计数、合计 (1/2)+(2/2)
-            k = re.findall(r"热图：fake_[ab]\.tif 积分完成（3 点）（(\d)/2）",
-                           log)
-            self.assertEqual(set(k), {"1", "2"})
-            self.assertIn("热图完成：2 个文件 × 3 点", log)
-            self.assertFalse(hasattr(w, "_batch"),
-                             "批走完应清账（之后零散任务不再计数）")
+            self.assertIn("热图：fake_a.tif 还没有 1D 曲线（先点 [1D] 出图）"
+                          "——跳过", log)
+            self.assertIn("热图完成：1 个文件 × 3 点", log)
         finally:
             w.close()
 
@@ -15448,29 +15539,28 @@ class TestHeatmap(unittest.TestCase):
             w.close()
 
     def test_heatmap_error_still_draws_others(self):
-        """一个文件失败：错误日志计数，其余照样成图。"""
-        def flaky(path_str, geom, npt):
-            if path_str.endswith("fake_a.tif"):
-                raise RuntimeError("解码失败")
-            return _fake_compute(path_str, geom, npt)
+        """一个来源读不到（那一份产物被删了）：逐条跳过，其余照样成图。
 
+        栅栏（2026-10-16）之后失败只剩这一类：勾的是产物条目、而那一份
+        已经不在盘上（老路"某个文件积分炸了"随现场积分一起退休）。
+        """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=flaky):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            files = _tmp_files(2)
+            keys = [_store_product(w, p) for p in files]
+            add_checked(w, [str(p) for p in files])
+            w.refresh_groups()
+            w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
+            grp = _group_by_text(w, "1D 产物")
+            for i in range(grp.childCount()):
+                grp.child(i).setCheckState(0, Qt.Checked)
+            QApplication.processEvents()
+            stage_cache.drop_keys("1d", [keys[0]])   # 第一份被删
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
-            self.assertIn("热图：fake_a.tif 积分失败 —— RuntimeError: 解码失败",
-                          log)
-            self.assertIn("热图：fake_b.tif 积分完成（3 点）", log)
-            # 完成/失败回调各跑在独立 QThread，谁先到主线程由调度决定
-            # （教训 12）——不写死先后，只断言"失败也参与计数、两条
-            # 合计 (1/2)+(2/2)"
-            k = re.findall(r"热图：(?:fake_a|fake_b)\.tif 积分(?:完成|失败)"
-                           r".*?（(\d)/2）", log)
-            self.assertEqual(set(k), {"1", "2"})
+            self.assertIn("产物不存在", log)
+            self.assertIn("跳过", log)
             self.assertIn("热图完成：1 个文件 × 3 点", log)
         finally:
             w.close()
@@ -15484,11 +15574,10 @@ class TestHeatmap(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=grids):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=grids)              # 栅栏前置：先各出过 1D
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             log = w.log_text.toPlainText()
             self.assertIn("各文件 2θ 网格不一致，已统一到"
                           "第一个文件的 2θ 网格", log)
@@ -15501,9 +15590,10 @@ class TestHeatmap(unittest.TestCase):
         """改色图 → 即改即画重画（不重新积分；2026-10-08 起无 [应用] 按钮）。"""
         w = create_window()
         try:
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute) as c:
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
                 calls = c.call_count
@@ -15524,11 +15614,10 @@ class TestHeatmap(unittest.TestCase):
         update_normal 复用后几何只算一次）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute):
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
             dock = self._heat_dock(w)
             ax = gui_panel_state._content(dock).axes_heat
             widths = []
@@ -15540,19 +15629,21 @@ class TestHeatmap(unittest.TestCase):
         finally:
             w.close()
 
-    def test_heatmap_data_apply_reintegrates_all(self):
-        """数据 [应用]：改了数据参数 → 全部文件重新积分（无视缓存）。"""
+    def test_heatmap_data_apply_rereads_from_cache(self):
+        """数据 [应用]：不重积分（栅栏 2026-10-16）——按已经算好的曲线
+        重读重画一遍（老语义"改数据参数 → 全部重新积分"随现场积分退休）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
-                                   side_effect=_fake_compute) as c:
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
-                w.heat_btn.click()
-                self.assertTrue(self._wait_heat(w))
-                calls = c.call_count
+            _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                      stub=_fake_compute)      # 栅栏前置：先各出过 1D
+            w.heat_btn.click()
+            self.assertTrue(self._wait_heat(w))
+            with mock.patch.object(gui_views, "_compute_integration") as c:
                 w.findChild(QPushButton, "apply_btn").click()
-                self.assertTrue(_wait_until(
-                    lambda: c.call_count >= calls + 2))
+                QApplication.processEvents()
+                c.assert_not_called()
+            self.assertGreaterEqual(
+                w.log_text.toPlainText().count("热图完成：2 个文件 × 3 点"), 2)
         finally:
             w.close()
 
@@ -16105,7 +16196,8 @@ class TestBackgroundSubtraction(unittest.TestCase):
         with mock.patch.object(gui_views, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
-                add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
+                _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
+                          stub=_fake_bg_compute)   # 栅栏前置（2026-10-16）
                 gui_plot_compare._plot_compare(w)
                 keys = [k for k in w.plot_docks if k.startswith("对比")]
                 self.assertTrue(_wait_until(lambda: len(keys) == 1))
