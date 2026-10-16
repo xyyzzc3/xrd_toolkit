@@ -151,8 +151,8 @@ def _draw_compare_color_scale(ax, family, names, caption, corner) -> None:
     那行说明文字（默认"颜色按文件名尾号顺序"；在「外观…」里改，空串 =
     不画这行字）。`corner`（用户 2026-10-16："实现色标仅保留横向以及
     可以选择放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
-    卡片放图的哪个角，四选 "右下"（默认）/"左下"/"右上"/"左上"；未知值
-    兜底右下（老快照/手改文件不会把图弄坏）。
+    卡片放图的哪个角，四选 "右上"（默认，用户 2026-10-16 当天改）/ "右下" /
+    "左下" / "左上"；未知值兜底默认角（老快照/手改文件不会把图弄坏）。
 
     画法：一个白底小框（框住曲线，与图例同理），里面一条**按当前色系
     按真实条数取样**的渐变条（彩虹=viridis 全段、单色系深→浅、经典色
@@ -166,7 +166,7 @@ def _draw_compare_color_scale(ax, family, names, caption, corner) -> None:
     if n < 2:
         return
     if corner not in ("右下", "左下", "右上", "左上"):
-        corner = "右下"          # 未知值（老快照/手改文件）兜底默认角
+        corner = "右上"          # 未知值（老快照/手改文件）兜底默认角
     short = _short_labels([names[0], names[-1]], ax)
     first, last = short[0], short[-1]
     trans = ax.transAxes

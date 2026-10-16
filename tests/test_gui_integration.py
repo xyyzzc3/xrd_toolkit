@@ -2052,9 +2052,10 @@ class TestCurveColors(unittest.TestCase):
 
     def test_color_scale_corner_editable_via_customize(self):
         """色标位置四选（用户 2026-10-16："实现色标仅保留横向以及可以选择
-        放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
-        默认右下角；在 [外观…] 里选"左上" → 卡片整块挪到左上角，说明
-        文字永远横排（rotation 0）；[恢复默认] 回右下。"""
+        放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版；默认角
+        当天再由用户定为"右上"："色标位置默认右上"）：默认右上角；在
+        [外观…] 里选"左下" → 卡片整块挪到左下角，说明文字永远横排
+        （rotation 0）；[恢复默认] 回右上。"""
         w = create_window()
         try:
             n = gui_plot_compare.LEGEND_MAX_CURVES + 3
@@ -2077,24 +2078,24 @@ class TestCurveColors(unittest.TestCase):
                         return t
                 return None
 
-            self.assertEqual(card_xy(), (0.58, 0.28), "默认右下角")
+            self.assertEqual(card_xy(), (0.58, 0.79), "默认右上角")
             self.assertEqual(caption().get_rotation(), 0, "永远横排")
             dlg = gui_customize._build_customize_dialog(w, dock, content.axes_1d,
                                                   content.figure)
             pos_combo = dlg.findChild(QComboBox, "color_scale_pos_combo")
             self.assertIsNotNone(pos_combo, "对比面板应有「色标位置」下拉")
-            self.assertEqual(pos_combo.currentData(), "右下", "预填当前位置")
-            pos_combo.setCurrentIndex(pos_combo.findData("左上"))
+            self.assertEqual(pos_combo.currentData(), "右上", "预填当前位置")
+            pos_combo.setCurrentIndex(pos_combo.findData("左下"))
             gui_customize._apply_customize(w, dock, content.axes_1d,
                                      content.figure, dlg)
-            self.assertEqual(dock.params_snapshot["色标位置"], "左上")
-            self.assertEqual(card_xy(), (0.02, 0.79), "卡片整块挪到左上角")
+            self.assertEqual(dock.params_snapshot["色标位置"], "左下")
+            self.assertEqual(card_xy(), (0.02, 0.28), "卡片整块挪到左下角")
             self.assertAlmostEqual(caption().get_position()[0], 0.22,
                                    places=6, msg="说明文字跟着卡片走")
             self.assertEqual(caption().get_rotation(), 0, "仍横排")
             gui_customize._reset_customize_fields(dock, dlg._fields)
-            self.assertEqual(pos_combo.currentData(), "右下",
-                             "[恢复默认] 回右下")
+            self.assertEqual(pos_combo.currentData(), "右上",
+                             "[恢复默认] 回右上")
         finally:
             w.close()
 

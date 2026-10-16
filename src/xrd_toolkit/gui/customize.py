@@ -222,19 +222,20 @@ def _build_customize_dialog(window: QMainWindow, dock, ax, fig) -> QDialog:
         color_form.addRow("色标说明", note)
         scale_note = note
         # 色标位置（2026-10-16 用户："实现色标仅保留横向以及可以选择
-        # 放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版）：
-        # 卡片放图的哪个角，四选，默认右下。
+        # 放在图的哪个角落"——同日的横竖二选在发版前退休，固定横版；
+        # 默认角当天再由用户改为"右上"，列表也按默认角打头放：
+        # 上一行右→左、下一行右→左）。
         corner = QComboBox()
         corner.setObjectName("color_scale_pos_combo")
-        for label, value in (("右下（默认）", "右下"), ("左下", "左下"),
-                             ("右上", "右上"), ("左上", "左上")):
+        for label, value in (("右上（默认）", "右上"), ("左上", "左上"),
+                             ("右下", "右下"), ("左下", "左下")):
             corner.addItem(label, value)
         cur_pos = _panel_param(window, dock, "色标位置",
                                _DISPLAY_DEFAULTS["色标位置"])
         pidx = corner.findData(cur_pos)
         corner.setCurrentIndex(pidx if pidx >= 0 else 0)
         corner.setToolTip("色标卡片放在图的哪个角落（固定横版）；"
-                          "默认右下")
+                          "默认右上")
         color_form.addRow("色标位置", corner)
         scale_pos = corner
         body_lay.addWidget(color_box)
