@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/github/v/release/xyyzzc3/xrd_toolkit?color=blue)](https://github.com/xyyzzc3/xrd_toolkit/releases/latest)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard, and integrates the 2D pattern into standard 1D powder spectra — as four CLI scripts and as a PySide6 desktop app over the same engine.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard, and integrates the 2D pattern into standard 1D powder spectra — as five CLI scripts and as a PySide6 desktop app over the same engine.
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Quick start for trial users: [docs/使用说明.html](docs/使用说明.html) (in-app: Help → 使用说明, F1) · Long version: [docs/NOTES.md](docs/NOTES.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Citation: [CITATION.cff](CITATION.cff)
 
@@ -83,6 +83,7 @@ own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
 - **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
 - **Desktop app over the same engine** — five stage entrances, a live parameter panel, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF export.
+- **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is an optional extra: `pip install 'xrd-toolkit[simulation]'`).
 
 ## Install (from source)
 
@@ -101,6 +102,8 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 # integrate with an existing geometry, or run the sector/waterfall analysis
 python scripts/integrate_pattern.py  --file data/xxx.tif
 python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
+# simulate a theoretical powder pattern from a CIF (structures ship in data/structures/)
+python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
 ```
 
 Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). Outputs land in `outputs/{dataset}/`. Omit `--file` and each script shows an interactive menu of everything in `data/`; the three consuming scripts take `--config NAME` (default `lmfp1_lab6`). **Script table and full flag list: [docs/NOTES.md](docs/NOTES.md#cli-scripts).**
@@ -108,7 +111,7 @@ Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geomet
 ## Tests
 
 ```bash
-python scripts/run_tests.py     # 700+ tests, behind a watchdog
+python scripts/run_tests.py     # 860+ tests, behind a watchdog
 ```
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
@@ -117,7 +120,6 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 
 - Peak finding & profile fitting on the 1D patterns (background subtraction landed first — net peak heights are only meaningful once the pedestal is gone)
 - Line-profile analysis: Scherrer / Williamson–Hall size–strain
-- Structure-factor simulation
 - A basic Rietveld refinement engine
 - Machine learning: clustering for phase identification and CNN peak-shape classification
 
@@ -125,16 +127,17 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 
 ```
 .
-├── data/                          # raw XRD images (.tif), not tracked by git
+├── data/                          # raw XRD images (.tif, untracked) + data/structures/ (reference CIFs, tracked)
 ├── outputs/                       # script outputs + product cache (local, not tracked)
-├── showcase/                      # curated example figures used in this README (tracked)
+├── showcase/                      # curated example figures (this README, the manual, the simulation module)
 ├── packaging/                     # PyInstaller build (icons, spec, constraints)
-├── scripts/                       # the four analysis scripts + self-check tools
+├── scripts/                       # the five analysis scripts + self-check tools
 ├── src/xrd_toolkit/
 │   ├── config.py                  # named geometry configs (one per batch; --config selects)
 │   ├── cli.py                     # shared interactive file-selection menu
 │   ├── core/processor.py          # image processing (line profiles, ring-centre localization)
 │   ├── services/                  # data_loader · integrator · background · range_selector · ring_metrics · stage_cache
+│   ├── simulation/                # CIF → theoretical powder pattern (hand-written; pymatgen optional)
 │   └── gui/                       # PySide6 desktop app (python -m xrd_toolkit.gui)
 ├── tests/                         # synthetic-image unit tests + GUI integration tests
 ├── docs/                          # Chinese README, long-form notes

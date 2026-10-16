@@ -4,7 +4,7 @@
 
 ## 命令行参数
 
-四个脚本都支持两种方式选文件：`--file` 指定单个文件；不带 `--file` 则弹出交互菜单，列出 `data/` 里所有数据文件按编号选择（`1,2` 多选、`all` 全选）。输出都在 `{输出目录}/{数据名}/` 下，输出目录**默认 = 项目根 `outputs/` 的绝对路径**（2026-10-02 起统一：以前是相对路径，跟着进程工作目录跑，从别的目录启动就落到别处；显式传 `--outdir` 照旧）。三个消费脚本用 `--config 条目名` 选几何配置（默认 `lmfp1_lab6`）；交互模式下选完文件会再弹一个配置菜单（回车 = 默认条目）。txt 的写盘格式与 GUI 导出同源（`services/export.py`，见下文《导出文件格式》）。
+四个处理图像的脚本都支持两种方式选文件：`--file` 指定单个文件；不带 `--file` 则弹出交互菜单，列出 `data/` 里所有数据文件按编号选择（`1,2` 多选、`all` 全选）。（模拟脚本 `simulate_xrd.py` 不选数据文件——位置参数直接给 CIF 路径，见《XRD 模拟》一节。）输出都在 `{输出目录}/{数据名}/` 下，输出目录**默认 = 项目根 `outputs/` 的绝对路径**（2026-10-02 起统一：以前是相对路径，跟着进程工作目录跑，从别的目录启动就落到别处；显式传 `--outdir` 照旧）。三个消费脚本用 `--config 条目名` 选几何配置（默认 `lmfp1_lab6`）；交互模式下选完文件会再弹一个配置菜单（回车 = 默认条目）。txt 的写盘格式与 GUI 导出同源（`services/export.py`，见下文《导出文件格式》）。
 
 <details>
 <summary><b>衍射图查看</b> — <code>scripts/view_diffraction.py</code></summary>
@@ -276,6 +276,21 @@ SNIP 也实现了并实测过，但它在这些图谱上会过度扣除 43%–98
 - **批量与分阶段产物**——文件夹一键导入、整批积分（**超过 25 张就一张都不画**：全部后台算完落盘、结果列进文件栏，双击**产物**看一张、右键整组打开（可按视图选；双击**原始数据** = 打开它本身的 2D 图，2026-10-08 起）），一张图就能对比或看热图。1D 曲线与扣背景曲线按阶段缓存（`outputs/_stage/`，键 = 文件指纹 + 几何 + 设置，跨会话复用），并在文件栏里显示成**分组**：扣完背景的那一批，两下点击就进对比图，不用重积分。
 - **桌面界面**——MDI 图面板（可弹出、可平铺）、实时参数面板、悬停读数、框选放大、单条曲线自定义配色、PNG/TIF 导出。
 
+## XRD 模拟（CIF → 理论粉末谱）
+
+（2026-10-10 随 RY04 第六周并入仓库；不碰实验数据、也不在界面里，纯命令行 + 库。）
+`xrd_toolkit.simulation` 从晶体结构文件（CIF）算理论粉末 XRD：布拉格定律 + 结构因子，
+公式全手写（`simulation/core.py` 不依赖 pymatgen），另有 pymatgen `XRDCalculator`
+参考版并存——Si / LaB₆ / Al₂O₃ 三个材料逐峰对过答案（max Δ2θ = 0.0000°，
+`scripts/simulate_xrd.py --compare` 可随时现场复核）。出谱走
+`scripts/simulate_xrd.py <cif> <png>`：`--annotate` 标峰位 (hkl)、`--three-index`
+切六方卡片式三位指数（默认四位 `(h k i l)`，六方取代表一律规范正指数写法
+h ≥ k ≥ 0）、`--wavelength` 换波长（默认 Cu Kα 1.5406 Å）、`--two-theta` 改区间。
+参考结构在 `data/structures/`（COD 公有领域），展示图在 `showcase/simulation/`。
+pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只有 `--compare` /
+`--pymatgen` 两条路才需要它，主程序与其余功能不受影响。单元测试 16 项（峰位 / 波长
+效应 / 消光 / 散射因子自检 / 多重性 / 指数代表与排版 / 两版一致性）。
+
 ## 脚本一览
 
 | 脚本 | 作用 |
@@ -284,6 +299,7 @@ SNIP 也实现了并实测过，但它在这些图谱上会过度扣除 43%–98
 | `scripts/calibrate_integrate.py` | LaB₆ 几何校准（pyFAI）+ 方位角积分（2D→1D） |
 | `scripts/integrate_pattern.py` | 全角度积分：2D 图 → 标准 1D 谱 |
 | `scripts/sector_waterfall.py` | 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计 |
+| `scripts/simulate_xrd.py` | CIF → 理论粉末 XRD 谱（布拉格 + 结构因子，手写版；`--compare` 对 pymatgen 参考版复核） |
 | `scripts/check_env.py` | 环境自检——"跑不起来"时先跑它 |
 | `scripts/check_gui.py` | 界面链路探针——真数据 + 真画布事件把界面走一遍 |
 | `scripts/show_gui.py` | 真窗口看一眼——真数据走三步，窗口留给你自己点 |

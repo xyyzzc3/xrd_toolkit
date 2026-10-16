@@ -7,8 +7,10 @@ product caching work, and the engineering notes behind the GUI. The short versio
 
 ## CLI flags
 
-All four scripts accept `--file` to pick one dataset, or — without it — an interactive
-menu listing everything in `data/` (number selection, `1,2` multi-select, or `all`).
+All four image-processing scripts accept `--file` to pick one dataset, or — without it —
+an interactive menu listing everything in `data/` (number selection, `1,2` multi-select,
+or `all`). (The simulation script `simulate_xrd.py` takes no dataset — its positional
+argument is a CIF path; see the XRD simulation section below.)
 Outputs land in `{outdir}/{dataset}/`, where `outdir` defaults to the **absolute
 project `outputs/` folder** (since 2026-10-02; it used to be a relative path that
 followed the process working directory — starting from elsewhere silently wrote
@@ -312,6 +314,26 @@ No processing is stated too (`chain: none` + `cut: 0 points removed`) — there 
   python -m xrd_toolkit.gui
   ```
 
+## XRD simulation (CIF → theoretical powder pattern)
+
+(Merged into the repo 2026-10-10, RY04 week 6; it touches no experimental data and
+never appears in the GUI — CLI and library only.) `xrd_toolkit.simulation` computes a
+theoretical powder pattern from a crystal structure file (CIF): Bragg's law plus the
+structure factor, **written out by hand** (`simulation/core.py` does not depend on
+pymatgen), with a pymatgen `XRDCalculator` reference implementation alongside — Si /
+LaB₆ / Al₂O₃ were checked peak-for-peak (max Δ2θ = 0.0000°; `scripts/simulate_xrd.py
+--compare` re-runs the check any time). Plot with `scripts/simulate_xrd.py <cif>
+<png>`: `--annotate` labels (hkl), `--three-index` switches to card-style
+three-index labels for hexagonal cells (the default is four-index `(h k i l)`, with
+representatives in the conventional all-non-negative form h ≥ k ≥ 0), `--wavelength`
+changes λ (default Cu Kα 1.5406 Å), `--two-theta` changes the range. Reference
+structures live in `data/structures/` (COD, public domain), example figures in
+`showcase/simulation/`. pymatgen is an **optional dependency**
+(`pip install 'xrd-toolkit[simulation]'`): only `--compare` / `--pymatgen` need it;
+the app and everything else are unaffected. 16 unit tests (peak positions /
+wavelength effect / extinction / scattering-factor self-check / multiplicity /
+index representatives and layout / the two implementations agreeing).
+
 ## CLI scripts
 
 | Script | What it does |
@@ -320,6 +342,7 @@ No processing is stated too (`chain: none` + `cut: 0 points removed`) — there 
 | `scripts/calibrate_integrate.py` | LaB₆ geometric calibration (pyFAI) + azimuthal integration (2D → 1D) |
 | `scripts/integrate_pattern.py` | Full-angle integration: 2D image → standard 1D powder pattern |
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plot + uniformity statistics |
+| `scripts/simulate_xrd.py` | CIF → theoretical powder pattern (Bragg + structure factor, hand-written; `--compare` re-checks against the pymatgen reference) |
 | `scripts/check_env.py` | Environment self-check — run this first when something "just won't run" |
 | `scripts/check_gui.py` | GUI link check — drives the interface with real data and real canvas events |
 | `scripts/show_gui.py` | Real-window peek — opens the app, walks three steps, leaves the window up |

@@ -1,6 +1,6 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 `.tif` / `.edf` / `.cbf` 二维衍射数据，用 LaB₆ 标样做几何校准，把二维衍射图积分成标准 1D 粉末谱——四个命令行脚本，外加一个跑在同一个引擎上的 PySide6 桌面界面。本项目是香港城市大学 *PHY6528 Advanced Research in Applied Physics* 的课题工作。
+XRD 衍射图像处理工具箱：读取 `.tif` / `.edf` / `.cbf` 二维衍射数据，用 LaB₆ 标样做几何校准，把二维衍射图积分成标准 1D 粉末谱——五个命令行脚本，外加一个跑在同一个引擎上的 PySide6 桌面界面。本项目是香港城市大学 *PHY6528 Advanced Research in Applied Physics* 的课题工作。
 
 English: [README.md](../README.md) · 试用者上手图文：[使用说明.html](使用说明.html)（程序内：帮助 → 使用说明，快捷键 F1）· 详细说明：[NOTES.zh-CN.md](NOTES.zh-CN.md) · 更新记录：[CHANGELOG.md](../CHANGELOG.md) · 引用：[CITATION.cff](../CITATION.cff)
 
@@ -76,6 +76,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **批量与分阶段产物**——文件夹一键导入、整批积分；曲线与扣背景曲线按阶段缓存（文件指纹 + 几何 + 设置的键，跨会话复用）并显示成文件栏**分组**：81 个文件的那一批，两下点击进对比图或热图，不用重积分。
 - **偏置束心与扇形分析**——束心打在探测器边缘/角落的数据全程支持（pyFAI 分箱不可靠时自动切自研 numpy 积分）；36 扇区瀑布图一眼看出择优取向与被切环的几何。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
+- **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 为可选依赖：`pip install 'xrd-toolkit[simulation]'`）。
 
 ## 安装（从源码跑）
 
@@ -94,6 +95,8 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 # 用已标定的几何做全角度积分；扇形积分 + 瀑布图
 python scripts/integrate_pattern.py  --file data/xxx.tif
 python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
+# 从 CIF 模拟理论粉末谱（参考结构随仓库附在 data/structures/）
+python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
 ```
 
 典型流程：`view_diffraction`（看图）→ `calibrate_integrate`（几何校准）→ `integrate_pattern`（1D 标准谱）→ `sector_waterfall`（方位均匀性）。输出都在 `outputs/{数据名}/` 下。不带 `--file` 时每个脚本弹出 `data/` 里的文件菜单；三个积分脚本用 `--config 条目名` 选几何（默认 `lmfp1_lab6`）。**脚本一览与完整参数说明见 [NOTES.zh-CN.md](NOTES.zh-CN.md#脚本一览)。**
@@ -101,7 +104,7 @@ python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
 ## 测试
 
 ```bash
-python scripts/run_tests.py     # 700+ 条，带看门狗
+python scripts/run_tests.py     # 860+ 条，带看门狗
 ```
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
@@ -110,7 +113,6 @@ python scripts/run_tests.py     # 700+ 条，带看门狗
 
 - 1D 图谱上的寻峰与峰形拟合（背景扣除先落地——扣掉基线之后峰高与峰面积才有意义）
 - 线形分析：Scherrer / Williamson–Hall 尺寸-应变
-- 结构因子模拟
 - 基本的 Rietveld 精修引擎
 - 机器学习：物相识别聚类 + 峰形 CNN 分类
 
@@ -118,16 +120,17 @@ python scripts/run_tests.py     # 700+ 条，带看门狗
 
 ```
 .
-├── data/                       # XRD 原始数据（.tif，不进 git）
+├── data/                       # XRD 原始数据（.tif，不进 git）+ data/structures/ 参考 CIF（进 git）
 ├── outputs/                    # 脚本输出 + 产物缓存（本地，不进 git）
-├── showcase/                   # README 展示用的精选示例图（进 git）
+├── showcase/                   # 精选示例图（README / 说明书 / 模拟模块用，进 git）
 ├── packaging/                  # PyInstaller 打包（图标、spec、版本钉）
-├── scripts/                    # 四个分析脚本 + 自检/探针工具
+├── scripts/                    # 五个分析脚本 + 自检/探针工具
 ├── src/xrd_toolkit/
 │   ├── config.py               # 几何配置注册表（每批实验一个条目，--config 选择）
 │   ├── cli.py                  # 命令行共用交互选文件菜单
 │   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
 │   ├── services/               # data_loader · integrator · background · range_selector · ring_metrics · stage_cache
+│   ├── simulation/             # CIF → 理论粉末谱（手写版；pymatgen 可选）
 │   └── gui/                    # PySide6 桌面界面（python -m xrd_toolkit.gui）
 ├── tests/                      # 合成图像单元测试 + 界面集成测试
 ├── docs/                       # 英文 README、详细说明
