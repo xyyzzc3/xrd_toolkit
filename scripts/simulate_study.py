@@ -454,11 +454,136 @@ def study_microstructure(cif: Path, outdir: Path) -> None:
     print(f"  → {out_b}")
 
 
+def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
+    """任务四：模拟 vs 实验（LaB₆ 标样 = 第三周处理的 `lab6-00024.tif`）。
+
+    按真实工作流走一遍"标样定仪器 → 再用仪器参数出模拟谱"：
+      ① 用仓库引擎把实验图积分成 1D（几何 = config 里的 `lmfp1_lab6`，
+         波长也从它读——这批是 0.1223 Å 的同步辐射数据）；
+      ② 自研自动基线扣背景（estimate_baseline_sliding）；
+      ③ 拿理论峰位在实验谱上找峰 → **定仪器参数**：零点偏移（峰位差的
+         中位）+ 展宽（FWHM² = U·tan²θ + V·tanθ + W 三系数最小二乘）；
+      ④ 用这套"标样定的仪器参数"+ CIF 热振动重出模拟谱 → 对比；
+      ⑤ 逐峰表：峰位残差 / FWHM（实验 vs 模拟）/ 相对强度（实验 vs 模拟）。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from xrd_toolkit.config import get_config
+    from xrd_toolkit.services.background import estimate_baseline_sliding
+    from xrd_toolkit.services.data_loader import load_diffraction_image
+    from xrd_toolkit.services.integrator import integrate_1d
+
+    material = _material_name(cif)
+    structure = load_structure(str(cif))
+    b_iso = b_iso_from_cif(cif)
+    cfg = get_config("lmfp1_lab6")
+    geom = dict(cfg["geometry"])
+    lam = geom["wavelength_m"] * 1e10          # m → Å（实验本身的波长）
+    TMIN, TMAX = 1.0, 8.0                      # 第三周处理用的同一窗口
+    NPT = 3000
+
+    # ① 实验 1D（同一条引擎与几何）
+    img = load_diffraction_image(str(exp_tif))
+    t_exp, y_exp = integrate_1d(img, npt=NPT, tth_min_deg=TMIN,
+                                tth_max_deg=TMAX, **geom)
+    # ② 扣背景（自研自动基线）
+    base = estimate_baseline_sliding(t_exp, y_exp, 0.2)
+    y_sub = y_exp - base
+
+    # 理论峰位（无零点、无展宽要求——只要位置）
+    st_tt, st_ii, peaks, _ = pattern_from_cif(
+        str(cif), wavelength=lam, two_theta_range=(TMIN, TMAX))
+
+    # ③ 实验找峰（窗口 ±0.08°，高度门槛 = 最强峰的 2%）
+    thr = 0.02 * y_sub.max()
+    matched = []
+    for tt, ii in zip(st_tt, st_ii):
+        m = (t_exp > tt - 0.08) & (t_exp < tt + 0.08)
+        if not m.any() or y_sub[m].max() < thr:
+            continue
+        center = _peak_center(t_exp, y_sub, tt, span=0.05)
+        fw = _measure_fwhm(t_exp, y_sub, tt, span=0.05)
+        height = float(y_sub[(t_exp > tt - 0.05) & (t_exp < tt + 0.05)].max())
+        matched.append((tt, ii, center, fw, height))
+    if len(matched) < 4:
+        print(f"实验谱上只对上 {len(matched)} 根峰，拟合仪器参数样本不足")
+        return
+    zero_fit = float(np.median([c - tt for tt, _, c, _, _ in matched]))
+    tt_arr = np.array([tt for tt, _, _, _, _ in matched])
+    fw_arr = np.array([fw for _, _, _, fw, _ in matched])
+    t_arr = np.tan(np.radians(tt_arr / 2.0))
+    coef = np.polyfit(t_arr, fw_arr ** 2, 2)   # [U, V, W]
+    u_fit, v_fit, w_fit = (float(c) for c in coef)
+
+    # ④ 用标样定的参数出模拟谱
+    t_sim, y_sim, _, _ = simulate_pattern(
+        structure, wavelength=lam, zero_deg=zero_fit,
+        u=u_fit, v=v_fit, w=w_fit, b_iso=b_iso,
+        two_theta_range=(TMIN, TMAX), step_deg=0.001)
+    k_scale = float(np.sum(y_sub * np.interp(t_exp, t_sim, y_sim))
+                    / np.sum(np.interp(t_exp, t_sim, y_sim) ** 2))
+    y_sim_scaled = y_sim * k_scale
+
+    # ⑤ 逐峰数字
+    def sim_fwhm_at(center):
+        return _measure_fwhm(t_sim, y_sim, center, span=0.1)
+
+    h_max = max(h for *_, h in matched)
+    rows = []
+    for tt, ii, c, fw, h in matched:
+        i_sim = float(y_sim[(t_sim > c - 0.05) & (t_sim < c + 0.05)].max())
+        rows.append((tt, c, fw, sim_fwhm_at(c), h / h_max * 100.0, i_sim))
+    i_sim_max = max(r[5] for r in rows)
+
+    # 图：全谱 + 两处放大（rows 是 6 元组：(2θ, 实验位置, FWHM实验, FWHM模拟, I%实验, I模拟)）
+    strongest = max(rows, key=lambda r: r[4])
+    mid = min(rows, key=lambda r: abs(r[0] - (TMIN + TMAX) / 2))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4),
+                             gridspec_kw={"width_ratios": [2.0, 1, 1]})
+    axes[0].plot(t_exp, y_sub, color="0.25", lw=1.9,
+                 label="experiment (background subtracted)")
+    axes[0].plot(t_sim, y_sim_scaled, color="#2b6cb0", lw=1.1,
+                 label="simulation (instrument from the standard)")
+    axes[0].set_xlim(TMIN, TMAX); axes[0].set_ylim(bottom=0)
+    axes[0].legend(loc="upper right", fontsize=9)
+    axes[0].set_title(f"{material} — simulation vs experiment "
+                      f"(λ = {lam:.4f} Å)", fontsize=10.5)
+    axes[0].set_xlabel(r"2$\theta$ (degrees)"); axes[0].set_ylabel("Intensity")
+    for ax, (tt, c, fw, fws, h_rel, _i) in zip(
+            axes[1:], (strongest, mid)):
+        w = 0.15
+        ax.plot(t_exp, y_sub, color="0.25", lw=1.9)
+        ax.plot(t_sim, y_sim_scaled, color="#2b6cb0", lw=1.1)
+        ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
+        ax.set_title(f"$2\\theta$ ≈ {c:.3f}°  (FWHM {fw:.3f}° / sim {fws:.3f}°)",
+                     fontsize=9.5)
+        ax.set_xlabel(r"2$\theta$ (degrees)")
+    for ax in axes:
+        ax.grid(alpha=0.25, linestyle=":")
+    fig.tight_layout()
+    out = outdir / f"sim_xrd_vs_experiment_{material}.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+    print(f"{material} 任务四：模拟 vs 实验（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°）")
+    print(f"  标样定仪器：零点 {zero_fit:+.4f}° ；U={u_fit:.2e} V={v_fit:.2e} "
+          f"W={w_fit:.2e}（FWHM² = U·tan²θ+V·tanθ+W）")
+    print(f"  对上 {len(matched)} 根峰（理论 {len(st_tt)} 根）；"
+          f"强度缩放系数 k = {k_scale:.1f}")
+    print(f"  {'2θ理论':>8} {'Δ2θ':>7} {'FWHM实验':>9} {'FWHM模拟':>9} "
+          f"{'I实验%':>7} {'I模拟%':>7}")
+    for tt, c, fw, fws, h_rel, i_sim in rows:
+        print(f"  {tt:8.3f} {c - tt - zero_fit:+7.3f} {fw:9.4f} {fws:9.4f} "
+              f"{h_rel:7.1f} {i_sim / i_sim_max * 100:7.1f}")
+    print(f"  → {out}")
+
+
 STUDIES = {
     "basic": study_basic,
     "instrument": study_instrument,
     "microstructure": study_microstructure,
-    # "compare": study_compare,              # 任务四
+    "compare": study_compare,
 }
 
 
@@ -475,6 +600,9 @@ def main() -> None:
                          "（装了 GSAS-II 的环境跑 scripts/gsas2_crosscheck.py 产出）")
     ap.add_argument("--gsas2-zero-npz", default=None,
                     help="crosscheck 用：GSAS-II 零点 +0.05° 的 npz")
+    ap.add_argument("--exp", default=str(ROOT / "data" / "lab6-00024.tif"),
+                    help="compare 用：实验 LaB₆ 图（默认 data/lab6-00024.tif，"
+                         "即第三周处理过的那张标样）")
     args = ap.parse_args()
     cif = Path(args.cif)
     if not cif.exists():
@@ -486,6 +614,11 @@ def main() -> None:
             ap.error("crosscheck 需要 --gsas2-npz 与 --gsas2-zero-npz")
         study_crosscheck(cif, outdir, Path(args.gsas2_npz),
                          Path(args.gsas2_zero_npz))
+    elif args.study == "compare":
+        exp = Path(args.exp)
+        if not exp.exists():
+            ap.error(f"实验图不存在：{exp}（--exp 指定）")
+        study_compare(cif, outdir, exp)
     else:
         STUDIES[args.study](cif, outdir)
 
