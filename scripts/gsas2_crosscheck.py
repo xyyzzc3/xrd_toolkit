@@ -54,6 +54,13 @@ def simulate(cif, out, *, lam=1.5406, zero=0.0, u=0.0, v=0.0, w=0.01,
     phase = gpx.add_phase(str(cif), phasename=Path(cif).stem, fmthint="CIF")
     hist = gpx.add_simulated_powder_histogram(
         "sim", str(prm), tmin, tmax, Tstep=step, phases=[phase])
+    # 微结构中性化（2026-10-17 标定发现的坑）：GSAS-II 新物相**自带**
+    # Size=1 µm + Mustrain=1000（=0.1% 应变），不设掉会在"纯仪器"模拟里
+    # 混进 ~0.03–0.06° 的假展宽。这里显式设成"无限大晶粒、零应变"，
+    # 让两边比的是同一件事（仪器展宽）。
+    hap = phase.getHAPvalues(hist.name)
+    hap["Size"][1] = [1e5, 1e5, 1e5]
+    hap["Mustrain"][1] = [0.0, 0.0, 1.0]
     # 0 轮精修 = 只做一遍计算把 ycalc 填出来（建 hist 时还不算）
     gpx.do_refinements([{}])
     tth = np.asarray(hist.getdata("x"), dtype=float)
