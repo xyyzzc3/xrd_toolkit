@@ -65,11 +65,17 @@ def scattering_factor(symbol, s2):
     return z - 41.78214 * s2 * float(np.sum(coeff[:, 0] * np.exp(-coeff[:, 1] * s2)))
 
 
-def structure_factor(hkl, structure, s):
+def structure_factor(hkl, structure, s, b_iso=None):
     """结构因子 F(hkl)：对晶胞里每个原子求和。
 
     F = Σ_j f_j(s)·occ_j·exp[ 2πi (h·x_j + k·y_j + l·z_j) ]
     （每个原子散射的波因位置不同有相位差，复数求和得到总振幅）
+
+    b_iso（可选）= 原子的**温度因子** B（Debye-Waller），Å²：热振动让
+    每个原子的散射振幅按 f → f·exp(−B·s²) 衰减（B = 8π²⟨u²⟩，室温典型
+    0.3~1 Å²；振动越厉害、高角度衰减越狠——这正是一条"真实效应"）。
+    传单个 float（全体原子同 B）或 {元素符号: B} 字典（分元素）。默认
+    None = 理想刚性晶格、不衰减（第 6 周原口径）。
     """
     h, k, l = hkl
     s2 = s * s
@@ -77,11 +83,39 @@ def structure_factor(hkl, structure, s):
     for site in structure:
         for sp, occ in site.species.items():
             f = scattering_factor(sp.symbol, s2)
+            if b_iso is not None:
+                b = (float(b_iso) if not isinstance(b_iso, dict)
+                     else float(b_iso.get(sp.symbol, 0.0)))
+                f *= math.exp(-b * s2)
             phase = 2.0 * math.pi * (h * site.frac_coords[0]
                                      + k * site.frac_coords[1]
                                      + l * site.frac_coords[2])
             F += f * occ * complex(math.cos(phase), math.sin(phase))
     return F
+
+
+def march_dollase(hkl, axis, r, lattice_matrix):
+    """择优取向的 March-Dollase 因子 P(hkl)（单参数模型）。
+
+    用户/仪器条件里若存在织构（压片取向、针状/片状晶粒），某些晶面的
+    取向概率偏离随机分布，峰强随之异常。标准模型（Dollase 1986）按
+    "晶面法向 h 与取向轴 a 的夹角 α"给每个反射一个乘数：
+
+        P = ( R²·cos²α + sin²α/R )^(−3/2)
+
+    R = 1 → P ≡ 1（无取向，逐点复原）；R < 1 → 法向沿轴的晶面**增强**
+    （cosα=1 时 P = R⁻³），R > 1 → 沿轴的晶面被压低。α 用倒空间度量算
+    （两个晶面法向的夹角），所以只要传 (hkl) 形式的轴（如六方的
+    (0,0,1)）就行，晶系自动正确。
+    """
+    g_star = np.linalg.inv(np.asarray(lattice_matrix) @ np.asarray(lattice_matrix).T)
+    h = np.asarray(hkl, dtype=float)
+    a = np.asarray(axis, dtype=float)
+    hg, ag = h @ g_star @ h, a @ g_star @ a
+    cos_a = float(h @ g_star @ a) / math.sqrt(hg * ag)
+    cos_a = min(1.0, max(-1.0, cos_a))
+    sin2 = 1.0 - cos_a * cos_a
+    return (r * r * cos_a * cos_a + sin2 / r) ** -1.5
 
 
 # ---------------- 第 4 步：多重性与洛伦兹偏振因子 ----------------
@@ -182,11 +216,17 @@ def _hex_representative(orbit):
 # ---------------- 主流程 ----------------
 
 def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 80.0),
-                           nmax=10, merge_tol=1e-3, min_intensity=0.01):
+                           nmax=10, merge_tol=1e-3, min_intensity=0.01,
+                           b_iso=None, md=None):
     """手写版主流程。返回 (2θ 数组, 归一化强度数组, 峰表, 是否六方)。
 
     峰表每项：[2θ, 强度%, [(代表 hkl, 多重性), ...]]
     nmax 要足够大：比如刚玉到 80° 需要 l 到 10。
+
+    b_iso / md（可选，2026-10-17 RY04 第七周加）：温度因子（见
+    structure_factor 的 b_iso）与择优取向——md = (轴, R)，见
+    march_dollase；强度 = m·|F|²·LP·P_md。两者默认 None = 第 6 周的
+    理想晶体口径，老结果逐位不变。
     """
     lo, hi = two_theta_range
     lattice = structure.lattice.matrix
@@ -209,8 +249,11 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
                 m = len(orbit)
                 theta = math.radians(tt / 2.0)
                 s = math.sin(theta) / wavelength
-                F = structure_factor((h, k, l), structure, s)
+                F = structure_factor((h, k, l), structure, s, b_iso=b_iso)
                 intensity = m * abs(F) ** 2 * lp_factor(theta)
+                if md is not None:
+                    axis, r_md = md
+                    intensity *= march_dollase((h, k, l), axis, r_md, lattice)
 
                 # 报告用的代表：六方晶系取规范正指数写法（见 _hex_representative），
                 # 其它晶系取"正半边"里最大的（(111) 家族显示成 (111) 而不是 (1-11)）

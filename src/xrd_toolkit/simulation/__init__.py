@@ -10,6 +10,7 @@ from xrd_toolkit.simulation.core import (
     format_hkls,
     load_structure,
     lp_factor,
+    march_dollase,
     multiplicity,
     pattern_from_cif,
     pattern_from_cif_pymatgen,
@@ -19,12 +20,26 @@ from xrd_toolkit.simulation.core import (
     structure_factor,
     two_theta_from_d,
 )
-from xrd_toolkit.simulation.plots import plot_annotated, plot_pattern
+from xrd_toolkit.simulation.plots import plot_annotated, plot_pattern, plot_profile
+from xrd_toolkit.simulation.profile import (
+    caglioti_fwhm_deg,
+    lorentz_fwhm_deg,
+    profile_fwhm_eta,
+    pseudo_voigt,
+    scherrer_fwhm_deg,
+    simulate_pattern,
+    strain_fwhm_deg,
+    tch_fwhm_eta,
+)
 
 __all__ = [
     "d_spacing", "two_theta_from_d", "scattering_factor", "structure_factor",
+    "march_dollase",
     "distinct_rotations", "multiplicity", "lp_factor", "format_hkls",
     "pattern_from_structure", "pattern_from_cif",
     "pattern_from_structure_pymatgen", "pattern_from_cif_pymatgen",
-    "load_structure", "plot_pattern", "plot_annotated",
+    "load_structure", "plot_pattern", "plot_annotated", "plot_profile",
+    "caglioti_fwhm_deg", "lorentz_fwhm_deg", "scherrer_fwhm_deg",
+    "strain_fwhm_deg", "tch_fwhm_eta", "pseudo_voigt", "profile_fwhm_eta",
+    "simulate_pattern",
 ]
