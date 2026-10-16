@@ -335,9 +335,6 @@ structures live in `data/structures/` (COD, public domain), example figures in
 the app and everything else are unaffected. 16 unit tests (peak positions /
 wavelength effect / extinction / scattering-factor self-check / multiplicity /
 index representatives and layout / the two implementations agreeing).
-**From week 7 on, the course's weekly reports are archived in
-`docs/weekly/`** (`Week7_Report.md`: the round covering instrument
-profiles, thermal motion, texture and the two-engine crosscheck).
 
 ## CLI scripts
 
