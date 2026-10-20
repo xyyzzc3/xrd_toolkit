@@ -23,9 +23,9 @@ from xrd_toolkit.gui.panel_state import (CALIB_HOVER_KEY,
                                          _auto_contrast_values,
                                          _collect_geometry, _log)
 from xrd_toolkit.gui.tasks import user_error_text
+from xrd_toolkit.services.calibrants import calibrant_short_label
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.services.integrator import (snap_lab6_ring,
-                                             theoretical_ring_paths)
+from xrd_toolkit.services.integrator import snap_ring, theoretical_ring_paths
 
 
 class _CalibSubWindow(QMdiSubWindow):
@@ -102,8 +102,10 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     再开新的。图像在界面线程读一次（进 _image_cache），之后校准
     完成的重画都从缓存拿。
     """
-    from xrd_toolkit.gui.calib import (_calib_sync, _ensure_current, _refresh_current_metrics,
-        _reset_calib_form)   # 破循环：见模块说明
+    from xrd_toolkit.gui.calib import (
+        _calib_sync, _ensure_current, _init_calibrant_for_path,
+        _refresh_current_metrics, _reset_calib_form,
+        _update_ring_count)   # 破循环：见模块说明
     key = f"校准|{path}"
     if getattr(window, "calib_dock", None) is not None:
         if window.calib_key == key:
@@ -117,6 +119,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
         return
     window.calib_gen = getattr(window, "calib_gen", 0) + 1   # 新面板新代
     _calib_state(window)   # 状态从空白起步（关闭即遗忘）
+    _init_calibrant_for_path(window, path)   # 按文件名/条目预选标样
     _reset_calib_form(window)
 
     sub = _CalibSubWindow(window, key)
@@ -240,8 +243,12 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     # 借用内部已按借到的几何画了一帧，下面这画是兜底——注册表里没有那条
     # 条目时借不出来（current_geom 仍是 None），也不该留一块空图
     _ensure_current(window)
+    _update_ring_count(window, force_auto=True)
     _draw_calib_image(window, key, image, _calib_draw_geometry(window))
-    _log(window, f"打开校准面板：{path.name}（点衍射环即可选点）")
+    state = _calib_state(window)
+    _log(window, f"打开校准面板：{path.name}（标样 "
+                 f"{calibrant_short_label(state['calibrant'])}，"
+                 f"{state['n_rings']} 环；点衍射环即可选点）")
     _calib_sync(window)
     _refresh_current_metrics(window)
 
@@ -311,12 +318,14 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
               origin="lower")
     ax.set_aspect("equal")
+    state = _calib_state(window)
     paths = theoretical_ring_paths(
         pixel_size_m=geometry["pixel_size_m"],
         wavelength_m=geometry["wavelength_m"],
         dist_m=geometry["dist_m"], poni1_px=geometry["poni1_px"],
         poni2_px=geometry["poni2_px"], rot1_deg=geometry["rot1_deg"],
-        rot2_deg=geometry["rot2_deg"], image_shape=image.shape)
+        rot2_deg=geometry["rot2_deg"], image_shape=image.shape,
+        calibrant=state["calibrant"], n_rings=state["n_rings"])
     for ring, xy in paths["rings"]:
         ax.plot(xy[:, 0], xy[:, 1], color=RING_COLOR, lw=0.7, alpha=0.65)
         # 环号标在"路径上、落在图像内、最靠右"的点（标到图外看不见）
@@ -642,9 +651,6 @@ def _redraw_calib(window: QMainWindow) -> None:
                       ring_marks=state["points"])
 
 
-# LaB₆ 理论环序号上限（snap_lab6_ring 的 max_rings=16 → 0~15）：手动小节的
-# 「选中点的环号」数字框拿它当上界（calib.py 建控件时 import 它）
-_LAB6_MAX_RING = 15
 # 右键选中：落点离某个选点多近算"点中了这个点"（px）。选点标记是 9 px 的
 # 圆圈，12 px 给触控板留点余量
 _MARKER_PICK_PX = 12.0
@@ -909,14 +915,15 @@ def _on_calib_click(window: QMainWindow, key: str, event) -> None:
         _calib_sync(window)                     # 面板那行（选中/数值）跟着变
         return
     g = _calib_draw_geometry(window)
-    ring = snap_lab6_ring(
+    state = _calib_state(window)
+    ring = snap_ring(
         float(event.xdata), float(event.ydata),
         pixel_size_m=g["pixel_size_m"], wavelength_m=g["wavelength_m"],
         dist_m=g["dist_m"], poni1_m=g["poni1_px"] * g["pixel_size_m"],
         poni2_m=g["poni2_px"] * g["pixel_size_m"],
         rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"],
-        tol_deg=SNAP_TOL_DEG)
-    state = _calib_state(window)
+        tol_deg=SNAP_TOL_DEG, calibrant=state["calibrant"],
+        max_rings=state["n_rings"])
     if ring is None:
         _log(window, f"({event.xdata:.1f}, {event.ydata:.1f}) "
                      f"不在任何理论环附近（±{SNAP_TOL_DEG:.1f}°），已忽略")

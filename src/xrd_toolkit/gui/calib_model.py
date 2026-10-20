@@ -11,6 +11,8 @@ import numpy as np
 
 from typing import TYPE_CHECKING
 
+from xrd_toolkit.services.calibrants import DEFAULT_CALIBRANT
+
 if TYPE_CHECKING:      # 只为类型注解：本模块运行时零 Qt
     from PySide6.QtWidgets import QMainWindow
 
@@ -49,6 +51,11 @@ def _calib_state(window: QMainWindow) -> dict:
       current_metrics / current_error  当前配置的指标（异步算）
       custom        True = 手输或手改过（表头显示"自定义"）
       counters      {"auto": n, ...} 累积命名计数
+      calibrant     当前本次校准用的标样（pyFAI 名称，默认 LaB6）；
+                    换标样会清空选点/结果（几何保留），见 _clear_calib_session
+      n_rings       参与画环/判环/精修/指标的理论环数
+      n_rings_auto  True = n_rings 按几何自动算（完整落在图像内的环数）；
+                    False = 用户手改过
     """
     state = getattr(window, "calib_state", None)
     if state is None:
@@ -58,8 +65,43 @@ def _calib_state(window: QMainWindow) -> dict:
             "pinned": {"A": False, "B": False}, "next_slot": "A",
             "current_geom": None, "current_from": None,
             "current_metrics": None, "current_error": None,
-            "custom": False, "counters": {}}
+            "custom": False, "counters": {},
+            "calibrant": DEFAULT_CALIBRANT, "n_rings": 16,
+            "n_rings_auto": True}
+    # 旧状态/测试里手搭的 dict 可能没有标样键：补默认值，别让
+    # _calib_sync/画图在 KeyError 上炸掉。
+    state.setdefault("calibrant", DEFAULT_CALIBRANT)
+    state.setdefault("n_rings", 16)
+    state.setdefault("n_rings_auto", True)
     return state
+
+
+def _clear_calib_session(state: dict) -> None:
+    """换标样时清空"相对于这套理论环"的一切：选点、结果、A/B 槽、指标。
+
+    **几何、来处、血缘、custom 标记都保留**——距离/PONI/倾斜角是仪器
+    属性，与标样无关；换标样后它们仍是同一份起点。清空后像刚进校准页
+    一样重新登记一条"原始"（当前几何），A/B 仍能跟它比。
+    """
+    old_current = state["slots"].get("current")
+    state["points"] = []
+    state["selected"] = None
+    state["results"] = []
+    state["slots"] = {"current": None, "A": None, "B": None}
+    state["pinned"] = {"A": False, "B": False}
+    state["next_slot"] = "A"
+    state["current_metrics"] = None
+    state["current_error"] = None
+    state["counters"] = {}
+    state.pop("manual_n", None)
+    # 当前几何若来自一条被清掉的结果，说明文字别再挂着那个已经不存在的
+    # 名字；借来的条目/手输的来处照旧保留。
+    if old_current and state.get("current_from") == old_current:
+        state["current_from"] = "换标样前保留的几何"
+    if state.get("current_geom") is not None:
+        state["results"].append(
+            {"name": _next_name(state, "raw"), "kind": "raw",
+             "result": _geom_to_result_shape(state["current_geom"])})
 
 
 def _metrics_dev(metrics) -> float:
@@ -345,7 +387,7 @@ COMPARE_HINT = ("⚠ 是退化方向：两列差异大不等于更准；判优�
 
 
 # ── 校准页与校准图面板共用的常量 ──────────────────────────
-SNAP_TOL_DEG = 0.5      # 判环容差（2θ 度；与 snap_lab6_ring 默认一致）
+SNAP_TOL_DEG = 0.5      # 判环容差（2θ 度；与 snap_ring 默认一致）
 
 MIN_POINTS = 3          # 手动校准最低点数
 

@@ -5,11 +5,11 @@ panels / panel_state / tasks 与服务层引擎，单向无环）。
 
 两种模式（按数据质量任选一种，也可都跑、结果三列并列对比）：
   - 自动校准 [开始自动校准]：后台线程 fit_center_from_rings 自动定
-    环心（失败 find_ring_center 兜底）→ calibrate_lab6 pyFAI 迭代
+    环心（失败 find_ring_center 兜底）→ calibrate_geometry pyFAI 迭代
     精修，输出距离/束心/倾斜角/残余误差；
   - 手动选点校准：中央校准图上点击至少 3 个点、覆盖 ≥2 个不同衍射
-    环，点自动吸附最近理论环（snap_lab6_ring，容差 0.5°），
-    [开始手动校准] 交给 refine_lab6_from_points 反推几何。
+    环，点自动吸附最近理论环（snap_ring，容差 0.5°），
+    [开始手动校准] 交给 refine_geometry_from_points 反推几何。
 
 校准完成后**引擎指标**（services/ring_metrics：环位偏差中位 px、完整
 环数、a 离散 ppm）附在结果 dict 上并写进日志后缀。它量的是"几何有没
@@ -69,12 +69,13 @@ from xrd_toolkit.gui.calib_model import (
     KIND_LABELS, MIN_POINTS, MIN_RINGS, PANEL_SCALE, RING_COLOR,
     SLOT_LABELS, SNAP_TOL_DEG,
     SOURCE_IMPROVE_MIN_PX, _add_custom_result, _add_result, _adopt_decision,
-    _calib_state, _fill_slot, _geom_to_result_shape, _next_name,
-    _result_by_name, _result_dev, _result_to_geom, _slot_label, _verdict)
+    _calib_state, _clear_calib_session, _fill_slot, _geom_to_result_shape,
+    _next_name, _result_by_name, _result_dev, _result_to_geom, _slot_label,
+    _verdict)
 from xrd_toolkit.gui.calib_table import (
     _on_slot_changed, _refresh_table, _sync_slot_combos)
 from xrd_toolkit.gui.calib_panel import (
-    _CalibSubWindow, _LAB6_MAX_RING, _apply_selected_ring,
+    _CalibSubWindow, _apply_selected_ring, _calib_image,
     _calib_standard_path, _clear_calib_points, _close_calib_panel,
     _geom_px_keys, _load_image, _open_calib_panel, _redraw_calib,
     _redraw_calib_if_open, _undo_calib_point, _warn_rings_off_image)
@@ -88,8 +89,12 @@ from xrd_toolkit.gui.panels import _settle
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
+from xrd_toolkit.services.calibrants import (
+    COMMON_CALIBRANTS, DEFAULT_CALIBRANT, MAX_GUI_RINGS,
+    calibrant_label, calibrant_short_label, calibrant_tooltip,
+    complete_ring_count, detect_calibrant_from_stem, ring_total)
 from xrd_toolkit.services.integrator import (
-    calibrate_lab6, refine_lab6_from_points, snap_lab6_ring)
+    calibrate_geometry, refine_geometry_from_points, snap_ring)
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
 
@@ -159,6 +164,155 @@ def _borrow_entry(window: QMainWindow, key: str, silent: bool = False) -> str:
     return state["current_from"]
 
 
+# ── 标样选择（常用 pyFAI 内置标样；换标样只清会话，不动几何）──────
+def _sync_calibrant_widgets(window: QMainWindow) -> None:
+    """把 state 的标样/环数刷到两个控件上（程序写入，不触发信号）。"""
+    combo = getattr(window, "calib_standard_combo", None)
+    spin = getattr(window, "calib_ring_count_spin", None)
+    if combo is None or spin is None:
+        return
+    state = _calib_state(window)
+    name = state.get("calibrant") or DEFAULT_CALIBRANT
+    total = max(1, min(ring_total(name), MAX_GUI_RINGS))
+    for w in (combo, spin):
+        w.blockSignals(True)
+    try:
+        idx = combo.findData(name)
+        if idx < 0:                 # 非常用内置名（脚本/手改配置带进来的）
+            combo.addItem(calibrant_label(name), name)
+            idx = combo.count() - 1
+        combo.setCurrentIndex(idx)
+        spin.setRange(1, total)
+        spin.setValue(int(min(max(state.get("n_rings", 1), 1), total)))
+    finally:
+        for w in (combo, spin):
+            w.blockSignals(False)
+    combo.setToolTip(
+        "校准用的标准样品。它只决定理论环的 2θ 阶梯；距离/PONI/倾斜角"
+        "与标样无关。请按标样证书选到具体 SRM 变体。\n\n"
+        + calibrant_tooltip(name))
+    spin.setToolTip(
+        f"参与画环/判环/精修/指标的理论环数。默认按几何自动算——"
+        f"完整落在图像内的环数；{calibrant_short_label(name)} 共 "
+        f"{ring_total(name)} 条反射，界面最多 {MAX_GUI_RINGS} 条。"
+        f"改它会按新环数重算当前配置的指标。")
+
+
+def _update_ring_count(window: QMainWindow, force_auto: bool = False) -> None:
+    """按当前几何算默认环数（完整落在图像内的环数）；用户手改过就不动。
+
+    只读缓存里的标样图尺寸，不重复解码（_calib_image 有缓存）；拿不到
+    几何/图像时退回 16，并把结果夹到反射总数和 GUI 上限。
+    """
+    state = _calib_state(window)
+    name = state.get("calibrant") or DEFAULT_CALIBRANT
+    total = max(1, min(ring_total(name), MAX_GUI_RINGS))
+    if force_auto or state.get("n_rings_auto", True):
+        state["n_rings_auto"] = True
+        n = None
+        geom = state.get("current_geom")
+        path = getattr(window, "calib_path", None)
+        if geom is not None and path is not None:
+            try:
+                image = _calib_image(window, path)
+                beam = geom.get("beam_center_rc") \
+                    or window.config.get("beam_center")
+                if beam is not None and None not in beam:
+                    n = complete_ring_count(
+                        name,
+                        wavelength_m=float(geom["wavelength_m"]),
+                        pixel_size_m=float(geom["pixel_size_m"]),
+                        dist_m=float(geom["dist_m"]),
+                        beam_center_rc=(float(beam[0]), float(beam[1])),
+                        image_shape=image.shape)
+            except Exception:                          # noqa: BLE001
+                n = None
+        state["n_rings"] = int(min(max(n if n is not None else 16, 1), total))
+    else:
+        state["n_rings"] = int(min(max(int(state["n_rings"]), 1), total))
+    _sync_calibrant_widgets(window)
+
+
+def _init_calibrant_for_path(window: QMainWindow, path: Path) -> None:
+    """新校准图：按文件名预选标样，认不出就沿用所选配置条目的标样。
+
+    文件名是这个会话里最可靠的证据（图本身就是标样）；配置条目的
+    calibrant 只作兜底。都不是就 LaB6（历史默认）。
+    """
+    state = _calib_state(window)
+    name = detect_calibrant_from_stem(Path(path).stem)
+    if name is None:
+        entry = config.CONFIGS.get(getattr(window, "config_name", "")) or {}
+        cand = entry.get("calibrant")
+        if isinstance(cand, str) and cand.strip():
+            try:
+                ring_total(cand)
+                name = cand.strip()
+            except ValueError:
+                name = None
+    state["calibrant"] = name or DEFAULT_CALIBRANT
+    state["n_rings_auto"] = True
+    state["n_rings"] = 16
+
+
+def _on_calibrant_changed(window: QMainWindow, _index: int) -> None:
+    """下拉框换标样：有选点/结果时确认，然后清空本次会话（几何保留）。"""
+    combo = getattr(window, "calib_standard_combo", None)
+    if combo is None:
+        return
+    name = combo.currentData()
+    state = _calib_state(window)
+    old = state.get("calibrant")
+    if not name or name == old:
+        return
+    has_work = bool(state["points"]) or any(
+        it.get("kind") != "raw" for it in state["results"])
+    if has_work:
+        answer = QMessageBox.question(
+            window, "换标样",
+            f"换标样会清空本次选点和校准结果（当前几何保留）。\n\n"
+            f"{calibrant_short_label(old)} → {calibrant_short_label(name)}\n"
+            f"继续吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            _sync_calibrant_widgets(window)          # 下拉框还原
+            return
+    state["calibrant"] = name
+    _clear_calib_session(state)
+    state["n_rings_auto"] = True
+    # 在飞的自动/手动/指标任务作废（它们拿的还是旧标样）
+    window.calib_gen = getattr(window, "calib_gen", 0) + 1
+    _update_ring_count(window, force_auto=True)
+    _calib_sync(window)
+    _refresh_current_metrics(window)
+    _redraw_calib_if_open(window)
+    _log(window, f"标样切换为 {calibrant_label(name)}：本次选点/结果已清空，"
+                 f"当前几何保留；环数按 {state['n_rings']} 条算")
+
+
+def _on_ring_count_changed(window: QMainWindow, value: int) -> None:
+    """手改环数：记住用户值（不再自动），按新环数重算指标并重画。"""
+    state = _calib_state(window)
+    total = max(1, min(ring_total(state.get("calibrant") or DEFAULT_CALIBRANT),
+                       MAX_GUI_RINGS))
+    value = min(max(int(value), 1), total)
+    state["n_rings"] = value
+    state["n_rings_auto"] = False
+    state["current_metrics"] = None     # 旧环数算的指标先撤下，异步重算
+    _sync_calibrant_widgets(window)
+    _calib_sync(window)          # 选中点的环号框上界跟着变
+    _refresh_current_metrics(window)
+    _redraw_calib_if_open(window)
+    over = sorted({int(p[2]) for p in state["points"] if int(p[2]) >= value})
+    if over:
+        _log(window, f"注意：已有选点的环号（{'、'.join(map(str, over))}）"
+                     f"超出新环数 {value}，精修会拒绝——请撤销这些点、"
+                     f"改环号，或把环数调大")
+    if any(it.get("kind") != "raw" for it in state["results"]):
+        _log(window, f"环数改为 {value}：当前配置的指标已按新环数重算；"
+                     f"A/B 里旧结果的指标仍是旧环数算的，重新校准可刷新")
+
+
 def _pixel_ok(window: QMainWindow) -> bool:
     """像素尺寸确认（规则 (b)）：只在**像素值真的变了**时才要重确认。
 
@@ -205,9 +359,12 @@ def _current_geom_text(window: QMainWindow) -> str:
     state = _calib_state(window)
     geom = state["current_geom"] or {}
     from_txt = _slot_label(state, "current")
+    cal_txt = calibrant_short_label(
+        state.get("calibrant") or DEFAULT_CALIBRANT)
     if geom.get("dist_m") is None:
-        return f"当前配置：{from_txt}"
-    return (f"当前配置：{from_txt}（距离 {geom['dist_m'] * 1e3:.2f} mm、"
+        return f"当前配置：{from_txt}（标样 {cal_txt}）"
+    return (f"当前配置：{from_txt}（标样 {cal_txt}；距离 "
+            f"{geom['dist_m'] * 1e3:.2f} mm、"
             f"像素 {(geom.get('pixel_size_m') or 0) * 1e6:.1f} µm）")
 
 
@@ -341,7 +498,8 @@ def _edit_current(window: QMainWindow) -> None:
     _redraw_calib_if_open(window)
 
 
-def _metrics_worker(path_str: str, geom: dict) -> dict:
+def _metrics_worker(path_str: str, geom: dict,
+                    calibrant: str, n_rings: int) -> dict:
     """后台线程：算一份几何的指标（当前配置的环位偏差专用）。
 
     `_attach_metrics(result, ...)` 的第一个参数就是**被量的那份几何**，
@@ -349,7 +507,8 @@ def _metrics_worker(path_str: str, geom: dict) -> dict:
     """
     image = _load_image(path_str)
     out = dict(geom)
-    _attach_metrics(out, image, geom)     # initial=None：不重复算初值那一份
+    _attach_metrics(out, image, geom, calibrant=calibrant,
+                    n_rings=n_rings)      # initial=None：不重复算初值那一份
     return out
 
 
@@ -413,6 +572,8 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
         _calib_sync(window)
 
     task = BackgroundTask(_metrics_worker, str(path), dict(geom),
+                          state.get("calibrant") or DEFAULT_CALIBRANT,
+                          int(state.get("n_rings") or 16),
                           on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
@@ -534,6 +695,38 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.addLayout(pix_row)
     window.calib_pixel_chk = chk_pix
     window.calib_pixel_warn = warn_pix
+
+    # ── 标样 + 环数 ─────────────────────────────────────────
+    # 这两项一起决定"理论 2θ 阶梯"：标样给 d 值，环数给用前多少条。
+    # 放在动作区之前——自动/手动/画环/指标全都吃它；换标样只清本次
+    # 会话（选点/结果），当前几何保留（距离/PONI/倾斜角是仪器属性）。
+    std_box = QGroupBox("标样")
+    std_lay = QHBoxLayout(std_box)
+    combo = QComboBox()
+    combo.setObjectName("calib_standard_combo")
+    for name, label, _aliases in COMMON_CALIBRANTS:
+        combo.addItem(label, name)
+        # 不在这里给每一项算 tooltip：那会把 18 个标样的 d 值库全部
+        # 同步加载一遍（实测建窗卡 8 秒，界面看门狗报警）。选中/同步时
+        # 只算当前这一项，见 _sync_calibrant_widgets。
+    # 下拉文字（“LaB₆（NIST SRM 660c，默认）”）很长，别让它按文字要宽度
+    # 把参数坞撑宽：水平 SizePolicy=Ignored，列宽由页面其余内容定。
+    combo.setSizePolicy(QSizePolicy.Ignored,
+                        combo.sizePolicy().verticalPolicy())
+    combo.currentIndexChanged.connect(
+        lambda _i: _on_calibrant_changed(window, _i))
+    ring_count = QSpinBox()
+    ring_count.setObjectName("calib_ring_count_spin")
+    ring_count.setRange(1, MAX_GUI_RINGS)
+    ring_count.setMaximumWidth(80)
+    ring_count.valueChanged.connect(
+        lambda v: _on_ring_count_changed(window, v))
+    std_lay.addWidget(combo, 1)
+    std_lay.addWidget(QLabel("环数"))
+    std_lay.addWidget(ring_count)
+    lay.addWidget(std_box)
+    window.calib_standard_combo = combo
+    window.calib_ring_count_spin = ring_count
 
     # 「条目名称」一个框（用户 2026-10-07："一个框，预填文件名的不含-
     # 后的长数字部分……两个框保存后最后变成一个连在一起的"）：名字本身
@@ -686,9 +879,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     sel_row.addWidget(sel_lbl, 1)
     ring_spin = QSpinBox()
     ring_spin.setObjectName("calib_ring_spin")
-    ring_spin.setRange(0, _LAB6_MAX_RING)
-    ring_spin.setToolTip(f"选中的点该算第几环（LaB₆ 理论环 0–{_LAB6_MAX_RING}）"
-                         f"——位置不动，拟合按新环号算")
+    ring_spin.setRange(0, 15)     # 实际上界由 _calib_sync 按标样/环数刷新
     ring_spin.setEnabled(False)
     btn_ring = QPushButton("改")
     btn_ring.setObjectName("calib_ring_apply_btn")
@@ -737,6 +928,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     scroll.setWidget(page)
     window.calib_scroll = scroll
     _ensure_current(window)
+    _sync_calibrant_widgets(window)
     _calib_sync(window)
     return scroll
 
@@ -771,6 +963,14 @@ def _calib_sync(window: QMainWindow) -> None:
         f"已选 {len(points)} 个点 / {n_rings} 个环——至少要 {MIN_POINTS} 个点、"
         f"覆盖 {MIN_RINGS} 个不同的环才能精修（都判成同一个环号了？"
         f"右键选中那个点，把环号改掉）")
+    # 选中点的环号框上界跟当前标样/环数走（不再写死 LaB₆ 的 0–15）
+    n_sel = max(1, int(state.get("n_rings") or 1))
+    ring_spin = getattr(window, "calib_ring_spin", None)
+    if ring_spin is not None:
+        ring_spin.setRange(0, n_sel - 1)
+        ring_spin.setToolTip(
+            f"选中的点该算第几环（{calibrant_short_label(state['calibrant'])} "
+            f"理论环 0–{n_sel - 1}）——位置不动，拟合按新环号算")
     # 选中点的环号行：谁被选中、现在几环；没选中（或越界）就禁用
     sel_lbl = getattr(window, "calib_selected_lbl", None)
     if sel_lbl is not None:
@@ -820,13 +1020,15 @@ def _calib_sync(window: QMainWindow) -> None:
 
 # ══ 引擎指标：环位偏差 / 完整度 / a 离散（结果日志后缀）══════════
 def _attach_metrics(result: dict, image, geom: dict,
-                    initial: dict = None) -> None:
+                    initial: dict = None, calibrant=DEFAULT_CALIBRANT,
+                    n_rings: int = 16) -> None:
     """给校准结果就地附引擎指标，**绝不抛出**（失败记 metrics_error）。
 
     geom / initial 都是 _collect_geometry 形状的字典（initial = 预精修
     的初值几何，米制 PONI）；result 是引擎结果（px 键，**不含**像素
     尺寸与波长——它们不参与拟合）。指标要的像素尺寸/波长一律取自
-    geom，距离/PONI/倾斜角取自被评估的那一份。
+    geom，距离/PONI/倾斜角取自被评估的那一份；calibrant/n_rings 决定
+    "理论环"是哪一套（标样只影响指标，不影响几何）。
 
     写三个键：
       metrics          结果几何下的指标（ring_metrics 的输出）
@@ -845,7 +1047,8 @@ def _attach_metrics(result: dict, image, geom: dict,
             image, pixel_size_m=geom["pixel_size_m"],
             wavelength_m=geom["wavelength_m"], dist_m=g["dist_m"],
             poni1_px=g["poni1_px"], poni2_px=g["poni2_px"],
-            rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"])
+            rot1_deg=g["rot1_deg"], rot2_deg=g["rot2_deg"],
+            calibrant=calibrant, n_rings=n_rings)
 
     result["metrics"] = None
     result["metrics_initial"] = None
@@ -880,8 +1083,8 @@ def _metrics_note(result: dict) -> str:
                     else "搜索窗在图像内放不下")
         return (f"｜无可用环信号（{clip_txt}、完整环 {m['n_complete']}/{n}）")
     a = m["a"]
-    a_txt = (f"晶格常数 a 的离散度 {a['spread_ppm']:.0f} ppm"
-             if np.isfinite(a["spread_ppm"]) else "晶格常数 a 的离散度 —")
+    a_txt = (f"标样 d 值离散度 {a['spread_ppm']:.0f} ppm"
+             if np.isfinite(a["spread_ppm"]) else "标样 d 值离散度 —")
     init = result.get("metrics_initial")
     init_txt = (f"（初值 {init['dev_px']:.2f} px）"
                 if init is not None and np.isfinite(init["dev_px"]) else "")
@@ -890,7 +1093,9 @@ def _metrics_note(result: dict) -> str:
 
 
 # ══ 后台任务：自动 / 手动（_spawn 同款守卫）═══════════════════
-def _auto_calib_worker(path_str: str, geom: dict) -> dict:
+def _auto_calib_worker(path_str: str, geom: dict,
+                       calibrant: str = DEFAULT_CALIBRANT,
+                       n_rings: int = 16) -> dict:
     """后台线程纯计算：读标样 → 自动定环心 → pyFAI 精修。
 
     环心先用取点拟合自动定位（fit_center_from_rings），失败再 FFT
@@ -902,7 +1107,7 @@ def _auto_calib_worker(path_str: str, geom: dict) -> dict:
 
     图像已经在手，顺手附引擎指标（metrics / metrics_initial）——环位
     偏差量的是"精修后几何把理论环放到图像真环上了没有"，是用户在校
-    准图上看得见的那件事。
+    准图上看得见的那件事。calibrant/n_rings 是本次会话选定的标样与环数。
     """
     image = _load_image(path_str)
     center = fit_center_from_rings(image)
@@ -910,17 +1115,20 @@ def _auto_calib_worker(path_str: str, geom: dict) -> dict:
         cy, cx = find_ring_center(image)
     else:
         cy, cx = center["cy"], center["cx"]
-    result = calibrate_lab6(
+    result = calibrate_geometry(
         image, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=geom["dist_m"],
-        center0_px=(cx, cy))
-    _attach_metrics(result, image, geom, initial=geom)
+        center0_px=(cx, cy), calibrant=calibrant, max_rings=n_rings)
+    _attach_metrics(result, image, geom, initial=geom, calibrant=calibrant,
+                    n_rings=n_rings)
     result["beam_center_rc"] = (cy, cx)
     return result
 
 
 def _manual_calib_worker(path_str, points, rings, geom: dict,
-                         center0_px: tuple) -> dict:
+                         center0_px: tuple,
+                         calibrant: str = DEFAULT_CALIBRANT,
+                         n_rings: int = 16) -> dict:
     """后台线程纯计算：用户点 → pyFAI refine2 单轮精修 → 附引擎指标。
 
     结果附 beam_center_rc：手动精修不动束心（初值 = 配置条目 B），
@@ -943,11 +1151,13 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
             image = _load_image(path_str)
         except Exception as exc:                      # noqa: BLE001
             load_error = user_error_text(exc)
-    rings, note, dist0_m = _reindex_by_scale(points, rings, geom, center0_px, image)
-    result = refine_lab6_from_points(
+    rings, note, dist0_m = _reindex_by_scale(
+        points, rings, geom, center0_px, image,
+        calibrant=calibrant, n_rings=n_rings)
+    result = refine_geometry_from_points(
         points, rings, pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"], dist0_m=dist0_m,
-        center0_px=center0_px)
+        center0_px=center0_px, calibrant=calibrant, max_rings=n_rings)
     result["beam_center_rc"] = (center0_px[1], center0_px[0])
     if note:
         result["reindex_note"] = note    # 主线程写进日志（不悄悄换判法）
@@ -957,7 +1167,8 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
             result["metrics_initial"] = None
             result["metrics_error"] = load_error
         else:
-            _attach_metrics(result, image, geom, initial=geom)
+            _attach_metrics(result, image, geom, initial=geom,
+                            calibrant=calibrant, n_rings=n_rings)
     return result
 
 
@@ -992,7 +1203,8 @@ def _rings_look_suspicious(points, rings, center_px) -> bool:
     return False
 
 
-def _rings_at_scale(points, geom, center_px, scale) -> list:
+def _rings_at_scale(points, geom, center_px, scale,
+                    calibrant=DEFAULT_CALIBRANT, n_rings: int = 16) -> list:
     """把距离乘 scale 后重新判环；有任何一点判不到环就返回空表（那套不能用）。
 
     geom 的形状约定与 _attach_metrics 相同（GUI 交出来的是米制键
@@ -1005,19 +1217,21 @@ def _rings_at_scale(points, geom, center_px, scale) -> list:
     px = float(g["pixel_size_m"])
     out = []
     for x, y in points:
-        k = snap_lab6_ring(
+        k = snap_ring(
             float(x), float(y), pixel_size_m=px,
             wavelength_m=float(g["wavelength_m"]), dist_m=float(g["dist_m"]),
             poni1_m=float(g["poni1_px"]) * px, poni2_m=float(g["poni2_px"]) * px,
             rot1_deg=float(g.get("rot1_deg") or 0.0),
-            rot2_deg=float(g.get("rot2_deg") or 0.0), tol_deg=SNAP_TOL_DEG)
+            rot2_deg=float(g.get("rot2_deg") or 0.0), tol_deg=SNAP_TOL_DEG,
+            calibrant=calibrant, max_rings=n_rings)
         if k is None:
             return []
         out.append(int(k))
     return out
 
 
-def _reindex_by_scale(points, rings, geom, center0_px, image):
+def _reindex_by_scale(points, rings, geom, center0_px, image,
+                      calibrant=DEFAULT_CALIBRANT, n_rings: int = 16):
     """判环可疑时：扫几个尺度重判环、各拟合一次，挑**环位偏差最小**的那套。
 
     返回 (rings, 说明, dist0_m)；不需要扫 / 扫不动时返回 (rings, "", 原距离)
@@ -1037,7 +1251,8 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
         return rings, "", float(geom["dist_m"])
 
     def _fit(scale, screen=True):
-        cand = _rings_at_scale(points, geom, center0_px, scale)
+        cand = _rings_at_scale(points, geom, center0_px, scale,
+                               calibrant=calibrant, n_rings=n_rings)
         if not cand:
             return None
         if screen and _rings_look_suspicious(points, cand, center0_px):
@@ -1045,14 +1260,16 @@ def _reindex_by_scale(points, rings, geom, center0_px, image):
             # 不可能对，别花 200 ms 去拟合它（用户 2026-10-01："按优化来"）
             return None
         try:
-            res = refine_lab6_from_points(
+            res = refine_geometry_from_points(
                 points, cand, pixel_size_m=float(geom["pixel_size_m"]),
                 wavelength_m=float(geom["wavelength_m"]),
                 dist0_m=float(geom["dist_m"]) * float(scale),
-                center0_px=center0_px)
+                center0_px=center0_px, calibrant=calibrant,
+                max_rings=n_rings)
         except Exception:                              # noqa: BLE001
             return None
-        _attach_metrics(res, image, geom, initial=geom)
+        _attach_metrics(res, image, geom, initial=geom, calibrant=calibrant,
+                        n_rings=n_rings)
         dev = _result_dev(res)
         return None if dev is None else (dev, scale, cand)
 
@@ -1117,11 +1334,15 @@ def _start_auto_calib(window: QMainWindow) -> None:
             return
         _log(window, f"校准失败（定位束心并精修）：{msg}")
 
-    task = BackgroundTask(_auto_calib_worker, str(path), geom,
-                          on_done=done, on_error=error)
+    state = _calib_state(window)
+    calibrant = state.get("calibrant") or DEFAULT_CALIBRANT
+    n_rings = int(state.get("n_rings") or 16)
+    task = BackgroundTask(_auto_calib_worker, str(path), geom, calibrant,
+                          n_rings, on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
-    _log(window, f"开始定位束心并精修：{path.name}（后台运行）")
+    _log(window, f"开始定位束心并精修：{path.name}（标样 "
+                 f"{calibrant_short_label(calibrant)}，{n_rings} 环；后台运行）")
     task.start()
 
 
@@ -1168,12 +1389,15 @@ def _start_manual_calib(window: QMainWindow) -> None:
         _log(window, f"校准失败（手动选点）：{msg}")
 
     path = getattr(window, "calib_path", None)   # 指标要图像；没面板时为 None
+    calibrant = state.get("calibrant") or DEFAULT_CALIBRANT
+    n_rings = int(state.get("n_rings") or 16)
     task = BackgroundTask(_manual_calib_worker, str(path) if path else None,
-                          points, rings, geom, center0_px,
-                          on_done=done, on_error=error)
+                          points, rings, geom, center0_px, calibrant,
+                          n_rings, on_done=done, on_error=error)
     window._latest_task[key] = task
     window._tasks.append(task)
-    _log(window, f"开始手动校准（{len(points)} 个点，后台运行）")
+    _log(window, f"开始手动校准（{len(points)} 个点，标样 "
+                 f"{calibrant_short_label(calibrant)}，{n_rings} 环；后台运行）")
     task.start()
 
 
@@ -1186,13 +1410,24 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
     按 A→B 轮换填没被钉住的槽。
     """
     state = _calib_state(window)
+    got_cal = result.get("calibrant")
+    if got_cal and got_cal != state.get("calibrant"):
+        # 任务在飞时换过标样：这是一份旧标样的结果，进列表只会误导
+        _log(window, f"{KIND_LABELS.get(kind, kind)}结果作废：标样已从 "
+                     f"{calibrant_short_label(got_cal)} 切到 "
+                     f"{calibrant_short_label(state.get('calibrant'))}")
+        return
     name = _add_result(state, kind, result)
     label = KIND_LABELS.get(kind, kind)
     if result.get("reindex_note"):
         # 判环换过一套（尺度扫描赢的）：先写这句，下面的结果才读得懂
         _log(window, result["reindex_note"])
-    _log(window, f"{label}完成（{name}）：距离 "
-                 f"{result['dist_m'] * 1000:.2f} mm，"
+    cal_txt = calibrant_short_label(got_cal or state.get("calibrant")
+                                    or DEFAULT_CALIBRANT)
+    rings_txt = (f"{result['n_rings']} 环"
+                 if result.get("n_rings") else "")
+    _log(window, f"{label}完成（{name}，{cal_txt}{'，' + rings_txt if rings_txt else ''}）："
+                 f"距离 {result['dist_m'] * 1000:.2f} mm，"
                  f"PONI ({result['poni1_px']:.2f}, {result['poni2_px']:.2f}) px，"
                  f"残差 {result['residual_deg']:.4f}°"
                  f"{_metrics_note(result)}")

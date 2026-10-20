@@ -1,12 +1,12 @@
-"""校准引擎的单元测试：snap_lab6_ring / refine_lab6_from_points /
-calibrate_lab6 的 control_points / config_entry_template。
+"""校准引擎的单元测试：snap_ring / refine_geometry_from_points /
+calibrate_geometry 的 control_points / config_entry_template / 常用标样。
 
 合成图像 + 真实几何常量（dist = 1.5958 m、pixel = 200 µm，与
 lmfp1_lab6 配置一致）验证：
   - 判环吸附：环上点 → 正确环号；离所有环 ≥1° 的点 → None；
   - 手动精修：合成控制点确定性收敛（距离/残差回到画入值附近）；
     点数不足 / 只覆盖一环 / 环号越界 → ValueError；
-  - calibrate_lab6 返回 control_points 键（GUI 画绿点验证精修用）；
+  - calibrate_geometry 返回 control_points 键（GUI 画绿点验证精修用）；
   - CONFIGS 条目模板与 CLI 输出逐字一致的关键行。
 
 运行：python -m unittest discover -s tests -v
@@ -23,9 +23,11 @@ from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry
 
 from xrd_toolkit.config import config_entry_template
+from xrd_toolkit.services.calibrants import (
+    DEFAULT_CALIBRANT, complete_ring_count, detect_calibrant_from_stem)
 from xrd_toolkit.services.integrator import (
-    calibrate_lab6, lab6_theoretical_2theta, refine_lab6_from_points,
-    snap_lab6_ring, theoretical_ring_paths)
+    calibrant_2theta, calibrate_geometry, lab6_theoretical_2theta,
+    refine_geometry_from_points, snap_ring, theoretical_ring_paths)
 
 PIXEL_M = 200e-6
 WAVELENGTH_M = 0.1223e-10
@@ -33,7 +35,7 @@ DIST_M = 1.5958
 PONI1_PX, PONI2_PX = 1045.2, 1022.0
 ROT1_DEG, ROT2_DEG = -0.005, -0.163
 
-THEO = lab6_theoretical_2theta(WAVELENGTH_M, 16)
+THEO = calibrant_2theta(DEFAULT_CALIBRANT, WAVELENGTH_M, 16)
 
 
 def _ring_point(ring, ang_deg=0.0, d2th=0.0):
@@ -50,12 +52,19 @@ def _ring_point(ring, ang_deg=0.0, d2th=0.0):
 
 def _synthetic_rings(shape=(2048, 2048), cx=1024.0, cy=1024.0, n_rings=11):
     """画合成 LaB₆ 衍射环（2.4 px 宽亮环 + 背景 1 + 小噪声）。"""
+    return _synthetic_rings_for(THEO[:n_rings], shape=shape, cx=cx, cy=cy,
+                                dist_m=DIST_M)
+
+
+def _synthetic_rings_for(theo, shape=(2048, 2048), cx=1024.0, cy=1024.0,
+                         dist_m=DIST_M):
+    """按任意标样的理论 2θ 画同心亮环（零倾斜几何，圆心 = cx,cy）。"""
     img = np.zeros(shape) + 1.0
     rng = np.random.default_rng(7)
     rows, cols = np.mgrid[0:shape[0], 0:shape[1]]
     rr = np.hypot(cols - cx, rows - cy)
-    for tth in THEO[:n_rings]:
-        r = DIST_M * np.tan(np.radians(tth)) / PIXEL_M
+    for tth in theo:
+        r = dist_m * np.tan(np.radians(tth)) / PIXEL_M
         img[np.abs(rr - r) < 1.2] = 300.0
     img += rng.normal(0, 2.0, shape)
     return img
@@ -65,7 +74,7 @@ class TestSnapLab6Ring(unittest.TestCase):
     """点击吸附：按当前几何算 2θ → 最近理论环（容差 0.5°）。"""
 
     def _snap(self, x, y):
-        return snap_lab6_ring(
+        return snap_ring(
             x, y, pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
             dist_m=DIST_M, poni1_m=PONI1_PX * PIXEL_M,
             poni2_m=PONI2_PX * PIXEL_M, rot1_deg=0.0, rot2_deg=0.0)
@@ -89,10 +98,10 @@ class TestSnapLab6Ring(unittest.TestCase):
 class TestSnapLab6RingOffDiagonal(unittest.TestCase):
     """判环的行列约定护栏：偏置摆法（束心远离图像对角线）下才不会互相
     掩盖——本数据的束心几乎在对角线上，行列写反时对角线镜像不改变到
-    束心的距离，错误被掩盖（见 snap_lab6_ring 的备注）。"""
+    束心的距离，错误被掩盖（见 snap_ring 的备注）。"""
 
     def _snap(self, x, y, poni1_px, poni2_px):
-        return snap_lab6_ring(
+        return snap_ring(
             x, y, pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
             dist_m=DIST_M, poni1_m=poni1_px * PIXEL_M,
             poni2_m=poni2_px * PIXEL_M)
@@ -235,19 +244,19 @@ class TestRefineLab6FromPoints(unittest.TestCase):
         for ri, ang in ((2, 0), (2, 90), (4, 30), (4, 150), (6, 70), (6, 240)):
             points.append(_ring_point(ri, ang))
             rings.append(ri)
-        res = refine_lab6_from_points(
+        res = refine_geometry_from_points(
             points, rings, pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
             dist0_m=1.6, center0_px=(1035.0, 1032.0))
         self.assertAlmostEqual(res["dist_m"] * 1000, 1595.8, delta=0.2)
         self.assertLess(res["residual_deg"], 1e-3)
-        # 与 calibrate_lab6 同形：键齐全（GUI 共用同一结果区）
+        # 与 calibrate_geometry 同形：键齐全（GUI 共用同一结果区）
         for key in ("dist_m", "poni1_px", "poni2_px", "offset_px",
                     "rot1_deg", "rot2_deg", "rot3_deg", "residual_deg"):
             self.assertIn(key, res)
 
     def test_too_few_points_raises(self):
         with self.assertRaises(ValueError):
-            refine_lab6_from_points(
+            refine_geometry_from_points(
                 [_ring_point(2), _ring_point(4)], [2, 4],
                 pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
                 dist0_m=1.6, center0_px=(1035.0, 1032.0))
@@ -255,14 +264,14 @@ class TestRefineLab6FromPoints(unittest.TestCase):
     def test_single_ring_raises(self):
         """点数够但只覆盖一个环 → ValueError（欠定，环号要 ≥2）。"""
         with self.assertRaises(ValueError):
-            refine_lab6_from_points(
+            refine_geometry_from_points(
                 [_ring_point(2, a) for a in (0, 90, 180)], [2, 2, 2],
                 pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
                 dist0_m=1.6, center0_px=(1035.0, 1032.0))
 
     def test_ring_index_out_of_range_raises(self):
         with self.assertRaises(ValueError):
-            refine_lab6_from_points(
+            refine_geometry_from_points(
                 [_ring_point(2), _ring_point(4), _ring_point(6)],
                 [2, 4, 16],   # 环号 0~15，16 越界
                 pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
@@ -270,11 +279,11 @@ class TestRefineLab6FromPoints(unittest.TestCase):
 
 
 class TestCalibrateLab6ControlPoints(unittest.TestCase):
-    """calibrate_lab6 返回 control_points（GUI 画绿点验证精修用）。"""
+    """calibrate_geometry 返回 control_points（GUI 画绿点验证精修用）。"""
 
     def test_result_contains_control_points(self):
         img = _synthetic_rings()
-        res = calibrate_lab6(img, pixel_size_m=PIXEL_M,
+        res = calibrate_geometry(img, pixel_size_m=PIXEL_M,
                              wavelength_m=WAVELENGTH_M, dist0_m=DIST_M,
                              center0_px=(1024.0, 1024.0))
         cps = res["control_points"]
@@ -296,9 +305,78 @@ class TestCalibrateLab6ControlPoints(unittest.TestCase):
         """
         with self.assertRaisesRegex(RuntimeError,
                                     "找不到与 LaB₆ 理论环匹配的峰"):
-            calibrate_lab6(np.zeros((512, 512)), pixel_size_m=PIXEL_M,
+            calibrate_geometry(np.zeros((512, 512)), pixel_size_m=PIXEL_M,
                            wavelength_m=WAVELENGTH_M, dist0_m=DIST_M,
                            center0_px=(256.0, 256.0))
+
+
+class TestCommonCalibrants(unittest.TestCase):
+    """常用标样：理论阶梯、完整环数、文件名预选、未知名称的可读报错。"""
+
+    def test_ceo2_ladder_matches_pyfai(self):
+        from pyFAI.calibrant import get_calibrant
+        cal = get_calibrant("CeO2")
+        cal.wavelength = WAVELENGTH_M
+        expected = np.degrees(np.asarray(
+            [t for t in cal.get_2th() if t is not None])[:10])
+        got = calibrant_2theta("CeO2", WAVELENGTH_M, 10)
+        np.testing.assert_allclose(got, expected, atol=1e-12)
+
+    def test_complete_ring_count_reproduces_lab6_16(self):
+        """LaB₆ 当前几何仍是 16 环；CeO₂ 按同一规则是 10 环。"""
+        kw = dict(wavelength_m=WAVELENGTH_M, pixel_size_m=PIXEL_M,
+                  dist_m=DIST_M, beam_center_rc=(1022.0, 1022.3),
+                  image_shape=(2048, 2048))
+        self.assertEqual(complete_ring_count("LaB6", **kw), 16)
+        self.assertEqual(complete_ring_count("CeO2", **kw), 10)
+
+    def test_ceo2_synthetic_calibration(self):
+        """合成 CeO₂ 环 → calibrate_geometry 应回到画入的距离/圆心。"""
+        theo = calibrant_2theta("CeO2", WAVELENGTH_M, 10)
+        img = _synthetic_rings_for(theo, dist_m=1.5)
+        res = calibrate_geometry(
+            img, pixel_size_m=PIXEL_M, wavelength_m=WAVELENGTH_M,
+            dist0_m=1.5, center0_px=(1024.0, 1024.0), max_rings=10,
+            calibrant="CeO2")
+        self.assertEqual(res["calibrant"], "CeO2")
+        self.assertEqual(res["n_rings"], 10)
+        self.assertAlmostEqual(res["dist_m"], 1.5, delta=0.01)
+        self.assertAlmostEqual(res["poni1_px"], 1024.0, delta=3.0)
+        self.assertAlmostEqual(res["poni2_px"], 1024.0, delta=3.0)
+
+    def test_small_calibrant_ring_count_is_clamped(self):
+        """Ni 只有 5 条反射：max_rings=16 也不能越界（报可读的"没匹配"）。"""
+        with self.assertRaisesRegex(RuntimeError, "Ni"):
+            calibrate_geometry(
+                np.zeros((512, 512)), pixel_size_m=PIXEL_M,
+                wavelength_m=WAVELENGTH_M, dist0_m=DIST_M,
+                center0_px=(256.0, 256.0), max_rings=16, calibrant="Ni")
+
+    def test_common_aliases_resolve(self):
+        """小写别名（lab6/ceo2/si…）与精确名称给同一条阶梯。"""
+        np.testing.assert_allclose(
+            calibrant_2theta("ceo2", WAVELENGTH_M, 10),
+            calibrant_2theta("CeO2", WAVELENGTH_M, 10))
+        np.testing.assert_allclose(
+            calibrant_2theta("lab6", WAVELENGTH_M, 16),
+            calibrant_2theta("LaB6", WAVELENGTH_M, 16))
+
+    def test_unknown_calibrant_has_readable_error(self):
+        with self.assertRaisesRegex(ValueError, "未知标样"):
+            calibrant_2theta("NoSuchStandard", WAVELENGTH_M, 5)
+
+    def test_old_lab6_names_still_work(self):
+        """兼容包装：旧脚本 import 的名字仍给同一组数字。"""
+        np.testing.assert_allclose(
+            lab6_theoretical_2theta(WAVELENGTH_M, 4),
+            calibrant_2theta(DEFAULT_CALIBRANT, WAVELENGTH_M, 4))
+
+    def test_filename_prefill(self):
+        self.assertEqual(detect_calibrant_from_stem("lab6-00024"), "LaB6")
+        self.assertEqual(detect_calibrant_from_stem("CeO2_0001"), "CeO2")
+        self.assertEqual(detect_calibrant_from_stem("Si_SRM640a-2"),
+                         "Si_SRM640a")
+        self.assertIsNone(detect_calibrant_from_stem("series-1"))
 
 
 class TestConfigEntryTemplate(unittest.TestCase):
@@ -327,6 +405,16 @@ class TestConfigEntryTemplate(unittest.TestCase):
         self.assertIn('"beam_center": (1022.00, 1022.30),', text)
         self.assertIn("# refined residual: 0.0037 deg", text)
         self.assertIn('"lmfp2_lab6"', text)   # 默认 key 提示（同 CLI）
+        self.assertIn('"calibrant": "LaB6",', text)   # 默认标样
+
+    def test_calibrant_is_written(self):
+        geometry = {"pixel_size_m": PIXEL_M, "wavelength_m": WAVELENGTH_M,
+                    "dist_m": 1.5, "poni1_px": 1.0, "poni2_px": 2.0,
+                    "rot1_deg": 0.0, "rot2_deg": 0.0}
+        text = config_entry_template(geometry=geometry,
+                                     beam_center_rc=(3.0, 4.0),
+                                     calibrant="CeO2")
+        self.assertIn('"calibrant": "CeO2",', text)
 
     def test_custom_key_and_label(self):
         text = config_entry_template(

@@ -59,6 +59,33 @@ class TestProvenance(unittest.TestCase):
                          config._validate_user_entry("k", dict(ENTRY)))
 
 
+class TestCalibrantField(unittest.TestCase):
+    """标样溯源字段：calibrant / calibrant_n_rings 可选、旧条目兼容。"""
+
+    def test_calibrant_survives_validation(self):
+        out = config._validate_user_entry(
+            "k", dict(ENTRY, calibrant="CeO2", calibrant_n_rings=10))
+        self.assertEqual(out["calibrant"], "CeO2")
+        self.assertEqual(out["calibrant_n_rings"], 10)
+
+    def test_bad_calibrant_fields_dropped(self):
+        for bad in (dict(calibrant="   "), dict(calibrant=3),
+                    dict(calibrant_n_rings=0), dict(calibrant_n_rings=-2),
+                    dict(calibrant_n_rings=True),
+                    dict(calibrant_n_rings="16")):
+            out = config._validate_user_entry("k", dict(ENTRY, **bad))
+            self.assertNotIn("calibrant", out, bad)
+            self.assertNotIn("calibrant_n_rings", out, bad)
+
+    def test_old_entry_without_calibrant_is_valid(self):
+        out = config._validate_user_entry("k", dict(ENTRY))
+        self.assertNotIn("calibrant", out)   # 消费方按 LaB6 兜底
+
+    def test_builtin_entry_carries_calibrant(self):
+        self.assertEqual(config.BUILTIN_CONFIGS["lmfp1_lab6"]["calibrant"],
+                         "LaB6")
+
+
 class TestReadUserConfig(unittest.TestCase):
     """_read_user_config：容错读取（坏文件不拖垮程序启动）。"""
 

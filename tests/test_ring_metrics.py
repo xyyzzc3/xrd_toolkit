@@ -16,7 +16,8 @@ import unittest
 
 import numpy as np
 
-from xrd_toolkit.services.integrator import theoretical_ring_paths
+from xrd_toolkit.services.integrator import (
+    calibrant_2theta, theoretical_ring_paths)
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
 # 真内置几何（与 config.py 的 lmfp1_lab6 一致；束心几乎在图像对角线上，
@@ -237,6 +238,30 @@ class TestRingMetricsEdgeCases(unittest.TestCase):
     def test_rejects_non_2d_input(self):
         with self.assertRaises(ValueError):
             _metric(np.zeros(16))
+
+
+class TestOtherCalibrant(unittest.TestCase):
+    """非 LaB₆ 标样的指标：理论环与 d 值参照都跟着标样走。"""
+
+    def test_ceo2_rings_score_cleanly(self):
+        n, center, dist = 1024, 512.0, 0.8
+        theo = calibrant_2theta("CeO2", LAM, 10)
+        rows, cols = np.mgrid[0:n, 0:n]
+        rr = np.hypot(cols - center, rows - center)
+        img = np.full((n, n), BG)
+        for tth in theo:
+            r = dist * np.tan(np.radians(tth)) / PIX
+            img[np.abs(rr - r) < 1.0] = BG + AMP
+        img += np.random.default_rng(3).normal(0, NSIG, (n, n))
+        m = ring_metrics(
+            img, pixel_size_m=PIX, wavelength_m=LAM, dist_m=dist,
+            poni1_px=center, poni2_px=center, rot1_deg=0.0, rot2_deg=0.0,
+            n_rings=10, n_azim=120, calibrant="CeO2")
+        self.assertEqual(m["calibrant"], "CeO2")
+        self.assertEqual(m["n_rings"], 10)
+        self.assertTrue(np.isfinite(m["dev_px"]))
+        self.assertLess(m["dev_px"], 1.0)
+        self.assertLess(m["a"]["spread_ppm"], 500.0)
 
 
 if __name__ == "__main__":

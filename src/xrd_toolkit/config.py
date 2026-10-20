@@ -47,6 +47,9 @@ BUILTIN_CONFIGS = {
     "lmfp1_lab6": {
         # 批次备注（中文）：几何所属批次与标定方式
         "label": "lmfp 第 1 批（LaB₆ 标样标定）",
+        # 校准用的标样（pyFAI 名称）：几何本身与标样无关，这个字段是
+        # 溯源——重新校准/算指标时知道该拿哪套理论环。缺省按 LaB6。
+        "calibrant": "LaB6",
         # 探测器几何（7 个键）：参考标定值
         "geometry": dict(
             pixel_size_m=200e-6,          # 像素 200 µm
@@ -102,6 +105,10 @@ def _validate_user_entry(name, entry):
     = 校准初值借自哪条条目（手输时没有这个键）、method = 哪个来源
     产出的（auto/manual/refined，对应三步流程）、created = 保存时间
     （ISO 8601，本地时区）。
+
+    标样字段（可选）：calibrant = pyFAI 标样名称（LaB6/CeO2/Si_SRM640…；
+    缺省按 LaB6，旧条目照常工作），calibrant_n_rings = 校准时用的环数
+    （溯源/复现用；消费方可以按几何重算，不强制使用）。
     """
     if not isinstance(entry, dict):
         raise ValueError(f"条目 {name!r} 必须是 dict")
@@ -127,10 +134,15 @@ def _validate_user_entry(name, entry):
     if isinstance(entry.get("residual_deg"), (int, float)):
         out["residual_deg"] = float(entry["residual_deg"])
     # 血缘字段：可选、非空字符串才收（旧条目没有这些键也照常工作）
-    for key in ("derived_from", "method", "created"):
+    for key in ("derived_from", "method", "created", "calibrant"):
         value = entry.get(key)
         if isinstance(value, str) and value.strip():
             out[key] = value.strip()
+    # 环数：正整数才收（bool 是 int 的子类，得排除）
+    n_rings = entry.get("calibrant_n_rings")
+    if isinstance(n_rings, int) and not isinstance(n_rings, bool) \
+            and n_rings > 0:
+        out["calibrant_n_rings"] = n_rings
     return out
 
 
@@ -266,7 +278,8 @@ def get_config(name=None):
             条目 key（如 "lmfp1_lab6"）；None → 取 DEFAULT_CONFIG
 
     返回：
-        dict，包含 "label" / "geometry" / "beam_center" 三个键。
+        dict，包含 "label" / "geometry" / "beam_center" 三个键；校准
+        条目还可能带 "calibrant"（标样名，旧条目缺省按 LaB6）。
 
     报错：
         名字不存在时抛 ValueError（英文报错，列出全部可选名字）。脚本里
@@ -282,7 +295,8 @@ def get_config(name=None):
 
 
 def config_entry_template(key_hint="lmfp2_lab6", label_hint="（改成实际批次备注）",
-                          geometry=None, beam_center_rc=None):
+                          geometry=None, beam_center_rc=None,
+                          calibrant="LaB6"):
     """生成内置 CONFIGS 条目模板文本（CLI 标定完成后打印，人工粘贴登记用）。
 
     scripts/calibrate_integrate.py 打印的模板就是这个函数的输出（逐字
@@ -300,6 +314,9 @@ def config_entry_template(key_hint="lmfp2_lab6", label_hint="（改成实际批�
                        （度，写进注释行）。GUI 用校准结果 + 参数坞的
                        像素/波长输入合并出这个 dict
         beam_center_rc  (row, col) 束心像素坐标（直射束落点 B）
+        calibrant      校准用的 pyFAI 标样名称（默认 LaB6；与
+                       services.calibrants.DEFAULT_CALIBRANT 同一个字面量，
+                       配置层不 import 服务层）
 
     返回：
         str，可直接粘贴进 config.py 的条目模板（多行文本）。
@@ -317,6 +334,7 @@ def config_entry_template(key_hint="lmfp2_lab6", label_hint="（改成实际批�
     lines.append(
         f'    "{key_hint}": {{   # rename key to "<material><n>_<standard>" (e.g. lmfp2_lab6)')
     lines.append(f'        "label": "{label_hint}",')
+    lines.append(f'        "calibrant": "{calibrant}",   # pyFAI calibrant name')
     lines.append('        "geometry": dict(')
     lines.append(f"            pixel_size_m={pixel_um:g}e-6,")
     lines.append(f"            wavelength_m={wl_angstrom:g}e-10,")

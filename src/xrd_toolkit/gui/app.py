@@ -2282,6 +2282,8 @@ def _sync_geom_row(window: QMainWindow) -> None:
                f"像素尺寸 {g['pixel_size_m'] * 1e6:.1f} µm\n"
                f"波长 {g['wavelength_m'] * 1e10:.4f} Å\n"
                f"距离 {g['dist_m'] * 1e3:.2f} mm")
+        if cfg.get("calibrant"):
+            tip += f"\n标样 {cfg['calibrant']}"
     if window.param_stack.currentIndex() == window.PARAM_PAGES["校准"]:
         tip += ("\n（校准用的是本页「当前配置」那份几何；这里换的是"
                 "分析/积分用的条目）")

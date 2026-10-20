@@ -1,4 +1,4 @@
-# 2D 衍射图像 → 1D 衍射图谱：方位角积分 + LaB₆ 几何校准（基于 pyFAI）。
+# 2D 衍射图像 → 1D 衍射图谱：方位角积分 + 标样几何校准（基于 pyFAI）。
 #
 # 背景：每个 (hkl) 晶面族把 X 光散射成以入射束为轴的圆锥（半角 2θ），
 # 探测器平面截过所有圆锥得到一组圆环（Debye–Scherrer 环）。方位角
@@ -7,10 +7,13 @@
 import threading
 
 import numpy as np
-from pyFAI.calibrant import get_calibrant
 from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry, GeometryRefinement, SingleGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
+
+from xrd_toolkit.services.calibrants import (
+    DEFAULT_CALIBRANT, calibrant_2theta, calibrant_short_label,
+    clamp_ring_count, resolve_calibrant)
 
 # 积分实现版本号：**算法或默认参数改了就要 +1**。
 # 分阶段产物缓存（services/stage_cache.py）用它做键的一部分——不升版本
@@ -19,9 +22,9 @@ from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 #   1 = 2026-09-24 起：按几何缓存 integrator + cython→numpy 回退链
 INTEGRATION_VERSION = 1
 
-# pyFAI 内置信标数据库（calibrant），LaB₆ 标准 d 值：
-#   d = a / sqrt(h² + k² + l²)，a = 4.1568 Å（NIST 标准值）
-LAB6_NAME = "LaB6"
+# 兼容旧导入：外部脚本可能还在用 LAB6_NAME。新代码一律用
+# calibrants.DEFAULT_CALIBRANT（标样名不再写死在引擎里）。
+LAB6_NAME = DEFAULT_CALIBRANT
 
 # 束心偏离探测器中心的阈值（像素）：超过则切换自研 numpy 积分。
 # 实测（pyFAI 2026.5.0，合成 1 px 宽环验证）：integrate1d/2d 的径向
@@ -30,7 +33,7 @@ LAB6_NAME = "LaB6"
 # （x0=200 时仅 2~3/36，只有 x0=1024 正确）。所有积分方法
 # （splitpixel/csr/numpy/cython/lut）、显式 radial_range/
 # azimuth_range/Detector 均无法修复，带掩膜同样失效。精修
-# （calibrate_lab6）在偏离大时同样失效。
+# （calibrate_geometry）在偏离大时同样失效。
 # 本数据 lmfp1_lab6 束心仅偏离 ~21 px 且真实峰宽（非 1 px 合成线），
 # 衰减可忽略，保持 pyFAI 路径（输出与已验证的历史结果一致）。
 OFF_CENTER_PX = 100.0
@@ -66,49 +69,37 @@ def _is_off_center(image_shape, poni1_m, poni2_m, pixel_size_m) -> bool:
 
 
 def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarray:
+    """【兼容包装】LaB₆ 理论 2θ；新代码用 calibrant_2theta(...)。
+
+    保留这个名字只为外部脚本/旧测试不炸。内部实现已经走
+    services.calibrants，标样名不再写死在引擎里。
     """
-    计算 LaB6 前 n_rings 个衍射环的理论 2θ（单位：度）。
-
-    布拉格定律：2d·sinθ = λ  →  2θ = 2·asin(λ / 2d)
-
-    参数：
-        wavelength_m : float
-            X 光波长（米），例如 0.1223e-10（0.1223 Å）
-        n_rings : int
-            要计算的环数（默认 16）
-
-    返回：
-        np.ndarray
-            长度 n_rings 的 2θ 数组（度）
-    """
-    cal = get_calibrant(LAB6_NAME)
-    # cal.dspacing 单位为埃（1e-10 m）
-    d_angstrom = np.asarray(cal.dspacing[:n_rings])
-    wavelength_a = wavelength_m * 1e10
-    return np.degrees(2 * np.arcsin(wavelength_a / (2 * d_angstrom)))
+    return calibrant_2theta(DEFAULT_CALIBRANT, wavelength_m, n_rings)
 
 
-def snap_lab6_ring(x_px: float, y_px: float, *, pixel_size_m: float,
-                   wavelength_m: float, dist_m: float, poni1_m: float,
-                   poni2_m: float, rot1_deg: float = 0.0,
-                   rot2_deg: float = 0.0, max_rings: int = 16,
-                   tol_deg: float = 0.5):
-    """点击点吸附到最近的 LaB₆ 理论环（手动选点校准的判环助手）。
+def snap_ring(x_px: float, y_px: float, *, pixel_size_m: float,
+              wavelength_m: float, dist_m: float, poni1_m: float,
+              poni2_m: float, rot1_deg: float = 0.0,
+              rot2_deg: float = 0.0, max_rings: int = 16,
+              tol_deg: float = 0.5,
+              calibrant=DEFAULT_CALIBRANT):
+    """点击点吸附到最近的理论环（手动选点校准的判环助手）。
 
     按当前几何算该点的 2θ（pyFAI Geometry.tth，输入像素坐标、输出
-    弧度），与 lab6_theoretical_2theta 的每个理论值比距离；最近者
-    在 tol_deg 内返回环序号（0 起），全部超出返回 None（调用方忽略
-    该点并提示）。rot1/rot2 默认 0：判环只需要大致几何，倾斜角对
-    2θ 的影响远小于环间距。
+    弧度），与所选标样的理论 2θ 阶梯逐条比距离；最近者在 tol_deg
+    内返回环序号（0 起），全部超出返回 None（调用方忽略该点并提示）。
+    rot1/rot2 默认 0：判环只需要大致几何，倾斜角对 2θ 的影响远小于
+    环间距。
 
     参数：
         x_px, y_px   点击点的像素坐标（横向、纵向）
         pixel_size_m / wavelength_m / dist_m / poni1_m / poni2_m
-                     当前几何（PONI 为米制，与 calibrate_lab6 的
+                     当前几何（PONI 为米制，与 calibrate_geometry 的
                      输入约定一致）
         rot1_deg / rot2_deg  倾斜角（度，可选，默认 0）
-        max_rings    参与匹配的理论环数（默认 16）
+        max_rings    参与匹配的理论环数（默认 16；按标样反射总数夹）
         tol_deg      吸附容差（2θ 度，默认 0.5°）
+        calibrant    pyFAI 标样名称（默认 LaB6）
 
     返回：
         int 环序号（0 起）或 None
@@ -126,11 +117,27 @@ def snap_lab6_ring(x_px: float, y_px: float, *, pixel_size_m: float,
     # 入参就是图像索引坐标，与 tth 的约定一致，无需半像素换算
     # （poni/getFit2D 才需要，见 PIXEL_CENTER_OFFSET）。
     tth_deg = float(np.degrees(geo.tth(np.array([y_px]), np.array([x_px]))[0]))
-    theo = lab6_theoretical_2theta(wavelength_m, max_rings)
+    theo = calibrant_2theta(calibrant, wavelength_m,
+                            clamp_ring_count(calibrant, max_rings))
+    if theo.size == 0:
+        return None
     i = int(np.argmin(np.abs(theo - tth_deg)))
     if abs(theo[i] - tth_deg) > tol_deg:
         return None
     return i
+
+
+def snap_lab6_ring(x_px: float, y_px: float, *, pixel_size_m: float,
+                   wavelength_m: float, dist_m: float, poni1_m: float,
+                   poni2_m: float, rot1_deg: float = 0.0,
+                   rot2_deg: float = 0.0, max_rings: int = 16,
+                   tol_deg: float = 0.5):
+    """【兼容包装】LaB₆ 判环；新代码用 snap_ring(..., calibrant=...)。"""
+    return snap_ring(
+        x_px, y_px, pixel_size_m=pixel_size_m, wavelength_m=wavelength_m,
+        dist_m=dist_m, poni1_m=poni1_m, poni2_m=poni2_m,
+        rot1_deg=rot1_deg, rot2_deg=rot2_deg, max_rings=max_rings,
+        tol_deg=tol_deg, calibrant=DEFAULT_CALIBRANT)
 
 
 # 环路径二分迭代次数：括号宽度 = 2×名义半径 + 图像对角线（几何离谱时
@@ -142,7 +149,8 @@ def theoretical_ring_paths(*, pixel_size_m: float, wavelength_m: float,
                            dist_m: float, poni1_px: float, poni2_px: float,
                            rot1_deg: float = 0.0, rot2_deg: float = 0.0,
                            image_shape=None, n_rings: int = 16,
-                           n_azim: int = 180) -> dict:
+                           n_azim: int = 180,
+                           calibrant=DEFAULT_CALIBRANT) -> dict:
     """当前几何预测的理论环路径（校准面板画青线、判环共用）。
 
     为什么不用"圆心 + 半径"的正圆：探测器有倾斜时衍射环不是正圆——它
@@ -162,8 +170,9 @@ def theoretical_ring_paths(*, pixel_size_m: float, wavelength_m: float,
         rot1_deg / rot2_deg  倾斜角（度）
         image_shape  (行, 列) 图像尺寸；用于统计"有多少条环落在图像
                      内"，None 时不做统计
-        n_rings      环数（默认 16，与 lab6_theoretical_2theta 一致）
+        n_rings      环数（默认 16；按标样反射总数夹）
         n_azim       方位角采样数（默认 180，即每条折线 180 个点）
+        calibrant    pyFAI 标样名称（默认 LaB6）
 
     返回：
         dict：
@@ -186,7 +195,8 @@ def theoretical_ring_paths(*, pixel_size_m: float, wavelength_m: float,
           点击事件同一套），只在取 getFit2D 时换算一次；漏换算或换算
           两次都会让画出来的环整体偏 0.707 px。
     """
-    levels = np.radians(lab6_theoretical_2theta(wavelength_m, n_rings))
+    levels = np.radians(calibrant_2theta(
+        calibrant, wavelength_m, clamp_ring_count(calibrant, n_rings)))
     geo = Geometry(
         dist=dist_m, poni1=poni1_px * pixel_size_m,
         poni2=poni2_px * pixel_size_m,
@@ -244,14 +254,14 @@ def theoretical_ring_paths(*, pixel_size_m: float, wavelength_m: float,
     }
 
 
-# 迭代精修收敛参数（calibrate_lab6）：残差目标、改善阈值、最大轮数。
+# 迭代精修收敛参数（calibrate_geometry）：残差目标、改善阈值、最大轮数。
 # 初始几何通常已接近真值，1~2 轮即收敛；上限 3 轮防止个别数据集震荡。
 REFINE_TARGET_RESIDUAL_DEG = 0.05
 REFINE_TOL = 1e-5
 REFINE_MAX_ITER = 3
 
 
-def calibrate_lab6(
+def calibrate_geometry(
     image: np.ndarray,
     pixel_size_m: float = 200e-6,
     wavelength_m: float = 0.1223e-10,
@@ -259,9 +269,10 @@ def calibrate_lab6(
     *,
     center0_px: tuple,
     max_rings: int = 16,
+    calibrant=DEFAULT_CALIBRANT,
 ) -> dict:
     """
-    用 LaB6 标样自动校准探测器几何（pyFAI GeometryRefinement）。
+    用标样自动校准探测器几何（pyFAI GeometryRefinement）。
 
     原理（迭代精修，最多 3 轮）：
       1) extract_cp：按当前几何预测每个环的 2θ 位置，在预测位置附近
@@ -285,7 +296,9 @@ def calibrate_lab6(
             校准脚本里用取点拟合（fit_center_from_rings，FFT 兜底）
             自动定位，或 --center 显式指定；本模块不做自动定位
         max_rings : int
-            参与校准的环数上限
+            参与校准的环数上限（按标样反射总数夹）
+        calibrant : str 或 Calibrant
+            pyFAI 标样名称（默认 LaB6；常用名见 services.calibrants）
 
     返回：
         dict，包含：
@@ -299,10 +312,12 @@ def calibrate_lab6(
             residual_deg 全部控制点的 2θ 残差 RMS（度）
             control_points 最优轮控制点 [[x, y, 环序号], ...]（像素
                 坐标 + 0 起环号；GUI 画绿点验证精修效果用，CLI 不消费）
+            calibrant    实际使用的标样名（溯源；保存配置时一并写入）
+            n_rings      实际参与的环数上限
 
     备注（pyFAI 接口注意事项）：
-        - calibrant 的波长一经设置不可再改；换波长必须重新
-          get_calibrant 创建新对象。
+        - calibrant 的波长一经设置不可再改；换波长必须重新创建
+          Calibrant 对象（resolve_calibrant 每次都给新对象）。
         - extract_cp 返回 ControlPoints 对象，getList() 才是 N×3 数组，
           第三列为环序号（从 0 开始），不是 2θ。
         - GeometryRefinement.tth() 的输入为像素坐标，不是米。
@@ -310,9 +325,11 @@ def calibrate_lab6(
           （pyFAI 已知问题，见常量注释）：偏置摆法数据集应先取居中标样
           图像精修距离/倾斜角（仪器属性），再配已知束心位置使用。
     """
-    # pyFAI 内置 LaB₆ 校准数据（d1 = 4.1568 Å ≈ a）
-    cal = get_calibrant(LAB6_NAME)
-    cal.wavelength = wavelength_m
+    # 标样只决定理论 2θ 阶梯；几何（距离/PONI/倾斜角/像素/波长）与它无关。
+    cal = resolve_calibrant(calibrant, wavelength_m)
+    max_rings = clamp_ring_count(cal, max_rings)
+    calibrant_name = getattr(cal, "name", None) or str(calibrant)
+    calibrant_disp = calibrant_short_label(calibrant_name)
 
     det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m, max_shape=image.shape)
 
@@ -345,7 +362,7 @@ def calibrate_lab6(
             detector=det,
             wavelength=wavelength_m,
         )
-        single = SingleGeometry("lab6", image, calibrant=cal,
+        single = SingleGeometry(calibrant_name, image, calibrant=cal,
                                 detector=det, geometry=geo)
         control_points = np.asarray(single.extract_cp(max_rings=max_rings).getList())
         # 一个峰都没匹上时 getList() 是空的：np.asarray 得到一维 (0,)，
@@ -355,12 +372,14 @@ def calibrate_lab6(
         # 就是这句）。在这里拦下，把现状（现用初值）与出路写清楚。
         if control_points.ndim != 2 or control_points.shape[0] == 0:
             raise RuntimeError(
-                f"图像上找不到与 LaB₆ 理论环匹配的峰（控制点 0 个）——"
-                f"现用初值：束心 ({params['poni1'] / pixel_size_m:.0f}, "
+                f"图像上找不到与 {calibrant_disp} 理论环匹配的峰"
+                f"（控制点 0 个）——现用初值：束心 "
+                f"({params['poni1'] / pixel_size_m:.0f}, "
                 f"{params['poni2'] / pixel_size_m:.0f}) px、距离 "
-                f"{params['dist'] * 1000:.0f} mm。请确认这是一张 LaB₆ "
-                f"标样图，且「几何配置」条目与它相符；束心明显偏离探测器"
-                f"中心的摆法，先在 [编辑…] 里把束心填对再试")
+                f"{params['dist'] * 1000:.0f} mm。请确认这是一张 "
+                f"{calibrant_disp} 标样图、标样选择与证书一致，且"
+                f"「几何配置」条目与它相符；束心明显偏离探测器中心的"
+                f"摆法，先在 [编辑…] 里把束心填对再试")
 
         # 2) 精修：距离 + 环心 + rot1/rot2（rot3 保持 0）
         ref = GeometryRefinement(
@@ -379,7 +398,7 @@ def calibrate_lab6(
 
         # 3) 残差检验，决定是否继续迭代
         residual_deg = _control_point_residual(ref, control_points,
-                                               wavelength_m, max_rings)
+                                               cal, max_rings)
         if best is None or residual_deg < best[0] - REFINE_TOL:
             best = (residual_deg, ref, control_points)
             params = dict(dist=float(ref.dist),
@@ -406,21 +425,23 @@ def calibrate_lab6(
         "rot2_deg": float(np.degrees(ref.rot2)),
         "rot3_deg": float(np.degrees(ref.rot3)),
         "residual_deg": residual_deg,
+        "calibrant": calibrant_name,
+        "n_rings": int(max_rings),
         "control_points": [
             [float(x), float(y), int(r)] for x, y, r in control_points],
     }
 
 
-def _control_point_residual(ref, control_points, wavelength_m, max_rings) -> float:
+def _control_point_residual(ref, control_points, calibrant, max_rings) -> float:
     """每个控制点的实测 2θ 与理论 2θ 偏差的 RMS（度）。
 
     ref.tth(x, y) 的输入为像素坐标。残差是精修质量的标尺：
-    迭代精修以它判断收敛，返回值同时作为 calibrate_lab6 的
+    迭代精修以它判断收敛，返回值同时作为 calibrate_geometry 的
     residual_deg。
     """
-    tth_theo = lab6_theoretical_2theta(wavelength_m, max_rings)
+    tth_theo = calibrant_2theta(calibrant, ref.wavelength, max_rings)
     residuals = []
-    for ring in range(max_rings):
+    for ring in range(min(int(max_rings), len(tth_theo))):
         sub = control_points[control_points[:, 2] == ring]
         if len(sub) == 0:
             continue
@@ -431,15 +452,16 @@ def _control_point_residual(ref, control_points, wavelength_m, max_rings) -> flo
     return float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
 
 
-def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
-                            wavelength_m: float, dist0_m: float,
-                            center0_px: tuple, max_rings: int = 16) -> dict:
+def refine_geometry_from_points(points_px, ring_indices, *, pixel_size_m: float,
+                                wavelength_m: float, dist0_m: float,
+                                center0_px: tuple, max_rings: int = 16,
+                                calibrant=DEFAULT_CALIBRANT) -> dict:
     """手动选点校准：用户点击的环上点 → pyFAI 反推探测器几何。
 
-    原理与 calibrate_lab6 完全相同（控制点 → GeometryRefinement.
+    原理与 calibrate_geometry 完全相同（控制点 → GeometryRefinement.
     refine2 最小二乘精修距离/束心/倾斜角），区别只是控制点来源：
     自动 = extract_cp 按预测位置搜峰，手动 = 用户在图上点环
-    （环号由 snap_lab6_ring 判定）。单轮精修即可——用户点固定不动，
+    （环号由 snap_ring 判定）。单轮精修即可——用户点固定不动，
     不需要"重取点再精修"的迭代。
 
     点太少时未知数多于方程（例如 3 点 5 未知数），refine2 可能给
@@ -448,21 +470,24 @@ def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
 
     参数：
         points_px      [(x, y), ...] 像素坐标（横向、纵向）
-        ring_indices   每个点所属的 LaB₆ 环序号（0 起，长度与
+        ring_indices   每个点所属的标样环序号（0 起，长度与
                        points_px 一致）
         pixel_size_m / wavelength_m  探测器像素尺寸（米）/ X 光波长（米）
         dist0_m        探测器距离初值（米，精修起点）
         center0_px     (cx, cy) 环心初值（像素）——通常取配置条目的
                        beam_center（(行, 列) 换序成 (列, 行)）
-        max_rings      环号上限（与 snap_lab6_ring 一致，默认 16）
+        max_rings      环号上限（与 snap_ring 一致，默认 16；按标样
+                       反射总数夹）
+        calibrant      pyFAI 标样名称（默认 LaB6）
 
     返回：
-        与 calibrate_lab6 同形 dict（dist_m/poni1_px/poni2_px/
-        offset_px/rot1_deg/rot2_deg/rot3_deg/residual_deg，见其
-        docstring）。
+        与 calibrate_geometry 同形 dict（dist_m/poni1_px/poni2_px/
+        offset_px/rot1_deg/rot2_deg/rot3_deg/residual_deg/calibrant/
+        n_rings，见其 docstring）。
 
     报错：
-        ValueError：点数 < 3、覆盖环 < 2、或 pyFAI refine2 抛异常。
+        ValueError：点数 < 3、覆盖环 < 2、环号越界、或 pyFAI refine2
+        抛异常。
     """
     points = np.asarray(points_px, dtype=np.float64)
     rings = np.asarray(ring_indices, dtype=np.int64)
@@ -474,13 +499,12 @@ def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
         raise ValueError("至少需要 3 个点")
     if len(np.unique(rings)) < 2:
         raise ValueError("至少需要覆盖 2 个不同的环")
+
+    cal = resolve_calibrant(calibrant, wavelength_m)
+    max_rings = clamp_ring_count(cal, max_rings)
     if np.any((rings < 0) | (rings >= max_rings)):
         raise ValueError(f"环序号越界（应在 0~{max_rings - 1} 内）")
 
-    # 与 calibrate_lab6 相同的 pyFAI 注意事项：calibrant 波长一经
-    # 设置不可再改，每次调用新建对象
-    cal = get_calibrant(LAB6_NAME)
-    cal.wavelength = wavelength_m
     det = Detector(pixel1=pixel_size_m, pixel2=pixel_size_m)
     control_points = np.column_stack([points[:, 0], points[:, 1], rings])
     ref = GeometryRefinement(
@@ -496,7 +520,8 @@ def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
     except Exception as err:
         raise ValueError(f"pyFAI 精修失败（点多点几个环上的点会更稳）：{err}") from err
     residual_deg = _control_point_residual(ref, control_points,
-                                           wavelength_m, max_rings)
+                                           cal, max_rings)
+    calibrant_name = getattr(cal, "name", None) or str(calibrant)
     return {
         "dist_m": float(ref.dist),
         "poni1_px": float(ref.poni1 / pixel_size_m),
@@ -509,7 +534,30 @@ def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
         "rot2_deg": float(np.degrees(ref.rot2)),
         "rot3_deg": float(np.degrees(ref.rot3)),
         "residual_deg": residual_deg,
+        "calibrant": calibrant_name,
+        "n_rings": int(max_rings),
     }
+
+
+def calibrate_lab6(image: np.ndarray, pixel_size_m: float = 200e-6,
+                   wavelength_m: float = 0.1223e-10,
+                   dist0_m: float = 1.6, *, center0_px: tuple,
+                   max_rings: int = 16) -> dict:
+    """【兼容包装】LaB₆ 自动校准；新代码用 calibrate_geometry(...)。"""
+    return calibrate_geometry(
+        image, pixel_size_m=pixel_size_m, wavelength_m=wavelength_m,
+        dist0_m=dist0_m, center0_px=center0_px, max_rings=max_rings,
+        calibrant=DEFAULT_CALIBRANT)
+
+
+def refine_lab6_from_points(points_px, ring_indices, *, pixel_size_m: float,
+                            wavelength_m: float, dist0_m: float,
+                            center0_px: tuple, max_rings: int = 16) -> dict:
+    """【兼容包装】LaB₆ 手动精修；新代码用 refine_geometry_from_points。"""
+    return refine_geometry_from_points(
+        points_px, ring_indices, pixel_size_m=pixel_size_m,
+        wavelength_m=wavelength_m, dist0_m=dist0_m, center0_px=center0_px,
+        max_rings=max_rings, calibrant=DEFAULT_CALIBRANT)
 
 
 # ══ integrator 缓存：批量积分的提速关键 ═══════════════════════
@@ -608,7 +656,7 @@ def integrate_1d(
         wavelength_m : float
             X 光波长（米）
         dist_m, poni1_m, poni2_m : float
-            探测器几何（米制），一般来自 calibrate_lab6 的结果
+            探测器几何（米制），一般来自 calibrate_geometry 的结果
         rot1_deg, rot2_deg : float
             倾斜角（度）
         npt : int
@@ -888,24 +936,27 @@ def calibrate_and_integrate(
     center0_px: tuple,
     max_rings: int = 16,
     npt: int = 3000,
+    calibrant=DEFAULT_CALIBRANT,
 ) -> tuple:
     """
     先校准几何，再用校准结果做方位角积分。
 
-    参数与 calibrate_lab6 / integrate_1d 相同。
+    参数与 calibrate_geometry / integrate_1d 相同；calibrant 是标样名
+    （默认 LaB6），只影响校准那一步，不影响积分几何。
 
     返回：
         (tth_deg, intensity, geometry) : tuple
             tth_deg, intensity  1D 图谱
-            geometry            calibrate_lab6 返回的几何结果 dict
+            geometry            calibrate_geometry 返回的几何结果 dict
     """
-    geometry = calibrate_lab6(
+    geometry = calibrate_geometry(
         image,
         pixel_size_m=pixel_size_m,
         wavelength_m=wavelength_m,
         dist0_m=dist0_m,
         center0_px=center0_px,
         max_rings=max_rings,
+        calibrant=calibrant,
     )
     tth_deg, intensity = integrate_1d(
         image,

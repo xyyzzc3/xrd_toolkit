@@ -37,16 +37,19 @@
          （谁都不读的标志留着只会误导）——要判断均匀性请直接看 FFT 值
          本身。
 
-  3. a 自洽
-     每条环按实测 2θ 反推 LaB₆ 晶格常数 a（a_k = d_k · a_ref/d_ref_k，
-     其中 d_k = λ/(2 sin θ_k)），看各环之间的一致性。
-       * 离散度 spread_ppm 有信息：大 = 单一 a + 单一几何解释不了这些环
-         （典型原因：环号认错、探测器畸变、几何模型缺项、某个峰被别的
-         东西顶偏）。
+  3. d 值自洽（输出键仍叫 "a"，兼容旧结果/测试）
+     每条环按实测 2θ 反推 d_k = λ/(2 sin θ_k)，再与标样的参考 d 值
+     比：a_k = d_k · d_ref0/d_ref_k。对立方标样（LaB₆/CeO₂/Si）它就是
+     晶格常数 a；对其他晶系（α-Al₂O₃、AgBh）它只是"按第一条反射归一
+     后的 d 值"，但**相对离散度**仍然有同样的含义：各环是否与同一套
+     参考 d 值自洽。
+       * 离散度 spread_ppm 有信息：大 = 单一几何解释不了这些环
+         （典型原因：环号认错、标样选错/变体不对、探测器畸变、几何
+         模型缺项、某个峰被别的东西顶偏）。
        * 均值**没有**信息：λ 与探测器距离在标样上完全简并（两者同时
          缩放时所有环的 2θ 完全不变），任何标定都无法只靠标样定出 λ。
          所以本模块只报离散度，不报"波长偏差"——报出来会误导。
-     也因此 a 自洽与环位偏差是同一信息的两种单位（前者无量纲、可跨
+     也因此 d 值自洽与环位偏差是同一信息的两种单位（前者无量纲、可跨
      批次比，后者是像素、直观看得见），不是两个独立证据。
 
 坐标约定与本模块的邻居完全一致（踩过坑，见 pyfai-pixel-coordinate-
@@ -56,13 +59,13 @@ getFit2D 只在 theoretical_ring_paths 内部换算一次；tth 的形参序是
 青线"严格同源。
 """
 import numpy as np
-from pyFAI.calibrant import get_calibrant
 from pyFAI.detectors import Detector
 from pyFAI.goniometer import Geometry
 from scipy import ndimage
 
-from xrd_toolkit.services.integrator import (
-    LAB6_NAME, lab6_theoretical_2theta, theoretical_ring_paths)
+from xrd_toolkit.services.calibrants import (
+    DEFAULT_CALIBRANT, clamp_ring_count, resolve_calibrant)
+from xrd_toolkit.services.integrator import theoretical_ring_paths
 
 # ══ 参数（按本数据标定过，理由见各常量注释）══════════════════════
 # 径向采样步长（px）：环宽约 2.5 px，0.5 px 采样给峰形 ~5 个点，抛物线
@@ -100,8 +103,9 @@ MIN_AZIM_FOR_A = 8
 def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
                  dist_m: float, poni1_px: float, poni2_px: float,
                  rot1_deg: float = 0.0, rot2_deg: float = 0.0,
-                 n_rings: int = 16, n_azim: int = 180) -> dict:
-    """量一组几何参数把 LaB₆ 理论环放到图像上的质量（三个指标）。
+                 n_rings: int = 16, n_azim: int = 180,
+                 calibrant=DEFAULT_CALIBRANT) -> dict:
+    """量一组几何参数把**所选标样**的理论环放到图像上的质量（三个指标）。
 
     参数：
         image        2D 强度数组（标样图，load_diffraction_image 的输出）
@@ -110,8 +114,9 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
         poni1_px / poni2_px
                      PONI 像素坐标（行、列——pyFAI 惯例：poni1↔行、poni2↔列）
         rot1_deg / rot2_deg  倾斜角（度）
-        n_rings      参与计算的理论环数（默认 16）
+        n_rings      参与计算的理论环数（默认 16；按标样反射总数夹）
         n_azim       每条环的方位角采样数（默认 180，即 2° 一个）
+        calibrant    pyFAI 标样名称（默认 LaB6）
 
     返回 dict（键名即含义，全部为 JSON 友好的标量/列表）：
         dev_px        主指标：全体纳入环的 |实测 − 预测| 半径偏差中位数（px）
@@ -132,7 +137,8 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
                         complete, prom_med     完整环标志 / 峰高中位
                         clip_frac              峰顶到窗边的比例（>0 说明真峰
                                                可能在窗外，偏差被截断）
-                        a_angstrom             该环反推的晶格常数（Å，或 NaN）
+                        a_angstrom             该环反推的归一 d 值（Å，或
+                                               NaN；立方标样即晶格常数 a）
         a             {mean_angstrom, std_angstrom, spread_ppm, n_used,
                        worst_ring}   详见模块 docstring 第 3 条
         beam_center_rc  环的公共圆心 = 直射束落点 B（行, 列，索引坐标）
@@ -146,12 +152,18 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
         raise ValueError(f"image 必须是 2D 数组，收到 {image.ndim} 维")
     h, w = image.shape
 
+    cal = resolve_calibrant(calibrant, wavelength_m)
+    n_rings = clamp_ring_count(cal, n_rings)
+
     # 预测环路径：与校准图面板的青线同一个函数（量的环 = 画的环）
     paths = theoretical_ring_paths(
         pixel_size_m=pixel_size_m, wavelength_m=wavelength_m, dist_m=dist_m,
         poni1_px=poni1_px, poni2_px=poni2_px, rot1_deg=rot1_deg,
         rot2_deg=rot2_deg, image_shape=image.shape, n_rings=n_rings,
-        n_azim=n_azim)
+        n_azim=n_azim, calibrant=calibrant)
+    # λ/(2d)>1 的尾部反射没有解，路径表会比请求的 n_rings 短——以实际
+    # 生成的路为准，保证 k 同时能索引 radii 与 dspacing。
+    n_rings = len(paths["rings"])
     b_row, b_col = paths["beam_center_rc"]
 
     # 实测 2θ → a 需要 tth：几何与 theoretical_ring_paths 内部同一套
@@ -176,9 +188,10 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
                          else np.nan for r in radii])
     windows = _half_windows_px(median_r)
 
-    # a 参照：dspacing[0] 就是 LaB₆ 的晶格常数 a（4.1568 Å，NIST SRM 660
-    # 的 (100) 线，N=1），故 a_k = d_k · dspacing[0]/dspacing[k]（= d_k·√N_k）
-    dspacing = np.asarray(get_calibrant(LAB6_NAME).dspacing[:n_rings])
+    # d 值参照：a_k = d_k · dspacing[0]/dspacing[k]。对立方标样
+    # （LaB₆/CeO₂/Si）它就是晶格常数 a（dspacing[0] 是 a）；对其他晶系
+    # 只是按第一条反射归一后的 d 值——相对离散度的口径不变。
+    dspacing = np.asarray(cal.dspacing, dtype=float)[:n_rings]
 
     ring_rows, dev_pool, dev_pool_abs = [], [], []
     clip_pool, n_valid_total = [], 0
@@ -218,6 +231,8 @@ def ring_metrics(image, *, pixel_size_m: float, wavelength_m: float,
         "n_rings_used": len(dev_pool),
         "rings": ring_rows,
         "a": _a_consistency(ring_rows),
+        "calibrant": getattr(cal, "name", None) or str(calibrant),
+        "n_rings": int(n_rings),
         "beam_center_rc": (b_row, b_col),
         "half_window_px": windows.tolist(),
     }
@@ -234,8 +249,8 @@ def metrics_note(m: dict, tag: str = "") -> str:
     if not np.isfinite(m["dev_px"]):
         return "no usable ring signal"
     a = m["a"]
-    a_txt = (f"a spread {a['spread_ppm']:.0f} ppm"
-             if np.isfinite(a["spread_ppm"]) else "a spread n/a")
+    a_txt = (f"d spread {a['spread_ppm']:.0f} ppm"
+             if np.isfinite(a["spread_ppm"]) else "d spread n/a")
     tag_txt = f"{tag} " if tag else ""
     return (f"{tag_txt}ring dev {m['dev_px']:.2f} px, "
             f"{m['n_complete']}/{len(m['rings'])} complete rings, {a_txt}")
@@ -394,7 +409,7 @@ def _ring_row(k, r_pred, phi, st, valid, n_azim, b_row, b_col, geo,
     }
     row["complete"] = bool(row["coverage"] >= COMPLETE_COV)
 
-    # 反推晶格常数：该环实测峰点的 2θ（逐方位角取中位，避免个别方位角
+    # 反推归一 d 值：该环实测峰点的 2θ（逐方位角取中位，避免个别方位角
     # 被别的散射顶偏）→ d = λ/(2 sin θ) → a = d · a_ref/d_ref。tth 形参
     # 序是 (行, 列)，见模块 docstring 的坐标约定。dspacing 单位是 Å，
     # 所以波长先转 Å（1e10）——写成米会把 a 报成 4.16e-10（踩过）。
@@ -420,7 +435,7 @@ def _empty_row(k) -> dict:
 
 
 def _a_consistency(ring_rows) -> dict:
-    """各环反推的晶格常数 a 的一致性（详见模块 docstring 第 3 条）。"""
+    """各环反推的归一 d 值的一致性（详见模块 docstring 第 3 条）。"""
     vals = [(row["ring"], row["a_angstrom"]) for row in ring_rows
             if np.isfinite(row["a_angstrom"])]
     if len(vals) < 2:

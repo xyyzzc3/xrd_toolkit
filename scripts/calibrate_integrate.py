@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LaB6 几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱。
+"""标样几何校准 + 方位角积分：2D 衍射图像 → 1D 图谱（默认 LaB6）。
 
 用法示例：
     python scripts/calibrate_integrate.py --file data/xxx.tif
@@ -32,12 +32,15 @@ from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings  
 from xrd_toolkit.paths import OUTPUTS_DIR  # 输出根：钉在项目根 outputs（2026-10-02，从哪跑都一样）
 from xrd_toolkit.services import export as data_export  # 导出文件格式的唯一出处（与 GUI 同源）
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.services.integrator import calibrate_and_integrate, lab6_theoretical_2theta
+from xrd_toolkit.services.calibrants import DEFAULT_CALIBRANT, calibrant_label
+from xrd_toolkit.services.integrator import calibrate_and_integrate, calibrant_2theta
 from xrd_toolkit.services.range_selector import detect_material, select_auto_range
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LaB6 calibration + azimuthal integration")
+    parser = argparse.ArgumentParser(
+        description="Standard-sample calibration + azimuthal integration "
+                    "(default LaB6)")
     parser.add_argument("--file",
                         help="diffraction image path; if not given, an interactive menu "
                              "lists files in data/ and lets you pick (comma-separated for several)")
@@ -51,7 +54,13 @@ def main() -> None:
                              "auto-localized by multi-ring point fitting "
                              "(fit_center_from_rings, works for full and partial "
                              "rings; find_ring_center FFT as fallback)")
-    parser.add_argument("--max-rings", type=int, default=16, help="number of rings used for calibration")
+    parser.add_argument("--calibrant", default=DEFAULT_CALIBRANT,
+                        help="pyFAI calibrant name or common alias; default LaB6. "
+                             "Aliases: lab6, ceo2, si, al2o3, agbh. Exact names: "
+                             "LaB6_SRM660a, Si_SRM640, alpha_Al2O3_SRM676, ...")
+    parser.add_argument("--max-rings", type=int, default=16,
+                        help="number of rings used for calibration (clamped to the "
+                             "calibrant's reflection count)")
     parser.add_argument("--range", dest="range_", default="auto",
                         help="2θ range for the plot and the *_auto trimmed txt: "
                              "full, auto (default: per-material standard range), or "
@@ -79,7 +88,8 @@ def main() -> None:
     for path in file_list:
         image = load_diffraction_image(str(path))
         print(f"\nImage: {path} ({image.shape[0]}x{image.shape[1]} px)")
-        print(f"Parameters: λ={args.wavelength} Å, pixel={args.pixel} µm, dist0={args.dist0} mm")
+        print(f"Parameters: λ={args.wavelength} Å, pixel={args.pixel} µm, "
+              f"dist0={args.dist0} mm, calibrant={args.calibrant}")
 
         # 环心初值：指定 --center 时使用输入值，否则自动定位——
         # 取点拟合（fit_center_from_rings）为主：各方位角剖面寻峰取点，
@@ -116,16 +126,23 @@ def main() -> None:
                       f"for partial-ring data)")
 
         # 校准 → 积分
-        tth, intensity, geometry = calibrate_and_integrate(
-            image,
-            pixel_size_m=pixel_m,
-            wavelength_m=wavelength_m,
-            dist0_m=dist0_m,
-            center0_px=(cx, cy),
-            max_rings=args.max_rings,
-        )
+        try:
+            tth, intensity, geometry = calibrate_and_integrate(
+                image,
+                pixel_size_m=pixel_m,
+                wavelength_m=wavelength_m,
+                dist0_m=dist0_m,
+                center0_px=(cx, cy),
+                max_rings=args.max_rings,
+                calibrant=args.calibrant,
+            )
+        except (ValueError, RuntimeError) as err:
+            # 标样名写错 / 控制点不足：给一行人话，不甩 traceback
+            print(f"Calibration failed: {err}", file=sys.stderr)
+            continue
 
         print("\n===== Calibration result =====")
+        print(f"Calibrant         : {calibrant_label(args.calibrant)}")
         print(f"Detector distance : {geometry['dist_m']*1000:.2f} mm  (initial {args.dist0} mm)")
         print(f"PONI (center)     : ({geometry['poni1_px']:.2f}, {geometry['poni2_px']:.2f}) px")
         print(f"Center offset     : ({geometry['offset_px'][0]:+.2f}, {geometry['offset_px'][1]:+.2f}) px")
@@ -147,7 +164,7 @@ def main() -> None:
         print("\n" + config_entry_template(
             geometry=dict(geometry, pixel_size_m=pixel_m,
                           wavelength_m=wavelength_m),
-            beam_center_rc=(cy, cx)))
+            beam_center_rc=(cy, cx), calibrant=args.calibrant))
 
         # ---- 2θ 有效区间（默认 auto，同 sector_waterfall/integrate_pattern）----
         # 完整版 txt 始终保存；区间只影响图与另存的 _auto 裁剪版。
@@ -163,7 +180,8 @@ def main() -> None:
                 else detect_material(path.stem)
             if material is None:
                 print("Material: not recognized from filename "
-                      "(use --material lab6|lmfp); known-peak check skipped")
+                      "(use --material lab6|lmfp, or --range full for a "
+                      "non-LaB6 standard); known-peak check skipped")
             lo, hi, info = select_auto_range(
                 tth, intensity, material, wavelength_m, image.shape,
                 pixel_m, geometry["dist_m"],
@@ -209,7 +227,8 @@ def main() -> None:
         else:
             tth_plot, intensity_plot = tth, intensity
 
-        theory = lab6_theoretical_2theta(wavelength_m, args.max_rings)
+        theory = calibrant_2theta(args.calibrant, wavelength_m,
+                                  args.max_rings)
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(tth_plot, intensity_plot, "b-", lw=0.8)
         for i, t0 in enumerate(theory):

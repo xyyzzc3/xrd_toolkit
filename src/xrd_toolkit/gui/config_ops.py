@@ -92,7 +92,8 @@ def _import_poni(window: QMainWindow) -> None:
     _borrow_entry(window, key)
     _log(window, f"已导入 .poni → 配置条目 {key}"
                  f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
-                 f"重启后仍在）")
+                 f"重启后仍在）；注意 .poni 不携带标样信息，校准时仍按"
+                 f"当前「标样」选择（默认 LaB₆）")
     _calib_sync(window)
 
 
@@ -156,7 +157,7 @@ def _save_poni(window: QMainWindow) -> None:
                  f"像素 {geom['pixel_size_m'] * 1e6:.1f} µm，"
                  f"波长 {geom['wavelength_m'] * 1e10:.4f} Å，"
                  f"倾斜 rot1={geom['rot1_deg']:.4f}°、"
-                 f"rot2={geom['rot2_deg']:.4f}°）")
+                 f"rot2={geom['rot2_deg']:.4f}°；.poni 不写标样信息）")
 
 
 def _sync_del_config_btn(window: QMainWindow) -> None:
@@ -316,6 +317,15 @@ def _save_calib_config(window: QMainWindow) -> None:
         },
         "beam_center": tuple(
             g.get("beam_center_rc") or window.config["beam_center"]),
+        # 标样是溯源字段：几何本身与标样无关，但重新校准/算指标时
+        # 要知道该拿哪套理论环。旧条目没有这个键，消费方按 LaB6 兜底。
+        # 当前配置来自某条结果时，以那条结果实际用的标样/环数为准
+        # （用户可能在跑完之后又动过环数控件）。
+        "calibrant": ((item["result"].get("calibrant") if item else None)
+                      or state.get("calibrant") or "LaB6"),
+        "calibrant_n_rings": int(
+            (item["result"].get("n_rings") if item else None)
+            or state.get("n_rings") or 16),
         # 血缘：哪个动作产出的（raw/auto/manual/refined/custom）、
         # 这一批的起点借自哪条、何时保存
         "method": item["kind"] if item else

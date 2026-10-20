@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/github/v/release/xyyzzc3/xrd_toolkit?color=blue)](https://github.com/xyyzzc3/xrd_toolkit/releases/latest)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a LaB₆ standard, and integrates the 2D pattern into standard 1D powder spectra — as five CLI scripts and as a PySide6 desktop app over the same engine.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a standard sample (LaB₆ by default; CeO₂, Si and other common standards are built in), and integrates the 2D pattern into standard 1D powder spectra — as five CLI scripts and as a PySide6 desktop app over the same engine.
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Quick start for trial users: [docs/使用说明.html](docs/使用说明.html) (in-app: Help → 使用说明, F1) · Long version: [docs/NOTES.md](docs/NOTES.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Citation: [CITATION.cff](CITATION.cff)
 
@@ -32,7 +32,7 @@ Requires macOS 13+ / Windows 10+; ~110 MB download.
 3. **Export** — `[导出数据]` → two-column txt / `.chi` / a combined CSV
 
 Geometry comes from a built-in config for the first LMFP batch; calibrate your
-own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
+own on the `[校准]` page against the selected standard (LaB₆ by default; common alternatives are built in), or import a pyFAI `.poni`.
 
 ## At a glance
 
@@ -77,7 +77,7 @@ own on the `[校准]` page against a LaB₆ standard, or import a pyFAI `.poni`.
 
 ## Highlights
 
-- **Calibrated 2D → 1D integration** — LaB₆ geometric refinement (NIST SRM 660, a = 4.156 Å) followed by full 0°–360° azimuthal integration into a standard two-column powder pattern `(2θ(deg), intensity)`, ready for peak finding, profile fitting and PDF analysis.
+- **Calibrated 2D → 1D integration** — geometric refinement against the selected standard (LaB₆ NIST SRM 660 by default; CeO₂, Si, α-Al₂O₃ and other common standards are built in), followed by full 0°–360° azimuthal integration into a standard two-column powder pattern `(2θ(deg), intensity)`, ready for peak finding, profile fitting and PDF analysis.
 - **Calibration metrics that catch what the fit residual cannot** — every run reports the median ring-position deviation, how many of the 16 rings came out complete, and the per-ring lattice-constant dispersion: a run can print a 0.0000° residual while its rings sit 10 px off the real ones.
 - **Background subtraction, live** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors that set the level while the auto baseline supplies the shape; smoothing (boxcar / Savitzky–Golay) and interval cuts on top. Negatives are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ.
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
