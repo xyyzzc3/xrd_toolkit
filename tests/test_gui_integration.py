@@ -109,6 +109,7 @@ from xrd_toolkit.gui import app as gui_app
 _gui_app = gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
 from xrd_toolkit.gui.files import actions as gui_file_actions
+from xrd_toolkit.gui.files import importing as gui_file_importing
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import plot_views as gui_plot_views
 from xrd_toolkit.gui import panel_state as gui_panel_state
@@ -14527,7 +14528,7 @@ class TestRecentOpens(unittest.TestCase):
                        / "recent.json")
         w = create_window()
         try:
-            with mock.patch.object(gui_file_dock, "_recent_path",
+            with mock.patch.object(gui_file_importing, "_recent_path",
                                    return_value=recent_file):
                 self.assertEqual(self._texts(w), ["（空）"],
                                  "没打开过 → 空态占位")
