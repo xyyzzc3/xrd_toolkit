@@ -83,7 +83,7 @@ def _has_cjk(text: str) -> bool:
 
 
 def _all_strings():
-    for py in sorted(GUI_DIR.glob("*.py")):
+    for py in sorted(GUI_DIR.rglob("*.py")):
         for lineno, value, visible in _iter_strings(py):
             yield py.name, lineno, value, visible
 
