@@ -115,7 +115,7 @@ def _entry_menu(window: QMainWindow, item) -> None:
     """
     if not window.isVisible():
         return   # 窗口没显示（测试/无头）不弹模态菜单：会永远等不到人点
-    from xrd_toolkit.gui.file_dock import drop_product_group, drop_product_item  # 破循环：只取这两个
+    from xrd_toolkit.gui.files.dragdrop import drop_product_group, drop_product_item  # 延迟导入：dragdrop 依赖本模块的 _keys_of
     # 派发时要用的两样东西（菜单项在 helper 里建，它自己也算这两样）
     src = None if is_group(item) else gui_sources.source_of(item)
     panel_key = panel_key_of(item)

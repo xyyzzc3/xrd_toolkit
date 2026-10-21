@@ -78,6 +78,9 @@ from xrd_toolkit.gui.files.importing import (
     SUPPORTED_SUFFIXES, _RECENT_KEEP, _RECENT_SHOW, _dropped_items,
     _load_recent, _note_recent, _open_recent, _recent_path,
     _rebuild_recent_menu, _scan_folder, _unique_display_name, add_files)
+# 文件栏拖放（2026-10-21 从本文件原样搬出；再导出）
+from xrd_toolkit.gui.files.dragdrop import (
+    _group_keys_by_kind, drop_product_group, drop_product_item)
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 
@@ -506,49 +509,6 @@ def _ask_rename(window: QMainWindow, default_name: str):
     if not ok or not text:
         return None
     return text
-
-def drop_product_group(window: QMainWindow, item) -> int:
-    """删掉**一组**产物（盘上的产物 + 对应的台账条目），返回删掉的份数。
-
-    两种组：处理批次（一整批，`drop_batch`）与「1D 产物 …」（那**一组设置**
-    下算好的那些，逐键删——按设置分组之后，删一组 = 删一套设置的结果）。
-    菜单确认之后调；脚本/测试也可以直接调（QMenu.exec 在
-    PySide6 里打不了补丁，弹菜单那一步没法在无头环境里走——所以把"删"这一
-    步单独摘出来，能测的就是它）。
-    """
-    if item is None or not is_group(item) or item is window.file_list.raw_group:
-        return 0
-    batch = item.data(0, GROUP_BATCH_ROLE)
-    if batch:
-        n = stage_cache.drop_batch("bg", batch)
-        tail = "（记录一并清掉）"
-    else:
-        n = 0
-        for kind, keys in _group_keys_by_kind(item).items():
-            n += stage_cache.drop_keys(kind, keys)
-        tail = ""
-    _log(window, f"已删除产物分组「{_group_title(item)}」：{n} 条产物{tail}")
-    refresh_product_groups(window)
-    return n
-
-def _group_keys_by_kind(item) -> dict:
-    """组里子项的产物键，按阶段归类：{阶段: [键, ...]}。"""
-    out = {}
-    for kind, key in _keys_of(item):
-        out.setdefault(kind, []).append(key)
-    return out
-
-def drop_product_item(window: QMainWindow, item) -> int:
-    """删掉**一条**产物（单个条目，用户 2026-09-25 定：所有产物都能删）。"""
-    if item is None or is_group(item):
-        return 0
-    src = gui_sources.source_of(item)
-    if src is None or not src.key:
-        return 0    # 原始数据条目：那走 [删除] 按钮，不走这里
-    n = stage_cache.drop_keys(src.kind, [src.key])
-    _log(window, f"已删除产物：{src.display}（{n} 个文件）")
-    refresh_product_groups(window)
-    return n
 
 def _on_file_selected(window: QMainWindow, current, previous) -> None:
     """文件列表选中变化 → 只刷新状态行标签，不计算。
