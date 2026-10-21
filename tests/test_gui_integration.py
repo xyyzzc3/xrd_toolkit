@@ -136,6 +136,9 @@ from xrd_toolkit.gui.app import create_window
 # 拆分后 patch 目标 = 调用点所在的模块（gui_app 只是兼容再导出，
 # 打它的名字截不住别的模块里的裸名查找）
 from xrd_toolkit.gui import calib as gui_calib
+from xrd_toolkit.gui import calib_metrics as gui_calib_metrics
+from xrd_toolkit.gui import calib_scale as gui_calib_scale
+from xrd_toolkit.gui import calib_workers as gui_calib_workers
 from xrd_toolkit.gui import panel_state as gui_state
 from xrd_toolkit.gui import panels as gui_panels
 from xrd_toolkit.gui import plot_views as gui_views
@@ -11742,9 +11745,9 @@ class TestCalibration(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=self.FAKE_AUTO) as fake:
                 self._enter_with_fake_a(w)
                 w.calib_start_auto.click()
@@ -11924,7 +11927,7 @@ class TestCalibration(unittest.TestCase):
             self.assertFalse(w.calib_undo_btn.isEnabled())
             # 重新点 3 点 → 手动校准（mock 引擎）
             self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
-            with mock.patch.object(gui_calib, "refine_geometry_from_points",
+            with mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                    return_value=self.FAKE_MANUAL) as fake:
                 w.calib_start_manual.click()
                 self.assertTrue(_wait_until(
@@ -12447,13 +12450,13 @@ class TestCalibration(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=self.FAKE_AUTO), \
-                 mock.patch.object(gui_calib, "refine_geometry_from_points",
+                 mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                    return_value=self.FAKE_MANUAL), \
-                 mock.patch.object(gui_calib, "ring_metrics",
+                 mock.patch.object(gui_calib_metrics, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    {"dev_px": 0.20 if kw["dist_m"] == 1.5958
                                     else 0.50,
@@ -12528,9 +12531,9 @@ class TestCalibration(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    side_effect=slow_calib):
                 self._enter_with_fake_a(w)
                 w.calib_start_auto.click()
@@ -12600,9 +12603,9 @@ class TestCalibration(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    side_effect=two_speed_calib):
                 self._enter_with_fake_a(w)
                 w.calib_start_auto.click()
@@ -12692,9 +12695,9 @@ class TestSaveCalibConfig(unittest.TestCase):
         """进校准模式跑一次 mock 自动校准（worker 真跑、引擎 mock）。"""
         with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((256, 256)) * 10), \
-             mock.patch.object(gui_calib, "fit_center_from_rings",
+             mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                return_value=TestCalibration.FAKE_CENTER), \
-             mock.patch.object(gui_calib, "calibrate_geometry",
+             mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                return_value=dict(self.FAKE_AUTO)):
             add_checked(w, ["data/fake_a.tif"])
             w.calib_btn.click()
@@ -12858,9 +12861,9 @@ class TestSaveCalibConfig(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=TestCalibration.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=dict(self.FAKE_AUTO)):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -12950,9 +12953,9 @@ class TestSaveCalibConfig(unittest.TestCase):
                 "dist_m": 1.5958}   # worker 先读几何键再调引擎（引擎 mock）
         with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=image), \
-             mock.patch.object(gui_calib, "fit_center_from_rings",
+             mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                return_value=TestCalibration.FAKE_CENTER), \
-             mock.patch.object(gui_calib, "calibrate_geometry",
+             mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                return_value=dict(self.FAKE_AUTO)):
             res = gui_calib._auto_calib_worker("data/fake_a.tif", geom)
         self.assertEqual(res["beam_center_rc"],
@@ -12961,17 +12964,17 @@ class TestSaveCalibConfig(unittest.TestCase):
         # 取点拟合失败 → FFT 兜底同样附带
         with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=image), \
-             mock.patch.object(gui_calib, "fit_center_from_rings",
+             mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                return_value=None), \
-             mock.patch.object(gui_calib, "find_ring_center",
+             mock.patch.object(gui_calib_workers, "find_ring_center",
                                return_value=(1021.0, 1023.0)), \
-             mock.patch.object(gui_calib, "calibrate_geometry",
+             mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                return_value=dict(self.FAKE_AUTO)):
             res = gui_calib._auto_calib_worker("data/fake_a.tif", geom)
         self.assertEqual(res["beam_center_rc"], (1021.0, 1023.0))
         # 手动 worker：束心 = 初值 (列, 行) → (行, 列)
         # （首参 None = 没有标样路径 → 跳过引擎指标，本测试只管束心）
-        with mock.patch.object(gui_calib, "refine_geometry_from_points",
+        with mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                return_value=dict(self.FAKE_MANUAL)):
             res = gui_calib._manual_calib_worker(
                 None, [(1, 2), (3, 4), (5, 6)], [0, 1, 2], geom,
@@ -13111,12 +13114,12 @@ class TestManualReindex(unittest.TestCase):
                               "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}
 
         with mock.patch.object(
-                gui_calib, "_rings_at_scale",
+                gui_calib_scale, "_rings_at_scale",
                 side_effect=lambda p, g, c, s, **kw: ([0, 1, 2] if abs(s - 0.9) < 1e-9
                                                 else [0, 0, 1])), \
-             mock.patch.object(gui_calib, "refine_geometry_from_points",
+             mock.patch.object(gui_calib_scale, "refine_geometry_from_points",
                                side_effect=self._fake_refine), \
-             mock.patch.object(gui_calib, "_attach_metrics",
+             mock.patch.object(gui_calib_scale, "_attach_metrics",
                                side_effect=fake_attach):
             got, note, dist0 = gui_calib._reindex_by_scale(
                 self.PTS, [0, 0, 1], self.GEOM, self.CENTER, object())
@@ -13139,9 +13142,9 @@ class TestManualReindex(unittest.TestCase):
         def attach(res, img, g, initial=None, **kw):
             res.update({"metrics": {"dev_px": 0.30}})   # 各尺度持平 → 不换
 
-        with mock.patch.object(gui_calib, "refine_geometry_from_points",
+        with mock.patch.object(gui_calib_scale, "refine_geometry_from_points",
                                side_effect=self._fake_refine), \
-             mock.patch.object(gui_calib, "_attach_metrics", side_effect=attach):
+             mock.patch.object(gui_calib_scale, "_attach_metrics", side_effect=attach):
             got_m, note_m, d0_m = gui_calib._reindex_by_scale(
                 self.PTS, [0, 0, 1], self.GEOM_M, self.CENTER, object())
             got_px, note_px, d0_px = gui_calib._reindex_by_scale(
@@ -13152,11 +13155,11 @@ class TestManualReindex(unittest.TestCase):
 
     def test_no_switch_without_a_clear_win(self):
         """所有尺度一样好（或更差）→ 原样不动、不给说明（不猜）。"""
-        with mock.patch.object(gui_calib, "_rings_at_scale",
+        with mock.patch.object(gui_calib_scale, "_rings_at_scale",
                                side_effect=lambda p, g, c, s, **kw: [0, 1, 2]), \
-             mock.patch.object(gui_calib, "refine_geometry_from_points",
+             mock.patch.object(gui_calib_scale, "refine_geometry_from_points",
                                side_effect=self._fake_refine), \
-             mock.patch.object(gui_calib, "_attach_metrics",
+             mock.patch.object(gui_calib_scale, "_attach_metrics",
                                side_effect=lambda res, img, g, initial=None, **kw:
                                res.update({"metrics": {"dev_px": 0.30}})):
             got, note, dist0 = gui_calib._reindex_by_scale(
@@ -13192,12 +13195,12 @@ class TestManualReindex(unittest.TestCase):
                               "rings": [{}] * 16, "a": {"spread_ppm": 500.0}}
 
         with mock.patch.object(
-                gui_calib, "_rings_at_scale",
+                gui_calib_scale, "_rings_at_scale",
                 side_effect=lambda p, g, c, s, **kw: ([0, 1, 2] if abs(s - 0.9) < 1e-9
                                                 else [0, 0, 1])), \
-             mock.patch.object(gui_calib, "refine_geometry_from_points",
+             mock.patch.object(gui_calib_scale, "refine_geometry_from_points",
                                side_effect=fake_refine), \
-             mock.patch.object(gui_calib, "_attach_metrics", side_effect=attach), \
+             mock.patch.object(gui_calib_scale, "_attach_metrics", side_effect=attach), \
              mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64))):
             gui_calib._manual_calib_worker(
@@ -13239,11 +13242,11 @@ class TestCalibMetrics(unittest.TestCase):
 
         with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
-             mock.patch.object(gui_calib, "fit_center_from_rings",
+             mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                return_value=self.FAKE_CENTER), \
-             mock.patch.object(gui_calib, "calibrate_geometry",
+             mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                return_value=dict(self.FAKE_AUTO)), \
-             mock.patch.object(gui_calib, "ring_metrics",
+             mock.patch.object(gui_calib_metrics, "ring_metrics",
                                side_effect=fake_rm):
             res = gui_calib._auto_calib_worker("data/fake_a.tif", self.GEO)
         self.assertEqual(res["metrics"]["dev_px"], 0.52)
@@ -13254,17 +13257,17 @@ class TestCalibMetrics(unittest.TestCase):
 
     def test_manual_worker_metrics_need_a_path(self):
         """手动 worker：给了标样路径才读图算指标；没路径就跳过（不写键）。"""
-        with mock.patch.object(gui_calib, "refine_geometry_from_points",
+        with mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                return_value=dict(self.FAKE_MANUAL)), \
              mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
-             mock.patch.object(gui_calib, "ring_metrics",
+             mock.patch.object(gui_calib_metrics, "ring_metrics",
                                return_value=dict(self.METRICS)):
             res = gui_calib._manual_calib_worker(
                 "data/fake_a.tif", [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
                 self.GEO, (1022.3, 1022.0))
         self.assertIsNotNone(res["metrics"])
-        with mock.patch.object(gui_calib, "refine_geometry_from_points",
+        with mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                return_value=dict(self.FAKE_MANUAL)):
             res_none = gui_calib._manual_calib_worker(
                 None, [(1, 2), (3, 4), (5, 6)], [0, 1, 2],
@@ -13286,11 +13289,11 @@ class TestCalibMetrics(unittest.TestCase):
         """引擎抛异常 → 只丢指标；校准结果与束心完好（指标是显示器）。"""
         with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                return_value=np.ones((64, 64)) * 10), \
-             mock.patch.object(gui_calib, "fit_center_from_rings",
+             mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                return_value=self.FAKE_CENTER), \
-             mock.patch.object(gui_calib, "calibrate_geometry",
+             mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                return_value=dict(self.FAKE_AUTO)), \
-             mock.patch.object(gui_calib, "ring_metrics",
+             mock.patch.object(gui_calib_metrics, "ring_metrics",
                                side_effect=RuntimeError("boom")):
             res = gui_calib._auto_calib_worker("data/fake_a.tif", self.GEO)
         self.assertIsNone(res["metrics"])
@@ -13301,7 +13304,7 @@ class TestCalibMetrics(unittest.TestCase):
 
     def test_manual_worker_image_failure_only_loses_metrics(self):
         """手动侧读图失败（文件被挪走）→ 只丢指标，精修结果照常返回。"""
-        with mock.patch.object(gui_calib, "refine_geometry_from_points",
+        with mock.patch.object(gui_calib_workers, "refine_geometry_from_points",
                                return_value=dict(self.FAKE_MANUAL)), \
              mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                side_effect=OSError("文件不见了")):
@@ -13356,12 +13359,12 @@ class TestCalibMetrics(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=dict(self.FAKE_AUTO,
                                                      dist_m=1.5970)), \
-                 mock.patch.object(gui_calib, "ring_metrics",
+                 mock.patch.object(gui_calib_metrics, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    dict(self.METRICS if kw["dist_m"] == 1.5970
                                         else self.INITIAL)):
@@ -13853,9 +13856,9 @@ class TestCalibCurrent(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=TestCalibration.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=dict(TestCalibration.FAKE_AUTO)):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
@@ -13966,12 +13969,12 @@ class TestCalibFlow(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=dict(self.FAKE_AUTO,
                                                      dist_m=1.5965)), \
-                 mock.patch.object(gui_calib, "ring_metrics",
+                 mock.patch.object(gui_calib_metrics, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    self._metrics(0.20 if kw["dist_m"] > 1.596
                                                  else 0.60)):
@@ -14018,11 +14021,11 @@ class TestCalibFlow(unittest.TestCase):
             w.show()
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10), \
-                 mock.patch.object(gui_calib, "fit_center_from_rings",
+                 mock.patch.object(gui_calib_workers, "fit_center_from_rings",
                                    return_value=self.FAKE_CENTER), \
-                 mock.patch.object(gui_calib, "calibrate_geometry",
+                 mock.patch.object(gui_calib_workers, "calibrate_geometry",
                                    return_value=dict(self.FAKE_AUTO)), \
-                 mock.patch.object(gui_calib, "ring_metrics",
+                 mock.patch.object(gui_calib_metrics, "ring_metrics",
                                    side_effect=lambda image, **kw:
                                    self._metrics(0.60)):
                 add_checked(w, ["data/fake_a.tif"])
