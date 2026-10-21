@@ -110,6 +110,7 @@ _gui_app = gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
 from xrd_toolkit.gui.files import actions as gui_file_actions
 from xrd_toolkit.gui.files import importing as gui_file_importing
+from xrd_toolkit.gui.state import ranges as gui_state_ranges
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import plot_views as gui_plot_views
 from xrd_toolkit.gui import panel_state as gui_panel_state
@@ -6076,7 +6077,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["对比度上限"].setValue(200.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
             w._image_cache.clear()   # 2D 面板已缓存其图：清掉让重算走 mock
-            with mock.patch.object(gui_state, "load_diffraction_image",
+            with mock.patch.object(gui_state_ranges, "load_diffraction_image",
                                    return_value=fake_image):
                 auto.setChecked(True)   # 勾回自动 → 按焦点图重算
             self.assertAlmostEqual(
@@ -6117,7 +6118,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["剖面角度 (°)"].setValue(45.0)
             fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
             w._image_cache.clear()   # 2D 面板已缓存其图：清掉让重算走 mock
-            with mock.patch.object(gui_state, "load_diffraction_image",
+            with mock.patch.object(gui_state_ranges, "load_diffraction_image",
                                    return_value=fake_image):
                 w.findChild(QPushButton, "reset_image_btn").click()
             self.assertTrue(w.params["自动对比度"].isChecked())
@@ -6150,7 +6151,7 @@ class TestAutoContrast(unittest.TestCase):
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
             w._image_cache.clear()
-            with mock.patch.object(gui_state, "load_diffraction_image",
+            with mock.patch.object(gui_state_ranges, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 w.params["自动对比度"].setChecked(True)
             self.assertEqual(w.params["对比度下限"].value(), 1.0)
@@ -6167,7 +6168,7 @@ class TestAutoContrast(unittest.TestCase):
             self._focus_1d(w)
             w.params["自动对比度"].setChecked(False)
             w.params["对比度下限"].setValue(5.0)
-            with mock.patch.object(gui_state, "load_diffraction_image",
+            with mock.patch.object(gui_state_ranges, "load_diffraction_image",
                                    side_effect=OSError("boom")) as load:
                 w.params["自动对比度"].setChecked(True)
             self.assertFalse(load.called)
