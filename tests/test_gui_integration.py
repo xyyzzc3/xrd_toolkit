@@ -119,6 +119,9 @@ from xrd_toolkit.gui import plot_panels as gui_plot_panels
 from xrd_toolkit.gui.plot import panel_build as gui_plot_panel_build
 from xrd_toolkit.gui.plot import drawing as gui_plot_drawing
 from xrd_toolkit.gui.plot import workers as gui_plot_workers
+from xrd_toolkit.gui.plot import runners as gui_plot_runners
+from xrd_toolkit.gui.plot import spawn as gui_plot_spawn
+from xrd_toolkit.gui.plot import view_flow as gui_plot_view_flow
 from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
@@ -231,7 +234,7 @@ def _prime_1d(w, paths, stub=None):
     _ready_curve）。假路径也不会**长出产物**，所以不会触发"新产物 =
     勾选清零"，勾选集原样保留给后面的 [对比]/[热图]。
     """
-    with mock.patch.object(gui_views, "_compute_integration",
+    with mock.patch.object(gui_plot_spawn, "_compute_integration",
                            side_effect=stub or _fake_compare_compute):
         add_checked(w, paths)
         _open_view(w, "1D")
@@ -451,7 +454,7 @@ class TestSelectionOnly(unittest.TestCase):
     def test_selecting_file_does_not_run(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 add_checked(w, ["data/fake_b.tif"])
                 time.sleep(0.6)          # 给足"防抖级"时间
@@ -470,7 +473,7 @@ class TestViewButtonRuns(unittest.TestCase):
     def test_1d_click_computes_and_draws(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -532,7 +535,7 @@ class TestViewButtonRuns(unittest.TestCase):
             folder = Path(tempfile.mkdtemp(prefix="xrd_1d_single_"))
             p = folder / "single-00001.tif"
             p.write_bytes(b"x" * 2048)          # 真文件：产物要真落盘才列得出来
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, [str(p)])
                 _open_view(w, "1D")
@@ -550,7 +553,7 @@ class TestViewButtonRuns(unittest.TestCase):
         不算图，用户误以为"点击画图画不了"——回归保护。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -575,7 +578,7 @@ class TestViewButtonRuns(unittest.TestCase):
         w = create_window()
         files = _tmp_files(gui_views.MAX_PANELS_PER_BATCH + 1)
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files([str(p) for p in files], select=True)
                 _open_view(w, "1D")
@@ -609,7 +612,7 @@ class TestViewButtonRuns(unittest.TestCase):
                 key2d = f"2D|{files[0]}"
                 self.assertTrue(_wait_until(lambda: key2d in w.plot_docks),
                                 "双击原始条目该打开它本身的 2D 图")
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(w, item, explicit=True)
                 key = f"1D|{files[0]}"
@@ -626,7 +629,7 @@ class TestViewButtonRuns(unittest.TestCase):
         w = create_window()
         files = _tmp_files(3)
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.add_files([str(p) for p in files], select=False)
                 group = w.file_list.raw_group
@@ -677,7 +680,7 @@ class TestViewButtonRuns(unittest.TestCase):
                     time.sleep(0.2)
                 return np.array([0.5, 1.0, 8.5]), np.array([1.0, 2.0, 3.0])
 
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=fake_ordered):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 self.assertEqual(w.file_label.text(), "已勾选 2 项")
@@ -1119,7 +1122,7 @@ class TestApplyAndFocus(unittest.TestCase):
     def test_apply_reruns_focused_view(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1136,7 +1139,7 @@ class TestApplyAndFocus(unittest.TestCase):
     def test_apply_without_focus_hints(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 add_checked(w, ["data/fake_b.tif"])
                 w.findChild(QPushButton, "apply_btn").click()
@@ -1164,7 +1167,7 @@ class TestApplyAndFocus(unittest.TestCase):
         """同面板连点两次：先开的慢任务晚到 → 丢弃，不得覆盖新图。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as fake:
                 add_checked(w, ["data/fake_a.tif"])   # A 慢 0.2 s
                 _open_view(w, "1D")   # 任务 1（慢）
@@ -1269,7 +1272,7 @@ class TestFileCheckSelection(unittest.TestCase):
         """以对号为准：取消 B 的对号（点方块），作图只用对号文件 A。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 # 点 B 的对号方块取消 → 只剩 A 勾着
@@ -1509,7 +1512,7 @@ class TestFileCheckSelection(unittest.TestCase):
 
 def _draw_one_1d(w):
     """画一张 fake_b 的 1D 图（mock 积分），返回面板。"""
-    with mock.patch.object(gui_views, "_compute_integration",
+    with mock.patch.object(gui_plot_spawn, "_compute_integration",
                            side_effect=_fake_compute):
         add_checked(w, ["data/fake_b.tif"])
         _open_view(w, "1D")
@@ -1584,7 +1587,7 @@ class TestSaveFigures(unittest.TestCase):
         不能当成"已全部保存"静默关掉）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -1796,7 +1799,7 @@ class TestCurveColors(unittest.TestCase):
         """1D 单曲线：默认蓝基色；快照切绿重画 = 绿基色。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2270,7 +2273,7 @@ class TestPendingDisplayParams(unittest.TestCase):
         """对数纵轴：一张图都没有时勾上 → 新 1D 图就是对数轴。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.params["对数纵轴"].setChecked(True)
                 self.assertTrue(w.pending_display.get("对数纵轴"))
@@ -2289,7 +2292,7 @@ class TestPendingDisplayParams(unittest.TestCase):
         """批量出图：账本给同批的**每一张**当起点（不是只喂第一张）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.params["对数纵轴"].setChecked(True)
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
@@ -2309,7 +2312,7 @@ class TestPendingDisplayParams(unittest.TestCase):
         """处理页参数：没有编辑对象时把背景调成自动基线 → 新图就按它画。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 combo = w.params["背景扣除模式"]
                 combo.setCurrentIndex(combo.findData("auto"))
@@ -2329,7 +2332,7 @@ class TestPendingDisplayParams(unittest.TestCase):
         """切到别的图（焦点回放刷成不同值）= 待应用值作废。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -2453,7 +2456,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute) as c:
                 key, ax = self._plot_compare(w)
                 calls = c.call_count
@@ -2600,7 +2603,7 @@ class TestCompareStackAndHeatLink(unittest.TestCase):
         """没有含该文件的对比面板 → 只提示，不炸。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -2867,7 +2870,7 @@ class TestDragDrop(unittest.TestCase):
         w = create_window()
         try:
             abs_b = str(Path("data/fake_b.tif").resolve())
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _drop_event(w, [abs_b])
                 w.findChild(QPushButton, "select_all_btn").click()   # 勾上
@@ -3433,7 +3436,7 @@ class TestRecipeReuse(unittest.TestCase):
                 k = 2.0 if files[1].name in str(path_str) else 1.0
                 return tth, np.asarray(y, dtype=float) * k
 
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=fake):
                 w.add_files([str(p) for p in files], select=False)
                 gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(0),
@@ -3495,7 +3498,7 @@ class TestRecipeReuse(unittest.TestCase):
         try:
             files = _tmp_files(1)
             w.add_files([str(p) for p in files], select=False)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(
                     w, w.file_list.raw_group.child(0), explicit=True)
@@ -3534,7 +3537,7 @@ class TestRecipeReuse(unittest.TestCase):
         try:
             files = _tmp_files(1)
             w.add_files([str(p) for p in files], select=False)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(
                     w, w.file_list.raw_group.child(0), explicit=True)
@@ -3645,7 +3648,7 @@ class TestRecipeReuse(unittest.TestCase):
                 time.sleep(2.0)          # 让"计算中"这一态能被看到
                 return _fake_compute("", {}, 0)
 
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=slow):
                 w.add_files([str(p) for p in files], select=False)
                 gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(0),
@@ -3764,7 +3767,7 @@ class TestOpenRowMarks(unittest.TestCase):
             first = w.file_list.raw_group.child(0)
             second = w.file_list.raw_group.child(1)
             self.assertFalse(self._marked(first), "还没开图：不该有记号")
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(w, first, explicit=True)
                 self.assertTrue(_wait_until(
@@ -3805,7 +3808,7 @@ class TestOpenRowMarks(unittest.TestCase):
             w.add_files([str(p) for p in files], select=False)
             tree = w.file_list
             first = tree.raw_group.child(0)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 gui_file_dock._open_entry_view(w, first, explicit=True)
                 self.assertTrue(_wait_until(
@@ -3868,7 +3871,7 @@ class TestOpenFiguresGroup(unittest.TestCase):
     """
 
     def _open_1d(self, w, name="data/fake_b.tif"):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [name])
             _open_view(w, "1D")
@@ -4134,7 +4137,7 @@ class TestProductGroups(unittest.TestCase):
             group.child(0).setCheckState(0, Qt.Checked)
             w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
                 _open_view(w, "1D")
                 QApplication.processEvents()
@@ -4212,7 +4215,7 @@ class TestProductGroups(unittest.TestCase):
             group.setCheckState(0, Qt.Checked)
             w.file_list.raw_group.setCheckState(0, Qt.Unchecked)
             QApplication.processEvents()
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
                 w.compare_btn.click()
                 QApplication.processEvents()
@@ -4787,7 +4790,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
             recheck_all(w)   # 产物刚冒出来 → 上一轮的勾选已清零（第 8 条）
             _group_by_text(w, "1D 产物").child(0).setCheckState(0, Qt.Checked)
             QApplication.processEvents()
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 QApplication.processEvents()
@@ -4828,7 +4831,7 @@ class TestProcessingChain(unittest.TestCase):
         """开一张 1D 面板（窄尖峰曲线），返回 (路径, 面板)。"""
         files = _tmp_files(1)
         add_checked(w, [str(p) for p in files])
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_spiky_compute):
             _open_view(w, "1D")
             self.assertTrue(_wait_until(
@@ -5261,7 +5264,7 @@ class TestProcessingPageExits(unittest.TestCase):
         # 假积分**整条测试期间都挂着**：开图、[重算这张图]、[批量处理]
         # 都要走它。第一版只 mock 了开图那一小段，重算时打到真积分器上（拿
         # 空文件）+ 后台线程，看着像"按钮没用"——测试自己骗自己
-        self._patcher = mock.patch.object(gui_views, "_compute_integration",
+        self._patcher = mock.patch.object(gui_plot_spawn, "_compute_integration",
                                           side_effect=self._fake)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
@@ -5375,7 +5378,7 @@ class TestProcessingPageExits(unittest.TestCase):
                 time.sleep(0.3)          # 让第一次点击的补算"还在路上"
                 return TestProcessingPageExits._fake(path_str, geom, npt)
 
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=slow_fake):
                 w.proc_batch_btn.click()
                 QApplication.processEvents()
@@ -5519,7 +5522,7 @@ class TestPendingEdits(unittest.TestCase):
         """两张 1D 面板都算好，焦点停在第一张上（返回文件与两个面板键）。"""
         files = _tmp_files(2)
         add_checked(w, [str(p) for p in files])
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             _open_view(w, "1D")
             self.assertTrue(_wait_until(lambda: all(
@@ -5574,7 +5577,7 @@ class TestPendingEdits(unittest.TestCase):
 
     def _plot_only(self, w, file, params):
         """只勾这一个文件、设参数、出图并等完成（TestParamSnapshot._plot_fake 的简版）。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             for i in range(w.file_list.count()):
                 item = w.file_list.item(i)
@@ -5724,7 +5727,7 @@ class TestDuplicateFiles(unittest.TestCase):
                                    return_value="rename"):
                 add_checked(w, [str(p)])                # 同一文件第二条条目
             self.assertEqual(w.file_list.count(), 2)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -5758,7 +5761,7 @@ class TestDuplicateFiles(unittest.TestCase):
                                    return_value="rename"):
                 add_checked(w, files[:1])       # 第 10 条 = 同一文件第二条
             self.assertEqual(w.file_list.count(), 10)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -5790,7 +5793,7 @@ class TestDuplicateFiles(unittest.TestCase):
                                    return_value="rename"):
                 add_checked(w, [str(p)])
             self.assertEqual(w.file_list.count(), 2)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -5937,7 +5940,7 @@ class TestDuplicateFiles(unittest.TestCase):
         p = _tmp_files(1, prefix="ren_")[0]
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, [str(p)])
                 with mock.patch.object(gui_file_dock, "_ask_duplicate",
@@ -6015,7 +6018,7 @@ class TestTthRangeFlowsToCompute(unittest.TestCase):
             def recorder(path_str, geom, npt):
                 calls.append(dict(geom))
                 return np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=recorder):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -6062,7 +6065,7 @@ class TestAutoContrast(unittest.TestCase):
 
     def _focus_1d(self, w):
         """画一张 fake_a 的 1D 图并等它完成 → 编辑对象 = 该面板。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "1D")
@@ -6193,7 +6196,7 @@ class TestParamSnapshot(unittest.TestCase):
 
     def _plot_fake(self, w, file, params):
         """只勾这一个文件、改参数、出图并等完成 → 返回面板键。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [file])
             # 只留这一个对号（其余取消），点作图按钮才只画它
@@ -6253,7 +6256,7 @@ class TestParamSnapshot(unittest.TestCase):
                             {"2θ 下限 (°)": 1.5})
             w.params["2θ 下限 (°)"].setValue(2.5)
             done_before = w.log_text.toPlainText().count("积分完成")
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
@@ -6379,7 +6382,7 @@ class TestPanelToggles(unittest.TestCase):
                 self.w.panel_toggles[name].click()
         for dock in (self.w.file_dock, self.w.param_dock, self.w.log_dock):
             self.assertFalse(dock.isVisible())
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(self.w, ["data/fake_b.tif"])
             _open_view(self.w, "1D")
@@ -6396,7 +6399,7 @@ class Test1dDisplay(unittest.TestCase):
 
     def _plot_fake_b(self, w):
         """画 fake_b 的 1D 图并等完成 → 返回坐标轴（强度 1/2/3）。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -6483,7 +6486,7 @@ class TestLongNames(unittest.TestCase):
 
     def _plot_long(self, w):
         """画一张长文件名的 1D 图并等完成（编辑对象 = 该面板）。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [self.LONG])
             _open_view(w, "1D")
@@ -6601,7 +6604,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute), \
                  mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))):
@@ -6919,7 +6922,7 @@ class TestImageDisplayLive(unittest.TestCase):
         """改显示参数 → 快照立刻更新 + 用已有数据重画（不重算）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -6964,7 +6967,7 @@ class TestImageDisplayLive(unittest.TestCase):
         一张改了所有图都变）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -7001,7 +7004,7 @@ class TestImageDisplayLive(unittest.TestCase):
         图参数坞就显示哪张的设置（修前切面板不回放，参数跟图对不上）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")   # 两张都出图（默认线性）
@@ -7035,7 +7038,7 @@ class TestImageDisplayLive(unittest.TestCase):
         w = create_window()
         try:
             # A：先按默认出图，再改成手填范围并图像 [应用]
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -7055,7 +7058,7 @@ class TestImageDisplayLive(unittest.TestCase):
                 item.setCheckState(
                     Qt.Checked if item.data(Qt.UserRole) == "data/fake_b.tif"
                     else Qt.Unchecked)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -7080,7 +7083,7 @@ class TestImageDisplayLive(unittest.TestCase):
         手填，新开的对比图也跟着对数+手填）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -7094,7 +7097,7 @@ class TestImageDisplayLive(unittest.TestCase):
             w.params["纵轴上限"].setValue(500.0)
             QApplication.processEvents()
             # 新开对比图 → 显示参数是默认，不是上面的对数/手填
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])   # fake_b 仍勾着
                 _open_view(w, "1D")                   # 栅栏（2026-10-16）：fake_a 也没算过，先出过 1D
@@ -7125,7 +7128,7 @@ class TestImageDisplayLive(unittest.TestCase):
         参数坞当前值覆盖——看别的图时重算会把别的图的长相抄过来）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -7140,7 +7143,7 @@ class TestImageDisplayLive(unittest.TestCase):
             # 加一张 fake_b 两张都勾着重按 1D：重算两张。新开的 fake_b
             # 从默认（线性）起步，fake_a 保留自己的对数设置
             add_checked(w, ["data/fake_b.tif"])
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -7162,7 +7165,7 @@ class TestImageDisplayLive(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -7184,7 +7187,7 @@ class TestImageDisplayLive(unittest.TestCase):
             w.params["剖面角度 (°)"].setValue(45.0)
             # 按数据 [应用] → 数据生效；重算用面板自己的显示参数
             # （每图各记各的），不把坞里其它控件的值捎带进去
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
@@ -7210,7 +7213,7 @@ class TestImageDisplayLive(unittest.TestCase):
         try:
             # fake_b 数据 = [10, 20, 30]（_fake_compare_compute）→ 自动
             # 区间是它的 1%/99.9% 分位，不是占位默认
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -7231,7 +7234,7 @@ class TestImageDisplayLive(unittest.TestCase):
                 item.setCheckState(
                     Qt.Checked if item.data(Qt.UserRole) == "data/fake_a.tif"
                     else Qt.Unchecked)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 _open_view(w, "1D")
                 self.assertTrue(_wait_until(
@@ -7317,7 +7320,7 @@ class TestCompare(unittest.TestCase):
                                      np.ones(8) * 3.0, config=w.config_name,
                                      npt=1234, tth_min=2.0, tth_max=7.0)
             dock = w.plot_docks.get("对比")
-            with mock.patch.object(gui_views, "_compute_integration") as compute:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as compute:
                 w.compare_btn.click()
                 QApplication.processEvents()
                 dock = w.plot_docks["对比"]
@@ -7334,7 +7337,7 @@ class TestCompare(unittest.TestCase):
             QApplication.processEvents()
             self.assertTrue(w.pending_labels["数据"].isHidden(),
                             "对比面板不管数据参数 → 不该亮「未应用」")
-            with mock.patch.object(gui_views, "_compute_integration") as again:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as again:
                 w.compare_btn.click()
                 QApplication.processEvents()
                 self.assertTrue(_wait_until(
@@ -7396,7 +7399,7 @@ class TestCompare(unittest.TestCase):
             grp.child(0).setCheckState(0, Qt.Checked)     # 产物 1
             QApplication.processEvents()
             titles = []
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 QApplication.processEvents()
@@ -7489,7 +7492,7 @@ class TestCompare(unittest.TestCase):
         不现场积分、不开面板；日志点名 + 指路。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration") as compute:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as compute:
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.compare_btn.click()
                 QApplication.processEvents()
@@ -7528,7 +7531,7 @@ class TestCompare(unittest.TestCase):
         try:
             paths = ["data/fake_a.tif", "data/fake_b.tif"]
             _prime_1d(w, paths)              # 先出 1D（这一步就是"去过 1D 积分"）
-            with mock.patch.object(gui_views, "_compute_integration") as compute:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as compute:
                 w.compare_btn.click()
                 QApplication.processEvents()
                 compute.assert_not_called()
@@ -7735,7 +7738,7 @@ class TestCompare(unittest.TestCase):
         try:
             ax = self._plot_compare(w)
             self._set_norm_mode(w, "off")
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 self.assertTrue(_wait_until(
@@ -7753,7 +7756,7 @@ class TestCompare(unittest.TestCase):
             ax = self._plot_compare(w)
             dock_before = [d for k, d in w.plot_docks.items()
                            if k.startswith("对比")][0]
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compare_compute):
                 w.compare_btn.click()
                 self.assertTrue(_wait_until(
@@ -7773,7 +7776,7 @@ class TestCompare(unittest.TestCase):
         w = create_window()
         try:
             ax = self._plot_compare(w)
-            with mock.patch.object(gui_views, "_compute_integration") as c:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as c:
                 w.findChild(QPushButton, "apply_btn").click()
                 self.assertTrue(_wait_until(
                     lambda: w.log_text.toPlainText().count("对比完成") >= 2))
@@ -7881,7 +7884,7 @@ class TestArrangeModeClose(unittest.TestCase):
         w = create_window()
         try:
             w.show()   # 面板要可见才参与重排（offscreen 下不 show 不可见）
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -7907,7 +7910,7 @@ class TestArrangeModeClose(unittest.TestCase):
         w = create_window()
         try:
             w.show()
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -7961,7 +7964,7 @@ class TestArrangeModeClose(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=slow):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")   # 任务立刻在后台开睡
@@ -8004,7 +8007,7 @@ class TestPlotFixedSize(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -8040,7 +8043,7 @@ class TestSlimPanelChrome(unittest.TestCase):
     PATH = "data/fake_b.tif"
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [self.PATH])
             _open_view(w, "1D")
@@ -8218,7 +8221,7 @@ class TestDragBlit(unittest.TestCase):
     PATH = "data/fake_b.tif"
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [self.PATH])
             _open_view(w, "1D")
@@ -8320,7 +8323,7 @@ class TestBoxZoomScope(unittest.TestCase):
     都不许动。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -8390,7 +8393,7 @@ class TestHomeView(unittest.TestCase):
     PATH = "data/fake_b.tif"
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [self.PATH])
             _open_view(w, "1D")
@@ -8624,7 +8627,7 @@ class TestHomeView(unittest.TestCase):
             x0, y0 = ax.get_xlim(), ax.get_ylim()
             content.toolbar._actions["zoom"].trigger()
             self._wheel(w, dock)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")          # 重算
                 self.assertTrue(_wait_until(
@@ -8648,7 +8651,7 @@ class TestHomeView(unittest.TestCase):
             ax = content.axes_1d
             w.params["2θ 下限 (°)"].setValue(2.0)
             w.params["2θ 上限 (°)"].setValue(6.0)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")          # 重算（数据范围变了）
                 self.assertTrue(_wait_until(
@@ -8697,7 +8700,7 @@ class TestBackgroundBatch(unittest.TestCase):
         return out
 
     def _open_both(self, w, files):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_scaled_compute):
             add_checked(w, files)
             _open_view(w, "1D")
@@ -8837,7 +8840,7 @@ class TestStageCacheFlow(unittest.TestCase):
         w = create_window()
         path = self._real_file()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
                 add_checked(w, [path])
                 _open_view(w, "1D")
@@ -8861,7 +8864,7 @@ class TestStageCacheFlow(unittest.TestCase):
         w = create_window()
         path = self._real_file("cache_range.tif")
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as compute:
                 add_checked(w, [path])
                 _open_view(w, "1D")
@@ -8887,7 +8890,7 @@ class TestStageCacheFlow(unittest.TestCase):
         w = create_window()
         path = self._real_file("cache_clear.tif")
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, [path])
                 _open_view(w, "1D")
@@ -9075,7 +9078,7 @@ class TestBoxZoomOnPixelViews(unittest.TestCase):
     def test_box_zoom_on_the_waterfall_survives_a_redraw(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_waterfall",
+            with mock.patch.object(gui_plot_runners, "_compute_waterfall",
                                    side_effect=_fake_waterfall_compute):
                 add_checked(w, ["data/fake_w.tif"])
                 _open_view(w, "瀑布")
@@ -9102,7 +9105,7 @@ class TestBoxZoom(unittest.TestCase):
     PATH = "data/fake_b.tif"
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [self.PATH])
             _open_view(w, "1D")
@@ -9237,7 +9240,7 @@ class TestZoomToolbar(unittest.TestCase):
     def test_toolbar_present_on_1d(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -9275,7 +9278,7 @@ class TestHoverDot(unittest.TestCase):
     """E：鼠标悬停 = 曲线上出白边点 + 状态栏实时坐标；离开清空。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -9394,7 +9397,7 @@ class TestArrangeGrid(unittest.TestCase):
     5:3 不被缩放），同类型同行/列、顶/左对齐，放不下靠滚动条兜底。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -9459,7 +9462,7 @@ class TestTilingGroups(unittest.TestCase):
 
     def _open_mixed(self, w):
         """按开图先后：1D(fake_a) → 2D(fake_c) → 1D(fake_b)。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
                          "data/fake_c.tif"])
@@ -9535,7 +9538,7 @@ class TestTilingGroups(unittest.TestCase):
             w.show()
             w.resize(1400, 900)
             # 三张同类型 1D 挤在同一行，窗口收窄后必然放不下
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif",
                              "data/fake_c.tif"])
@@ -9561,7 +9564,7 @@ class TestFreeResize(unittest.TestCase):
     记住当前画布比例；主窗口缩放不牵动子窗口。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -9622,7 +9625,7 @@ class TestResizeGrips(unittest.TestCase):
     容器（子窗口/弹出窗口都可用），拖完照常记"拖过"比例。"""
 
     def _open_one(self, w, view="1D", path_str="data/fake_b.tif"):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [path_str])
             _open_view(w, view)
@@ -9753,7 +9756,7 @@ class TestCustomizeDialog(unittest.TestCase):
     摘掉 tight layout 引擎（否则 draw 时布局引擎把用户边距算回去）。"""
 
     def _open_one(self, w, path_str="data/fake_b.tif"):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, [path_str])
             _open_view(w, "1D")
@@ -9892,7 +9895,7 @@ class TestCustomizeDialog(unittest.TestCase):
                 self.assertEqual(dock.params_snapshot["2D 色图"], "viridis",
                                  "色图该记进这张面板的快照")
             # 1D 面板没有这个下拉（它的"颜色"是曲线色，另一套）
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "1D")
@@ -9998,7 +10001,7 @@ class TestWindowClickFocus(unittest.TestCase):
     实证），从落点沿 parentWidget 链向上找面板容器。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -10074,7 +10077,7 @@ class TestCanvasTrue53(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -10096,7 +10099,7 @@ class TestCustomRatioMemory(unittest.TestCase):
     都保持同比例缩放；没拖过的按默认 5:3。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -10115,7 +10118,7 @@ class TestCustomRatioMemory(unittest.TestCase):
             self._open_two(w)
             d2 = _dock(w, "1D", "data/fake_b.tif")
             geo = d2.geometry()
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_c.tif"])
                 _open_view(w, "1D")
@@ -10181,7 +10184,7 @@ class TestViewLimitSync(unittest.TestCase):
     """缩放/平移写回参数：视图 2θ 范围 + 纵轴窗口（动纵轴才关自动）。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -10308,7 +10311,7 @@ class TestGestures(unittest.TestCase):
     以光标为中心缩放（每格 10%）+ 左键拖框放大，熄灭时让位。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -10553,7 +10556,7 @@ class TestCustomizeProtection(unittest.TestCase):
     才由参数接管。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "1D")
@@ -11090,7 +11093,7 @@ class TestPopOut(unittest.TestCase):
     弹出窗口 × = 关闭即遗忘；平铺只排主窗口内的子窗口。"""
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_b.tif"])
             _open_view(w, "1D")
@@ -11170,7 +11173,7 @@ class TestPopOut(unittest.TestCase):
         try:
             w.show()
             w.resize(1400, 900)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -11198,7 +11201,7 @@ class TestPanelClose(unittest.TestCase):
     全新默认；在飞任务迟到结果静默丢弃、旧代结果不串新图。"""
 
     def _open_two(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -11239,7 +11242,7 @@ class TestPanelClose(unittest.TestCase):
             _resize_panel(w, _dock(w, "1D", "data/fake_a.tif"), 700, 400)
             _axes(w, "1D", "data/fake_a.tif").set_ylim(1.0, 2.0)
             gui_panels._close_panel(w, key_a)
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 _open_view(w, "1D")   # 文件仍在列表里，重新出图
                 self.assertTrue(_wait_until(
@@ -11269,7 +11272,7 @@ class TestPanelClose(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=slow):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")   # 后台开算（0.3s）
@@ -11338,7 +11341,7 @@ class TestSavePromptExcludesClosed(unittest.TestCase):
     def test_close_prompt_counts_only_open_panels(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14158,7 +14161,7 @@ class TestBatchProgress(unittest.TestCase):
     def test_batch_logs_progress_suffix_and_clears(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14206,10 +14209,10 @@ class TestBatchProgress(unittest.TestCase):
         try:
             add_checked(w, paths)
             with mock.patch.object(
-                    gui_views, "_open_plot_panel",
+                    gui_plot_view_flow, "_open_plot_panel",
                     side_effect=lambda win, name, key, title:
                     opened.append(key) or mock.MagicMock()), \
-                    mock.patch.object(gui_views, "_run_view"):
+                    mock.patch.object(gui_plot_view_flow, "_run_view"):
                 _open_view(w, "1D")
             log = w.log_text.toPlainText()
             # 第 9 块（i=8）跨过 8 的倍数 → 报一次；9 块都真的去开了
@@ -14241,7 +14244,7 @@ class TestBatchProgress(unittest.TestCase):
             Path(p).touch()
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
+            with mock.patch.object(gui_plot_view_flow, "MAX_PANELS_PER_BATCH", 2), \
                     mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                       return_value=np.zeros((8, 8))):
                 add_checked(w, paths)
@@ -14269,8 +14272,8 @@ class TestBatchProgress(unittest.TestCase):
         w = create_window()
         try:
             cache_kw = None
-            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 4), \
-                    mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_view_flow, "MAX_PANELS_PER_BATCH", 4), \
+                    mock.patch.object(gui_plot_spawn, "_compute_integration",
                                       side_effect=_fake_compute):
                 # ① 4 张 ≤ 上限 4：照旧一张一张全画
                 add_checked(w, paths)
@@ -14285,8 +14288,8 @@ class TestBatchProgress(unittest.TestCase):
                 if dock is not None:
                     dock.close()
             recheck_all(w)   # ① 出过图 → 勾选已清零（第 8 条）：② 要重新勾
-            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
-                    mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_view_flow, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_plot_spawn, "_compute_integration",
                                       side_effect=_fake_compute):
                 # ② 4 张 > 上限 2：一张都不画
                 _open_view(w, "1D")
@@ -14360,7 +14363,7 @@ class TestBatchProgress(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=slow):
                 add_checked(w, ["data/fake_p1.tif", "data/fake_p2.tif"])
                 _open_view(w, "1D")
@@ -14405,8 +14408,8 @@ class TestBatchProgress(unittest.TestCase):
         """额度内的重复点 = 复用那几张面板，不新建也不报"少画"。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
-                    mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_view_flow, "MAX_PANELS_PER_BATCH", 2), \
+                    mock.patch.object(gui_plot_spawn, "_compute_integration",
                                       side_effect=_fake_compute):
                 paths = [f"data/fake_d{i}.tif" for i in range(1, 4)]
                 add_checked(w, paths)
@@ -14429,7 +14432,7 @@ class TestBatchProgress(unittest.TestCase):
     def test_single_file_has_no_progress_suffix(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14451,7 +14454,7 @@ class TestBatchProgress(unittest.TestCase):
 
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=flaky):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14575,7 +14578,7 @@ class TestRangeMemory(unittest.TestCase):
     def _open_single(self, w, path):
         """单张出图（勾一个文件点 [1D]），等面板出现。"""
         w.add_files([str(path)], select=True)
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             w.view_buttons["1D"].click()
             QApplication.processEvents()
@@ -14668,7 +14671,7 @@ class TestExportData(unittest.TestCase):
 
     def _two_1d_results(self, w):
         """勾两个文件出 1D（mock 计算），等结果进面板缓存。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
             _open_view(w, "1D")
@@ -14680,7 +14683,7 @@ class TestExportData(unittest.TestCase):
 
     def _one_1d_result(self, w):
         """勾一个文件出 1D（mock 计算），等结果进面板缓存。"""
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_compute):
             add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "1D")
@@ -14751,7 +14754,7 @@ class TestExportData(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14780,7 +14783,7 @@ class TestExportData(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -14997,7 +15000,7 @@ class TestExportCsv(unittest.TestCase):
         """两条及以上且勾选总表 → 批量文件夹里 txt/ 与大集合一起出。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute):
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -15481,7 +15484,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
                       stub=_fake_compute)      # 栅栏前置：先各出过 1D
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as c:
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
@@ -15592,7 +15595,7 @@ class TestHeatmap(unittest.TestCase):
         """1D 已算好 → [热图] 零后台任务直接出图（复用面板缓存）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as c:
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 _open_view(w, "1D")
@@ -15630,7 +15633,7 @@ class TestHeatmap(unittest.TestCase):
         不现场积分、不开面板；日志点名 + 指路。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_integration") as compute:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as compute:
                 add_checked(w, ["data/fake_a.tif", "data/fake_b.tif"])
                 w.heat_btn.click()
                 QApplication.processEvents()
@@ -15725,7 +15728,7 @@ class TestHeatmap(unittest.TestCase):
         try:
             _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
                       stub=_fake_compute)      # 栅栏前置：先各出过 1D
-            with mock.patch.object(gui_views, "_compute_integration",
+            with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                    side_effect=_fake_compute) as c:
                 w.heat_btn.click()
                 self.assertTrue(self._wait_heat(w))
@@ -15771,7 +15774,7 @@ class TestHeatmap(unittest.TestCase):
                       stub=_fake_compute)      # 栅栏前置：先各出过 1D
             w.heat_btn.click()
             self.assertTrue(self._wait_heat(w))
-            with mock.patch.object(gui_views, "_compute_integration") as c:
+            with mock.patch.object(gui_plot_spawn, "_compute_integration") as c:
                 w.findChild(QPushButton, "apply_btn").click()
                 QApplication.processEvents()
                 c.assert_not_called()
@@ -15887,7 +15890,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
     KEY = "1D|data/fake_bg.tif"
 
     def _open_1d(self, w):
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_bg_compute):
             add_checked(w, [self.PATH])
             _open_view(w, "1D")
@@ -15976,7 +15979,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         （缓存里的原始曲线不动）。
         """
         w = create_window()
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_bg_compute) as compute:
             try:
                 dock = self._open_1d(w)
@@ -16326,7 +16329,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         """对比面板的每条曲线也扣背景（口径一致：同一份数据在不同
         面板里长得一样）。"""
         w = create_window()
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
                 _prime_1d(w, ["data/fake_a.tif", "data/fake_b.tif"],
@@ -16362,7 +16365,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "_compute_waterfall",
+            with mock.patch.object(gui_plot_runners, "_compute_waterfall",
                                    side_effect=_fake_waterfall_compute):
                 add_checked(w, ["data/fake_w.tif"])
                 _open_view(w, "瀑布")
@@ -16448,7 +16451,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         显示参数（实测是 热图色图 等注册在背景组之后的几项）串过来。
         """
         w = create_window()
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
                 add_checked(w, ["data/fg_a.tif", "data/fg_b.tif"])
@@ -16481,7 +16484,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         失去了拾取状态。切焦点挪到确认是点击之后，拖拽就不影响。
         """
         w = create_window()
-        with mock.patch.object(gui_views, "_compute_integration",
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                side_effect=_fake_bg_compute):
             try:
                 add_checked(w, ["data/fg_a.tif", "data/fg_b.tif"])
@@ -16519,7 +16522,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             # 覆盖齐全时不提示
             w2 = create_window()
             try:
-                with mock.patch.object(gui_views, "_compute_integration",
+                with mock.patch.object(gui_plot_spawn, "_compute_integration",
                                        side_effect=_fake_bg_compute):
                     add_checked(w2, [self.PATH])
                     _open_view(w2, "1D")
