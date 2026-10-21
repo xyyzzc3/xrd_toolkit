@@ -131,6 +131,7 @@ from xrd_toolkit.gui import watchdog as gui_watchdog
 gui_watchdog.OUT_DIR = Path(tempfile.mkdtemp(prefix="xrd_hang_suite_"))
 from xrd_toolkit.gui import config_ops as gui_config_ops
 from xrd_toolkit.gui import calib_panel as gui_calib_panel
+from xrd_toolkit.gui import calib_panel_draw as gui_calib_panel_draw
 from xrd_toolkit.gui import calib_model as gui_calib_model
 from xrd_toolkit.gui import calib_table as gui_calib_table
 from xrd_toolkit.gui import plot_export as gui_export
@@ -11867,13 +11868,13 @@ class TestCalibration(unittest.TestCase):
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
             calls = []
-            real_paths = gui_calib_panel.theoretical_ring_paths
+            real_paths = gui_calib_panel_draw.theoretical_ring_paths
 
             def spy(**kw):
                 calls.append(kw)
                 return real_paths(**kw)
 
-            with mock.patch.object(gui_calib_panel, "theoretical_ring_paths",
+            with mock.patch.object(gui_calib_panel_draw, "theoretical_ring_paths",
                                    side_effect=spy):
                 gui_calib._on_calib_result(w, "auto", res)
             self.assertEqual(calls[-1]["poni1_px"], 980.0)
@@ -13716,7 +13717,7 @@ class TestCalibCurrent(unittest.TestCase):
         要的不变量（画的就是当前配置的几何），几何微调也能抓到。
         """
         px = gui_calib_panel._geom_px_keys(w.calib_state["current_geom"])
-        paths = gui_calib_panel.theoretical_ring_paths(
+        paths = gui_calib_panel_draw.theoretical_ring_paths(
             pixel_size_m=px["pixel_size_m"], wavelength_m=px["wavelength_m"],
             dist_m=px["dist_m"], poni1_px=px["poni1_px"],
             poni2_px=px["poni2_px"], rot1_deg=px["rot1_deg"],
@@ -13804,7 +13805,7 @@ class TestCalibCurrent(unittest.TestCase):
                     w.calib_btn.setChecked(False)
                     self.assertIsNone(w.calib_dock)
                     with mock.patch.object(
-                            gui_calib_panel, "_redraw_calib",
+                            gui_calib_panel_draw, "_redraw_calib",
                             side_effect=AssertionError("画到已关面板上")):
                         gui_calib._borrow_entry(w, "test_geom")
         finally:
