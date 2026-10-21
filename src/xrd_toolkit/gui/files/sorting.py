@@ -101,7 +101,7 @@ def _set_sort_mode(window: QMainWindow, mode: str) -> None:
     _apply_sort(window)
     _log(window, f"文件栏排序改为「{SORT_LABELS[mode]}」：重排「原始数据」"
                  "（产物分组的行序跟着走，勾选与高亮不动）")
-    from xrd_toolkit.gui.file_dock import refresh_product_groups  # 破循环：只取这一个
+    from xrd_toolkit.gui.files.groups import refresh_product_groups  # 破循环：只取这一个
     refresh_product_groups(window, quiet=True)   # 产物行序立刻跟上
     _sync_sort_menu(window)
     bar = window.file_list.verticalScrollBar()
