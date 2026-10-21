@@ -46,7 +46,13 @@ from xrd_toolkit.services import process
 from xrd_toolkit.services.background import (
     compute_baseline, subtract_background)
 from xrd_toolkit.services.data_loader import load_diffraction_image
-
+# 对比/热图配色（2026-10-21 从本文件原样搬出；再导出）
+from xrd_toolkit.gui.plot.colors import (
+    _CLASSIC_COLORS, _CLASSIC_DARK_BRIGHT_FLOOR, _CLASSIC_DARK_FLOOR,
+    _CLASSIC_DARK_PER_ROUND, _CLASSIC_FAMILY, _CLASSIC_LIGHT_CAP,
+    _GRADIENT_DARK_MIX, _GRADIENT_FAMILIES, _GRADIENT_FAMILY_ORDER,
+    _GRADIENT_LIGHT_MIX, _RAINBOW_FAMILY, _RAINBOW_SINGLE_POS,
+    _family_label, _gradient_color, _mix_hex)
 
 def _log(window: QMainWindow, text: str) -> None:
     """统一反馈出口：写日志区（累积）+ 状态行（常驻"就绪"，消息
@@ -59,7 +65,6 @@ def _log(window: QMainWindow, text: str) -> None:
         window._status_timer.timeout.connect(
             lambda: window.status_text.setText("就绪"))
     window._status_timer.start(5000)   # 重新计时
-
 
 def _snapshot_params(window: QMainWindow) -> dict:
     """拍下参数面板当前状态：配置条目 + 各控件值 + 自动对比度开关。
@@ -79,7 +84,6 @@ def _snapshot_params(window: QMainWindow) -> dict:
         else:
             snap[name] = w.value()
     return snap
-
 
 # 图像参数组的全部条目（"只看图不参与计算"的那一组）。快照里这两类
 # 参数按职责分开更新（见 _data_snapshot / _display_snapshot）：两个
@@ -227,116 +231,6 @@ _VIEW_WINDOW_KEYS = ("视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
 CALIB_HOVER_KEY = "校准图"
 
 # 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为
-# 一种颜色的渐变过程……只留渐变顺序，颜色这种选项"——原先的 8 槽分类
-# 色板与"逐条自定义色"一起退休，用户原话："不是每个数据都能改颜色，
-# 非常无效"）。每系一个基色（"蓝"沿用原来第一个文件的蓝，老用户的
-# 视觉是连续的）；多条曲线从"基色加深一档"过渡到"基色与白混 55%"
-# （两头各见下面两个常量；单条曲线仍用基色本身）。
-_GRADIENT_FAMILIES = {
-    "蓝": "#2a78d6",
-    "绿": "#1baf7a",
-    "橙": "#eb6834",
-    "紫": "#4a3aa7",
-    "灰": "#595959",
-}
-_GRADIENT_LIGHT_MIX = 0.55   # 最浅一条 = 基色与白混到 55%（再浅就看不见）
-# 最深一头的加深量（2026-10-14 加，用户："彩虹没问题，[其余色系]是对的，但是
-# 不明显"——实测 81 条橙色从底到顶只走了"基色→55% 白"这半段，肉眼一片同色）。
-# 现在跨度拉成整整一段：第 1 条 = 基色与黑混 _GRADIENT_DARK_MIX，最后一条
-# 不变（55% 白，保住"最浅的白底可辨"），中间线性过渡——8 条时每条明显拉开，
-# 大堆叠也比原来有层次。
-_GRADIENT_DARK_MIX = 0.30
-
-# 第六个色系「彩虹」（2026-10-14 用户："对比图不堆叠时颜色很难区分，要不要
-# 改成瀑布图的配色那种"＋"除了不要循环的颜色，按顺序的数据能获得有规律的
-# 按顺序颜色就可以"）：不走"基色混白"，而是**瀑布同一张色图 viridis 全段
-# 等距取样**（平铺 8 条实测：单色系八条挤在浅蓝里分不出，viridis 深紫→黄
-# 一条一色一眼认得出；81 条也能读出顺序）。它不是被退休的那套分类色
-# （红绿蓝随便给），是顺序色——颜色严格跟序号走、不循环。
-_RAINBOW_FAMILY = "彩虹"
-_RAINBOW_SINGLE_POS = 0.5    # 单曲线（1D/剖面/只有一条对比）取中段青绿
-
-# 第七个色系「经典色」（2026-10-15 用户："对比图添加论文中常用颜色"）：
-# Okabe–Ito 8 色——期刊图表规范最常点名的那套（色盲友好），顺序按
-# 相邻对比度排过（预览图给用户看过就是这个顺序）。它不是渐变、也
-# 不是"彩虹"那种顺序色，是**固定串色**：前 8 条一色一条，互不重复；
-# 超过 8 条**每轮整体压暗一档**（×0.75^轮，见 _PAPER_DARK_*）——不与
-# 上一轮任何一条同色、顺序仍然读得出（"不循环"精神与彩虹一致）；
-# 黑色压不动，改往白提亮（见 _CLASSIC_DARK_BRIGHT_FLOOR）。
-_CLASSIC_FAMILY = "经典色"
-_CLASSIC_COLORS = ("#0072B2", "#D55E00", "#009E73", "#E69F00",
-                 "#56B4E9", "#CC79A7", "#F0E442", "#000000")
-_CLASSIC_DARK_PER_ROUND = 0.75
-_CLASSIC_DARK_FLOOR = 0.15     # 压暗到底线就不再深（再深全成黑）
-_CLASSIC_DARK_BRIGHT_FLOOR = 0.22   # 亮度低于它 = 压不动了（黑色那格）
-_CLASSIC_LIGHT_CAP = 0.5            # 压不动的改往白提亮，混白 50% 封顶
-
-# UI 下拉按这个顺序列色系（app.py 参数坞 / customize.py「外观」共用）
-_GRADIENT_FAMILY_ORDER = (*_GRADIENT_FAMILIES, _RAINBOW_FAMILY,
-                          _CLASSIC_FAMILY)
-
-
-def _family_label(name: str) -> str:
-    """色系下拉的显示名。"经典色"不是渐变（固定串色 + 压暗轮换），
-    直接用名字；其余照旧"X色渐变"（含彩虹）。"""
-    return name if name == _CLASSIC_FAMILY else f"{name}色渐变"
-
-
-def _mix_hex(a: str, b: str, t: float) -> str:
-    """两个 #rrggbb 按 t 线性混合（0 = 全 a，1 = 全 b）。"""
-    ar, ag, ab = (int(a[i:i + 2], 16) for i in (1, 3, 5))
-    br, bg, bb = (int(b[i:i + 2], 16) for i in (1, 3, 5))
-    return "#" + "".join(
-        f"{int(round(x + (y - x) * t)):02x}"
-        for x, y in ((ar, br), (ag, bg), (ab, bb)))
-
-
-def _gradient_color(family: str, i: int, n: int) -> str:
-    """第 i 条（共 n 条）曲线的渐变色。
-
-    单色系（蓝/绿/橙/紫/灰）：从"基色加深一档"线性过渡到"基色与白混 55%"
-    （一头一尾见 _GRADIENT_DARK_MIX / _GRADIENT_LIGHT_MIX）——第 1 条最深、
-    最后一条最浅。「彩虹」：与瀑布同款——viridis 全段等距（i 从 0 到 n-1
-    恰好走 linspace(0, 1, n) 那几档），顺序 = 序号、不循环，平铺压线时比
-    单色系多一个色相辨认通道。「经典色」：Okabe–Ito 8 色固定串色（按
-    序号一色一条，见 _CLASSIC_COLORS），超过 8 条每轮整体压暗一档
-    （_CLASSIC_DARK_PER_ROUND）——不与上一轮同色、顺序仍读得出。
-
-    n <= 1（单曲线面板 / 只有一条对比曲线）给一个稳妥的单曲线色：单色系
-    用基色本身（1D/剖面拿它当"这条曲线的颜色"），彩虹取中段，经典色取
-    色 1。i 越界夹回范围（防御）；未知色系兜底蓝。
-    """
-    if family == _RAINBOW_FAMILY:
-        # 延迟导入：panel_state 是最底层共享层，模块级不拉 matplotlib
-        from matplotlib import colormaps
-        from matplotlib.colors import to_hex
-        pos = _RAINBOW_SINGLE_POS if n <= 1 else min(max(i / (n - 1), 0.0), 1.0)
-        return to_hex(colormaps["viridis"](pos))
-    if family == _CLASSIC_FAMILY:
-        if n <= 1:
-            return _CLASSIC_COLORS[0]
-        i = min(max(i, 0), n - 1)   # 越界夹回（防御，同彩虹）
-        color = _CLASSIC_COLORS[i % len(_CLASSIC_COLORS)]
-        rnd = i // len(_CLASSIC_COLORS)   # 第几轮（0 = 原色）
-        if rnd:
-            factor = max(_CLASSIC_DARK_FLOOR, _CLASSIC_DARK_PER_ROUND ** rnd)
-            bright = max(int(color[j:j + 2], 16)
-                         for j in (1, 3, 5)) / 255.0
-            if bright * factor < _CLASSIC_DARK_BRIGHT_FLOOR:
-                # 黑色那格压不动：改往白提亮（混白 50% 封顶），免得
-                # 每轮长得一模一样（"不与上一轮同色"要真成立）
-                color = _mix_hex(color, "#ffffff",
-                                 min(1.0 - factor, _CLASSIC_LIGHT_CAP))
-            else:
-                color = _mix_hex(color, "#000000", 1.0 - factor)
-        return color
-    base = _GRADIENT_FAMILIES.get(family) or _GRADIENT_FAMILIES["蓝"]
-    if n <= 1:
-        return base
-    t = min(max(i / (n - 1), 0.0), 1.0)
-    return _mix_hex(_mix_hex(base, "#000000", _GRADIENT_DARK_MIX),
-                    _mix_hex(base, "#ffffff", _GRADIENT_LIGHT_MIX), t)
-
 
 def _stash_pending_display(window: QMainWindow, keys) -> None:
     """即改即画时**没有面板能接住**的改动：把控件现值记进窗口级"待应用"
@@ -363,7 +257,6 @@ def _stash_pending_display(window: QMainWindow, keys) -> None:
         if w is not None:
             store[name] = _widget_value(w)
 
-
 def _drop_pending_display(window: QMainWindow, keys) -> None:
     """把某几个键从"待应用"账本里清掉（改动已有面板接住 / 用户重拨）。
 
@@ -377,7 +270,6 @@ def _drop_pending_display(window: QMainWindow, keys) -> None:
         store.pop(name, None)
     if not store:
         window.pending_display = {}
-
 
 def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
     """数据参数快照：数据组取控件当前值，显示参数沿用 base（无 base
@@ -405,7 +297,6 @@ def _data_snapshot(window: QMainWindow, base: dict = None) -> dict:
                 if name in _DISPLAY_PARAMS:
                     snap[name] = value
     return snap
-
 
 def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
     """显示参数快照：显示组取控件当前值，数据参数沿用 base。
@@ -454,7 +345,6 @@ def _display_snapshot(window: QMainWindow, base: dict = None) -> dict:
         snap.setdefault(name, value)
     return snap
 
-
 def _param_box_set(window: QMainWindow, name: str, value) -> None:
     """给参数坞里的控件赋值（控件不在了就跳过）。
 
@@ -478,7 +368,6 @@ def _param_box_set(window: QMainWindow, name: str, value) -> None:
         finally:
             window._param_box_sync = prev
 
-
 def _panel_param(window: QMainWindow, dock, name: str,
                  default):
     """面板自己的参数值：优先快照（这张图作图时用的值）。
@@ -496,7 +385,6 @@ def _panel_param(window: QMainWindow, dock, name: str,
         return default
     return _widget_value(w)
 
-
 def _widget_value(w):
     """控件的值 → 快照里的表示（勾选框 bool / 下拉框 data / 其余 value()）。"""
     if isinstance(w, QCheckBox):
@@ -504,7 +392,6 @@ def _widget_value(w):
     if isinstance(w, QComboBox):
         return w.currentData()
     return w.value()
-
 
 def _set_widget_value(w, value) -> None:
     """快照里的表示写回控件（_widget_value 的逆；回放与"未应用"回填共用）。
@@ -519,7 +406,6 @@ def _set_widget_value(w, value) -> None:
             w.setCurrentIndex(idx)
     else:
         w.setValue(value)
-
 
 # ── 「未应用」：改了要按一下才生效的控件（用户 2026-09-30 的"丙"方案） ──
 # 用户原话："参数页显示本图的参数，就是上方图片名称的本图参数。如果用户改了，
@@ -538,11 +424,9 @@ _PENDING_GROUPS = {
     "数据": ("2θ 下限 (°)", "2θ 上限 (°)", "输出点数"),
 }
 
-
 def _pending_names() -> tuple:
     """表里所有控件的名字并成一条（按表里的顺序）。"""
     return tuple(name for names in _PENDING_GROUPS.values() for name in names)
-
 
 # （_AUTO_OWNS / _auto_owner 随「图像」组于 2026-10-08 退休：它们只用来把
 # "自动开关算完填进上下限框的展示值"排除出 pending 比对，那个组没了就
@@ -550,14 +434,12 @@ def _pending_names() -> tuple:
 # _apply_auto_contrast / _apply_auto_heatlim——即改即画那一路靠它区分
 # 程序同步与用户输入。）
 
-
 def _group_of(name: str):
     """这个键属于哪一组（数据 / 图像；不在名单里返回 None）。"""
     for group, names in _PENDING_GROUPS.items():
         if name in names:
             return group
     return None
-
 
 def _note_user_edit(window: QMainWindow, name: str) -> None:
     """用户动了某个"要按一下才生效"的控件 → 这组的值又变回"没被用掉"。
@@ -572,7 +454,6 @@ def _note_user_edit(window: QMainWindow, name: str) -> None:
     window._pending_consumed = consumed
     _refresh_pending_labels(window)
 
-
 def _note_params_consumed(window: QMainWindow, group: str) -> None:
     """这一组控件的当前值刚被**用掉**（算了/重算了一张图、应用了显示设置）。
 
@@ -583,7 +464,6 @@ def _note_params_consumed(window: QMainWindow, group: str) -> None:
     consumed = dict(getattr(window, "_pending_consumed", None) or {})
     consumed[group] = True
     window._pending_consumed = consumed
-
 
 def _pending_diff(window: QMainWindow, dock) -> dict:
     """当前控件值 vs 该面板**已生效**快照的差（只算上面那张表里的键）。
@@ -608,7 +488,6 @@ def _pending_diff(window: QMainWindow, dock) -> dict:
             out[name] = value
     return out
 
-
 def _refresh_pending_labels(window: QMainWindow) -> None:
     """按"当前编辑对象有没有未应用的改动"开关那个灰字（没控件就跳过）。"""
     labels = getattr(window, "pending_labels", None)
@@ -618,7 +497,6 @@ def _refresh_pending_labels(window: QMainWindow) -> None:
     diff = _pending_diff(window, dock) if dock is not None else {}
     for group, label in labels.items():
         label.setVisible(any(name in diff for name in _PENDING_GROUPS[group]))
-
 
 def _capture_pending(window: QMainWindow, key) -> None:
     """切走之前：把"改了还没生效"的控件值记给**正要离开**的那张图。
@@ -641,7 +519,6 @@ def _capture_pending(window: QMainWindow, key) -> None:
         if not consumed.get(_group_of(name))
     } or None
 
-
 def _overlay_pending(window: QMainWindow, dock) -> None:
     """切进来之后：把该面板自己的未应用改动铺回控件（在快照回放**之后**调）。
 
@@ -661,7 +538,6 @@ def _overlay_pending(window: QMainWindow, dock) -> None:
     finally:
         window._param_replaying = prev
 
-
 def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
     """把一份面板快照回放进参数坞控件，期间挂 _param_replaying 旗标。
 
@@ -677,7 +553,6 @@ def _load_params_snapshot(window: QMainWindow, snap: dict) -> None:
         _load_params_snapshot_body(window, snap)
     finally:
         window._param_replaying = False
-
 
 def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
     """把参数快照填回参数面板（只展示不计算）。
@@ -799,13 +674,11 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
         if not pending:
             window.pending_display = {}
 
-
 # 未选中编辑对象时坞顶灰字的文案（2026-10-07 用户："最上方灰字在未选中时
 # 添加双击某某产物的提示，在同一行不要分段"）。**四处复位点共用这一份**：
 # app 建标签、panels 关面板、plot_views 两处清焦点——各写一份必然漂移。
 # 单行显示（_ElideLabel：坞窄时尾部省略、悬停看全），绝不撑宽参数坞。
 FOCUS_EMPTY_TEXT = "编辑对象：未选中（双击文件栏「1D 产物」或点开一张图即可选定）"
-
 
 def _set_focus(window: QMainWindow, key: str, title: str) -> None:
     """把参数面板的编辑对象切到某面板（点面板 / 计算完成时调用）。
@@ -835,7 +708,6 @@ def _set_focus(window: QMainWindow, key: str, title: str) -> None:
     if hook is not None:
         hook(prev, key)
 
-
 def _collect_geometry(window: QMainWindow) -> dict:
     """收集当前**几何配置条目**的积分几何（面板上的几何字段是只读显示）。
 
@@ -862,10 +734,8 @@ def _collect_geometry(window: QMainWindow) -> dict:
         tth_max_deg=window.params["2θ 上限 (°)"].value(),
     )
 
-
 _CONTRAST_FALLBACK = (1.0, 100000.0)   # 没有焦点图时的自动对比度占位默认
 _YLIM_FALLBACK = (1.0, 100000.0)   # 曲线无有效数值时的纵轴占位（任意但安全）
-
 
 def _auto_y_range(intensity, log_scale: bool) -> tuple:
     """1D 曲线自动纵轴范围：取 1%/99.9% 分位，掐掉极端强/弱值。
@@ -882,7 +752,6 @@ def _auto_y_range(intensity, log_scale: bool) -> tuple:
         return _YLIM_FALLBACK
     return float(np.percentile(finite, 1.0)), float(np.percentile(finite, 99.9))
 
-
 def _auto_contrast_values(image) -> tuple:
     """自动对比度：取全体像素的 1%/99.9% 分位，掐掉极端亮暗值。
 
@@ -894,7 +763,6 @@ def _auto_contrast_values(image) -> tuple:
     if finite.size == 0:
         raise ValueError("图没有有效数值")
     return float(np.percentile(finite, 1.0)), float(np.percentile(finite, 99.9))
-
 
 def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
     """按编辑对象（焦点图）重算自动对比度，填进置灰的输入框。
@@ -947,17 +815,14 @@ def _apply_auto_contrast(window: QMainWindow, silent: bool = False) -> None:
             _log(window, "自动对比度：编辑对象不是 2D/剖面 视图，"
                          f"已恢复默认值")
 
-
 # 决定"先扣图再积分 ≡ 先积分再扣"能否成立的几何量（2θ 范围与点数不在
 # 其中：网格不一致由 interp_onto_grid 重插值处理，几何不一致没法补）
 _BG_GEOM_KEYS = ("pixel_size_m", "wavelength_m", "dist_m", "poni1_m",
                  "poni2_m", "rot1_deg", "rot2_deg")
 
-
 def _bg_geom_sig(geom) -> tuple:
     """几何指纹：只取真正影响积分的几何量，浮点取整避免表示误差误报。"""
     return tuple(round(float(geom.get(k, 0.0)), 12) for k in _BG_GEOM_KEYS)
-
 
 def _bg_params(window: QMainWindow, dock, path) -> dict:
     """该面板当前的背景扣除参数（显示参数 + 窗级数据 → 纯函数层字典）。
@@ -975,7 +840,6 @@ def _bg_params(window: QMainWindow, dock, path) -> dict:
                                                                   []),
         "anchor_method": _panel_param(window, dock, "锚点拟合方式", "linear"),
     }
-
 
 def _smooth_cut_params(window: QMainWindow, dock) -> dict:
     """「处理」页里平滑与裁剪两项的参数（各自可以关掉）。
@@ -1009,13 +873,11 @@ def _smooth_cut_params(window: QMainWindow, dock) -> dict:
         "cut_ranges": ranges,
     }
 
-
 def _cut_list_of(window: QMainWindow) -> list:
     """窗口级的"要裁剪的区间"清单（界面上 [添加]/[清空] 改的就是它）。"""
     if getattr(window, "cut_list", None) is None:
         window.cut_list = []
     return window.cut_list
-
 
 def _proc_params(window: QMainWindow, dock, path) -> dict:
     """该面板当前的处理参数（背景 + 平滑 + 裁剪）→ services/process.apply_chain。"""
@@ -1023,7 +885,6 @@ def _proc_params(window: QMainWindow, dock, path) -> dict:
     params.update(_smooth_cut_params(window, dock))
     params["clip"] = bool(_panel_param(window, dock, "负值截断为 0", False))
     return params
-
 
 def _proc_settings(window: QMainWindow, dock, path) -> dict:
     """处理产物**键**用的口径：背景设置 + 平滑/裁剪（开着的才进，见
@@ -1033,7 +894,6 @@ def _proc_settings(window: QMainWindow, dock, path) -> dict:
     settings = _bg_settings(window, dock, path)
     settings.update(_smooth_cut_params(window, dock))
     return settings
-
 
 def _bg_settings(window: QMainWindow, dock, path) -> dict:
     """该面板当前的背景设置（bg 产物键用的规范化字典）。
@@ -1063,7 +923,6 @@ def _bg_settings(window: QMainWindow, dock, path) -> dict:
         "anchors": [(float(x), float(y)) for x, y in params["anchors"]],
         "blank": blank_sig,
     }
-
 
 def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
     """按该面板的处理设置跑整条链：**背景扣除 → 平滑 → 裁剪**。
@@ -1109,7 +968,6 @@ def _proc_curve(window: QMainWindow, dock, path, tth, intensity):
     out, base = process.apply_chain(tth, intensity, params,
                                     blank_curve=blank_curve)
     return tth, out, base
-
 
 def _compare_shown_curves(window: QMainWindow, dock) -> list:
     """对比面板实际画上去的曲线：[(tth, shown, display, i, ref), ...]。
@@ -1192,7 +1050,6 @@ def _compare_shown_curves(window: QMainWindow, dock) -> list:
             curves.append((tth, shown_src, display, i, ref))
     return curves
 
-
 def _heat_shown(matrix, mode):
     """热图实际画上去的强度矩阵（归一化是显示层，原始结果原样保留）。
 
@@ -1211,7 +1068,6 @@ def _heat_shown(matrix, mode):
         if peak > 0:
             shown = shown / peak
     return shown
-
 
 def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
     """按编辑对象（焦点图）重算自动纵轴范围，填进置灰的输入框。
@@ -1257,7 +1113,6 @@ def _apply_auto_ylim(window: QMainWindow, silent: bool = False) -> None:
     if not silent and loaded:
         _log(window, f"自动纵轴：编辑对象算得 {ylo:.4g}–{yhi:.4g}")
 
-
 def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
     """按编辑对象（焦点热图）重算热图强度范围，填进置灰的输入框。
 
@@ -1285,7 +1140,6 @@ def _apply_auto_heatlim(window: QMainWindow, silent: bool = False) -> None:
     if not silent and loaded:
         _log(window, f"热图范围：编辑对象算得 {lo:.4g}–{hi:.4g}")
 
-
 def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:
     """把下拉框选中的配置条目应用到参数面板。
 
@@ -1308,7 +1162,6 @@ def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None
         sync()
     if not silent:
         _log(window, f"已加载几何配置 {entry_display(key, cfg)}")
-
 
 def _reload_config_combo(window: QMainWindow,
                          select_key: str | None = None) -> None:
@@ -1339,13 +1192,11 @@ def _reload_config_combo(window: QMainWindow,
     else:
         _apply_config(window, idx)   # 索引没变信号不触发：手动应用
 
-
 def _content(dock) -> QWidget:
     """面板容器 → 面板内容：子窗口用 widget()，弹出窗口用 content。"""
     if isinstance(dock, QMdiSubWindow):
         return dock.widget()
     return dock.content
-
 
 # 背景扣除的辅助线（原始曲线/基线/锚点标记）统一带这个 gid 前缀。
 # 它们不是"曲线"，凡按线号/线列表做事的逻辑都要排除，否则会错位：
