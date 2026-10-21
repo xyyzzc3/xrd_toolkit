@@ -134,6 +134,7 @@ from xrd_toolkit.gui import panel_state as gui_state
 from xrd_toolkit.gui import panels as gui_panels
 from xrd_toolkit.gui import plot_views as gui_views
 from xrd_toolkit.gui.param_dock import helpers as gui_param_helpers
+from xrd_toolkit.gui.param_dock import pages as gui_param_pages
 
 _app = QApplication.instance() or QApplication([])
 
@@ -496,7 +497,7 @@ class TestViewButtonRuns(unittest.TestCase):
         try:
             w.show()
             calls = []
-            with mock.patch.object(gui_app, "_plot_view",
+            with mock.patch.object(gui_param_pages, "_plot_view",
                                    side_effect=lambda win, name:
                                    calls.append(name)):
                 w.view_buttons["剖面"].click()
