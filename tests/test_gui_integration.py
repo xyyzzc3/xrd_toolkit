@@ -118,6 +118,7 @@ from xrd_toolkit.gui import plot_compare as gui_plot_compare
 from xrd_toolkit.gui import plot_panels as gui_plot_panels
 from xrd_toolkit.gui.plot import panel_build as gui_plot_panel_build
 from xrd_toolkit.gui.plot import drawing as gui_plot_drawing
+from xrd_toolkit.gui.plot import workers as gui_plot_workers
 from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
@@ -599,7 +600,7 @@ class TestViewButtonRuns(unittest.TestCase):
         try:
             w.add_files([str(p) for p in files], select=False)
             item = w.file_list.raw_group.child(0)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.ones((8, 8)) * 3.0):
                 w.file_list.itemDoubleClicked.emit(item, 0)
                 key2d = f"2D|{files[0]}"
@@ -721,7 +722,7 @@ class TestNewViews(unittest.TestCase):
         w = create_window()
         try:
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=fake_image):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -757,9 +758,9 @@ class TestNewViews(unittest.TestCase):
                 t = np.linspace(-100.0, 100.0, 21)
                 return t, 10.0 * np.ones_like(t)
 
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "line_profile",
+                 mock.patch.object(gui_plot_workers, "line_profile",
                                    side_effect=fake_profile):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "剖面")
@@ -774,9 +775,9 @@ class TestNewViews(unittest.TestCase):
             self.assertIn("剖面完成：fake_b.tif", w.log_text.toPlainText())
             # 改角度 → 即改即画（2026-10-08：[应用显示设置] 已删，焦点是
             # 剖面面板 → 按新角度重算，不是只重画）
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "line_profile",
+                 mock.patch.object(gui_plot_workers, "line_profile",
                                    side_effect=fake_profile):
                 w.params["剖面角度 (°)"].setValue(45.0)
                 recomputed = _wait_until(lambda: len(profile_calls) == 2)
@@ -786,9 +787,9 @@ class TestNewViews(unittest.TestCase):
                           w.log_text.toPlainText())
             # 改一个**不用重算**的显示参数（显示束心）→ 只重画，不再算
             # （束心默认关着，这里勾上才真的触发一次改动）
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "line_profile",
+                 mock.patch.object(gui_plot_workers, "line_profile",
                                    side_effect=fake_profile):
                 w.params["显示束心"].setChecked(True)
                 QApplication.processEvents()
@@ -812,9 +813,9 @@ class TestNewViews(unittest.TestCase):
                 self.assertEqual(kw["n_sectors"], 36)
                 return tth, i2d, chi
 
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "integrate_sectors",
+                 mock.patch.object(gui_plot_workers, "integrate_sectors",
                                    side_effect=fake_sectors):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
@@ -857,7 +858,7 @@ class TestNewViews(unittest.TestCase):
         w = create_window()
         try:
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=fake_image):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -888,7 +889,7 @@ class TestNewViews(unittest.TestCase):
         w = create_window()
         try:
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=fake_image):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -929,9 +930,9 @@ class TestNewViews(unittest.TestCase):
             i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0    # 2 号：稍强
             chi = np.linspace(-175.0, 175.0, 4)
             i_mid = int(np.argmin(np.abs(tth - 4.0)))     # 两峰之间：全是基线
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "integrate_sectors",
+                 mock.patch.object(gui_plot_workers, "integrate_sectors",
                                    return_value=(tth, i2d, chi)):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
@@ -986,9 +987,9 @@ class TestNewViews(unittest.TestCase):
             i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0    # 第二高 = 12
             chi = np.linspace(-175.0, 175.0, 4)
             i_mid = int(np.argmin(np.abs(tth - 4.0)))     # 两峰之间：全是基线
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "integrate_sectors",
+                 mock.patch.object(gui_plot_workers, "integrate_sectors",
                                    return_value=(tth, i2d, chi)) as fake_sectors:
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
@@ -1033,9 +1034,9 @@ class TestNewViews(unittest.TestCase):
             i2d[(tth >= 1.0) & (tth <= 2.0), 0] = 100.0
             i2d[(tth >= 5.0) & (tth <= 5.2), 2] = 12.0
             chi = np.linspace(-175.0, 175.0, 4)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "integrate_sectors",
+                 mock.patch.object(gui_plot_workers, "integrate_sectors",
                                    return_value=(tth, i2d, chi)):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
@@ -1090,10 +1091,10 @@ class TestNewViews(unittest.TestCase):
             tth = np.linspace(1.0, 8.0, 10)
             i2d = np.ones((10, 36))
             chi = np.linspace(5.0, 355.0, 36)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
                  mock.patch.object(
-                    gui_views, "integrate_sectors",
+                    gui_plot_workers, "integrate_sectors",
                     return_value=(tth, i2d, chi)) as fake_sectors:
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "瀑布")
@@ -6046,7 +6047,7 @@ class TestAutoContrast(unittest.TestCase):
     def _focus_2d(self, w):
         """开一张 fake_a 的 2D 面板并等它画出来 → 编辑对象 = 该面板。"""
         fake_image = np.linspace(0, 1000, 3000).reshape(50, 60)
-        with mock.patch.object(gui_views, "load_diffraction_image",
+        with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                return_value=fake_image):
             add_checked(w, ["data/fake_a.tif"])
             _open_view(w, "2D")
@@ -6140,7 +6141,7 @@ class TestAutoContrast(unittest.TestCase):
         w = create_window()
         try:
             add_checked(w, ["data/fake_a.tif"])
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 _open_view(w, "2D")
                 self.assertTrue(_wait_until(
@@ -6599,7 +6600,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
         try:
             with mock.patch.object(gui_views, "_compute_integration",
                                    side_effect=_fake_compute), \
-                 mock.patch.object(gui_views, "load_diffraction_image",
+                 mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))):
                 add_checked(w, ["data/fake_b.tif"])
                 # 1D 页：出 1D 图
@@ -6941,7 +6942,7 @@ class TestImageDisplayLive(unittest.TestCase):
         """编辑对象是没算出结果的 2D 面板：改显示参数不崩（静默等它算完）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    side_effect=OSError("boom")):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -9033,7 +9034,7 @@ class TestBoxZoomOnPixelViews(unittest.TestCase):
         w = create_window()
         try:
             fake_image = np.arange(400, dtype=float).reshape(20, 20)
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=fake_image):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -9053,9 +9054,9 @@ class TestBoxZoomOnPixelViews(unittest.TestCase):
                 t = np.linspace(-100.0, 100.0, 41)
                 return t, 10.0 + 5.0 * np.sin(t / 20.0)
 
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.zeros((10, 10))), \
-                 mock.patch.object(gui_views, "line_profile",
+                 mock.patch.object(gui_plot_workers, "line_profile",
                                    side_effect=fake_profile):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "剖面")
@@ -9866,7 +9867,7 @@ class TestCustomizeDialog(unittest.TestCase):
         """
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.ones((32, 32)) * 100):
                 add_checked(w, ["data/fake_b.tif"])
                 _open_view(w, "2D")
@@ -14238,7 +14239,7 @@ class TestBatchProgress(unittest.TestCase):
         w = create_window()
         try:
             with mock.patch.object(gui_views, "MAX_PANELS_PER_BATCH", 2), \
-                    mock.patch.object(gui_views, "load_diffraction_image",
+                    mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                       return_value=np.zeros((8, 8))):
                 add_checked(w, paths)
                 _open_view(w, "2D")
@@ -15784,7 +15785,7 @@ class Test2DColorbar(unittest.TestCase):
     def test_2d_has_single_colorbar_and_redraw_does_not_stack(self):
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.ones((64, 64)) * 5.0):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "2D")
@@ -15806,7 +15807,7 @@ class Test2DColorbar(unittest.TestCase):
         教训 13——remove+重建颜色条每次让 20% 宽度且不退还）。"""
         w = create_window()
         try:
-            with mock.patch.object(gui_views, "load_diffraction_image",
+            with mock.patch.object(gui_plot_workers, "load_diffraction_image",
                                    return_value=np.ones((64, 64)) * 5.0):
                 add_checked(w, ["data/fake_a.tif"])
                 _open_view(w, "2D")
