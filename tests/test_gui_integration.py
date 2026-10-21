@@ -133,6 +133,7 @@ from xrd_toolkit.gui import calib as gui_calib
 from xrd_toolkit.gui import panel_state as gui_state
 from xrd_toolkit.gui import panels as gui_panels
 from xrd_toolkit.gui import plot_views as gui_views
+from xrd_toolkit.gui.param_dock import helpers as gui_param_helpers
 
 _app = QApplication.instance() or QApplication([])
 
@@ -3497,7 +3498,7 @@ class TestRecipeReuse(unittest.TestCase):
             QApplication.processEvents()
             dlg = mock.MagicMock()
             dlg.getText.return_value = ("按钮配方", True)
-            with mock.patch.object(gui_app, "QInputDialog", dlg):
+            with mock.patch.object(gui_param_helpers, "QInputDialog", dlg):
                 w.findChild(QPushButton, "recipe_save_btn").click()
             QApplication.processEvents()
             self.assertIn("按钮配方", recipe_store.names(),
