@@ -21,6 +21,8 @@ from xrd_toolkit.gui.param_dock.helpers import (
     _apply_selected_recipe, _connect_pending_hooks, _delete_selected_recipe,
     _fit_max_width, _on_bg_mode, _on_choose_blank, _on_clear_anchors,
     _on_pick_anchor, _save_recipe_dialog, _sync_bg_rows)
+from xrd_toolkit.gui.param_dock.widgets import (
+    add_caption, add_float, add_range, bg_group, bg_row, make_page)
 from xrd_toolkit.gui.param_dock.pages import (
     _build_check_summary, _build_plot_type_row, _on_cut_add, _on_cut_clear,
     _on_cut_toggled, _sync_cut_label, _sync_data_row, _sync_geom_row,
@@ -197,26 +199,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     lay.addWidget(window.param_stack)     # 下面才是五个入口页
 
-    def make_page():
-        """一页 = 滚动表单（装参数）+ 底部按钮行。
-
-        返回 (页面, 表单, 底部行的布局)：参数一律加到表单上，按钮加到
-        返回的布局里（固定最下方，不随滚动走）。"""
-        page = QWidget()
-        pv = QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)   # 条目随滚动区宽度自动重排
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        fields = QWidget()
-        form = QFormLayout(fields)
-        form.setContentsMargins(2, 1, 2, 1)
-        scroll.setWidget(fields)
-        pv.addWidget(scroll, 1)
-        return page, form, pv
-
     page_1d, form_1d, btns_1d = make_page()
     page_bg, form_bg, btns_bg = make_page()
     page_cmp, form_cmp, btns_cmp = make_page()
@@ -246,86 +228,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window._geom_row_sync = lambda: _sync_geom_row(window)
     _sync_geom_row(window)
     _sync_data_row(window)
-
-    def add_caption(form, text):
-        """全宽灰字小节标题（横跨标签/字段两列）：**上面一条细分隔线**。
-
-        2026-10-09 加线加粗：用户"对比和热图的参数区没有很明显区分"
-        （根子是「对比」那半页当时连标题都没有）——标题补上之后顺手把
-        小节边界做明显：细线 + 半粗。全页统一，原图页三节、处理页四节
-        也一起吃这套。
-        """
-        cap = QLabel(text)
-        cap.setStyleSheet("color: gray; font-weight: 600;")
-        line = QFrame()
-        line.setFixedHeight(1)
-        # 裸 QFrame 上给 color 画不出来（实测）——固定 1px 高 + 背景色
-        line.setStyleSheet("background-color: #d5dae0;")
-        row = QWidget()
-        box = QVBoxLayout(row)
-        box.setContentsMargins(0, 3, 0, 1)
-        box.setSpacing(3)
-        box.addWidget(line)
-        box.addWidget(cap)
-        form.addRow(row)
-        return cap
-
-    def add_float(form, name, lo, hi, value, decimals=2,
-                  label=None, suffix="", tooltip="", readonly=False):
-        box = QDoubleSpinBox()
-        box.setRange(lo, hi)
-        box.setValue(value)
-        box.setDecimals(decimals)
-        if suffix:
-            box.setSuffix(suffix)   # 单位跟在数字后（标签不再带括号单位）
-        if tooltip:
-            box.setToolTip(tooltip)
-        if readonly:
-            # 只读摘要：几何值由所选配置条目决定（_apply_config 填），
-            # 用户改不了——要改去校准页。setReadOnly 只挡用户输入，
-            # 程序 setValue 照常工作，快照回放不受影响。
-            box.setReadOnly(True)
-            box.setButtonSymbols(QDoubleSpinBox.NoButtons)
-            box.setStyleSheet("color: gray;")
-        _fit_max_width(box)          # 上限 = 完整显示量程最长文本所需
-        window.params[name] = box
-        form.addRow(label if label is not None else name, box)
-        return box
-
-    def add_range(form, lo_name, hi_name, lo, hi, lo_value, hi_value,
-                  label, suffix="", decimals=1, tooltip=""):
-        """成对的上下限并排一行：左框 ~ 右框，共用一个行标签。
-
-        window.params 的键保持原来的 lo_name/hi_name 不动（快照回放、
-        测试都按这些键找控件），只改显示排版。两框各自限宽到"量程最长
-        文本能完整显示"（_fit_max_width）——写死 84 时，上到 1e9 的量程
-        放不下（"1000000000.0" 要 117px），拉宽坞也补不回来。
-        """
-        lo_box = QDoubleSpinBox()
-        lo_box.setRange(lo, hi)
-        lo_box.setValue(lo_value)
-        lo_box.setDecimals(decimals)
-        hi_box = QDoubleSpinBox()
-        hi_box.setRange(lo, hi)
-        hi_box.setValue(hi_value)
-        hi_box.setDecimals(decimals)
-        for box in (lo_box, hi_box):
-            if suffix:
-                box.setSuffix(suffix)
-            if tooltip:
-                box.setToolTip(tooltip)
-            _fit_max_width(box, 84)
-        window.params[lo_name] = lo_box
-        window.params[hi_name] = hi_box
-        field = QWidget()
-        row = QHBoxLayout(field)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
-        row.addWidget(lo_box, 1)   # 两框平分行宽
-        row.addWidget(QLabel("–"))
-        row.addWidget(hi_box, 1)
-        form.addRow(label, field)
-        return lo_box, hi_box
 
     # 标定几何那三行只读字段（像素尺寸/波长/分析用距离）撤了：它们的
     # 值改在坞顶"几何配置"那一行的悬停提示里看（用户 2026-09-26 定：
@@ -365,7 +267,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["纵轴自动"] = auto_y
     form_1d.addRow(auto_y)
 
-    add_range(form_1d, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(window, form_1d, "纵轴下限", "纵轴上限", 0.0, 1e9, 1.0, 100000.0,
               label="纵轴范围", decimals=1,
               tooltip="取消自动后手填的纵轴区间（下限–上限）；改完立刻重画")
 
@@ -462,7 +364,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["自动对比度"] = auto
     form_draw.addRow(auto)
 
-    add_range(form_draw, "对比度下限", "对比度上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(window, form_draw, "对比度下限", "对比度上限", 0.0, 1e9, 1.0, 100000.0,
               label="显示范围", decimals=1,
               tooltip="取消自动对比度后手填的显示区间（下限–上限）")
 
@@ -494,8 +396,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
 
     # ── 剖面（小节）：剖面面板自己的参数 ——
     add_caption(form_draw, "剖面")
-    angle = add_float(form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0, decimals=1,
-                      label="剖面角度", suffix="°",
+    angle = add_float(window, form_draw, "剖面角度 (°)", -180.0, 180.0, 0.0,
+                      decimals=1, label="剖面角度", suffix="°",
                       tooltip="剖面线相对参考方向的角度（改了即刻按新角度重算）")
     angle.setSingleStep(5.0)   # 步进 5°，对应 view_diffraction 的 --angle
     # 即改即画里的"要重算"那一档（2026-10-08）：焦点是剖面面板就地重算，
@@ -695,7 +597,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 的一对（在「热图显示」小节，键名"热图视图 2θ …"），改一边不再动
     # 两边。1D 面板也共用这一对键显示它的缩放窗口（老行为，不动）。
     cv_lo, cv_hi = add_range(
-        form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
+        window, form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
         DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
         label="视图 2θ", suffix="°", decimals=1,
         tooltip="对比横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
@@ -728,32 +630,6 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     order_hint.setWordWrap(True)
     order_hint.setStyleSheet("color: gray;")
     form_bg.addRow(order_hint)
-
-    # 排版小工具（本页三个小节共用；原先住在「背景扣除」小节里，
-    # 2026-10-07 裁剪小节挪到最上后提到这里——它先用 bg_row）
-    def bg_group(rows):
-        """把若干控件行打包成一个可整体显隐的竖直容器。
-
-        三个模式各有一个容器（空扫/自动/锚点），按模式只放出一个——
-        参数坞窄，全部摊开既挤又让人不知道该填哪个。
-        """
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
-        for row in rows:
-            lay.addWidget(row)
-        return box
-
-    def bg_row(*widgets):
-        """一行横排（窄排版：内边距 0、间距 2）。"""
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
-        for w, stretch in widgets:
-            lay.addWidget(w, stretch)
-        return row
 
     # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
     # **页面顺序 = 裁剪 → 扣背景 → 平滑**（用户 2026-10-07："最上方是
@@ -1118,7 +994,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.params["热图自动范围"] = auto_heat
     form_cmp.addRow(auto_heat)
 
-    add_range(form_cmp, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
+    add_range(window, form_cmp, "热图下限", "热图上限", 0.0, 1e9, 1.0, 100000.0,
               label="热图范围", decimals=1,
               tooltip="取消自动后手填的强度范围（下限–上限）")
 
@@ -1162,7 +1038,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 含义。初始值 = 积分范围出厂默认，焦点是热图面板时一回放就被它的
     # 窗口（或"跟随"的折算值）覆盖。对比那对在「对比」小节里（老键）。
     wv_lo, wv_hi = add_range(
-        form_cmp, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)", 0.0, 90.0,
+        window, form_cmp, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)", 0.0, 90.0,
         DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
         label="视图 2θ", suffix="°", decimals=1,
         tooltip="热图横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
