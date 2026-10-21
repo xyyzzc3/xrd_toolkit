@@ -32,7 +32,11 @@ from xrd_toolkit.gui.plot_panels import (
     _refresh_home, _restore_line_styles, _settle_scale, _snapshot_canvas)
 from xrd_toolkit.gui.plot_views import (
     _apply_plain_view, _bg_path_of, _ready_curve, _refresh_proc)
-
+# 锚点拾取（2026-10-21 从本文件原样搬出；再导出，tests/scripts 照旧经
+# gui_plot_compare 取用）
+from xrd_toolkit.gui.plot.anchors import (
+    _anchor_changed, _anchor_enabled, _anchor_press, _anchor_raw_y,
+    _anchor_release, _anchor_right_click, _anchors_visible)
 
 # 对比面板图例最多列几条：再多就不画了（挡住图的是那 81 行名字）。
 # 用户 2026-09-26："对比的图例还是影响看图，太多了"。
@@ -40,7 +44,6 @@ LEGEND_MAX_CURVES = 12
 
 # 剥公共后缀的门槛（".tif" 4 个字符）：够长才剥，且剥完不能空
 MIN_SUFFIX_CHARS = 4
-
 
 def _strip_common(names) -> list:
     """剥掉一组名字共同的前缀（在最后一个非数字字符处切断）与共同后缀。
@@ -80,7 +83,6 @@ def _strip_common(names) -> list:
         out = [n[:-len(suffix)] for n in out]
     return out
 
-
 def _short_labels(names, ax) -> list:
     """纵轴标签 = 短名 + 按可用高度抽稀（同瀑布图 χ 刻度那一招）。
 
@@ -95,7 +97,6 @@ def _short_labels(names, ax) -> list:
     h_px = float(ax.figure.get_size_inches()[1]) * float(ax.figure.dpi)
     every = max(1, int(np.ceil(n * 11.0 / max(h_px * 0.75, 1.0))))
     return [s if k % every == 0 else "" for k, s in enumerate(short)]
-
 
 def _draw_compare_legend(window, dock, ax, labels) -> None:
     """对比面板图例：先看「显示数据名」（默认关），再看条数放不放得下。
@@ -126,11 +127,9 @@ def _draw_compare_legend(window, dock, ax, labels) -> None:
     ax.legend(labels=_strip_common(shown), fontsize=8,
               ncols=max(1, int(np.ceil(len(shown) / 8.0))))
 
-
 # 色标的 gid 标记：测试与探针按它认领这些图元（不靠位置猜）
 COLOR_SCALE_TAG = "compare_color_scale"
 _COLOR_SCALE_STEPS = 32   # 渐变条画多少段（段间轻微重叠防白缝）
-
 
 def _draw_compare_color_scale(ax, family, names, caption, corner) -> None:
     """对比图的颜色刻度条：给"颜色跟数据对应"这条规则一个读数。
@@ -206,7 +205,6 @@ def _draw_compare_color_scale(ax, family, names, caption, corner) -> None:
                 ha="center", va="bottom", fontsize=6.5, color="0.25",
                 zorder=5.2, gid=COLOR_SCALE_TAG)
 
-
 def _trailing_key(source) -> tuple:
     """排序键：文件名里**最后一串数字**（"LMFP_1_atten0-00029.tif" → 29）。
 
@@ -216,7 +214,6 @@ def _trailing_key(source) -> tuple:
     """
     nums = re.findall(r"\d+", Path(str(source.path)).stem)
     return (0, int(nums[-1])) if nums else (1, 0)
-
 
 def _color_rank_by_number(files) -> dict:
     """按文件名尾号给色号：{compare_files 下标 → 颜色序号}。
@@ -230,7 +227,6 @@ def _color_rank_by_number(files) -> dict:
                    key=lambda k: (_trailing_key(files[k]), k))
     return {k: r for r, k in enumerate(order)}
 
-
 def _sources_mix(files) -> str:
     """"原始 2 ｜ 1D 产物 2 ｜ 处理后 2"——这批勾选由什么构成。
 
@@ -243,7 +239,6 @@ def _sources_mix(files) -> str:
     return " ｜ ".join(f"{text} {kinds[kind]}" for kind, text in
                       ((gui_sources.RAW, "原始数据"), (gui_sources.ONED, "1D 产物"),
                        (gui_sources.BG, "处理产物")) if kinds.get(kind))
-
 
 def _compare_title(files) -> str:
     """对比面板标题：两个文件 = A vs B；更多 = A 等 N 个文件。
@@ -259,12 +254,10 @@ def _compare_title(files) -> str:
     kinds = len({s.kind for s in files})
     return f"{base}（{_sources_mix(files)}）" if kinds > 1 else base
 
-
 def _preview_names(sources) -> str:
     """日志里点名的一小段名单："A" / "A 等 N 个"（同 _compare_title 惯例）。"""
     first = sources[0].display
     return first if len(sources) == 1 else f"{first} 等 {len(sources)} 个"
-
 
 def _raw_not_ready(window, files) -> list:
     """勾选里"还没有 1D 曲线可用"的原始条目（栅栏判据，用户 2026-10-16）。
@@ -276,7 +269,6 @@ def _raw_not_ready(window, files) -> list:
     return [s for s in files
             if s.kind == gui_sources.RAW
             and _ready_curve(window, s.path, s.display) is None]
-
 
 def _redraw_compare(window: QMainWindow, key: str) -> None:
     """用面板已有的曲线数据按该面板自己的 1D 显示参数重画整张对比图。
@@ -459,7 +451,6 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
         _refresh_home(dock, ax)   # 程序重画 = 新"家"（见 helper 注释）
     dock.figure_saved = False   # 重画 = 新内容还没存盘
 
-
 def _refresh_compare_family(window: QMainWindow) -> None:
     """渐变色系下拉拨了（对比页那把）→ 写进快照再重画。
 
@@ -490,7 +481,6 @@ def _refresh_compare_family(window: QMainWindow) -> None:
         # 一张对比面板都没有：记进"待应用"账本，出图时当新面板起点
         _stash_pending_display(window, ("渐变色系",))
     _refresh_compare(window)   # 用已有数据重画（它那几个键的账本收尾照旧）
-
 
 def _refresh_compare(window: QMainWindow) -> None:
     """对比显示参数（归一化 / 归一化目标 / 堆叠）改了 → 就地重画。
@@ -535,7 +525,6 @@ def _refresh_compare(window: QMainWindow) -> None:
     # 而这里刚把控件值写进了快照（同 _refresh_heat 的收尾）
     _refresh_pending_labels(window)
 
-
 def _finish_compare(window: QMainWindow, key: str) -> None:
     """对比面板全部曲线到齐（含失败）：整图重画 → 成为编辑对象 → 记日志。"""
     dock = window.plot_docks.get(key)
@@ -561,7 +550,6 @@ def _finish_compare(window: QMainWindow, key: str) -> None:
     else:
         _log(window, "对比失败：没有一条曲线画得出来，面板留空")
 
-
 def _aggregate_snapshot(window: QMainWindow, base: dict) -> dict:
     """对比 / 热图面板的快照：显示参数照旧，**数据参数（2θ / 点数）不要**。
 
@@ -576,7 +564,6 @@ def _aggregate_snapshot(window: QMainWindow, base: dict) -> dict:
     for name in DATA_PARAM_DEFAULTS:
         snap.pop(name, None)
     return snap
-
 
 def _run_compare(window: QMainWindow, key: str) -> None:
     """把面板绑定的每个文件的曲线**读出来**叠到同一张图（只读已经算好的）。
@@ -668,7 +655,6 @@ def _run_compare(window: QMainWindow, key: str) -> None:
             continue
         fail_one(path, display, "还没有 1D 曲线（先点 [1D] 出图）")
 
-
 def _plot_compare(window: QMainWindow) -> None:
     """[对比] 按钮：把勾选文件的 1D 曲线叠到同一张面板上。
 
@@ -727,7 +713,6 @@ def _plot_compare(window: QMainWindow) -> None:
     dock.setVisible(True)
     _run_compare(window, key)
 
-
 def _assemble_heatmap(results):
     """把 [(样品名, tth, intensity), ...] 对齐成强度矩阵（纯函数）。
 
@@ -753,185 +738,6 @@ def _assemble_heatmap(results):
         rows.append(vi)
     return x, np.vstack(rows), [r[0] for r in results], interp
 
-
-def _anchor_enabled(window: QMainWindow, key: str) -> bool:
-    """这个 1D 面板现在该不该响应锚点点选。
-
-    两个条件都要满足：参数坞的模式是"手动锚点"、[拾取锚点] 开着。
-    两个开关分开是故意的——模式决定"用什么算背景"（画图时生效），
-    拾取开关决定"鼠标现在是在画图还是在选点"，不让人在只想看图时
-    误点出锚点。
-    """
-    if key.split("|", 1)[0] != "1D":
-        return False
-    btn = getattr(window, "bg_pick_btn", None)
-    return bool(btn is not None and btn.isChecked())
-
-
-def _anchor_press(window: QMainWindow, key: str, event) -> None:
-    """1D 面板按下：记账候选锚点（没拖动才算"点击"，松手再决定）。
-
-    与热图行点击同套路：左键拖 = 平移（通用手势），点按 = 加/删锚点。
-    """
-    dock = window.plot_docks.get(key)
-    if dock is None or event.inaxes is None or event.button != 1:
-        return
-    if not _anchor_enabled(window, key):
-        return
-    if event.xdata is None or event.ydata is None:
-        return
-    # 这里**不切焦点**：按下时还不知道是点击还是拖拽平移，而切焦点会回放
-    # 该面板的快照（模式多半是"关闭"）→ 拾取开关被 _sync_bg_rows 收掉，
-    # 用户只是想在别的图上拖一下就把"拾取锚点"弄丢了（实测日志末行变成
-    # "背景扣除：关闭"）。切焦点挪到 _anchor_release、确认是点击之后
-    dock._anchor_press = (event.x, event.y)
-
-
-def _anchor_release(window: QMainWindow, key: str, event) -> None:
-    """1D 面板松手：按下点没怎么挪（阈值 5 px）→ 在最近的曲线上取一个
-    锚点；点到已有关键点附近（阈值 8 px）→ 删掉它。挪多了 = 平移，不动。
-
-    取点复用悬停那套"最近曲线 + 吸附最近真实数据点"（_hover_motion）：
-    报的是真算出来的值，不是鼠标的原始位置。
-    """
-    dock = window.plot_docks.get(key)
-    if dock is None:
-        return
-    info = getattr(dock, "_anchor_press", None)
-    dock._anchor_press = None
-    if info is None:
-        return
-    x0, y0 = info
-    if (event.x - x0) ** 2 + (event.y - y0) ** 2 > 5 ** 2:
-        return   # 拖过了 = 平移手势，不是点击
-    if not _anchor_enabled(window, key):
-        return
-    if event.inaxes is None or event.xdata is None or event.ydata is None:
-        return
-    path = _bg_path_of(dock)
-    if path is None:
-        return
-    # 点哪张图就编辑哪张图（与点面板选中编辑对象一致）：_refresh_proc 把参数
-    # 坞控件值推进的正是编辑对象的快照，不切焦点会出现"点了没反应"。放在
-    # 这里而不是按下时——此刻已确认是点击，不会误伤平移手势（见 _anchor_press）
-    _set_focus(window, key, dock.panel_display)
-    # 注意不能写 `(... or {}).setdefault(...)`：空 dict 是 falsy，`or`
-    # 会换成临时新字典，锚点全加进临时对象里去（探针实测：日志报"加了
-    # 1 个"而 window.bg_anchors 还是空的）
-    if getattr(window, "bg_anchors", None) is None:
-        window.bg_anchors = {}
-    anchors = window.bg_anchors.setdefault(str(path), [])
-    # 点到已有关键点附近 → 删除（再点恢复的开关语义）
-    ax = event.inaxes
-    for i, (ax_, ay_) in enumerate(anchors):
-        px, py = ax.transData.transform((ax_, ay_))
-        if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
-            anchors.pop(i)
-            _anchor_changed(window, f"删除锚点：2θ {ax_:.3f}°")
-            return
-    # 取最近曲线上的最近真实数据点
-    lines = [ln for ln in _data_lines(ax) if len(ln.get_xdata()) > 1]
-    if not lines:
-        return
-    best = None
-    for ln in lines:
-        xd = ln.get_xdata()
-        if xd.size < 2 or not (xd[0] <= event.xdata <= xd[-1]):
-            continue
-        yline = float(np.interp(event.xdata, xd, ln.get_ydata()))
-        px, py = ax.transData.transform((event.xdata, yline))
-        d2 = (px - event.x) ** 2 + (py - event.y) ** 2
-        if best is None or d2 < best[0]:
-            best = (d2, xd, ln)
-    if best is None:
-        return
-    _, xd, ln = best
-    i = int(np.argmin(np.abs(xd - event.xdata)))
-    x = float(xd[i])
-    y = _anchor_raw_y(window, dock, ax, xd, i, ln)
-    anchors.append((x, y))
-    _anchor_changed(window, f"加锚点：2θ {x:.3f}°（{len(anchors)} 个）")
-
-
-def _anchors_visible(window: QMainWindow, dock) -> bool:
-    """这张 1D 图上现在画着锚点圆圈吗（与 _draw_bg_overlay 同一个门槛）。
-
-    圆圈只在**手动锚点**与**自动基线（自动 + 锚点校正）**两种模式下画
-    （见 _draw_bg_overlay）。右键删除只认"看得见"的锚点——看不见的东西
-    不该被点掉。
-    """
-    path = _bg_path_of(dock)
-    if path is None or not getattr(window, "bg_anchors", {}).get(str(path)):
-        return False
-    return _panel_param(window, dock, "背景扣除模式", "off") in ("anchor", "auto")
-
-
-def _anchor_right_click(window: QMainWindow, key: str, event) -> None:
-    """1D 图上**右键点锚点 = 删掉它**（用户 2026-10-02 第 2 条）。
-
-    原先删单个锚点只有一条窄路：先点亮 [拾取锚点]，再左键点那个圆圈
-    （8 屏幕像素以内）——手势隐形、目标小。右键在 1D 图上是空的（校准图
-    那边右键改环号已有先例），拿它当"删除"最顺；**不要求拾取开关**：
-    它只删不加，误伤的代价是重新点一个回来。
-
-    命中判定与左键删除同一套（transData 之后的 8 px）：同一个圆圈，
-    两个键不该有两种手感。
-    """
-    dock = window.plot_docks.get(key)
-    if dock is None or event.inaxes is None or event.button != 3:
-        return
-    if key.split("|", 1)[0] != "1D" or not _anchors_visible(window, dock):
-        return
-    if event.xdata is None or event.ydata is None:
-        return
-    path = _bg_path_of(dock)
-    anchors = getattr(window, "bg_anchors", {}).get(str(path), [])
-    ax = event.inaxes
-    for i, (ax_, ay_) in enumerate(anchors):
-        px, py = ax.transData.transform((ax_, ay_))
-        if (px - event.x) ** 2 + (py - event.y) ** 2 <= 8 ** 2:
-            anchors.pop(i)
-            _anchor_changed(window, f"删除锚点：2θ {ax_:.3f}°（右键）")
-            return
-
-
-def _anchor_raw_y(window: QMainWindow, dock, ax, xd, i, line) -> float:
-    """锚点的 y：**原始**曲线的值，不是屏幕上那条扣过的曲线。
-
-    锚点描述的是原始曲线的背景形状。屏幕上的实线是扣完的（在已有关键点
-    处已经接近 0），照它取值会把新锚点记成 0/负值 → 该处背景等于没扣，
-    而画面上看不出错；锚点还会持久化，把"显示原始曲线对比"重新勾上也不
-    会自愈。
-
-    取法按可靠性排队：
-      ① 画出来的原始叠加线（bg:raw）—— 它是"这张图当时用的原始数据"的
-         权威副本；
-      ② 面板缓存的 last_intensity —— 用户关掉原始叠加时走这条（此时
-         轴上没有 bg:raw，而缓存里的原始曲线仍在，且绘制层从不改它）；
-      ③ 最后的兜底：就用屏幕上那条线的值（只有前两者都拿不到才走到，
-         例如测试直接拿自定义数组调 _draw_1d）。
-    """
-    raw = next((ln_ for ln_ in ax.lines
-                if ln_.get_gid() == _AUX_GID_PREFIX + "raw"), None)
-    if raw is not None and len(raw.get_ydata()) == len(xd):
-        return float(raw.get_ydata()[i])
-    cached_y = getattr(dock, "last_intensity", None)
-    cached_x = getattr(dock, "last_tth", None)
-    if cached_y is not None and cached_x is not None \
-            and len(cached_y) == len(xd) and np.allclose(cached_x, xd):
-        return float(np.asarray(cached_y, dtype=float)[i])
-    return float(line.get_ydata()[i])
-
-
-def _anchor_changed(window: QMainWindow, msg: str) -> None:
-    """锚点变动后的统一收尾：刷新计数 + 立刻重画 + 记日志。"""
-    updater = getattr(window, "_bg_count_refresh", None)
-    if updater is not None:
-        updater(window)
-    _refresh_proc(window)
-    _log(window, msg)
-
-
 def _heat_row_press(window: QMainWindow, key: str, event) -> None:
     """热图按下：记候选行（没拖动才算"点击"，松手再决定）。
 
@@ -949,7 +755,6 @@ def _heat_row_press(window: QMainWindow, key: str, event) -> None:
     if not (0 <= row < n) or abs(y - row) > 0.5:
         return   # 点在行缝/图外：不算
     dock._heat_press = (event.x, event.y, row)
-
 
 def _heat_row_release(window: QMainWindow, key: str, event) -> None:
     """热图松手：按下点没怎么挪（阈值 5 px）→ 行联动——该行样品在
@@ -992,7 +797,6 @@ def _heat_row_release(window: QMainWindow, key: str, event) -> None:
                          f"（再点该行恢复）")
         cdock.compare_hidden = hidden
         _redraw_compare(window, ckey)
-
 
 def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
     """在热图面板画出强度热图（只允许主线程调用）。
@@ -1090,7 +894,6 @@ def _draw_heatmap(window: QMainWindow, dock, tth, matrix, stems) -> None:
     _refresh_home(dock, ax)
     dock.figure_saved = False
 
-
 def _heat_data(window: QMainWindow, dock):
     """热图面板的 (tth, matrix, stems, interp)——逐行按各文件自己的参数
     扣背景后再对齐成矩阵。
@@ -1112,7 +915,6 @@ def _heat_data(window: QMainWindow, dock):
         _, sub, _ = _proc_curve(window, dock, src.path, tth, intensity)
         rows.append((stem, tth, sub))
     return _assemble_heatmap(rows)
-
 
 def _finish_heatmap(window: QMainWindow, key: str) -> None:
     """热图全部数据到齐（含失败）：对齐成矩阵 → 整图画出 → 成为编辑
@@ -1136,7 +938,6 @@ def _finish_heatmap(window: QMainWindow, key: str) -> None:
     _draw_heatmap(window, dock, tth, matrix, stems)
     _set_focus(window, key, dock.panel_display)
     _log(window, f"热图完成：{len(stems)} 个文件 × {len(tth)} 点")
-
 
 def _run_heatmap(window: QMainWindow, key: str) -> None:
     """把面板绑定的每个文件的曲线**读出来**拼成强度矩阵（只读已经算好的）。
@@ -1181,7 +982,6 @@ def _run_heatmap(window: QMainWindow, key: str) -> None:
     dock.heat_results = results
     _finish_heatmap(window, key)
 
-
 def _refresh_heat(window: QMainWindow) -> None:
     """热图显示参数（色图/归一化/对数/范围）改了 → **所有**热图面板就地重画。
 
@@ -1223,7 +1023,6 @@ def _refresh_heat(window: QMainWindow) -> None:
         _stash_pending_display(window, keys)
     if touched:
         _apply_auto_heatlim(window)      # 对数/自动范围改了 → 置灰框跟着更新
-
 
 def _apply_view_boxes(window: QMainWindow, lo_name: str, hi_name: str,
                       views) -> None:
@@ -1284,12 +1083,10 @@ def _apply_view_boxes(window: QMainWindow, lo_name: str, hi_name: str,
         # "出图前调参数无效"）
         _stash_pending_display(window, (lo_name, hi_name))
 
-
 def _refresh_heat_view(window: QMainWindow) -> None:
     """「视图 2θ」框（**对比小节那对**，老键）改了 → 各对比面板裁剪重画。"""
     _apply_view_boxes(window, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)",
                       ("对比",))
-
 
 def _refresh_heatmap_view(window: QMainWindow) -> None:
     """「热图显示」小节那对框（新键）改了 → 各**热图**面板裁剪重画。
@@ -1299,7 +1096,6 @@ def _refresh_heatmap_view(window: QMainWindow) -> None:
     """
     _apply_view_boxes(window, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)",
                       ("热图",))
-
 
 def _plot_heatmap(window: QMainWindow) -> None:
     """[热图] 按钮：把勾选文件的 1D 曲线拼成一张 2θ×样品 强度热图。
