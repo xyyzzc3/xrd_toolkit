@@ -116,6 +116,7 @@ from xrd_toolkit.gui import panel_state as gui_panel_state
 from xrd_toolkit.gui import plot_compare as gui_plot_compare
 from xrd_toolkit.gui import plot_panels as gui_plot_panels
 from xrd_toolkit.gui.plot import panel_build as gui_plot_panel_build
+from xrd_toolkit.gui.plot import drawing as gui_plot_drawing
 from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
@@ -16368,7 +16369,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 # 直接验设计决定：_proc_curve 只被调用一次，且喂进去的是
                 # **扇区均值**（共同基线）。逐扇区各扣各的会调用 4 次、
                 # 每次喂一条扇区曲线——扇区之间的真实强度差就被抹平了
-                with mock.patch.object(gui_views, "_proc_curve",
+                with mock.patch.object(gui_plot_drawing, "_proc_curve",
                                        wraps=gui_panel_state._proc_curve) as spy:
                     gui_views._draw_waterfall(w, dock, *dock.last_waterfall)
                 self.assertEqual(spy.call_count, 1, "应只估一条共同基线")
