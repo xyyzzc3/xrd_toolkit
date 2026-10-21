@@ -108,6 +108,7 @@ from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 _gui_app = gui_app
 from xrd_toolkit.gui import file_dock as gui_file_dock
+from xrd_toolkit.gui.files import actions as gui_file_actions
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import plot_views as gui_plot_views
 from xrd_toolkit.gui import panel_state as gui_panel_state
@@ -638,7 +639,7 @@ class TestViewButtonRuns(unittest.TestCase):
             w.add_files([str(p) for p in files], select=False)
             group = w.file_list.raw_group
             self.assertEqual(group.childCount(), len(files))
-            with mock.patch.object(gui_file_dock, "_confirm_open_many",
+            with mock.patch.object(gui_file_actions, "_confirm_open_many",
                                    return_value=False):
                 gui_file_dock._open_group_views(w, group)
             self.assertEqual(len(w.plot_docks), 0, "选取消就不该开图")
