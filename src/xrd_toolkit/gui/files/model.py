@@ -3,10 +3,10 @@
 2026-10-21 从 file_dock.py 原样搬出（只改结构，不动逻辑）。file_dock
 再导出，tests/scripts 照旧经 gui_file_dock 取用角色常量。
 """
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
-    QMainWindow, QMdiSubWindow, QStyle, QStyleOptionViewItem,
-    QStyledItemDelegate, QTreeWidgetItem)
+    QAbstractItemView, QMainWindow, QMdiSubWindow, QStyle,
+    QStyleOptionViewItem, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem)
 
 from xrd_toolkit.gui.panel_state import _set_focus
 
@@ -235,4 +235,65 @@ class _RowPaintDelegate(QStyledItemDelegate):
         if opt.backgroundBrush.style() != Qt.BrushStyle.NoBrush:
             painter.fillRect(opt.rect, opt.backgroundBrush)
         super().paint(painter, opt, index)  # 文字/对号/小点照常
+
+# ── 文件栏树（2026-10-21 从 file_dock.py 搬入） ──
+FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
+
+class FileTree(QTreeWidget):
+    """文件栏：顶上"原始数据"组，往下是各阶段的产物分组。
+
+    为什么改成树（用户 2026-09-25）："每次完成一个大功能后在文件栏有一个
+    新的子文件夹进行区分"——扣完背景的图整组勾上就能去 [对比]/[热图]；
+    勾组 = 勾组里全部。
+
+    **保留三个老接口** item(i) / count() / addItem()，它们都指"原始数据"
+    组：文件栏的几十处读写（各视图、批量扣背景、导出、探针、测试）都是按
+    "原始文件"想的，换树之后让它们全改一遍是无谓的风险。要跨组读的地方
+    （出图/批量扣背景/对比/热图/导出/校准取标样）统一走 sources 模块。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setHeaderHidden(True)
+        self.setUniformRowHeights(True)
+        self.setTextElideMode(Qt.ElideMiddle)   # 窄坞里长名字中间省略
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # **选中底色取消**（用户 2026-09-28 第 5 条："文件栏背景加深代表这个
+        # 图正在打开，选中未选中仅用框内的标志表示"）：改之前整行深色是 Qt 的
+        # "当前行"高亮，含义只能靠猜；现在整行颜色专供"正在打开"（见
+        # refresh_open_marks），勾没勾只看框里那个小勾。做法见 _RowPaintDelegate
+        # （原先挂的是样式表，它会把条目自己的淡色也一起盖掉）
+        self.setItemDelegate(_RowPaintDelegate(self))
+        # 覆盖 minimumSizeHint：QListWidget/QTreeWidget 内部写死约 270px
+        # （按"能显示条目"设计），而 dock 布局只认这个 hint、不认
+        # setMinimumWidth。覆盖后文件栏才能收到按钮行决定的真实最窄宽度
+        self.raw_group = _make_group("原始数据", "导入的原始衍射图像")
+        self.addTopLevelItem(self.raw_group)
+
+    def minimumSizeHint(self):
+        return QSize(100, 120)
+
+    # ── 老接口：都指"原始数据"组 ──
+    def item(self, i):
+        """原始数据组里的第 i 个条目（老 QListWidget 的口径）。"""
+        return self.raw_group.child(i)
+
+    def count(self):
+        """原始数据组里的条目数（不含各组产物）。"""
+        return self.raw_group.childCount()
+
+    def addItem(self, item):
+        """加进"原始数据"组（老 QListWidget 的口径）。"""
+        self.raw_group.addChild(item)
+
+    # ── 分组 ──
+    def groups(self):
+        """除"原始数据"以外的全部组节点（各阶段产物）。"""
+        return [self.topLevelItem(i) for i in range(self.topLevelItemCount())
+                if self.topLevelItem(i) is not self.raw_group]
+
+    def clear_groups(self):
+        """摘掉全部产物组（重建前先清；原始数据组和它的条目不动）。"""
+        for node in self.groups():
+            self.takeTopLevelItem(self.indexOfTopLevelItem(node))
 
