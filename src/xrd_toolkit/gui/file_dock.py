@@ -40,12 +40,18 @@ from xrd_toolkit.gui.panel_state import _collect_geometry, _log, _set_focus
 from xrd_toolkit.gui.plot_export import _run_export, _save_figures
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit import paths as xrd_paths
+# 文件栏数据模型（2026-10-21 从本文件原样搬出；再导出，tests/scripts 照旧
+# 经 gui_file_dock 取用角色常量）
+from xrd_toolkit.gui.files.model import (
+    GROUP_BATCH_ROLE, GROUP_ROLE, GROUP_TITLE_ROLE, PANEL_KEY_ROLE,
+    FileItem, _RowPaintDelegate, _group_counts, _group_state, _group_title,
+    _is_checkable, _make_group, _raise_panel, _refresh_group_badges,
+    _set_group_title, is_group, panel_key_of)
 
 FILE_FILTER = "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)"
 
 # 支持的后缀（拖放/文件夹扫描/CLI 菜单共用一张表；endswith 要 tuple）
 SUPPORTED_SUFFIXES = tuple(sorted(SUPPORTED_EXTS))
-
 
 # ══ 日志 / 状态行 ═══════════════════════════════════════════
 def _dropped_items(event) -> list:
@@ -64,22 +70,7 @@ def _dropped_items(event) -> list:
                 items.append(p)
     return items
 
-
 # ══ 左侧：文件栏（树：原始数据 + 各阶段产物分组）════════════
-GROUP_ROLE = Qt.UserRole + 3        # 组节点标记（条目没有这个槽）
-GROUP_BATCH_ROLE = GROUP_ROLE + 1   # 处理组的台账批次号（右键"删除这一组"用）
-GROUP_TITLE_ROLE = GROUP_ROLE + 2   # 组的**纯名字**（不含折叠时才显示的
-                                    # "（n/m 选中）"后缀，见 _group_title）
-PANEL_KEY_ROLE = GROUP_ROLE + 3     # 「打开的图」那一组的行：存面板键
-                                    # （"<视图>|<身份>"）。这些行**不给勾**
-                                    # （它们不是数据，是"屏幕上正开着的东西"），
-                                    # 也不带来源三件套——sources.all_sources
-                                    # 因此看不见它们，出图/批量/导出/校准取样
-                                    # 都不会把一张图片当成输入
-# 槽号一律走上面的名字，别再写 GROUP_ROLE + n 的字面量：2026-09-28 给徽标
-# 加槽时就撞过一次——新槽正好落在"批次号"那一格上，于是处理组的名字被批次
-# id 顶掉（文件栏上显示成 "probe-batch"），而组态、勾选、右键删除全都正常，
-# 只有名字错。这种撞车不报错，只是"名字看起来怪"，最难查。
 
 # ── 文件栏排序（2026-10-08）的常量 ──
 SORT_SEQ_ROLE = Qt.UserRole + 7   # 条目进文件栏的先后序号——「导入顺序」的
@@ -92,188 +83,7 @@ SORT_LABELS = {SORT_IMPORT: "导入顺序", SORT_NAME: "名称",
                SORT_MTIME: "修改时间"}
 _NATURAL_RE = re.compile(r"(\d+)")
 
-
-class FileItem(QTreeWidgetItem):
-    """文件栏条目：列号默认 0，老写法（单列列表那套）原样能用。
-
-    树条目的 checkState()/setCheckState()/text()/data() 在 PySide6 里
-    **必须**带列号，而文件栏（以及各视图、探针、测试）几十处都按
-    "单列列表"的写法调它们（item.checkState() / item.text() /
-    item.data(Qt.UserRole)）。这里按**参数个数**补列号：少的那个写法
-    补上 0，两种都吃——老的不用全改一遍，新的想写列号也照样能写。
-
-    为什么按个数而不是"看值是不是 None"（2026-09-25 踩过）：产物条目的
-    来源三件套里"产物键"对原始文件就是 None，`setData(0, 键槽, None)`
-    会被"没给列号"的判据误判成 `setData(键槽, None)` → 列号变成槽位、
-    角色变成 0 = **把角色号 258 写成了显示文本**（界面上文件名变成
-    "258"）。个数是无歧义的。
-    """
-
-    def checkState(self, *args):
-        return super().checkState(*(args or (0,)))
-
-    def setCheckState(self, *args):
-        return super().setCheckState(*((0,) + args if len(args) == 1 else args))
-
-    def text(self, *args):
-        return super().text(*(args or (0,)))
-
-    def setText(self, *args):
-        return super().setText(*((0,) + args if len(args) == 1 else args))
-
-    def data(self, *args):
-        return super().data(*((0,) + args if len(args) == 1 else args))
-
-    def setData(self, *args):
-        return super().setData(*((0,) + args if len(args) == 2 else args))
-
-
-def _set_group_title(node, base: str) -> None:
-    """写组的**纯名字**（折叠徽标由 _refresh_group_badges 统一渲染）。"""
-    node.setData(0, GROUP_TITLE_ROLE, base)
-    node.setText(0, base)
-
-
-def _group_title(node) -> str:
-    """组的纯名字 = 不带"（n/m 选中）"徽标的那个。
-
-    日志、悬停提示、右键菜单一律读它——`text(0)` 是**显示文本**，组折叠
-    时后面挂着徽标，念出来会变成"已选中整组 1D 产物（81/81 选中）（81 个…）"。
-    """
-    return node.data(0, GROUP_TITLE_ROLE) or node.text(0)
-
-
-def _group_counts(node) -> tuple:
-    """组里 (勾了几条, 共几条)。递归数——组里再套组也数得对。
-
-    只数**子项**的对号，不数组自身的：组态是子项算出来的派生量（见
-    _group_state），信它就会把"组上暂时是空格"误报成"里面一条没勾"。
-    """
-    n = m = 0
-    for i in range(node.childCount()):
-        child = node.child(i)
-        if is_group(child):
-            cn, cm = _group_counts(child)
-            n += cn
-            m += cm
-        else:
-            m += 1
-            if child.checkState(0) == Qt.Checked:
-                n += 1
-    return n, m
-
-
-def _refresh_group_badges(window: QMainWindow) -> None:
-    """组名后缀"（n/m 选中）"，**只在组折叠时显示**（用户 2026-09-28）。
-
-    起因是"勾选集比想的大"那类事故（162 条 = 81 原始 + 81 处理后）：组
-    折叠着看不见里面的对号，而组上又是不亮的——0 条和勾了 81 条在列表里
-    长得一模一样（半勾那一态 2026-09-26 已按用户要求去掉，见 _group_state），
-    所以"我想不到里面还留着一整批勾"这件事没有任何线索。徽标补上的正是
-    这条线索。展开时条目的对号就在眼前，不重复写数字。
-
-    **改文字会发 itemChanged**，而 on_item_changed 把组上的 itemChanged
-    当成"组被勾了"、会把组的状态**铺给全部子项**——组此刻通常是空格，
-    于是写一个徽标就会把里面的对号全清掉（静默的那种）。所以整个过程用
-    _check_syncing 罩住（它正是那个槽的重入闸），旧值存下来再还原：本函数
-    会被已经罩着的调用方（_set_checks）叫到，不能一把掀开。
-
-    幂等：文本没变就不 setText，反复调没有副作用——所以"勾选变了 / 组
-    重建了 / 展开折叠了"三处都放心地叫它（_sync_group_states、
-    refresh_product_groups、文件坞的两条信号）。
-    """
-    if getattr(window, "file_list", None) is None:
-        return
-    prev = window._check_syncing
-    window._check_syncing = True
-    try:
-        tree = window.file_list
-        for node in [tree.raw_group] + tree.groups():
-            if not _is_checkable(node):
-                continue    # 「打开的图」没有"选中几条"这回事，别加徽标
-            base = _group_title(node)
-            if node.isExpanded():
-                text = base
-            else:
-                n, m = _group_counts(node)
-                text = f"{base}（{n}/{m} 选中）"
-            if node.text(0) != text:
-                node.setText(0, text)
-    finally:
-        window._check_syncing = prev
-
-
-def _make_group(text: str, tip: str = "", checkable: bool = True) -> FileItem:
-    """建一个组节点（阶段文件夹）：可勾（勾 = 整组全选）、加粗、带提示。
-
-    名字进 GROUP_TITLE_ROLE（纯名字）；显示文本由 _refresh_group_badges
-    按展开/折叠渲染（折叠时后缀"（n/m 选中）"）。**组名里不再带总数**
-    （原来是"1D 产物 (81)"）：那个数字跟徽标里的分母重复，同一行两个数字
-    反而分不清谁是谁。
-
-    `checkable=False`：「打开的图」那一组用——它装的是屏幕上开着的图，
-    不是数据，没有"全选"这回事（也**绝不设对号槽**：设了 Qt 就会画一个
-    复选框出来）。全树的勾选逻辑（_set_checks / _sync_group_states /
-    _refresh_group_badges / on_item_changed）都按这个开关跳过它。
-    """
-    node = FileItem([text])
-    node.setData(0, GROUP_ROLE, True)
-    node.setData(0, GROUP_TITLE_ROLE, text)
-    flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-    if checkable:
-        flags |= Qt.ItemIsUserCheckable
-    node.setFlags(flags)
-    if checkable:
-        node.setCheckState(0, Qt.Unchecked)
-    node.setToolTip(0, tip or text)
-    font = node.font(0)
-    font.setBold(True)
-    node.setFont(0, font)
-    return node
-
-
-def is_group(item) -> bool:
-    """组节点（不是条目：组不带来源三件套）。"""
-    return item is not None and bool(item.data(0, GROUP_ROLE))
-
-
-def _is_checkable(item) -> bool:
-    """这个节点带不带对号槽（能不能勾）。
-
-    「打开的图」那些行**不给勾**（它们不是数据，是屏幕上正开着的东西）：
-    全树的勾选逻辑（on_item_changed / on_item_clicked / _set_checks /
-    _sync_group_states / _refresh_group_badges）一律先问这一句——Qt 对
-    没有 ItemIsUserCheckable 的条目**照样接受** setCheckState，画出来
-    就是一个勾选框，而"打开着的图"根本不是可选的数据。
-    """
-    return item is not None and bool(item.flags() & Qt.ItemIsUserCheckable)
-
-
-def panel_key_of(item):
-    """「打开的图」那一行指向的面板键（"<视图>|<身份>"）；别的条目 None。"""
-    return item.data(0, PANEL_KEY_ROLE) if item is not None else None
-
-
-def _raise_panel(window: QMainWindow, key: str) -> None:
-    """把「打开的图」里那一行对应的图提到最前面（子窗口 / 弹出去的独立窗口）。
-
-    顺带把它设成**编辑对象**（`_set_focus`）：点谁就是谁——与直接点面板
-    本身同一个口径（参数坞跟着显示那张图的参数）。
-    """
-    dock = getattr(window, "plot_docks", {}).get(key)
-    if dock is None:
-        return
-    if isinstance(dock, QMdiSubWindow):
-        window.mdi.setActiveSubWindow(dock)
-        dock.raise_()
-    else:                      # 弹出去的独立窗口：归系统管，先抬到最前
-        dock.raise_()
-        dock.activateWindow()
-    _set_focus(window, key, dock.windowTitle())
-
-
 OPEN_FIGURES_TITLE = "打开的图"
-
 
 def _sync_open_figures(window: QMainWindow) -> None:
     """把「打开的图」那一组对齐到屏幕上真正开着的图（用户 2026-10-01 第 5 条）。
@@ -348,50 +158,6 @@ def _sync_open_figures(window: QMainWindow) -> None:
         window._check_syncing = prev_syncing
     tree.verticalScrollBar().setValue(scroll)
 
-
-def _group_state(states) -> Qt.CheckState:
-    """一组子项的对号 → 组该显示的态。**只有两态**：全勾 = 对号，其余
-    （含只勾了一部分）= 空格。
-
-    用户 2026-09-26 定："现在文件栏有三种状态，对号、横线、空格。横线和
-    空重复了，留空格"——半勾那根横线在列表里跟空格几乎分不出来，索性去掉：
-    勾了一部分 = 组不亮，选了哪几条看条目本身的对号（状态行/日志里也有
-    条数）。"""
-    states = set(states)
-    return Qt.Checked if states == {Qt.Checked} else Qt.Unchecked
-
-
-class _RowPaintDelegate(QStyledItemDelegate):
-    """条目底色的画笔：只画"正在打开"，不画 Qt 的选中底色。
-
-    用户 2026-09-28 第 5 条："文件栏背景加深代表这个图正在打开，选中未选中
-    仅用框内的标志表示"。当时是靠 FileTree 上的一条样式表
-    （`QTreeView::item:selected { background: transparent; }`）把 Qt 的选中
-    底色压成透明的——可样式表是"对所有条目一条口径"，它连条目**自己**的
-    背景刷子（refresh_open_marks 设的那层淡色）也一起盖掉了：当前那一行
-    （刚点过的、或刚双击打开的那行）反而是纯白，只剩左边小点——"整行淡色"
-    这个记号在最该看见它的那行偏偏没有（2026-09-30 复核逮到）。
-
-    改到绘制这一层，两步：
-      ① 交基类之前把 option 里的"选中"状态位摘掉 → Qt 的选中底色不画。
-         只是"怎么画"变了：选中逻辑本身在 selection model 里，勾选、右键、
-         删除、键盘操作一律照旧；
-      ② 条目带背景刷子（= "正在打开"）时自己先铺一遍 → 淡色不再依赖样式表
-         放行，也用不着跟任何风格博弈。
-    """
-
-    def initStyleOption(self, option, index) -> None:
-        super().initStyleOption(option, index)
-        option.state &= ~QStyle.StateFlag.State_Selected
-
-    def paint(self, painter, option, index) -> None:
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)   # 背景刷子 = 从模型读的那一份
-        if opt.backgroundBrush.style() != Qt.BrushStyle.NoBrush:
-            painter.fillRect(opt.rect, opt.backgroundBrush)
-        super().paint(painter, opt, index)  # 文字/对号/小点照常
-
-
 class FileTree(QTreeWidget):
     """文件栏：顶上"原始数据"组，往下是各阶段的产物分组。
 
@@ -450,7 +216,6 @@ class FileTree(QTreeWidget):
         for node in self.groups():
             self.takeTopLevelItem(self.indexOfTopLevelItem(node))
 
-
 def _scan_folder(window: QMainWindow, folder) -> None:
     """扫描一个文件夹并把支持的数据文件加进列表（不递归、排序稳定）。
 
@@ -467,7 +232,6 @@ def _scan_folder(window: QMainWindow, folder) -> None:
     _log(window, f"文件夹扫描：{folder} 找到 {len(found)} 个数据文件")
     window.add_files([str(p) for p in found], skip_duplicates=True)
 
-
 # ── 「最近打开」（2026-10-08 用户："最近打开——做"） ──────────────
 # 记录存 outputs/recent.json：那是用户自己的数据区（不进包、不上传，
 # 与"数据不出本机"的既有口径一致）。菜单每次弹出前重建（aboutToShow），
@@ -475,10 +239,8 @@ def _scan_folder(window: QMainWindow, folder) -> None:
 _RECENT_KEEP = 8     # 存这么多条
 _RECENT_SHOW = 5     # 菜单里最多露这么多
 
-
 def _recent_path():
     return xrd_paths.OUTPUTS_DIR / "recent.json"
-
 
 def _load_recent() -> list:
     """读记录；没有/坏了都当空——这是便利功能，不打扰用户。"""
@@ -487,7 +249,6 @@ def _load_recent() -> list:
     except (OSError, ValueError):
         return []
     return [str(p) for p in data if isinstance(p, str)]
-
 
 def _note_recent(window: QMainWindow, chosen) -> None:
     """把刚打开的文件/文件夹记进「最近打开」（去重、最新的在前）。"""
@@ -504,7 +265,6 @@ def _note_recent(window: QMainWindow, chosen) -> None:
     except OSError as err:       # 写不进去只是少个便利入口，如实说一声
         _log(window, f"「最近打开」写入失败（不影响导入）：{err}")
 
-
 def _open_recent(window: QMainWindow, path_str: str) -> None:
     """点「最近打开」里的一条：按类型走与主按钮同一条导入口。"""
     path = Path(path_str)
@@ -515,7 +275,6 @@ def _open_recent(window: QMainWindow, path_str: str) -> None:
         _scan_folder(window, path)
     else:
         window.add_files([path_str])
-
 
 def _rebuild_recent_menu(window: QMainWindow) -> None:
     """「最近打开」子菜单每次弹出前重建（失效路径剔除）。"""
@@ -535,13 +294,11 @@ def _rebuild_recent_menu(window: QMainWindow) -> None:
         act.triggered.connect(
             lambda _checked=False, s=p: _open_recent(window, s))
 
-
 # ── 文件栏排序（2026-10-08 用户："文件栏添加排序功能"） ─────────
 # 三个模式：导入顺序（默认）/ 名称（自然序）/ 修改时间（新在前）。
 # 只重排「原始数据」的子项（**移动条目对象、不重建**——勾选/高亮/开图
 # 记号都留住）；各产物分组的组内行序本来就按"文件栏行序"排，自动跟随。
 # 不落盘记忆：每次打开软件回到「导入顺序」（用户 2026-10-08 拍板）。
-
 
 def _natural_key(text) -> list:
     """自然排序键：数字段按数值比（29 < 31 < 100），其余段按小写文本比。
@@ -552,15 +309,12 @@ def _natural_key(text) -> list:
     return [int(part) if part.isdigit() else part.lower()
             for part in _NATURAL_RE.split(str(text or ""))]
 
-
 def _sort_mode(window) -> str:
     return getattr(window, "_sort_mode", SORT_IMPORT)
-
 
 def _stamp_import_order(window, item) -> None:
     """给新条目盖"第几个进来的"序号——回头选「导入顺序」要靠它排回去。"""
     item.setData(0, SORT_SEQ_ROLE, next(window._import_seq))
-
 
 def _file_mtime(window, path_str):
     """按需 stat；读不到就沿用上次看到的（从没读到过 → None = 排最后）。"""
@@ -571,7 +325,6 @@ def _file_mtime(window, path_str):
         return cache.get(path_str)
     cache[path_str] = mt
     return mt
-
 
 def _raw_sort_key(window, item) -> tuple:
     mode = _sort_mode(window)
@@ -584,7 +337,6 @@ def _raw_sort_key(window, item) -> tuple:
         return (0.0 if mt is None else -mt, name, path_str)   # 新在前
     seq = item.data(0, SORT_SEQ_ROLE)
     return (10 ** 9 if seq is None else int(seq),)
-
 
 def _apply_sort(window: QMainWindow) -> None:
     """按当前模式重排「原始数据」子项（移动、不重建，勾选与高亮都留住）。
@@ -605,7 +357,6 @@ def _apply_sort(window: QMainWindow) -> None:
     if cur is not None:
         _set_current_keeping_scroll(tree, cur)
 
-
 def _sync_sort_menu(window) -> None:
     """菜单勾点归位（setChecked 不会发 triggered，无递归）。"""
     menu = getattr(window, "sort_menu", None)
@@ -614,7 +365,6 @@ def _sync_sort_menu(window) -> None:
     cur = _sort_mode(window)
     for act in menu.actions():
         act.setChecked(act.data() == cur)
-
 
 def _set_sort_mode(window: QMainWindow, mode: str) -> None:
     """换排序：重排「原始数据」→ 产物分组行序跟上 → 勾点归位 → 回顶端。
@@ -635,7 +385,6 @@ def _set_sort_mode(window: QMainWindow, mode: str) -> None:
     # 延后一帧再归零一次：与 _set_current_keeping_scroll 的延迟滚动同一招，
     # 不让"回顶端"输给 Qt 排在下一个事件循环里的滚动
     QTimer.singleShot(0, lambda: bar.setValue(0))
-
 
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """文件坞：打开（多选）/ 保存 / 删除 / 导出 + 选择工具 + 文件列表。
@@ -949,7 +698,6 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     window.addDockWidget(Qt.LeftDockWidgetArea, dock)
     return dock
 
-
 def _unique_display_name(window: QMainWindow, name: str) -> str:
     """给重复文件起不重名的显示名："xxx.tif" → "xxx (1).tif" → "xxx (2).tif"…"""
     taken = {window.file_list.item(i).text()
@@ -959,7 +707,6 @@ def _unique_display_name(window: QMainWindow, name: str) -> str:
     while f"{p.stem} ({n}){p.suffix}" in taken:
         n += 1
     return f"{p.stem} ({n}){p.suffix}"
-
 
 def _ask_duplicate(window: QMainWindow, name: str) -> str:
     """同一文件再次加入时的询问弹窗。返回 "overwrite" / "rename" / "cancel"。
@@ -987,7 +734,6 @@ def _ask_duplicate(window: QMainWindow, name: str) -> str:
         return "overwrite"
     return "cancel"
 
-
 def _ask_rename(window: QMainWindow, default_name: str):
     """改名输入框：预填默认编号名，用户可以改成自己想要的名字。
 
@@ -1002,7 +748,6 @@ def _ask_rename(window: QMainWindow, default_name: str):
     if not ok or not text:
         return None
     return text
-
 
 def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
               select: bool = False) -> None:
@@ -1098,7 +843,6 @@ def add_files(window: QMainWindow, paths, skip_duplicates: bool = False,
     # 新来的文件可能有产物（同一次实验重开会话）→ 刷新各产物分组
     refresh_product_groups(window)
 
-
 def _set_current_keeping_scroll(tree, item) -> None:
     """设当前项，但**不许它带着列表滚**。
 
@@ -1112,7 +856,6 @@ def _set_current_keeping_scroll(tree, item) -> None:
     tree.setCurrentItem(item)
     bar.setValue(keep)
     QTimer.singleShot(0, lambda: bar.setValue(keep))
-
 
 def _sync_current_to_checks(window: QMainWindow) -> None:
     """Qt 的"当前项"不许停在没勾选的条目上；停在别处就清掉当前项。
@@ -1137,7 +880,6 @@ def _sync_current_to_checks(window: QMainWindow) -> None:
         return      # 没高亮 / 高亮在组节点上 / 就是勾选着的条目：都不动
     window.file_list.setCurrentItem(None)
 
-
 def _refresh_file_label(window: QMainWindow) -> None:
     """状态行文件标签跟随对号集合：0 个 = 未打开 / 1 个 = 名字 /
     N 个 = 已选 N 个（其中有产物条目就点明几个，免得"文件数"对不上）。"""
@@ -1150,7 +892,6 @@ def _refresh_file_label(window: QMainWindow) -> None:
     else:
         tail = f"（含 {len(odd)} 条产物）" if odd else ""
         window.file_label.setText(f"已勾选 {len(checked)} 项{tail}")
-
 
 def _keys_of(item, kind: str = None) -> list:
     """组/条目身上挂着的产物键（组 = 组里全部子项的键）。"""
@@ -1165,7 +906,6 @@ def _keys_of(item, kind: str = None) -> list:
     if src is None or not src.key:
         return []
     return [(src.kind, src.key)]
-
 
 def drop_product_group(window: QMainWindow, item) -> int:
     """删掉**一组**产物（盘上的产物 + 对应的台账条目），返回删掉的份数。
@@ -1191,14 +931,12 @@ def drop_product_group(window: QMainWindow, item) -> int:
     refresh_product_groups(window)
     return n
 
-
 def _group_keys_by_kind(item) -> dict:
     """组里子项的产物键，按阶段归类：{阶段: [键, ...]}。"""
     out = {}
     for kind, key in _keys_of(item):
         out.setdefault(kind, []).append(key)
     return out
-
 
 def drop_product_item(window: QMainWindow, item) -> int:
     """删掉**一条**产物（单个条目，用户 2026-09-25 定：所有产物都能删）。"""
@@ -1212,11 +950,9 @@ def drop_product_item(window: QMainWindow, item) -> int:
     refresh_product_groups(window)
     return n
 
-
 # 右键批量打开可选的视图（2026-10-09）：菜单顺序就是这里的顺序。产物条目
 # 只有 1D 能出，选了别的视图由 _open_checked_views 挑出原始条目并记日志。
 OPEN_BULK_VIEWS = ("1D", "2D", "剖面", "瀑布")
-
 
 def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
     """往 menu 上挂右键菜单项，返回 {QAction: 动作} 映射（不 exec）。
@@ -1280,7 +1016,6 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
     actions[menu.addAction("删除所有缓存…")] = "clear_cache"
     return actions
 
-
 def _entry_menu(window: QMainWindow, item) -> None:
     """右键文件栏：**删除与导出**，一套手势、不区分原始与处理后。
 
@@ -1336,7 +1071,6 @@ def _entry_menu(window: QMainWindow, item) -> None:
         from xrd_toolkit.gui.panels import _close_panel   # 延迟：见模块说明
         _close_panel(window, panel_key)   # 与面板自己的 × 同一条路
 
-
 def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     """双击条目 / 右键 [打开 1D 图]：按条目打开一张面板（两处共用）。
 
@@ -1366,7 +1100,6 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
         return
     opener(src, "1D")
 
-
 def _open_group_views(window: QMainWindow, item, name: str = "1D") -> None:
     """右键 [打开整组图] ▸ 视图：整组逐条打开；张数多时先问一声。
 
@@ -1392,7 +1125,6 @@ def _open_group_views(window: QMainWindow, item, name: str = "1D") -> None:
     if opener is not None:
         opener(sources, name)
 
-
 def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
     """> 防爆线批量开图前的确认框：[打开] / [取消]（回车默认 [取消]）。
 
@@ -1408,7 +1140,6 @@ def _confirm_open_many(window: QMainWindow, title: str, text: str) -> bool:
     box.setDefaultButton(btn_cancel)
     box.exec()
     return box.clickedButton() is btn_open
-
 
 def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
     """右键 [打开勾选的 N 张图] ▸ 视图：把勾选的条目逐条打开。
@@ -1448,7 +1179,6 @@ def _open_checked_views(window: QMainWindow, name: str = "1D") -> None:
     if opener is not None:
         opener(sources, name)
 
-
 def export_sources(window: QMainWindow, sources) -> None:
     """右键"导出这一条/这一组"：只导出给定来源（不动勾选状态）。
 
@@ -1457,7 +1187,6 @@ def export_sources(window: QMainWindow, sources) -> None:
     """
     from xrd_toolkit.gui.plot_export import _run_export
     _run_export(window, sources=sources)
-
 
 def _remove_from_list(window: QMainWindow, items) -> None:
     """把条目从文件栏移除（只动列表，硬盘上的文件一个字节都不碰）。"""
@@ -1476,7 +1205,6 @@ def _remove_from_list(window: QMainWindow, items) -> None:
     _refresh_file_label(window)
     refresh_product_groups(window)
     _log(window, f"已从文件栏移除 {len(items)} 个文件（硬盘上的文件未改动）")
-
 
 def ask_clear_cache(window: QMainWindow) -> None:
     """「删除所有缓存…」：**点一下直接删**（2026-10-14 起）。
@@ -1500,7 +1228,6 @@ def ask_clear_cache(window: QMainWindow) -> None:
                  f"（约 {info['bytes'] / 1e6:.1f} MB；只删处理产物与 1D 产物，"
                  "下次出图重新积分）")
 
-
 def _oned_sig(meta, lo, hi) -> tuple:
     """一套积分设置的指纹 = 1D 产物分组的身份。
 
@@ -1513,13 +1240,11 @@ def _oned_sig(meta, lo, hi) -> tuple:
             round(float(lo), 6), round(float(hi), 6),
             int(meta.get("engine") or 0))
 
-
 def _oned_sig_is_current(sig, cur) -> bool:
     """这套设置是不是坞顶**当前**那一套（组名标「当前设置」+ 排最前）。"""
     return (sig[0] == str(cur["config"]) and sig[1] == int(cur["npt"])
             and abs(sig[2] - cur["tth_min"]) <= 0.01
             and abs(sig[3] - cur["tth_max"]) <= 0.01)
-
 
 def _fmt_deg(x) -> str:
     """2θ 端点给人看的写法：「1.001」「7.999」「12.5」（三位小数、去尾零）。
@@ -1530,7 +1255,6 @@ def _fmt_deg(x) -> str:
     万一两组因此重名，文件栏那边还有"· 第 N 组"尾注兜底。
     """
     return f"{float(x):.3f}".rstrip("0").rstrip(".")
-
 
 def _oned_group_title(sig, cur) -> str:
     """1D 产物组的组名：把"这一组是按什么算的"写在名字里。
@@ -1554,7 +1278,6 @@ def _oned_group_title(sig, cur) -> str:
         title += "（当前设置）"
     return title
 
-
 def _oned_group_tip(sig, cur) -> str:
     """1D 产物组的悬停提示：这一组是什么、与当前设置差在哪儿。"""
     config, npt_, lo, hi, _engine = sig
@@ -1566,7 +1289,6 @@ def _oned_group_tip(sig, cur) -> str:
                 f"2θ {_fmt_deg(cur['tth_min'])}–{_fmt_deg(cur['tth_max'])}°"
                 f"——要按当前设置再算一批，勾上文件点 [1D]）")
     return txt
-
 
 def _group_key(item, tree):
     """组节点的稳定身份（重建前后认人用）。
@@ -1581,11 +1303,9 @@ def _group_key(item, tree):
     batch = item.data(0, GROUP_BATCH_ROLE)
     return ("bg", str(batch)) if batch else ("1d",)
 
-
 def _top_groups(tree) -> list:
     """全部顶层组节点（含"原始数据"组；tree.groups() 是不含它的）。"""
     return [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-
 
 def _tree_state(window: QMainWindow) -> dict:
     """重建前记下"用户在哪儿"：滚动位置 / 收起的组 / 勾着的产物条目。
@@ -1615,7 +1335,6 @@ def _tree_state(window: QMainWindow) -> dict:
         out["current"] = (src.kind, src.key if src.kind != gui_sources.RAW
                           else src.path)
     return out
-
 
 def _restore_tree_state(window: QMainWindow, keep: dict,
                         restore_checks: bool = True) -> None:
@@ -1654,12 +1373,10 @@ def _restore_tree_state(window: QMainWindow, keep: dict,
         # 勾选刚被清过：当前项不许停在没勾的行上（同 _sync_current_to_checks）
         _sync_current_to_checks(window)
 
-
 def _product_keys(window: QMainWindow) -> set:
     """文件栏里全部产物条目的身份 `(kind, key)`（原始数据不算）。"""
     return {(s.kind, s.key) for s in gui_sources.all_sources(window)
             if s.kind != gui_sources.RAW}
-
 
 def _product_keys_on_disk() -> set:
     """**盘上**现有的全部产物身份 `(kind, key)`——不管它在不在文件栏里。
@@ -1684,7 +1401,6 @@ def _product_keys_on_disk() -> set:
             keys.add(("bg", meta.get("key")))
     return keys
 
-
 def _uncheck_everything(window: QMainWindow) -> int:
     """清掉全树的勾（原始数据组 + 各产物组），返回清了几条。
 
@@ -1701,7 +1417,6 @@ def _uncheck_everything(window: QMainWindow) -> int:
             changed += 1
     _sync_group_states(window)   # 组态跟着子项走（屏蔽信号时不会自动跑）
     return changed
-
 
 def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
     """重建文件栏里的产物分组：各组「1D 产物 …」+ 各组「处理后 …」。
@@ -1917,11 +1632,9 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
     _refresh_group_badges(window)   # 重建出新组了：折叠着的那些要带上数字
     refresh_open_marks(window)      # 重建出来的是新对象：标记要重新打一遍
 
-
 # 「正在打开」的两种记号（用户 2026-09-28 第 5 条）：整行淡色 + 左侧小点
 _OPEN_ROW_BG = "#e8f0fb"
 _open_dot = None        # 懒建（建 QPixmap 要先有 QApplication）
-
 
 def _open_dot_icon() -> QIcon:
     """左侧那个小实心点：深蓝色 8 px 圆，居中画在 10×10 的透明底上。
@@ -1941,7 +1654,6 @@ def _open_dot_icon() -> QIcon:
         painter.end()
         _open_dot = QIcon(pm)
     return _open_dot
-
 
 def refresh_open_marks(window: QMainWindow) -> None:
     """把"这个条目有活着的面板"画出来：整行淡色 + 左侧小点。
@@ -1995,17 +1707,14 @@ def refresh_open_marks(window: QMainWindow) -> None:
     finally:
         tree.blockSignals(prev_blocked)
 
-
 def checked_items(window: QMainWindow) -> list:
     """当前打对号的**叶子**条目（原始数据 + 各组产物；组节点不算）。"""
     return [src.item for src in gui_sources.checked_sources(window)]
-
 
 def checked_raw_items(window: QMainWindow) -> list:
     """当前打对号的原始数据条目（[删除] 与 [全选] 的口径）。"""
     return [src.item for src in gui_sources.checked_sources(window)
             if src.kind == gui_sources.RAW]
-
 
 def _sync_group_states(window: QMainWindow) -> None:
     """按子项把每个组的状态重算一遍（组 = 全勾 / 不勾，两态）。
@@ -2022,7 +1731,6 @@ def _sync_group_states(window: QMainWindow) -> None:
         node.setCheckState(0, _group_state(
             node.child(i).checkState(0) for i in range(node.childCount())))
     _refresh_group_badges(window)   # 批量改完，折叠着的组上的数字也要跟上
-
 
 def _sync_select_label(window: QMainWindow) -> None:
     """出图按钮与全选/全不选切换按钮的**文字**跟着勾选集合走。
@@ -2048,7 +1756,6 @@ def _sync_select_label(window: QMainWindow) -> None:
                     else "全选（原始数据）")
     _refresh_check_labels(window)
 
-
 def _check_summary(window: QMainWindow) -> str:
     """勾选集合的一句话说明：条数 + 构成（+ "同一条曲线画两遍"提醒）。"""
     checked = gui_sources.checked_sources(window)
@@ -2069,13 +1776,11 @@ def _check_summary(window: QMainWindow) -> str:
                 "1D 产物（同一条曲线，会画两遍）")
     return out
 
-
 def _duplicate_raw_paths(checked) -> set:
     """同一文件既勾了原始条目、又勾了它的 1D 产物 → 那些源文件路径。"""
     raw = {str(s.path) for s in checked if s.kind == gui_sources.RAW}
     prod = {str(s.path) for s in checked if s.kind == gui_sources.ONED}
     return raw & prod
-
 
 def _refresh_check_labels(window: QMainWindow) -> None:
     """把"勾了多少条"写到 1D 页的出图按钮上，并刷新摘要那句构成说明。"""
@@ -2092,7 +1797,6 @@ def _refresh_check_labels(window: QMainWindow) -> None:
     lbl = getattr(window, "check_summary_lbl", None)
     if lbl is not None:
         lbl.setText(_check_summary(window))
-
 
 def _set_checks(window: QMainWindow, wanted: list) -> int:
     """一次性改一批对号，返回改动条数。
@@ -2122,7 +1826,6 @@ def _set_checks(window: QMainWindow, wanted: list) -> int:
     _sync_select_label(window)
     return changed
 
-
 def _selection_matches(window: QMainWindow, spec: dict) -> list:
     """按条件挑条目（纯读；弹窗预览与真正执行共用同一套判定）。
 
@@ -2147,7 +1850,6 @@ def _selection_matches(window: QMainWindow, spec: dict) -> list:
             continue
         picked.append(item)
     return picked
-
 
 def apply_selection(window: QMainWindow, spec: dict) -> list:
     """执行一次"按条件选"：勾上命中的条目，返回它们。
@@ -2178,7 +1880,6 @@ def apply_selection(window: QMainWindow, spec: dict) -> list:
     else:
         _log(window, f"没有命中任何文件（{what}）")
     return picked
-
 
 def _selection_dialog_spec(window: QMainWindow, total: int):
     """「按条件选…」弹窗：区间 / 间隔 + 名称筛选 + 追加开关，带实时预览。
@@ -2283,7 +1984,6 @@ def _selection_dialog_spec(window: QMainWindow, total: int):
         return None
     return current_spec()
 
-
 def _on_file_selected(window: QMainWindow, current, previous) -> None:
     """文件列表选中变化 → 只刷新状态行标签，不计算。
 
@@ -2292,7 +1992,6 @@ def _on_file_selected(window: QMainWindow, current, previous) -> None:
     的根源：以前每次点选都触发一次完整积分。
     """
     _refresh_file_label(window)
-
 
 class _PressRecorder(QObject):
     """记录鼠标按下时命中的文件项与对号状态（装在列表视口上）。
