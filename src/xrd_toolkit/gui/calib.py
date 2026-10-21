@@ -79,6 +79,12 @@ from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _clear_calib_points, _close_calib_panel,
     _geom_px_keys, _load_image, _open_calib_panel, _redraw_calib,
     _redraw_calib_if_open, _undo_calib_point, _warn_rings_off_image)
+# 标样辅助（2026-10-21 从本文件原样搬出；再导出）
+from xrd_toolkit.gui.calib_calibrant import (
+    _adopt_result, _borrow_entry, _current_geom_text, _ensure_current,
+    _init_calibrant_for_path, _on_calibrant_changed, _on_ring_count_changed,
+    _pixel_ok, _set_pixel_ok, _sync_calibrant_widgets, _update_ring_count,
+    _warn_pixel_unchecked)
 from xrd_toolkit.gui.config_ops import (
     _delete_config, _import_poni, _save_calib_config, _save_poni,
     _suggest_config_key, _sync_del_config_btn)
@@ -97,276 +103,7 @@ from xrd_toolkit.services.integrator import (
     calibrate_geometry, refine_geometry_from_points, snap_ring)
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
-
 # ── 结果列表与三个槽 ────────────────────────────────────────
-
-
-def _adopt_result(window: QMainWindow, name: str, why: str = "自动采纳") -> None:
-    """把当前配置换成这条结果（几何 / 指标 / 来处一起换）+ 重画青线。"""
-    state = _calib_state(window)
-    item = _result_by_name(state, name)
-    if item is None:
-        return
-    state["slots"]["current"] = name
-    state["current_geom"] = _result_to_geom(item["result"],
-                                            state["current_geom"])
-    state["current_metrics"] = item["result"].get("metrics")
-    state["current_error"] = item["result"].get("metrics_error")
-    state["current_from"] = name
-    # 重新选中"自定义"那条 = 又把手输的几何拿回来用了：保护标记要跟着回来，
-    # 否则下一次自动结果就会把它悄悄替换掉（用户手输的东西不该被覆盖）
-    state["custom"] = item.get("kind") == "custom"
-    if why:
-        dev = _result_dev(item["result"])
-        dev_txt = f"环位偏差 {dev:.2f} px" if dev is not None else "无可用环信号"
-        _log(window, f"当前配置 ← {name}（{why}，{dev_txt}）")
-    _redraw_calib(window)
-
-
-# ── 当前配置：起点（借用条目 / 手输手改）、像素确认、指标 ──────
-def _ensure_current(window: QMainWindow) -> None:
-    """当前配置还没设定时：默认借分析页选中的配置条目。
-
-    借来的这条几何同时登记成累积列表的第一条（"原始"）——这样 A/B 随时
-    能拿精修结果跟"没校准过"的样子比，回答"校准到底有没有用"。
-    """
-    state = _calib_state(window)
-    if state["current_geom"] is None:
-        _borrow_entry(window, getattr(window, "config_name",
-                                      config.DEFAULT_CONFIG), silent=True)
-
-
-def _borrow_entry(window: QMainWindow, key: str, silent: bool = False) -> str:
-    """当前配置 ← 借一条配置条目的几何（已在累积的结果不动）。"""
-    entry = config.CONFIGS.get(key)
-    if entry is None:
-        return f"没有配置条目 {key}"
-    state = _calib_state(window)
-    geom = dict(entry["geometry"])
-    geom["beam_center_rc"] = tuple(entry.get("beam_center", (None, None)))
-    state["current_geom"] = geom
-    state["slots"]["current"] = None
-    state["current_from"] = f"预填自 {key}"
-    state["base_key"] = key          # 血缘：这一批的起点是从哪条借的
-    state["custom"] = False
-    state["current_metrics"] = None
-    state["current_error"] = None
-    if not state["results"]:          # 累积列表的第一条 = "原始"
-        state["results"].append(
-            {"name": _next_name(state, "raw"), "kind": "raw",
-             "result": _geom_to_result_shape(geom)})
-    if not silent:
-        _log(window, f"当前配置 ← 预填自条目 {key}"
-                     f"（距离 {geom['dist_m'] * 1e3:.2f} mm）")
-    _refresh_current_metrics(window)
-    # 借用/导入 .poni 换了当前配置的几何 → 青线跟着换（面板没开时是空操作）
-    _redraw_calib_if_open(window)
-    return state["current_from"]
-
-
-# ── 标样选择（常用 pyFAI 内置标样；换标样只清会话，不动几何）──────
-def _sync_calibrant_widgets(window: QMainWindow) -> None:
-    """把 state 的标样/环数刷到两个控件上（程序写入，不触发信号）。"""
-    combo = getattr(window, "calib_standard_combo", None)
-    spin = getattr(window, "calib_ring_count_spin", None)
-    if combo is None or spin is None:
-        return
-    state = _calib_state(window)
-    name = state.get("calibrant") or DEFAULT_CALIBRANT
-    total = max(1, min(ring_total(name), MAX_GUI_RINGS))
-    for w in (combo, spin):
-        w.blockSignals(True)
-    try:
-        idx = combo.findData(name)
-        if idx < 0:                 # 非常用内置名（脚本/手改配置带进来的）
-            combo.addItem(calibrant_label(name), name)
-            idx = combo.count() - 1
-        combo.setCurrentIndex(idx)
-        spin.setRange(1, total)
-        spin.setValue(int(min(max(state.get("n_rings", 1), 1), total)))
-    finally:
-        for w in (combo, spin):
-            w.blockSignals(False)
-    combo.setToolTip(
-        "校准用的标准样品。它只决定理论环的 2θ 阶梯；距离/PONI/倾斜角"
-        "与标样无关。请按标样证书选到具体 SRM 变体。\n\n"
-        + calibrant_tooltip(name))
-    spin.setToolTip(
-        f"参与画环/判环/精修/指标的理论环数。默认按几何自动算——"
-        f"完整落在图像内的环数；{calibrant_short_label(name)} 共 "
-        f"{ring_total(name)} 条反射，界面最多 {MAX_GUI_RINGS} 条。"
-        f"改它会按新环数重算当前配置的指标。")
-
-
-def _update_ring_count(window: QMainWindow, force_auto: bool = False) -> None:
-    """按当前几何算默认环数（完整落在图像内的环数）；用户手改过就不动。
-
-    只读缓存里的标样图尺寸，不重复解码（_calib_image 有缓存）；拿不到
-    几何/图像时退回 16，并把结果夹到反射总数和 GUI 上限。
-    """
-    state = _calib_state(window)
-    name = state.get("calibrant") or DEFAULT_CALIBRANT
-    total = max(1, min(ring_total(name), MAX_GUI_RINGS))
-    if force_auto or state.get("n_rings_auto", True):
-        state["n_rings_auto"] = True
-        n = None
-        geom = state.get("current_geom")
-        path = getattr(window, "calib_path", None)
-        if geom is not None and path is not None:
-            try:
-                image = _calib_image(window, path)
-                beam = geom.get("beam_center_rc") \
-                    or window.config.get("beam_center")
-                if beam is not None and None not in beam:
-                    n = complete_ring_count(
-                        name,
-                        wavelength_m=float(geom["wavelength_m"]),
-                        pixel_size_m=float(geom["pixel_size_m"]),
-                        dist_m=float(geom["dist_m"]),
-                        beam_center_rc=(float(beam[0]), float(beam[1])),
-                        image_shape=image.shape)
-            except Exception:                          # noqa: BLE001
-                n = None
-        state["n_rings"] = int(min(max(n if n is not None else 16, 1), total))
-    else:
-        state["n_rings"] = int(min(max(int(state["n_rings"]), 1), total))
-    _sync_calibrant_widgets(window)
-
-
-def _init_calibrant_for_path(window: QMainWindow, path: Path) -> None:
-    """新校准图：按文件名预选标样，认不出就沿用所选配置条目的标样。
-
-    文件名是这个会话里最可靠的证据（图本身就是标样）；配置条目的
-    calibrant 只作兜底。都不是就 LaB6（历史默认）。
-    """
-    state = _calib_state(window)
-    name = detect_calibrant_from_stem(Path(path).stem)
-    if name is None:
-        entry = config.CONFIGS.get(getattr(window, "config_name", "")) or {}
-        cand = entry.get("calibrant")
-        if isinstance(cand, str) and cand.strip():
-            try:
-                ring_total(cand)
-                name = cand.strip()
-            except ValueError:
-                name = None
-    state["calibrant"] = name or DEFAULT_CALIBRANT
-    state["n_rings_auto"] = True
-    state["n_rings"] = 16
-
-
-def _on_calibrant_changed(window: QMainWindow, _index: int) -> None:
-    """下拉框换标样：有选点/结果时确认，然后清空本次会话（几何保留）。"""
-    combo = getattr(window, "calib_standard_combo", None)
-    if combo is None:
-        return
-    name = combo.currentData()
-    state = _calib_state(window)
-    old = state.get("calibrant")
-    if not name or name == old:
-        return
-    has_work = bool(state["points"]) or any(
-        it.get("kind") != "raw" for it in state["results"])
-    if has_work:
-        answer = QMessageBox.question(
-            window, "换标样",
-            f"换标样会清空本次选点和校准结果（当前几何保留）。\n\n"
-            f"{calibrant_short_label(old)} → {calibrant_short_label(name)}\n"
-            f"继续吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if answer != QMessageBox.Yes:
-            _sync_calibrant_widgets(window)          # 下拉框还原
-            return
-    state["calibrant"] = name
-    _clear_calib_session(state)
-    state["n_rings_auto"] = True
-    # 在飞的自动/手动/指标任务作废（它们拿的还是旧标样）
-    window.calib_gen = getattr(window, "calib_gen", 0) + 1
-    _update_ring_count(window, force_auto=True)
-    _calib_sync(window)
-    _refresh_current_metrics(window)
-    _redraw_calib_if_open(window)
-    _log(window, f"标样切换为 {calibrant_label(name)}：本次选点/结果已清空，"
-                 f"当前几何保留；环数按 {state['n_rings']} 条算")
-
-
-def _on_ring_count_changed(window: QMainWindow, value: int) -> None:
-    """手改环数：记住用户值（不再自动），按新环数重算指标并重画。"""
-    state = _calib_state(window)
-    total = max(1, min(ring_total(state.get("calibrant") or DEFAULT_CALIBRANT),
-                       MAX_GUI_RINGS))
-    value = min(max(int(value), 1), total)
-    state["n_rings"] = value
-    state["n_rings_auto"] = False
-    state["current_metrics"] = None     # 旧环数算的指标先撤下，异步重算
-    _sync_calibrant_widgets(window)
-    _calib_sync(window)          # 选中点的环号框上界跟着变
-    _refresh_current_metrics(window)
-    _redraw_calib_if_open(window)
-    over = sorted({int(p[2]) for p in state["points"] if int(p[2]) >= value})
-    if over:
-        _log(window, f"注意：已有选点的环号（{'、'.join(map(str, over))}）"
-                     f"超出新环数 {value}，精修会拒绝——请撤销这些点、"
-                     f"改环号，或把环数调大")
-    if any(it.get("kind") != "raw" for it in state["results"]):
-        _log(window, f"环数改为 {value}：当前配置的指标已按新环数重算；"
-                     f"A/B 里旧结果的指标仍是旧环数算的，重新校准可刷新")
-
-
-def _pixel_ok(window: QMainWindow) -> bool:
-    """像素尺寸确认（规则 (b)）：只在**像素值真的变了**时才要重确认。
-
-    为什么非要这一步：环落在哪个像素半径上，只由 λ、像素尺寸、距离三者
-    的**组合**决定（tan 2θ = 半径 × 像素 / 距离）——三者同比例缩放时环
-    一模一样。λ 与像素尺寸是能从光源/探测器规格确认的已知量；两个都确认
-    了，精修出的距离才是真距离。像素尺寸填错时拟合会把距离按同比例凑
-    回来：环位偏差、a 离散度、完整环数**全都正常**，只有报出来的距离是
-    错的（还会一路写进 .poni 与报告）。
-    """
-    want = (_calib_state(window)["current_geom"] or {}).get("pixel_size_m")
-    ok = getattr(window, "calib_pixel_ok_m", None)
-    return want is not None and ok is not None and abs(ok - want) < 1e-12
-
-
-def _set_pixel_ok(window: QMainWindow, on: bool) -> None:
-    """勾选/取消「像素尺寸已确认」（记下确认时的像素值，规则 (b)）。"""
-    geom = _calib_state(window)["current_geom"] or {}
-    pixel = geom.get("pixel_size_m")
-    window.calib_pixel_ok_m = pixel if on else None
-    if on and pixel is not None:
-        _log(window, f"已核对像素尺寸：{pixel * 1e6:.1f} µm"
-                     f"（当前配置：{_slot_label(_calib_state(window), 'current')}）")
-
-
-def _warn_pixel_unchecked(window: QMainWindow, doing: str = "校准") -> None:
-    """像素尺寸没核对时写一条提醒（**不拦动作**）。
-
-    用户 2026-10-05："改为提醒的样式，不要求用户必须选择了"——原来这道门
-    是硬门禁（没勾按钮直接不干活）；现在照常继续，只把风险写清楚：像素
-    尺寸与波长、距离同比例缩放时环一模一样，填错时拟合会把距离凑回来，
-    环位偏差、a 离散度全都正常，只有报出来的距离是错的（还会写进 .poni
-    与配置条目）。界面上另有一行常显的橙色提示（calib_pixel_warn）。
-    """
-    if _pixel_ok(window):
-        return
-    _log(window, "提醒：像素尺寸还没核对（[已核对像素尺寸] 没勾）——"
-                 "像素填错时拟合会把距离同比例凑错：环位偏差看着正常，"
-                 f"报出来的距离是错的。这次{doing}照常进行，结果请自行核对")
-
-
-def _current_geom_text(window: QMainWindow) -> str:
-    """当前配置一行的说明文字（表头下面的小字）。"""
-    state = _calib_state(window)
-    geom = state["current_geom"] or {}
-    from_txt = _slot_label(state, "current")
-    cal_txt = calibrant_short_label(
-        state.get("calibrant") or DEFAULT_CALIBRANT)
-    if geom.get("dist_m") is None:
-        return f"当前配置：{from_txt}（标样 {cal_txt}）"
-    return (f"当前配置：{from_txt}（标样 {cal_txt}；距离 "
-            f"{geom['dist_m'] * 1e3:.2f} mm、"
-            f"像素 {(geom.get('pixel_size_m') or 0) * 1e6:.1f} µm）")
-
 
 def _edit_current(window: QMainWindow) -> None:
     """[编辑…]：对话框里改当前配置的几何（改完标成"自定义"）。
@@ -497,7 +234,6 @@ def _edit_current(window: QMainWindow) -> None:
     # 用户报的"编辑当前配置青环不动"——改的是状态、漏了这一笔）
     _redraw_calib_if_open(window)
 
-
 def _metrics_worker(path_str: str, geom: dict,
                     calibrant: str, n_rings: int) -> dict:
     """后台线程：算一份几何的指标（当前配置的环位偏差专用）。
@@ -510,7 +246,6 @@ def _metrics_worker(path_str: str, geom: dict,
     _attach_metrics(out, image, geom, calibrant=calibrant,
                     n_rings=n_rings)      # initial=None：不重复算初值那一份
     return out
-
 
 def _stack_custom_metrics(state: dict) -> None:
     """把当前配置的指标**也写进最后那条"自定义"结果**。
@@ -532,7 +267,6 @@ def _stack_custom_metrics(state: dict) -> None:
             item["result"]["metrics"] = state.get("current_metrics")
             item["result"]["metrics_error"] = state.get("current_error")
             return
-
 
 def _refresh_current_metrics(window: QMainWindow) -> None:
     """异步算当前配置的环位偏差（换条目 / 手改之后要重算）。
@@ -579,9 +313,7 @@ def _refresh_current_metrics(window: QMainWindow) -> None:
     window._tasks.append(task)
     task.start()
 
-
 # ══ 中央校准图面板 ═══════════════════════════════════════════
-
 
 # ══ 参数坞第 0 页：校准表单 ═══════════════════════════════════
 def _build_calib_form(window: QMainWindow) -> QWidget:
@@ -932,7 +664,6 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     _calib_sync(window)
     return scroll
 
-
 def _reset_calib_form(window: QMainWindow) -> None:
     """表单复位：表格清空、结论/标签复位（按钮状态由 _calib_sync 管）。"""
     for col in ("current", "A", "B"):
@@ -943,7 +674,6 @@ def _reset_calib_form(window: QMainWindow) -> None:
             label.setText("—")
     window.calib_verdict.setText("结论：—")
     _calib_sync(window)
-
 
 def _calib_sync(window: QMainWindow) -> None:
     """把状态刷到界面：槽下拉框 / 表格 / Δ / 结论 / 按钮 / 像素确认。"""
@@ -1014,9 +744,7 @@ def _calib_sync(window: QMainWindow) -> None:
     _refresh_table(window)
     _sync_del_config_btn(window)
 
-
 # ══ 手动选点：点击判环 / 撤销 / 清空 ══════════════════════════
-
 
 # ══ 引擎指标：环位偏差 / 完整度 / a 离散（结果日志后缀）══════════
 def _attach_metrics(result: dict, image, geom: dict,
@@ -1062,7 +790,6 @@ def _attach_metrics(result: dict, image, geom: dict,
             # 措辞走统一出口：内部错误说明"不是你操作的问题"（2026-10-05）
             result["metrics_error"] = user_error_text(exc)
 
-
 def _metrics_note(result: dict) -> str:
     """结果日志的中文指标后缀（没指标时尽量说明原因，不静默）。
 
@@ -1090,7 +817,6 @@ def _metrics_note(result: dict) -> str:
                 if init is not None and np.isfinite(init["dev_px"]) else "")
     return (f"｜环位偏差中位 {m['dev_px']:.2f} px{init_txt}、"
             f"完整环 {m['n_complete']}/{n}、{a_txt}")
-
 
 # ══ 后台任务：自动 / 手动（_spawn 同款守卫）═══════════════════
 def _auto_calib_worker(path_str: str, geom: dict,
@@ -1123,7 +849,6 @@ def _auto_calib_worker(path_str: str, geom: dict,
                     n_rings=n_rings)
     result["beam_center_rc"] = (cy, cx)
     return result
-
 
 def _manual_calib_worker(path_str, points, rings, geom: dict,
                          center0_px: tuple,
@@ -1171,7 +896,6 @@ def _manual_calib_worker(path_str, points, rings, geom: dict,
                             calibrant=calibrant, n_rings=n_rings)
     return result
 
-
 # 判环可疑时按哪些距离尺度重试（见 _reindex_by_scale）。距离是这套几何里
 # **整体缩放环位置**的那个量：它错一个比例，低角侧的真实环就会被压到"第 0
 # 环"以下、判环全挤在一起。
@@ -1180,12 +904,10 @@ _MANUAL_SCALE_PROBE = (0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.20)
 # （同一个环上点两次半径只差几个百分点，不会误报）
 _SUSPICIOUS_RADIUS_RATIO = 1.15
 
-
 def _ring_radius(p, center_px) -> float:
     """点到束心的半径（px）——判"同一个环号是不是横跨了两个半径"。"""
     return float(np.hypot(float(p[0]) - float(center_px[0]),
                           float(p[1]) - float(center_px[1])))
-
 
 def _rings_look_suspicious(points, rings, center_px) -> bool:
     """同一个环号被点在明显不同的半径上 → 判环很可能挤在一起了。
@@ -1201,7 +923,6 @@ def _rings_look_suspicious(points, rings, center_px) -> bool:
                 and max(radii) / max(min(radii), 1e-9) > _SUSPICIOUS_RADIUS_RATIO:
             return True
     return False
-
 
 def _rings_at_scale(points, geom, center_px, scale,
                     calibrant=DEFAULT_CALIBRANT, n_rings: int = 16) -> list:
@@ -1228,7 +949,6 @@ def _rings_at_scale(points, geom, center_px, scale,
             return []
         out.append(int(k))
     return out
-
 
 def _reindex_by_scale(points, rings, geom, center0_px, image,
                       calibrant=DEFAULT_CALIBRANT, n_rings: int = 16):
@@ -1291,7 +1011,6 @@ def _reindex_by_scale(points, rings, geom, center0_px, image,
                   f"更合理——环位偏差 {dev:.2f} px，原判法 {base[0]:.2f} px"), \
         float(geom["dist_m"]) * float(scale)
 
-
 def _start_auto_calib(window: QMainWindow) -> None:
     """[定位束心并精修]：从当前配置出发，自动定位环心（取点拟合，FFT
     兜底）→ pyFAI 精修。
@@ -1344,7 +1063,6 @@ def _start_auto_calib(window: QMainWindow) -> None:
     _log(window, f"开始定位束心并精修：{path.name}（标样 "
                  f"{calibrant_short_label(calibrant)}，{n_rings} 环；后台运行）")
     task.start()
-
 
 def _start_manual_calib(window: QMainWindow) -> None:
     """[用选点精修]：用户点后台精修（初值 = 当前配置；环心 = 分析条目束心）。"""
@@ -1400,7 +1118,6 @@ def _start_manual_calib(window: QMainWindow) -> None:
                  f"{calibrant_short_label(calibrant)}，{n_rings} 环；后台运行）")
     task.start()
 
-
 # ══ 结果 / Δ / 保存为配置 ════════════════════════════════════
 def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
     """一次校准结果落地（主线程）：进累积列表 → 判要不要换当前配置 → 填槽。
@@ -1444,11 +1161,9 @@ def _on_calib_result(window: QMainWindow, kind: str, result: dict) -> None:
         _log(window, "提示：点数较少（<6）时手动结果可能不稳，建议多点"
                      "几个环上的点再跑一次，以环位偏差判断可信度")
 
-
 # ══ 几何配置条目：加载 .poni / 保存 .poni / 删除 ═══════════════
 # （从 app.py 搬来：几何配置的增删改查归校准页——分析页只读，下拉框
 # 选条目；按钮的工作对象仍是"分析页当前选中的那一条"。）
-
 
 # ══ 模式进出（app._on_mode 调用）══════════════════════════════
 def _default_config_name(window: QMainWindow) -> str:
@@ -1466,7 +1181,6 @@ def _default_config_name(window: QMainWindow) -> str:
         return cleaned or stem
     return _suggest_config_key(config.DEFAULT_CONFIG)
 
-
 def _refresh_config_name_prefill(window: QMainWindow) -> None:
     """进入校准时把「条目名称」按当前标样文件名重填。
 
@@ -1479,7 +1193,6 @@ def _refresh_config_name_prefill(window: QMainWindow) -> None:
         return   # 用户改过：不动
     box.setText(_default_config_name(window))
     window._calib_name_auto = box.text()
-
 
 def _enter_calib(window: QMainWindow) -> None:
     """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
@@ -1509,13 +1222,11 @@ def _enter_calib(window: QMainWindow) -> None:
     _refresh_config_name_prefill(window)   # 「条目名称」跟着这个标样重填
     _widen_dock_for_calib(window)
 
-
 def _exit_calib(window: QMainWindow) -> None:
     """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
     window.calib_exit_btn.setVisible(False)
     _close_calib_panel(window)
     _restore_dock_width(window)
-
 
 def _widen_dock_for_calib(window: QMainWindow) -> None:
     """校准模式下把参数坞拉宽到"放下校准页所有内容"（不超过窗口上限）。"""
@@ -1542,7 +1253,6 @@ def _widen_dock_for_calib(window: QMainWindow) -> None:
     if need > limit:
         _log(window, f"校准页需要 {need} px，但为保住绘图区（点环用）只给到 "
                      f"{target} px：窄窗口下校准页里可以横向滚动")
-
 
 def _restore_dock_width(window: QMainWindow) -> None:
     """出校准模式：参数坞宽度还原成进之前那一条。"""
