@@ -115,6 +115,7 @@ from xrd_toolkit.gui import plot_views as gui_plot_views
 from xrd_toolkit.gui import panel_state as gui_panel_state
 from xrd_toolkit.gui import plot_compare as gui_plot_compare
 from xrd_toolkit.gui import plot_panels as gui_plot_panels
+from xrd_toolkit.gui.plot import panel_build as gui_plot_panel_build
 from xrd_toolkit.gui import plot_export as gui_plot_export
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
@@ -1708,7 +1709,7 @@ class TestSaveOptions(unittest.TestCase):
         w = create_window()
         try:
             dock = _draw_one_1d(w)
-            with mock.patch.object(gui_plot_panels, "_ask_save_options",
+            with mock.patch.object(gui_plot_panel_build, "_ask_save_options",
                                    return_value=None), \
                  mock.patch.object(QFileDialog, "getSaveFileName") as dlg:
                 gui_panel_state._content(dock).toolbar.save_figure()
@@ -1723,7 +1724,7 @@ class TestSaveOptions(unittest.TestCase):
         try:
             dock = _draw_one_1d(w)
             fig = gui_panel_state._content(dock).figure
-            with mock.patch.object(gui_plot_panels, "_ask_save_options",
+            with mock.patch.object(gui_plot_panel_build, "_ask_save_options",
                                    return_value={"dpi": 600, "fmt": "tif"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/panel_tif", "TIF 图片 (*.tif)")) as dlg, \
@@ -11310,7 +11311,7 @@ class TestToolbarSave(unittest.TestCase):
         try:
             dock = _draw_one_1d(w)
             fig = gui_panel_state._content(dock).figure
-            with mock.patch.object(gui_plot_panels, "_ask_save_options",
+            with mock.patch.object(gui_plot_panel_build, "_ask_save_options",
                                    return_value={"dpi": 300, "fmt": "png"}), \
                  mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("/tmp/panel_out", "PNG 图片 (*.png)")) as dlg, \
