@@ -9974,9 +9974,9 @@ class TestCustomizeDialog(unittest.TestCase):
             w.resize(1400, 900)
             self._open_one(w)
             content = gui_panel_state._content(_dock(w, "1D", "data/fake_b.tif"))
-            # patch 目标 = 调用点所在模块 plot_panels（_SlimToolbar 在
+            # patch 目标 = 调用点所在模块 panel_build（_SlimToolbar 在
             # 那里查全局名）；gui_panels 是 panels.py，不是这个模块
-            with mock.patch.object(gui_plot_panels,
+            with mock.patch.object(gui_plot_panel_build,
                                    "_open_customize_dialog") as m:
                 content.toolbar._actions["edit_parameters"].trigger()
             m.assert_called_once_with(w, "1D|data/fake_b.tif")
