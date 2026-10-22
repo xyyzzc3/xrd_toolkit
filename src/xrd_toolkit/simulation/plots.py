@@ -9,6 +9,10 @@
 - `plot_profile`（2026-10-17 第七周加）：连续模拟谱——细网格曲线为主体，
   可选把理想竖线以浅色垫在下面（一眼看出"理论棒 → 模拟谱"的关系），
   峰顶同样竖排 (hkl) 标注（沿用同一套避叠字规矩）。
+- `plot_fit`（2026-10-22 加）：全谱拟合图——观测/计算/背景 + 残差，
+  可选一个放大窗（看峰形与峰间底部）。
+- `plot_fit_bottom`（2026-10-22 加）：把残差 y 轴按峰间噪声的 ±8σ 收窄，
+  专看"峰间底部平不平"（主图残差被峰顶几千 counts 撑满，看不见 ±10）。
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -19,6 +23,115 @@ from xrd_toolkit.simulation.core import format_hkls
 
 FOOTPRINT_DEG = 1.35   # 竖排标签的横向"占地"（度）：小于这个距离就躲到上一档
 TIER_GAP = 15.0        # 每档抬高多少（强度单位）
+
+
+def plot_fit_bottom(result, title, out_path, *, inter_mask=None, zoom=None):
+    """拟合的"底部"诊断图（2026-10-22）：峰间残差 vs ±3σ 噪声带。
+
+    为什么单独画：主拟合图的残差坐标被峰顶的几千 counts 撑满，峰间
+    ±10 counts 的系统差根本看不见。这里把 y 轴按底部噪声的 ±8σ 收窄，
+    再给一个峰间窗口的放大，专门看"底部平不平"。
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    r = np.asarray(result.residual, dtype=float)
+    tth = np.asarray(result.tth, dtype=float)
+    if inter_mask is None:
+        bg = np.asarray(result.background, dtype=float)
+        inter_mask = result.y_obs < 1.1 * np.median(bg) if bg.size else \
+            result.y_obs < 0.05 * result.y_obs.max()
+    inter_mask = np.asarray(inter_mask, dtype=bool)
+    if not np.any(inter_mask):          # 兜底：没有底部点时用全部点
+        inter_mask = np.ones_like(r, dtype=bool)
+    rr = r[inter_mask]
+    mu = float(np.median(rr))
+    sigma = float(1.4826 * np.median(np.abs(rr - mu)))
+    sigma = max(sigma, 1e-6)
+    lim = 8.0 * sigma
+
+    fig, (ax, axz) = plt.subplots(1, 2, figsize=(13.5, 4.4))
+    ax.axhspan(-3 * sigma, 3 * sigma, color="#2b6cb0", alpha=0.10,
+               label="±3σ noise")
+    ax.axhline(mu, color="0.4", lw=0.9, ls="--")
+    ax.plot(tth, r, ".", ms=2.2, color="0.25")
+    ax.set_ylim(-lim, lim)
+    ax.set_xlabel(r"2$\theta$ (degrees)")
+    ax.set_ylabel("obs − calc (counts)")
+    ax.set_title("(a) residual, y-axis clipped to the bottom scale",
+                 fontsize=10.5)
+    ax.text(0.015, 0.96,
+            f"inter-peak: mean {mu:+.1f}   RMS "
+            f"{np.sqrt(np.mean((rr - mu) ** 2)):.1f}   σ≈{sigma:.1f} counts",
+            transform=ax.transAxes, va="top", fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85))
+    ax.legend(loc="lower right", fontsize=8.5)
+    ax.grid(alpha=0.25, linestyle=":")
+
+    if zoom is None:
+        zoom = (float(tth.min()), float(tth.max()))
+    lo, hi = zoom
+    m = (tth >= lo) & (tth <= hi)
+    axz.axhspan(-3 * sigma, 3 * sigma, color="#2b6cb0", alpha=0.10)
+    axz.axhline(mu, color="0.4", lw=0.9, ls="--")
+    axz.plot(tth[m], r[m], "o-", ms=3.2, lw=0.8, color="#2b6cb0")
+    axz.set_xlim(lo, hi)
+    axz.set_ylim(-lim, lim)
+    axz.set_xlabel(r"2$\theta$ (degrees)")
+    axz.set_title(f"(b) bottom zoom {lo:.2f}–{hi:.2f}°", fontsize=10.5)
+    axz.grid(alpha=0.25, linestyle=":")
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def plot_fit(result, title, out_path, zoom=None):
+    """拟合结果图：上=观测/计算/背景，下=残差（2026-10-22 拟合工具）。
+
+    `result` 是 `simulation.fit.FitResult`（鸭子类型即可：tth / y_obs /
+    y_calc / background / residual / rwp / rp）。zoom 给 (lo, hi) 时
+    在上图里再嵌一个放大窗，方便看峰形和"峰间底部"。
+    """
+    import matplotlib.pyplot as plt
+    fig, (ax, axr) = plt.subplots(
+        2, 1, sharex=True, figsize=(11.5, 6.2),
+        gridspec_kw={"height_ratios": [3.2, 1.0]})
+    ax.plot(result.tth, result.y_obs, ".", ms=2.0, color="0.25",
+            label="observed")
+    ax.plot(result.tth, result.y_calc, color="#2b6cb0", lw=1.4,
+            label="calculated")
+    if result.background is not None:
+        ax.plot(result.tth, result.background, "--", color="#d94b2b",
+                lw=1.0, label="background")
+    ax.set_ylabel("Intensity")
+    ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
+                 fontsize=10.5)
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(alpha=0.25, linestyle=":")
+
+    axr.axhline(0.0, color="0.6", lw=0.8)
+    axr.plot(result.tth, result.residual, color="#2b6cb0", lw=0.9)
+    axr.set_xlabel(r"2$\theta$ (degrees)")
+    axr.set_ylabel("obs − calc")
+    axr.grid(alpha=0.25, linestyle=":")
+    axr.set_xlim(float(result.tth.min()), float(result.tth.max()))
+
+    if zoom is not None:
+        lo, hi = zoom
+        ins = ax.inset_axes([0.52, 0.52, 0.44, 0.42])
+        ins.plot(result.tth, result.y_obs, ".", ms=2.5, color="0.25")
+        ins.plot(result.tth, result.y_calc, color="#2b6cb0", lw=1.3)
+        ins.set_xlim(lo, hi)
+        ins.set_ylim(bottom=0)
+        ins.tick_params(labelsize=7)
+        ins.grid(alpha=0.25, linestyle=":")
+        ins.set_title("zoom", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 
 def plot_pattern(two_thetas, intensities, title, out_path):

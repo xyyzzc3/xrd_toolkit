@@ -7,7 +7,15 @@
     instrument     任务二：逐仪器参数（波长 / 零点 / 展宽 / 范围步长）四联图
     crosscheck     任务二·双引擎对拍：读 GSAS-II 的 npz → 叠图 + 数字差
     microstructure 任务三：逐样品参数（尺寸 / 应变 / B 因子 / 取向）
-    compare        任务四：模拟 vs 实验（lab6 实测一维谱，含标样定仪器）
+    compare        任务四：模拟 vs 实验（lab6 实测一维谱，GSAS 口径）
+    fit            精修：实验谱 → 全谱最小二乘（Rwp/参数表/残差图）
+    keys           一页看两条硬指标：面积不变 + 峰宽与 GSAS-II 一致
+
+引擎分工（2026-10-22）：
+    basic / instrument / microstructure 用第七周的教学引擎
+    （`profile.simulate_pattern`，峰顶归一，便于逐参数演示）；
+    crosscheck / compare / fit 用 GSAS-II 同口径引擎
+    （`gsas_profile.simulate_pattern_gsas`，面积守恒、峰宽同式）。
 
 用法：
     python scripts/simulate_study.py basic
@@ -16,6 +24,7 @@
     conda run -n gsas2 python scripts/gsas2_crosscheck.py --cif … --out /tmp/g2.npz --w 18.033
     conda run -n gsas2 python scripts/gsas2_crosscheck.py --cif … --out /tmp/g2z.npz --w 18.033 --zero 0.05
     python scripts/simulate_study.py crosscheck --gsas2-npz /tmp/g2.npz --gsas2-zero-npz /tmp/g2z.npz
+    python scripts/simulate_study.py fit
 
 主 CIF 默认 LaB₆（与第三周的实验数据同材料，任务四要对得上）。
 """
@@ -29,8 +38,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import (  # noqa: E402
-    b_iso_from_cif, d_spacing, format_hkls, load_structure, pattern_from_cif,
-    plot_profile, simulate_pattern, two_theta_from_d)
+    b_iso_from_cif, d_spacing, fit_pattern, format_hkls, legacy_to_gsas,
+    load_structure, pattern_from_cif, plot_fit, plot_fit_bottom,
+    plot_profile, simulate_pattern, simulate_pattern_gsas, two_theta_from_d)
 
 DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_1000055.cif"
 
@@ -227,9 +237,12 @@ def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
     material = _material_name(cif)
     structure = load_structure(str(cif))
     b_iso = b_iso_from_cif(cif)               # 与 GSAS-II 自动用的 Uiso 对齐
-    kw = dict(two_theta_range=(10.0, 80.0), step_deg=0.005, b_iso=b_iso)
-    t_us, y_us, peaks, is_hex = simulate_pattern(structure, **kw)
-    t_uz, y_uz, _, _ = simulate_pattern(structure, zero_deg=0.05, **kw)
+    kw = dict(two_theta_range=(10.0, 80.0), step_deg=0.005, b_iso=b_iso,
+              size_um=1e5, mustrain=0.0)     # 微结构中性化（与 npz 同口径）
+    t_us, y_us, peaks, is_hex = simulate_pattern_gsas(
+        structure, w=18.033, **kw)            # W=18.033 centideg² ↔ 0.1° FWHM
+    t_uz, y_uz, _, _ = simulate_pattern_gsas(
+        structure, w=18.033, zero_deg=0.05, **kw)
     gb = np.load(g2_base_npz)
     t_g, y_g = gb["x"], gb["ycalc"]
     gz = np.load(g2_zero_npz)
@@ -240,7 +253,7 @@ def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
     ax1.plot(t_us, y_us / y_us.max(), color="#2b6cb0", lw=1.4,
              label="hand-written engine")
     ax1.plot(t_g, y_g / y_g.max(), color="#d94b2b", lw=1.2, ls="--",
-             label="GSAS-II (W = 18.033 = 0.1° converted)")
+             label="GSAS-II (W = 18.033 centideg² ↔ 0.1°)")
     ax1.set_xlim(10, 80); ax1.set_ylim(0, 1.12)
     ax1.legend(loc="upper right", fontsize=9)
     ax1.set_title(f"{material} — same parameters, two engines "
@@ -255,20 +268,22 @@ def study_crosscheck(cif: Path, outdir: Path, g2_base_npz: Path,
         ax2.plot(t[m], norm[m], color=color, lw=1.5)
         left, right, _top = _fwhm_bounds(t, norm, 30.38, span=0.64)
         ax2.hlines(0.5, left, right, color=color, lw=1)
-        ax2.text((left + right) / 2, 0.5 + dy,
-                 f"FWHM {right - left:.3f}°", ha="center",
-                 fontsize=9, color=color)
+        ax2.text(right + 0.16, 0.5 + dy,
+                 f"FWHM {right - left:.3f}°", ha="left", va="center",
+                 fontsize=9, color=color,
+                 bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none",
+                           alpha=0.8))
     ax2.set_xlim(29.6, 31.2); ax2.set_ylim(0, 1.12)
     ax2.set_title("(110) zoom — widths agree after conversion", fontsize=10.5)
     ax2.set_xlabel(r"2$\theta$ (degrees)")
     for ax in (ax1, ax2):
         ax.grid(alpha=0.25, linestyle=":")
     fig.tight_layout()
-    out = outdir / f"week7_engine_crosscheck.png"
+    out = outdir / f"sim_xrd_engine_crosscheck.png"
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
-    print(f"{material} 双引擎对拍（W=18.033 ↔ w=0.01，Zero 两侧同设）：")
+    print(f"{material} 双引擎对拍（W=18.033 centideg² ↔ 0.1°，Zero 两侧同设）：")
     top = [p for p in sorted(peaks, key=lambda q: -q[1])[:5]]
     for tt, ii, refs in top:
         cu = _peak_center(t_us, y_us, tt)
@@ -516,11 +531,13 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     coef = np.polyfit(t_arr, fw_arr ** 2, 2)   # [U, V, W]
     u_fit, v_fit, w_fit = (float(c) for c in coef)
 
-    # ④ 用标样定的参数出模拟谱
-    t_sim, y_sim, _, _ = simulate_pattern(
+    # ④ 用标样定的参数出模拟谱（GSAS 口径：面积守恒 + 同单位换算）
+    gsas_kw = legacy_to_gsas(u=u_fit, v=v_fit, w=w_fit)
+    t_sim, y_sim, _, _ = simulate_pattern_gsas(
         structure, wavelength=lam, zero_deg=zero_fit,
-        u=u_fit, v=v_fit, w=w_fit, b_iso=b_iso,
-        two_theta_range=(TMIN, TMAX), step_deg=0.001)
+        u=gsas_kw["u"], v=gsas_kw["v"], w=gsas_kw["w"],
+        x=gsas_kw["x"], y=gsas_kw["y"], b_iso=b_iso,
+        two_theta_range=(TMIN, TMAX), step_deg=0.001, normalize=False)
     k_scale = float(np.sum(y_sub * np.interp(t_exp, t_sim, y_sim))
                     / np.sum(np.interp(t_exp, t_sim, y_sim) ** 2))
     y_sim_scaled = y_sim * k_scale
@@ -567,8 +584,11 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     plt.close(fig)
 
     print(f"{material} 任务四：模拟 vs 实验（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°）")
-    print(f"  标样定仪器：零点 {zero_fit:+.4f}° ；U={u_fit:.2e} V={v_fit:.2e} "
-          f"W={w_fit:.2e}（FWHM² = U·tan²θ+V·tanθ+W）")
+    print(f"  标样定仪器：零点 {zero_fit:+.4f}°")
+    print(f"    旧口径（deg²）：u={u_fit:.3e} v={v_fit:.3e} w={w_fit:.3e}"
+          f"（FWHM² = u·tan²θ+v·tanθ+w）")
+    print(f"    GSAS 口径（centideg²）：U={gsas_kw['u']:.3f} "
+          f"V={gsas_kw['v']:.3f} W={gsas_kw['w']:.3f}")
     print(f"  对上 {len(matched)} 根峰（理论 {len(st_tt)} 根）；"
           f"强度缩放系数 k = {k_scale:.1f}")
     print(f"  {'2θ理论':>8} {'Δ2θ':>7} {'FWHM实验':>9} {'FWHM模拟':>9} "
@@ -579,11 +599,216 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     print(f"  → {out}")
 
 
+def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
+    """精修：用 GSAS-II 口径的全谱最小二乘拟合实验 1D（2026-10-22）。
+
+    流程：实验图积分成 1D → 自动基线（固定背景）→ 两轮拟合：
+      ① 仪器 + 常规峰形（zero/U/V/W/X/Y）；
+      ② 再加 Lorentzian 尺寸项（Size）——它是 GSAS 默认的"长尾巴"通道，
+         专门改善峰间底部（不是靠抬高基线去凑）。
+    打印 Rwp/Rp、参数表、底部（y<5% 最强峰）残差的均值/RMS，
+    并存 `sim_xrd_fit_{材料}.png`（观测/计算/背景 + 残差 + 放大窗）。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    from xrd_toolkit.config import get_config
+    from xrd_toolkit.services.background import estimate_baseline_sliding
+    from xrd_toolkit.services.data_loader import load_diffraction_image
+    from xrd_toolkit.services.integrator import integrate_1d
+
+    material = _material_name(cif)
+    structure = load_structure(str(cif))
+    b_iso = b_iso_from_cif(cif)
+    cfg = get_config("lmfp1_lab6")
+    geom = dict(cfg["geometry"])
+    lam = geom["wavelength_m"] * 1e10
+    TMIN, TMAX = 1.0, 8.0
+    NPT = 3000
+
+    img = load_diffraction_image(str(exp_tif))
+    tth, y = integrate_1d(img, npt=NPT, tth_min_deg=TMIN,
+                          tth_max_deg=TMAX, **geom)
+    bg = estimate_baseline_sliding(tth, y, 0.2)
+
+    instrument = fit_pattern(
+        structure, tth, y, wavelength=lam, b_iso=b_iso,
+        background=bg, background_knots=0.25, weights="poisson",
+        free=("zero", "u", "v", "w", "x", "y"))
+    tail = fit_pattern(
+        structure, tth, y, wavelength=lam, b_iso=b_iso,
+        background=bg, background_knots=0.25, weights="poisson",
+        free=("zero", "u", "v", "w", "x", "y", "size_um", "b_iso"),
+        initial={**instrument.params, "size_um": 0.75, "b_iso": 0.0})
+    # Le Bail 式：每峰积分强度单独解出——用来验证"峰形/背景公式"本身，
+    # 把结构强度模型的残差（B/偏振/吸收）分离出去。
+    lebail = fit_pattern(
+        structure, tth, y, wavelength=lam, b_iso=b_iso,
+        background=bg, background_knots=0.25, weights="poisson",
+        refine_intensities=True,
+        free=("zero", "u", "v", "w", "x", "y"),
+        initial={**instrument.params, "size_um": 0.75})
+
+    def bottom(res):
+        m = res.y_obs < 0.05 * res.y_obs.max()
+        r = res.residual[m]
+        return int(m.sum()), float(r.mean()), float(np.sqrt(np.mean(r ** 2)))
+
+    st_tt, _, _, _ = pattern_from_cif(
+        str(cif), wavelength=lam, two_theta_range=(TMIN, TMAX))
+    dist = np.min(np.abs(tth[:, None] - st_tt[None, :]), axis=1)
+    inter = dist > 0.12               # 离任何理论峰都 >0.12° 的"真底部"
+
+    def inter_stats(res):
+        r = res.residual[inter]
+        return float(r.mean()), float(np.sqrt(np.mean(r ** 2)))
+
+    n_low, mean_i, rms_i = bottom(instrument)
+    _, mean_t, rms_t = bottom(tail)
+    _, mean_l, rms_l = bottom(lebail)
+    im_i, ir_i = inter_stats(instrument)
+    im_t, ir_t = inter_stats(tail)
+    im_l, ir_l = inter_stats(lebail)
+    out = outdir / f"sim_xrd_fit_{material}.png"
+    plot_fit(lebail, f"{material} — profile fit (GSAS-II + Le Bail "
+                     f"intensities, λ = {lam:.4f} Å)", str(out),
+             zoom=(1.6, 2.6))
+    out_b = outdir / f"sim_xrd_fit_bottom_{material}.png"
+    plot_fit_bottom(
+        lebail, f"{material} — inter-peak bottom residual (Le Bail fit)",
+        str(out_b), inter_mask=inter, zoom=(4.30, 4.70))
+
+    print(f"{material} 精修（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°，"
+          f"自动基线 + 0.25° 分段线性背景修正）")
+    print(f"  ① 仪器+常规峰形：Rwp {instrument.rwp:.3f}% / Rp {instrument.rp:.3f}%")
+    print(f"  ② + Lorentzian 尾巴 + 全局 ΔB：Rwp {tail.rwp:.3f}% / "
+          f"Rp {tail.rp:.3f}%")
+    print(tail.report())
+    print(f"  Size = {tail.params['size_um']:.3f} µm（Lorentzian 尾巴项）；"
+          f"ΔB = {tail.params['b_iso']:+.3f} Å²（叠在 CIF 各元素 B 上）")
+    ratio = (lebail.peak_intensities
+             / np.maximum(lebail.peak_table_intensities, 1e-12))
+    print(f"  ③ Le Bail（每峰强度自由）：Rwp {lebail.rwp:.3f}% / "
+          f"Rp {lebail.rp:.3f}% ；fit/table 强度比 "
+          f"{ratio.min():.2f}–{ratio.max():.2f}（中位 {np.median(ratio):.2f}）")
+    print(f"  底部（y < 5% 最强峰，{n_low} 点）obs−calc：")
+    print(f"    ① mean {mean_i:+.1f}  RMS {rms_i:.1f} counts")
+    print(f"    ② mean {mean_t:+.1f}  RMS {rms_t:.1f} counts")
+    print(f"    ③ mean {mean_l:+.1f}  RMS {rms_l:.1f} counts")
+    print(f"  峰间底部（离任何理论峰 >0.12°，{int(inter.sum())} 点）mean/RMS：")
+    print(f"    ① {im_i:+.1f} / {ir_i:.1f} counts")
+    print(f"    ② {im_t:+.1f} / {ir_t:.1f} counts")
+    print(f"    ③ {im_l:+.1f} / {ir_l:.1f} counts")
+    print(f"  → {out}")
+    print(f"  → {out_b}")
+
+
+def study_keys(cif: Path, outdir: Path) -> None:
+    """一页看两条硬指标：面积不变 + 峰宽与 GSAS-II 一致（2026-10-22）。
+
+    (a) 面积：把 LaB₆ (110) 的仪器宽度从 0.05° 扫到 0.20°，峰高按
+        1/FWHM 下降，积分面积保持——这就是"峰变宽只变矮，不长大"。
+    (b) 宽度：四个通道（W / X / Size / Mustrain）在 2θ=30.38° 的 FWHM，
+        自研 vs 真 GSAS-II 的相对差都在 ±1.2% 内（GSAS 值带背景测量）。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    material = _material_name(cif)
+    structure = load_structure(str(cif))
+    CENTER = 30.38
+
+    def area_above_baseline(tth, y, half=1.5):
+        m = (tth > CENTER - half) & (tth < CENTER + half)
+        xs, ys = tth[m], y[m]
+        base = np.linspace(ys[0], ys[-1], len(ys))
+        return float(np.trapezoid(ys - base, xs))
+
+    fwhms, heights, areas = [], [], []
+    for w in (4.5, 18.033, 72.132):        # FWHM 0.05 / 0.10 / 0.20°
+        tth, y, _, _ = simulate_pattern_gsas(
+            structure, w=w, size_um=1e5, mustrain=0.0,
+            two_theta_range=(CENTER - 3.0, CENTER + 3.0), step_deg=0.001,
+            normalize=False)
+        m = np.abs(tth - CENTER) < 0.6
+        fwhms.append(2.3548 * np.sqrt(w) / 100.0)
+        heights.append(float(y[m].max() - np.median(
+            np.r_[y[:30], y[-30:]])))
+        areas.append(area_above_baseline(tth, y))
+    heights = np.asarray(heights) / heights[0]
+    areas = np.asarray(areas) / areas[0]
+
+    # GSAS-II 实测值（2026-10-22，见 scripts/gsas2_crosscheck.py 的说明）
+    cases = [
+        ("W = 18.033", 0.10000, 0.10031),
+        ("X = 1", 0.01047, 0.01050),
+        ("Size 0.05 µm", 0.18298, 0.18505),
+        ("Mustrain 1000", 0.01564, 0.01566),
+    ]
+
+    fig, (ax_a, ax_b) = plt.subplots(
+        1, 2, figsize=(13.5, 4.8), gridspec_kw={"width_ratios": [1.15, 1]})
+    ax_a.plot(fwhms, heights, "o-", color="#2b6cb0", lw=1.6, ms=6,
+              label="peak height (normalised)")
+    ax_a.set_xlabel("instrument FWHM (degrees)")
+    ax_a.set_ylabel("peak height / height at 0.05°", color="#2b6cb0")
+    ax_a.tick_params(axis="y", labelcolor="#2b6cb0")
+    ax_a.set_ylim(0, 1.25)
+    ax_a2 = ax_a.twinx()
+    ax_a2.plot(fwhms, areas, "s--", color="#d94b2b", lw=1.6, ms=6,
+               label="integrated area (normalised)")
+    ax_a2.set_ylabel("integrated area / area at 0.05°", color="#d94b2b")
+    ax_a2.tick_params(axis="y", labelcolor="#d94b2b")
+    ax_a2.set_ylim(0.8, 1.1)
+    ax_a.set_title("(a) area is conserved — height ∝ 1/FWHM", fontsize=10.5)
+    lines = (ax_a.get_lines() + ax_a2.get_lines())
+    ax_a.legend(lines, [ln.get_label() for ln in lines], loc="center right",
+                fontsize=8.5)
+    ax_a.grid(alpha=0.25, linestyle=":")
+
+    labels = [c[0] for c in cases]
+    diff = [100.0 * (c[1] - c[2]) / c[2] for c in cases]
+    xpos = np.arange(len(cases))
+    ax_b.axhspan(-1.0, 1.0, color="#2b6cb0", alpha=0.08,
+                 label="±1% band")
+    ax_b.axhline(0.0, color="0.5", lw=0.8)
+    bars = ax_b.bar(xpos, diff, width=0.55, color="#2b6cb0", alpha=0.85)
+    for b, c in zip(bars, cases):
+        ax_b.text(b.get_x() + b.get_width() / 2,
+                  0.25 if b.get_height() >= 0 else -0.6,
+                  f"{b.get_height():+.2f}%", ha="center", va="bottom",
+                  fontsize=9)
+    ax_b.set_xticks(xpos)
+    ax_b.set_xticklabels(labels, fontsize=9)
+    ax_b.set_ylim(-1.6, 1.6)
+    ax_b.set_ylabel("(ours − GSAS-II) / GSAS-II  (%)")
+    ax_b.set_title("(b) FWHM at 2θ = 30.38° vs GSAS-II", fontsize=10.5)
+    ax_b.legend(loc="lower right", fontsize=8.5)
+    ax_b.grid(axis="y", alpha=0.25, linestyle=":")
+
+    fig.suptitle(f"{material} — the two keys: area invariance + width "
+                 f"consistency", fontsize=12.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    out = outdir / "sim_xrd_gsas_keys.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"{material} 两条硬指标：")
+    print("  面积  FWHM 0.05/0.10/0.20° → 峰高 "
+          + " / ".join(f"{h:.3f}" for h in heights)
+          + "，面积 " + " / ".join(f"{a:.3f}" for a in areas))
+    print("  峰宽  自研 vs GSAS-II：" + "；".join(
+        f"{c[0]} {c[1]:.5f}/{c[2]:.5f} ({100*(c[1]-c[2])/c[2]:+.2f}%)"
+        for c in cases))
+    print(f"  → {out}")
+
+
 STUDIES = {
     "basic": study_basic,
     "instrument": study_instrument,
     "microstructure": study_microstructure,
     "compare": study_compare,
+    "fit": study_fit,
+    "keys": study_keys,
 }
 
 
@@ -614,11 +839,11 @@ def main() -> None:
             ap.error("crosscheck 需要 --gsas2-npz 与 --gsas2-zero-npz")
         study_crosscheck(cif, outdir, Path(args.gsas2_npz),
                          Path(args.gsas2_zero_npz))
-    elif args.study == "compare":
+    elif args.study in ("compare", "fit"):
         exp = Path(args.exp)
         if not exp.exists():
             ap.error(f"实验图不存在：{exp}（--exp 指定）")
-        study_compare(cif, outdir, exp)
+        STUDIES[args.study](cif, outdir, exp)
     else:
         STUDIES[args.study](cif, outdir)
 

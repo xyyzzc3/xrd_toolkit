@@ -147,9 +147,17 @@ def multiplicity(hkl, rot_mats):
     return orbit
 
 
-def lp_factor(theta):
-    """洛伦兹偏振因子（θ 是布拉格角，弧度）：LP = (1+cos²2θ)/(sin²θ·cosθ)"""
-    return (1.0 + math.cos(2.0 * theta) ** 2) / (math.sin(theta) ** 2 * math.cos(theta))
+def lp_factor(theta, polariz=0.5):
+    """洛伦兹-偏振因子（θ 是布拉格角，弧度）。
+
+    GSAS-II 口径：偏振项 P(2θ) = P + (1−P)·cos²2θ（方位角 0），
+    Lorentz 项 = 1/(2 sin²θ cosθ)，两者相乘。这里前面留了一个常数
+    4（比例因子会被峰表归一化吸收），使 polariz=0.5 时与第七周的
+    (1+cos²2θ)/(sin²θ·cosθ) 逐位相同——旧结果不动，只多了偏振度
+    这个自由度（同步辐射常用 P≈0.95；P=0.5 = 非偏振）。
+    """
+    pola = float(polariz) + (1.0 - float(polariz)) * math.cos(2.0 * theta) ** 2
+    return 4.0 * pola / (2.0 * math.sin(theta) ** 2 * math.cos(theta))
 
 
 def _conventionalize_refs(refs):
@@ -221,7 +229,7 @@ def _hex_representative(orbit):
 
 def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 80.0),
                            nmax=10, merge_tol=1e-3, min_intensity=0.01,
-                           b_iso=None, md=None):
+                           b_iso=None, md=None, polariz=0.5):
     """手写版主流程。返回 (2θ 数组, 归一化强度数组, 峰表, 是否六方)。
 
     峰表每项：[2θ, 强度%, [(代表 hkl, 多重性), ...]]
@@ -231,6 +239,9 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
     structure_factor 的 b_iso）与择优取向——md = (轴, R)，见
     march_dollase；强度 = m·|F|²·LP·P_md。两者默认 None = 第 6 周的
     理想晶体口径，老结果逐位不变。
+
+    polariz（可选，2026-10-22 向 GSAS-II 对齐）：光束偏振度 P，
+    0.5 = 非偏振（默认，与旧结果逐位相同），同步辐射常用 0.95。
     """
     lo, hi = two_theta_range
     lattice = structure.lattice.matrix
@@ -254,7 +265,7 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
                 theta = math.radians(tt / 2.0)
                 s = math.sin(theta) / wavelength
                 F = structure_factor((h, k, l), structure, s, b_iso=b_iso)
-                intensity = m * abs(F) ** 2 * lp_factor(theta)
+                intensity = m * abs(F) ** 2 * lp_factor(theta, polariz)
                 if md is not None:
                     axis, r_md = md
                     intensity *= march_dollase((h, k, l), axis, r_md, lattice)
