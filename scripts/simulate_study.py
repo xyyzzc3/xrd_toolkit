@@ -6,8 +6,8 @@
     basic          任务一：基础模拟谱（理想晶体 + 常数展宽，带 hkl 标注）
     instrument     任务二：逐仪器参数（波长 / 零点 / 展宽 / 范围步长）四联图
     crosscheck     任务二·双引擎对拍：读 GSAS-II 的 npz → 叠图 + 数字差
-    microstructure 任务三：逐样品参数（尺寸 / 应变 / B 因子 / 取向）    [待加]
-    compare        任务四：模拟 vs 实验（lab6 实测一维谱）              [待加]
+    microstructure 任务三：逐样品参数（尺寸 / 应变 / B 因子 / 取向）
+    compare        任务四：模拟 vs 实验（lab6 实测一维谱，含标样定仪器）
 
 用法：
     python scripts/simulate_study.py basic
