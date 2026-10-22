@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import (  # noqa: E402
-    b_iso_from_cif, d_spacing, fit_pattern, format_hkls, legacy_to_gsas,
+    b_iso_from_cif, d_spacing, fit_pattern, format_hkls,
     load_structure, pattern_from_cif, plot_fit, plot_fit_bottom,
     plot_profile, simulate_pattern, simulate_pattern_gsas, two_theta_from_d)
 
@@ -472,14 +472,15 @@ def study_microstructure(cif: Path, outdir: Path) -> None:
 def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     """任务四：模拟 vs 实验（LaB₆ 标样 = 第三周处理的 `lab6-00024.tif`）。
 
-    按真实工作流走一遍"标样定仪器 → 再用仪器参数出模拟谱"：
+    2026-10-22 起，对比图直接用**全谱拟合结果**，不再走"FWHM 反解
+    U/V/W → 重新模拟"的简化路线：
       ① 用仓库引擎把实验图积分成 1D（几何 = config 里的 `lmfp1_lab6`，
          波长也从它读——这批是 0.1223 Å 的同步辐射数据）；
-      ② 自研自动基线扣背景（estimate_baseline_sliding）；
-      ③ 拿理论峰位在实验谱上找峰 → **定仪器参数**：零点偏移（峰位差的
-         中位）+ 展宽（FWHM² = U·tan²θ + V·tanθ + W 三系数最小二乘）；
-      ④ 用这套"标样定的仪器参数"+ CIF 热振动重出模拟谱 → 对比；
-      ⑤ 逐峰表：峰位残差 / FWHM（实验 vs 模拟）/ 相对强度（实验 vs 模拟）。
+      ② 自研自动基线（estimate_baseline_sliding）作为固定背景；
+      ③ 用 GSAS-II 同口径全谱最小二乘拟合：背景 + 0.25° 分段线性修正，
+         zero/U/V/W/X/Y + Size + 全局 ΔB 一起精修；
+      ④ 拟合曲线（扣掉背景后的峰部分）直接与实验对比；
+      ⑤ 逐峰表：峰位残差 / FWHM（实验 vs 拟合）/ 相对强度。
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -502,45 +503,39 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     img = load_diffraction_image(str(exp_tif))
     t_exp, y_exp = integrate_1d(img, npt=NPT, tth_min_deg=TMIN,
                                 tth_max_deg=TMAX, **geom)
-    # ② 扣背景（自研自动基线）
+    # ② 扣背景（自研自动基线，作为固定背景；拟合再加 0.25° 分段修正）
     base = estimate_baseline_sliding(t_exp, y_exp, 0.2)
-    y_sub = y_exp - base
 
     # 理论峰位（无零点、无展宽要求——只要位置）
     st_tt, st_ii, peaks, _ = pattern_from_cif(
         str(cif), wavelength=lam, two_theta_range=(TMIN, TMAX))
 
-    # ③ 实验找峰（窗口 ±0.08°，高度门槛 = 最强峰的 2%）
-    thr = 0.02 * y_sub.max()
+    # ③ 全谱拟合：直接用最新模型（背景修正 + Size + 全局 ΔB）
+    fit = fit_pattern(
+        structure, t_exp, y_exp, wavelength=lam, b_iso=b_iso,
+        background=base, background_knots=0.25, weights="poisson",
+        free=("zero", "u", "v", "w", "x", "y", "size_um", "b_iso"),
+        initial={"size_um": 0.75, "b_iso": 0.0})
+    t_sim = fit.tth
+    y_obs_peaks = fit.y_obs - fit.background
+    y_sim = fit.y_calc - fit.background
+    zero_fit = float(fit.params["zero"])
+
+    # ④ 实验找峰（窗口 ±0.08°，高度门槛 = 最强峰的 2%）
+    thr = 0.02 * y_obs_peaks.max()
     matched = []
     for tt, ii in zip(st_tt, st_ii):
-        m = (t_exp > tt - 0.08) & (t_exp < tt + 0.08)
-        if not m.any() or y_sub[m].max() < thr:
+        m = (t_sim > tt - 0.08) & (t_sim < tt + 0.08)
+        if not m.any() or y_obs_peaks[m].max() < thr:
             continue
-        center = _peak_center(t_exp, y_sub, tt, span=0.05)
-        fw = _measure_fwhm(t_exp, y_sub, tt, span=0.05)
-        height = float(y_sub[(t_exp > tt - 0.05) & (t_exp < tt + 0.05)].max())
+        center = _peak_center(t_sim, y_obs_peaks, tt, span=0.05)
+        fw = _measure_fwhm(t_sim, y_obs_peaks, tt, span=0.05)
+        height = float(y_obs_peaks[
+            (t_sim > tt - 0.05) & (t_sim < tt + 0.05)].max())
         matched.append((tt, ii, center, fw, height))
     if len(matched) < 4:
-        print(f"实验谱上只对上 {len(matched)} 根峰，拟合仪器参数样本不足")
+        print(f"实验谱上只对上 {len(matched)} 根峰，拟合样本不足")
         return
-    zero_fit = float(np.median([c - tt for tt, _, c, _, _ in matched]))
-    tt_arr = np.array([tt for tt, _, _, _, _ in matched])
-    fw_arr = np.array([fw for _, _, _, fw, _ in matched])
-    t_arr = np.tan(np.radians(tt_arr / 2.0))
-    coef = np.polyfit(t_arr, fw_arr ** 2, 2)   # [U, V, W]
-    u_fit, v_fit, w_fit = (float(c) for c in coef)
-
-    # ④ 用标样定的参数出模拟谱（GSAS 口径：面积守恒 + 同单位换算）
-    gsas_kw = legacy_to_gsas(u=u_fit, v=v_fit, w=w_fit)
-    t_sim, y_sim, _, _ = simulate_pattern_gsas(
-        structure, wavelength=lam, zero_deg=zero_fit,
-        u=gsas_kw["u"], v=gsas_kw["v"], w=gsas_kw["w"],
-        x=gsas_kw["x"], y=gsas_kw["y"], b_iso=b_iso,
-        two_theta_range=(TMIN, TMAX), step_deg=0.001, normalize=False)
-    k_scale = float(np.sum(y_sub * np.interp(t_exp, t_sim, y_sim))
-                    / np.sum(np.interp(t_exp, t_sim, y_sim) ** 2))
-    y_sim_scaled = y_sim * k_scale
 
     # ⑤ 逐峰数字
     def sim_fwhm_at(center):
@@ -558,20 +553,20 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     mid = min(rows, key=lambda r: abs(r[0] - (TMIN + TMAX) / 2))
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.4),
                              gridspec_kw={"width_ratios": [2.0, 1, 1]})
-    axes[0].plot(t_exp, y_sub, color="0.25", lw=1.9,
+    axes[0].plot(t_sim, y_obs_peaks, color="0.25", lw=1.9,
                  label="experiment (background subtracted)")
-    axes[0].plot(t_sim, y_sim_scaled, color="#2b6cb0", lw=1.1,
-                 label="simulation (instrument from the standard)")
+    axes[0].plot(t_sim, y_sim, color="#2b6cb0", lw=1.1,
+                 label="simulation (full-pattern fit)")
     axes[0].set_xlim(TMIN, TMAX); axes[0].set_ylim(bottom=0)
     axes[0].legend(loc="upper right", fontsize=9)
     axes[0].set_title(f"{material} — simulation vs experiment "
-                      f"(λ = {lam:.4f} Å)", fontsize=10.5)
+                      f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5)
     axes[0].set_xlabel(r"2$\theta$ (degrees)"); axes[0].set_ylabel("Intensity")
     for ax, (tt, c, fw, fws, h_rel, _i) in zip(
             axes[1:], (strongest, mid)):
         w = 0.15
-        ax.plot(t_exp, y_sub, color="0.25", lw=1.9)
-        ax.plot(t_sim, y_sim_scaled, color="#2b6cb0", lw=1.1)
+        ax.plot(t_sim, y_obs_peaks, color="0.25", lw=1.9)
+        ax.plot(t_sim, y_sim, color="#2b6cb0", lw=1.1)
         ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
         ax.set_title(f"$2\\theta$ ≈ {c:.3f}°  (FWHM {fw:.3f}° / sim {fws:.3f}°)",
                      fontsize=9.5)
@@ -584,13 +579,13 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     plt.close(fig)
 
     print(f"{material} 任务四：模拟 vs 实验（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°）")
-    print(f"  标样定仪器：零点 {zero_fit:+.4f}°")
-    print(f"    旧口径（deg²）：u={u_fit:.3e} v={v_fit:.3e} w={w_fit:.3e}"
-          f"（FWHM² = u·tan²θ+v·tanθ+w）")
-    print(f"    GSAS 口径（centideg²）：U={gsas_kw['u']:.3f} "
-          f"V={gsas_kw['v']:.3f} W={gsas_kw['w']:.3f}")
-    print(f"  对上 {len(matched)} 根峰（理论 {len(st_tt)} 根）；"
-          f"强度缩放系数 k = {k_scale:.1f}")
+    print(f"  全谱拟合：Rwp {fit.rwp:.3f}% / Rp {fit.rp:.3f}%")
+    print(f"  GSAS 口径：zero={zero_fit:+.4f}°  U={fit.params['u']:.3f}  "
+          f"V={fit.params['v']:.3f}  W={fit.params['w']:.3f}  "
+          f"X={fit.params['x']:.3f}  Y={fit.params['y']:.3f}")
+    print(f"  Size={fit.params['size_um']:.3f} µm；"
+          f"ΔB={fit.params['b_iso']:+.3f} Å²（叠在 CIF 各元素 B 上）")
+    print(f"  对上 {len(matched)} 根峰（理论 {len(st_tt)} 根）")
     print(f"  {'2θ理论':>8} {'Δ2θ':>7} {'FWHM实验':>9} {'FWHM模拟':>9} "
           f"{'I实验%':>7} {'I模拟%':>7}")
     for tt, c, fw, fws, h_rel, i_sim in rows:
