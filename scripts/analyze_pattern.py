@@ -67,7 +67,7 @@ def instrument_profile(geom, lam):
     return fit_pattern(
         st, t, y, wavelength=lam, b_iso=b6, background=bg,
         background_knots=0.25, weights="poisson",
-        free=("zero", "u", "v", "w", "x", "y"))
+        free=("zero", "u", "v", "w", "x", "y"), max_nfev=200)
 
 
 def detect_peaks(t, y, bg):
@@ -152,12 +152,23 @@ def al_substrate_ranges(obs_t, obs_h, lam, tmin, tmax, zero, primary_cif,
 
 
 def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
-            exclude, tmin, tmax):
+            exclude, tmin, tmax, use_al=False):
     t, y = load_1d(path, geom, tmin, tmax)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
+    w_leb = w.copy()
     for lo, hi in exclude:
-        w[(t > lo) & (t < hi)] = 0.0
+        w_leb[(t > lo) & (t < hi)] = 0.0
+    w_struct = w if use_al else w_leb
+    extras = []
+    if use_al and AL_CIF.exists():
+        al = load_structure(str(AL_CIF))
+        extras = [{
+            "structure": al, "label": "Al",
+            "a": 4.061, "b": 4.061, "c": 4.061,
+            "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5,
+            "md": ((1, 1, 1), 0.5),      # 轧制铝箔的 (111) 织构
+        }]
     ip = {} if inst is None else {
         "zero": inst.params["zero"], "u": inst.params["u"],
         "v": inst.params["v"], "w": inst.params["w"],
@@ -168,22 +179,26 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
             "size_um": 0.2, "mustrain": 1000.0, "b_iso": 0.5}
     struct = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, intensity_poly=2, weights=w,
+        background_knots=0.25, intensity_poly=2, weights=w_struct,
+        extra_phases=extras,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
-        initial=init)
+        initial=init, max_nfev=300)
     lebail = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, weights=w, cell_refine=True,
+        background_knots=0.25, weights=w_leb, cell_refine=True,
         refine_intensities=True, free=("size_um", "mustrain"),
         initial={**init, "a": struct.params["a"], "b": struct.params["b"],
                  "c": struct.params["c"],
                  "size_um": struct.params["size_um"],
-                 "mustrain": struct.params["mustrain"]})
+                 "mustrain": struct.params["mustrain"]}, max_nfev=200)
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
-    plot_fit(lebail, f"{path.name} — auto: {primary_name} "
-                     f"(structural Rwp {struct.rwp:.2f}%)",
-             str(out), zoom=(2.6, 3.2), exclude_ranges=list(exclude))
+    plot_src = struct if use_al else lebail
+    plot_fit(plot_src, f"{path.name} — auto: {primary_name}"
+                       + (" + Al (111) textured" if use_al else "")
+                       + f" (Rwp {plot_src.rwp:.2f}%)",
+             str(out), zoom=(2.6, 3.2),
+             exclude_ranges=[] if use_al else list(exclude))
     return struct, lebail, out
 
 
@@ -240,19 +255,22 @@ def main():
         primary = load_structure(str(top[1]))
         exclude = al_substrate_ranges(
             obs_t, obs_h, lam, a.tmin, a.tmax, zero, top[1], scale)
-        if exclude:
-            print("  自动识别 Al 集流体峰，排除："
+        use_al = bool(exclude)
+        if use_al:
+            print("  自动识别 Al 集流体峰，按 (111) 织构第二相建模："
                   + ", ".join(f"{lo:.2f}–{hi:.2f}°" for lo, hi in exclude))
         else:
             print("  未识别到 Al 集流体强峰")
         struct, lebail, out = fit_one(
             p, primary, top[1].name, cell0, geom, lam, inst, outdir,
-            exclude, a.tmin, a.tmax)
+            exclude, a.tmin, a.tmax, use_al=use_al)
+        al_txt = (f" Al={struct.params['Al:scale']:.3g}"
+                  if "Al:scale" in struct.params else "")
         print(f"  结构：Rwp {struct.rwp:.3f}%  a={struct.params['a']:.4f} "
               f"b={struct.params['b']:.4f} c={struct.params['c']:.4f} "
               f"Size={struct.params['size_um']:.3f} µm "
               f"ε={struct.params['mustrain']/4e6*1e3:.2f}e-3 "
-              f"B={struct.params['b_iso']:.2f}")
+              f"B={struct.params['b_iso']:.2f}{al_txt}")
         print(f"  Le Bail：Rwp {lebail.rwp:.3f}%")
         if struct.params["b_iso"] <= 0.01:
             print("  警告：B 撞到 0，结构强度模型不可信；以 Le Bail 峰强为准")
@@ -269,7 +287,10 @@ def main():
                      f"c={struct.params['c']:.4f} "
                      f"Size={struct.params['size_um']:.4f} "
                      f"strain={struct.params['mustrain']/4e6:.6f} "
-                     f"B={struct.params['b_iso']:.4f}\n")
+                     f"B={struct.params['b_iso']:.4f}"
+                     + (f" Al_scale={struct.params['Al:scale']:.6g}"
+                        if "Al:scale" in struct.params else "")
+                     + "\n")
             fh.write(f"Le Bail Rwp={lebail.rwp:.3f}%\n")
 
 
