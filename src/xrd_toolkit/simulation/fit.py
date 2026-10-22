@@ -113,7 +113,8 @@ class FitResult:
             f"{'parameter':>10} {'initial':>12} {'fitted':>12} {'esd≈':>10}",
         ]
         for name in self.params:
-            if name in ("scale", "size_mix", "strain_mix"):
+            if name in ("scale", "size_mix", "strain_mix") or \
+                    name.startswith("intensity_a"):
                 continue
             init = self.initial.get(name, float("nan"))
             esd = self.stderr.get(name, float("nan"))
@@ -130,6 +131,13 @@ class FitResult:
                     f"Le Bail: {len(ratio)} per-peak intensities; "
                     f"fit/table ratio median {np.median(ratio):.3f} "
                     f"range {ratio.min():.2f}–{ratio.max():.2f}")
+        a_names = [n for n in self.params if n.startswith("intensity_a")]
+        if a_names:
+            terms = " ".join(
+                f"{'+' if self.params[n] >= 0 else '−'}"
+                f"{abs(self.params[n]):.4f}·z^{i}"
+                for i, n in enumerate(a_names, start=1))
+            lines.append(f"intensity correction: 1 {terms}")
         if len(self.background_coeffs):
             lines.append(f"background: correction coefficients "
                          f"{np.array2string(self.background_coeffs, precision=4)}")
@@ -247,7 +255,8 @@ class _Model:
     """在固定峰表上，把 (峰形参数 → 曲线) 包成最小二乘可调用的对象。"""
 
     def __init__(self, table, tth, y_target, weights, wavelength, fixed,
-                 background_basis, refine_intensities=False):
+                 background_basis, refine_intensities=False,
+                 intensity_poly=0):
         self.table = table
         self.tth = np.asarray(tth, dtype=float)
         self.y = np.asarray(y_target, dtype=float)
@@ -257,6 +266,7 @@ class _Model:
         self.free_names = []
         self.background_basis = background_basis
         self.refine_intensities = bool(refine_intensities)
+        self.intensity_poly = int(intensity_poly)
 
     def params(self, vec):
         p = dict(self.fixed)
@@ -316,6 +326,30 @@ class _Model:
             cols.append(col)
         return np.column_stack(cols) if cols else np.empty((len(self.tth), 0))
 
+    def intensity_columns(self, p):
+        """结构模式的光滑强度修正列：1 + a1·z + a2·z²（z 归一化 2θ）。
+
+        物理上像吸收/消光/偏振的平滑响应；它只改**强度**，不改峰宽。
+        构造为额外线性列，拟合器一次解出 a1、a2——不增加非线性参数。
+        """
+        centers, inten, fwhm, eta = self._parts(p)
+        degree = self.intensity_poly
+        span = max(0.5 * float(centers.max() - centers.min()), 1e-9) \
+            if len(centers) else 1.0
+        z = (centers - float(centers.mean())) / span if len(centers) else \
+            np.zeros_like(centers)
+        cols = [np.zeros_like(self.tth) for _ in range(degree + 1)]
+        for tt, ii, fw, et, zz in zip(centers, inten, fwhm, eta, z):
+            if fw <= 0 or ii == 0:
+                continue
+            lo, hi = self._window(tt, fw)
+            if hi <= lo:
+                continue
+            pv = pv_area_normalized(self.tth[lo:hi], tt, fw, et)
+            for d in range(degree + 1):
+                cols[d][lo:hi] += ii * (zz ** d) * pv
+        return np.column_stack(cols)
+
     def solve_linear(self, p):
         """解线性参数：结构模式 = scale + 背景；Le Bail = 每峰强度 + 背景。"""
         if self.refine_intensities:
@@ -332,7 +366,27 @@ class _Model:
                 bg = self.background_basis @ coef[M.shape[1]:]
                 coeffs = np.asarray(coef[M.shape[1]:], dtype=float)
             y_calc = A @ coef
-            return y_calc, 1.0, bg, coeffs, amps
+            return y_calc, 1.0, bg, coeffs, amps, None
+
+        if self.intensity_poly:
+            M = self.intensity_columns(p)
+            A = (M if self.background_basis is None
+                 else np.column_stack([M, self.background_basis]))
+            coef, *_ = np.linalg.lstsq(
+                A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
+            scale = float(coef[0])
+            if scale > 0:
+                a = np.asarray(coef[1:1 + self.intensity_poly],
+                               dtype=float) / scale
+            else:                       # pragma: no cover - 极罕见
+                a = np.zeros(self.intensity_poly)
+            if self.background_basis is None:
+                bg = np.zeros_like(self.y)
+                coeffs = np.array([])
+            else:
+                bg = self.background_basis @ coef[M.shape[1]:]
+                coeffs = np.asarray(coef[M.shape[1]:], dtype=float)
+            return A @ coef, max(scale, 0.0), bg, coeffs, None, a
 
         y_model = self.peak_curve(p)
         if self.background_basis is None:
@@ -360,7 +414,7 @@ class _Model:
                 bg = self.background_basis @ coef[1:]
                 y_calc = A @ coef
                 coeffs = np.asarray(coef[1:], dtype=float)
-        return y_calc, scale, bg, coeffs, None
+        return y_calc, scale, bg, coeffs, None, None
 
     def residual(self, vec):
         y_calc, *_ = self.solve_linear(self.params(vec))
@@ -415,6 +469,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 two_theta_range=None, nmax=10,
                 background=4, background_poly=0, background_knots=0.0,
                 weights="poisson", refine_intensities=False,
+                intensity_poly=0,
                 free=("zero", "u", "v", "w"),
                 stages=None, initial=None, bounds=None,
                 size_mix=1.0, strain_mix=1.0,
@@ -441,6 +496,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            线性参数解出（不再受结构因子/B/LP 约束）。
                            用来区分"峰形/背景没拟合好"还是"强度模型没拟合好"；
                            b_iso/polariz 此时简并，不能放进 free。
+        intensity_poly     结构模式的光滑强度修正阶数（0/1/2）：
+                           强度乘 1 + a1·z + a2·z²（z = 归一化 2θ）。
+                           吸收/消光/偏振这类平滑响应用它，比逐峰自由强度
+                           更有物理约束；系数与 scale 一起线性解出。
         free               要精修的参数名（U/V/W/X/Y/Z/size_um/mustrain/
                            b_iso/polariz/zero）；scale 与背景总是线性解出
         stages             分阶段精修，默认 DEFAULT_STAGES 按 free 过滤
@@ -520,6 +579,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         if bad:
             raise ValueError(
                 f"Le Bail 模式下每峰强度已自由，{bad} 会简并，不能精修")
+        if intensity_poly:
+            raise ValueError("Le Bail 模式下 intensity_poly 没有意义")
+    if int(intensity_poly) < 0 or int(intensity_poly) > 4:
+        raise ValueError("intensity_poly 取 0–4")
     auto_zero, auto_u, auto_v, auto_w = _estimate_initial_profile(
         tth, y_target, table)
     init = {
@@ -574,7 +637,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             raise ValueError(f"stages 中有未在 free 里的参数：{bad}")
 
     model = _Model(table, tth, y_target, w, wavelength, init, basis,
-                   refine_intensities=refine_intensities)
+                   refine_intensities=refine_intensities,
+                   intensity_poly=intensity_poly)
     values = dict(init)
     result = None
     used_stages = []
@@ -598,8 +662,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     model.free_names = list(free)
     model.fixed = {k: v for k, v in values.items() if k not in free}
     vec = np.array([values[n] for n in free], dtype=float)
-    y_calc_target, scale, bg, coeffs, amps = model.solve_linear(
-        model.params(vec))
+    y_calc_target, scale, bg, coeffs, amps, inten_coeffs = \
+        model.solve_linear(model.params(vec))
     if fixed_bg is not None:
         y_calc_total = y_calc_target + fixed_bg
         # solve_linear 返回的是固定背景之上的修正项；报告里给总背景
@@ -614,7 +678,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     chi2 = float(np.sum(w * resid ** 2))
     n_peaks = len(table.tth)
     n_params = (len(free) + n_peaks
-                if refine_intensities else len(free) + 1)
+                if refine_intensities else len(free) + 1 + int(intensity_poly))
     n_params += basis.shape[1] if basis is not None else 0
     reduced = chi2 / max(1, len(y_raw) - n_params)
     stderr = _numerical_stderr(model, vec, list(free), reduced) \
@@ -624,6 +688,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     params["scale"] = float(scale)
     params["size_mix"] = float(size_mix)
     params["strain_mix"] = float(strain_mix)
+    if inten_coeffs is not None:
+        for i, a in enumerate(np.asarray(inten_coeffs).ravel(), start=1):
+            params[f"intensity_a{i}"] = float(a)
     peak_intensities = (None if amps is None
                         else np.asarray(amps, dtype=float) * table.inten)
     return FitResult(

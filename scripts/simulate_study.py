@@ -513,7 +513,8 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     # ③ 全谱拟合：直接用最新模型（背景修正 + Size + 全局 ΔB）
     fit = fit_pattern(
         structure, t_exp, y_exp, wavelength=lam, b_iso=b_iso,
-        background=base, background_knots=0.25, weights="poisson",
+        background=base, background_knots=0.25, intensity_poly=2,
+        weights="poisson",
         free=("zero", "u", "v", "w", "x", "y", "size_um", "b_iso"),
         initial={"size_um": 0.75, "b_iso": 0.0})
     t_sim = fit.tth
@@ -585,6 +586,9 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
           f"X={fit.params['x']:.3f}  Y={fit.params['y']:.3f}")
     print(f"  Size={fit.params['size_um']:.3f} µm；"
           f"ΔB={fit.params['b_iso']:+.3f} Å²（叠在 CIF 各元素 B 上）")
+    a1 = fit.params.get("intensity_a1", 0.0)
+    a2 = fit.params.get("intensity_a2", 0.0)
+    print(f"  强度修正：1 {a1:+.3f}z {a2:+.3f}z²（z = 归一化 2θ）")
     print(f"  对上 {len(matched)} 根峰（理论 {len(st_tt)} 根）")
     print(f"  {'2θ理论':>8} {'Δ2θ':>7} {'FWHM实验':>9} {'FWHM模拟':>9} "
           f"{'I实验%':>7} {'I模拟%':>7}")
@@ -631,7 +635,8 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
         free=("zero", "u", "v", "w", "x", "y"))
     tail = fit_pattern(
         structure, tth, y, wavelength=lam, b_iso=b_iso,
-        background=bg, background_knots=0.25, weights="poisson",
+        background=bg, background_knots=0.25, intensity_poly=2,
+        weights="poisson",
         free=("zero", "u", "v", "w", "x", "y", "size_um", "b_iso"),
         initial={**instrument.params, "size_um": 0.75, "b_iso": 0.0})
     # Le Bail 式：每峰积分强度单独解出——用来验证"峰形/背景公式"本身，
@@ -675,11 +680,14 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     print(f"{material} 精修（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°，"
           f"自动基线 + 0.25° 分段线性背景修正）")
     print(f"  ① 仪器+常规峰形：Rwp {instrument.rwp:.3f}% / Rp {instrument.rp:.3f}%")
-    print(f"  ② + Lorentzian 尾巴 + 全局 ΔB：Rwp {tail.rwp:.3f}% / "
-          f"Rp {tail.rp:.3f}%")
+    a1 = tail.params.get("intensity_a1", 0.0)
+    a2 = tail.params.get("intensity_a2", 0.0)
+    print(f"  ② + Lorentzian 尾巴 + 全局 ΔB + 光滑强度修正："
+          f"Rwp {tail.rwp:.3f}% / Rp {tail.rp:.3f}%")
     print(tail.report())
     print(f"  Size = {tail.params['size_um']:.3f} µm（Lorentzian 尾巴项）；"
-          f"ΔB = {tail.params['b_iso']:+.3f} Å²（叠在 CIF 各元素 B 上）")
+          f"ΔB = {tail.params['b_iso']:+.3f} Å²（叠在 CIF 各元素 B 上）；"
+          f"强度 ×(1 {a1:+.3f}z {a2:+.3f}z²)")
     ratio = (lebail.peak_intensities
              / np.maximum(lebail.peak_table_intensities, 1e-12))
     print(f"  ③ Le Bail（每峰强度自由）：Rwp {lebail.rwp:.3f}% / "

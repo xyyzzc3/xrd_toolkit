@@ -37,13 +37,14 @@ def _synth(structure, *, zero_deg=0.012, u=0.5, v=-0.1, w=18.0,
     return tth, y
 
 
-def _synth_modified(structure, *, w=18.0, step=0.01,
+def _synth_modified(structure, *, factors=None, w=18.0, step=0.01,
                     two_theta_range=(10.0, 80.0), background=0.0):
-    """合成一条"每峰强度被 factors 改过"的谱（Le Bail 测试用）。"""
+    """合成一条"每峰强度被 factors 改过"的谱（Le Bail / 强度测试用）。"""
     sticks, inten, _, _ = core.pattern_from_structure(
         structure, wavelength=CU_KA, two_theta_range=two_theta_range,
         min_intensity=0.0)
-    factors = 1.0 + 0.15 * np.cos(np.arange(len(sticks)) * 0.7)
+    if factors is None:
+        factors = 1.0 + 0.15 * np.cos(np.arange(len(sticks)) * 0.7)
     sig, gam = reflection_sig_gam(sticks, CU_KA, w=w)
     fwhm, eta = sig_gam_to_fwhm_eta(sig, gam)
     tth = np.arange(two_theta_range[0],
@@ -133,6 +134,27 @@ class TestFitModes(unittest.TestCase):
         with self.assertRaises(ValueError):
             fit_pattern(self.st, tth, y, refine_intensities=True,
                         free=("b_iso",))
+
+    def test_smooth_intensity_poly_recovers_factor(self):
+        sticks, _, _, _ = core.pattern_from_structure(
+            self.st, wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+            min_intensity=0.0)
+        z = (sticks - sticks.mean()) / (0.5 * (sticks.max() - sticks.min()))
+        factors = 1.0 + 0.10 * z
+        tth, y, _ = _synth_modified(self.st, factors=factors)
+        res = fit_pattern(
+            self.st, tth, y, background=None, weights="uniform",
+            intensity_poly=1, free=("zero", "u", "v", "w"),
+            initial={"w": 18.0},
+            stages=[("zero", "w"), ("u", "v", "w")])
+        self.assertLess(res.rwp, 0.1)
+        self.assertAlmostEqual(res.params["intensity_a1"], 0.10, delta=0.02)
+
+    def test_intensity_poly_rejected_with_lebail(self):
+        tth, y = _synth(self.st, x=0.0, y=0.0)
+        with self.assertRaises(ValueError):
+            fit_pattern(self.st, tth, y, refine_intensities=True,
+                        intensity_poly=1, free=("zero", "w"))
 
     def test_background_knots_correct_a_biased_baseline(self):
         tth, y = _synth(self.st, x=0.0, y=0.0)
