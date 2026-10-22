@@ -13,6 +13,8 @@
   可选一个放大窗（看峰形与峰间底部）。
 - `plot_fit_bottom`（2026-10-22 加）：把残差 y 轴按峰间噪声的 ±8σ 收窄，
   专看"峰间底部平不平"（主图残差被峰顶几千 counts 撑满，看不见 ±10）。
+- `plot_intensity_ratios`（2026-10-22 加）：逐峰 obs/fit 面积比 + 两条
+  背景的差，回答"实验扣背景后为什么比拟合高"。
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -23,6 +25,73 @@ from xrd_toolkit.simulation.core import format_hkls
 
 FOOTPRINT_DEG = 1.35   # 竖排标签的横向"占地"（度）：小于这个距离就躲到上一档
 TIER_GAP = 15.0        # 每档抬高多少（强度单位）
+
+
+def plot_intensity_ratios(result, auto_background, peak_tt, labels, out_path,
+                          *, intensities=None, window=0.06):
+    """逐峰强度诊断（2026-10-22）：obs/fit 面积比 + 两条背景的差。
+
+    左图回答"为什么实验扣背景后比拟合高"：红点 >1 是实验高、蓝点 <1 是
+    拟合高；强峰通常贴着 1，高角弱峰因重叠/hkl 效应散得最大。右图把
+    自动基线与拟合背景画在一起，说明两者的系统差。
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    tth = np.asarray(result.tth, dtype=float)
+    y_obs = np.asarray(result.y_obs, dtype=float) - np.asarray(
+        result.background, dtype=float)
+    y_fit = np.asarray(result.y_calc, dtype=float) - np.asarray(
+        result.background, dtype=float)
+    ratios, used_tt, used_lab, used_int = [], [], [], []
+    for i, (tt, lab) in enumerate(zip(peak_tt, labels)):
+        m = np.abs(tth - tt) <= window
+        if not np.any(m):
+            continue
+        ao = float(np.trapezoid(y_obs[m], tth[m]))
+        af = float(np.trapezoid(y_fit[m], tth[m]))
+        if af <= 0:
+            continue
+        ratios.append(ao / af)
+        used_tt.append(float(tt))
+        used_lab.append(lab)
+        used_int.append(float(intensities[i]) if intensities is not None else 1.0)
+    ratios = np.asarray(ratios)
+    used_int = np.asarray(used_int)
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(13.5, 4.8))
+    ax.axhline(1.0, color="0.5", lw=0.9, ls="--")
+    for tt, r, ii, lab in zip(used_tt, ratios, used_int, used_lab):
+        ax.plot(tt, r, "o", color=("#d94b2b" if r > 1 else "#2b6cb0"),
+                ms=4.5 + 3.0 * np.sqrt(max(ii, 0.0) / max(used_int.max(), 1e-9)))
+        ax.text(tt, r + 0.008, lab.split(" x")[0], rotation=60, fontsize=7,
+                ha="left", va="bottom", color="0.25")
+    pad = max(0.02, 0.15 * (ratios.max() - ratios.min()))
+    ax.set_ylim(max(0.0, ratios.min() - pad), ratios.max() + pad)
+    ax.set_xlabel(r"2$\theta$ (degrees)")
+    ax.set_ylabel("observed area / fit area")
+    ax.set_title("(a) per-peak integrated area ratio", fontsize=10.5)
+    ax.grid(alpha=0.25, linestyle=":")
+
+    auto_bg = np.asarray(auto_background, dtype=float)
+    ax2.plot(tth, auto_bg, color="#888888", lw=1.4,
+             label="auto baseline (0.2°)")
+    ax2.plot(tth, result.background, color="#2b6cb0", lw=1.4,
+             label="fit background")
+    ax2.set_xlabel(r"2$\theta$ (degrees)")
+    ax2.set_ylabel("Background (counts)")
+    ax2.set_title(f"(b) backgrounds differ by "
+                  f"{np.mean(result.background - auto_bg):+.1f} counts "
+                  f"on average", fontsize=10.5)
+    ax2.legend(loc="center right", fontsize=8.5)
+    ax2.grid(alpha=0.25, linestyle=":")
+    ax3 = ax2.twinx()
+    ax3.plot(tth, result.background - auto_bg, color="#d94b2b", lw=1.0,
+             ls=":")
+    ax3.set_ylabel("fit − auto (counts)", color="#d94b2b")
+    ax3.tick_params(axis="y", labelcolor="#d94b2b")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 
 def plot_fit_bottom(result, title, out_path, *, inter_mask=None, zoom=None):

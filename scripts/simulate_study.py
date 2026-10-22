@@ -40,7 +40,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, d_spacing, fit_pattern, format_hkls,
     load_structure, pattern_from_cif, plot_fit, plot_fit_bottom,
-    plot_profile, simulate_pattern, simulate_pattern_gsas, two_theta_from_d)
+    plot_intensity_ratios, plot_profile, simulate_pattern,
+    simulate_pattern_gsas, two_theta_from_d)
 
 DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_1000055.cif"
 
@@ -653,7 +654,7 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
         r = res.residual[m]
         return int(m.sum()), float(r.mean()), float(np.sqrt(np.mean(r ** 2)))
 
-    st_tt, _, _, _ = pattern_from_cif(
+    st_tt, st_ii, peaks, is_hex = pattern_from_cif(
         str(cif), wavelength=lam, two_theta_range=(TMIN, TMAX))
     dist = np.min(np.abs(tth[:, None] - st_tt[None, :]), axis=1)
     inter = dist > 0.12               # 离任何理论峰都 >0.12° 的"真底部"
@@ -676,6 +677,10 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     plot_fit_bottom(
         lebail, f"{material} — inter-peak bottom residual (Le Bail fit)",
         str(out_b), inter_mask=inter, zoom=(4.30, 4.70))
+    labels = [format_hkls(p[2], is_hex) for p in peaks]
+    out_i = outdir / f"sim_xrd_intensity_ratios_{material}.png"
+    plot_intensity_ratios(tail, bg, st_tt, labels, str(out_i),
+                          intensities=st_ii)
 
     print(f"{material} 精修（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°，"
           f"自动基线 + 0.25° 分段线性背景修正）")
@@ -703,6 +708,7 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     print(f"    ③ {im_l:+.1f} / {ir_l:.1f} counts")
     print(f"  → {out}")
     print(f"  → {out_b}")
+    print(f"  → {out_i}")
 
 
 def study_keys(cif: Path, outdir: Path) -> None:

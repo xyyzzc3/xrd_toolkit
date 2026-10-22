@@ -39,6 +39,7 @@ from xrd_toolkit.simulation.plots import (
     plot_annotated,
     plot_fit,
     plot_fit_bottom,
+    plot_intensity_ratios,
     plot_pattern,
     plot_profile,
 )
@@ -61,7 +62,7 @@ __all__ = [
     "pattern_from_structure", "pattern_from_cif",
     "pattern_from_structure_pymatgen", "pattern_from_cif_pymatgen",
     "load_structure", "plot_pattern", "plot_annotated", "plot_profile",
-    "plot_fit", "plot_fit_bottom",
+    "plot_fit", "plot_fit_bottom", "plot_intensity_ratios",
     "caglioti_fwhm_deg", "lorentz_fwhm_deg", "scherrer_fwhm_deg",
     "strain_fwhm_deg", "tch_fwhm_eta", "pseudo_voigt", "profile_fwhm_eta",
     "simulate_pattern",
