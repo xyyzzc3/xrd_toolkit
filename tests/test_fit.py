@@ -196,6 +196,25 @@ class TestFitModes(unittest.TestCase):
         self.assertAlmostEqual(res.params["c"], base.lattice.c * 1.01,
                                delta=0.01)
 
+    def test_extra_phase_scale_recovered(self):
+        main = core.load_structure(STRUCT_DIR / "LiFePO4_olivine.cif")
+        al = core.load_structure(STRUCT_DIR / "Al_metal.cif")
+        kw = dict(wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+                  step_deg=0.01, w=18.033, size_um=1e5, mustrain=0.0)
+        tth, y1, _, _ = simulate_pattern_gsas(main, scale=1000.0, **kw)
+        _, y2, _, _ = simulate_pattern_gsas(al, scale=300.0, **kw)
+        res = fit_pattern(
+            main, tth, y1 + y2, background=None, weights="uniform",
+            free=("zero", "w"),
+            initial={"zero": 0.0, "u": 0.0, "v": 0.0, "w": 18.033},
+            extra_phases=[{
+                "structure": al, "label": "Al",
+                "a": 4.049, "b": 4.049, "c": 4.049,
+                "size_um": 1e4, "mustrain": 0.0, "b_iso": None}])
+        self.assertLess(res.rwp, 0.2)
+        self.assertGreater(res.params["Al:scale"], 0.0)
+        self.assertGreater(res.params["scale"], 0.0)
+
     def test_x_y_default_bounds_are_nonnegative(self):
         from xrd_toolkit.simulation.fit import DEFAULT_BOUNDS
         self.assertEqual(DEFAULT_BOUNDS["x"][0], 0.0)
