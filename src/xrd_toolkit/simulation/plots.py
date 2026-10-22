@@ -156,12 +156,13 @@ def plot_fit_bottom(result, title, out_path, *, inter_mask=None, zoom=None):
     return out_path
 
 
-def plot_fit(result, title, out_path, zoom=None):
+def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None):
     """拟合结果图：上=观测/计算/背景，下=残差（2026-10-22 拟合工具）。
 
     `result` 是 `simulation.fit.FitResult`（鸭子类型即可：tth / y_obs /
     y_calc / background / residual / rwp / rp）。zoom 给 (lo, hi) 时
-    在上图里再嵌一个放大窗，方便看峰形和"峰间底部"。
+    在上图里再嵌一个放大窗；exclude_ranges 给 [(lo, hi), …] 时把
+    被排除的区域（如 Al 基片的强峰）画成灰带。
     """
     import matplotlib.pyplot as plt
     fig, (ax, axr) = plt.subplots(
@@ -174,6 +175,12 @@ def plot_fit(result, title, out_path, zoom=None):
     if result.background is not None:
         ax.plot(result.tth, result.background, "--", color="#d94b2b",
                 lw=1.0, label="background")
+    first = True
+    for lo, hi in exclude_ranges or []:
+        ax.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0,
+                   label="excluded" if first else None)
+        axr.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0)
+        first = False
     ax.set_ylabel("Intensity")
     ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
                  fontsize=10.5)

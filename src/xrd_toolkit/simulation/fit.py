@@ -52,6 +52,10 @@ DEFAULT_BOUNDS = {
     "w": (0.0, 1.0e6),
     # X/Y 是 Lorentzian 宽，负值没有物理意义；负 Y 会变成"抑制尾巴"的
     # 非物理旋钮（实测会把峰间底部拉成 -20 counts）。需要时用 bounds 覆盖。
+    # a/b/c 的默认边界会在 fit_pattern 里按 CIF 的初始晶胞覆盖（±1 Å）
+    "a": (0.1, 1.0e3),
+    "b": (0.1, 1.0e3),
+    "c": (0.1, 1.0e3),
     "x": (0.0, 1.0e4),
     "y": (0.0, 1.0e4),
     "z": (-1.0e4, 1.0e4),
@@ -67,6 +71,7 @@ DEFAULT_BOUNDS = {
 # 去"抑制"尾巴（非物理，还会把峰间底部拉低）。
 DEFAULT_STAGES = (
     ("zero", "w"),
+    ("a", "b", "c"),
     ("u", "v", "w"),
     ("size_um", "mustrain"),
     ("x", "y"),
@@ -153,15 +158,30 @@ class _PeakTable:
     """
 
     def __init__(self, structure, wavelength, two_theta_range, nmax,
-                 b_iso, polariz):
-        tth, inten, peaks, is_hex = core.pattern_from_structure(
-            structure, wavelength=wavelength,
-            two_theta_range=two_theta_range, nmax=nmax,
-            min_intensity=0.0, b_iso=b_iso, polariz=polariz)
+                 b_iso, polariz, keep_unmerged=False, md=None):
+        self.a0, self.b0, self.c0 = (float(x) for x in structure.lattice.abc)
+        self.cell_refine = bool(keep_unmerged)
+        if keep_unmerged:
+            hkl, d0, tth, inten = core.reflection_table(
+                structure, wavelength=wavelength,
+                two_theta_range=two_theta_range, nmax=nmax,
+                b_iso=b_iso, md=md, polariz=polariz)
+            self.hkl = np.asarray(hkl, dtype=int)
+            self.d0 = np.asarray(d0, dtype=float)
+            self.orthorhombic = all(
+                abs(float(a) - 90.0) < 1e-3 for a in structure.lattice.angles)
+        else:
+            tth, inten, _peaks, _is_hex = core.pattern_from_structure(
+                structure, wavelength=wavelength,
+                two_theta_range=two_theta_range, nmax=nmax,
+                min_intensity=0.0, b_iso=b_iso, md=md, polariz=polariz)
+            self.hkl = None
+            self.d0 = None
+            self.orthorhombic = False
         self.tth = np.asarray(tth, dtype=float)
-        self.inten = np.asarray(inten, dtype=float)
-        self.peaks = peaks
-        self.is_hex = is_hex
+        inten = np.asarray(inten, dtype=float)
+        self.inten = (inten / inten.max() * 100.0
+                      if inten.size and inten.max() > 0 else inten)
         theta = np.radians(self.tth / 2.0)
         self.s2 = (np.sin(theta) / float(wavelength)) ** 2
         self.pol_base = polarization(self.tth, polariz)
@@ -275,7 +295,20 @@ class _Model:
 
     def _parts(self, p):
         """当前非线性参数下，每条峰的 (位置, 相对强度, FWHM, η)。"""
-        centers = self.table.tth + float(p["zero"])
+        zero = float(p["zero"])
+        if self.table.orthorhombic:
+            a = float(p["a"])
+            b = float(p["b"])
+            c = float(p["c"])
+            h = self.table.hkl[:, 0].astype(float)
+            k = self.table.hkl[:, 1].astype(float)
+            l = self.table.hkl[:, 2].astype(float)
+            inv_d2 = h * h / (a * a) + k * k / (b * b) + l * l / (c * c)
+            d = 1.0 / np.sqrt(np.maximum(inv_d2, 1e-12))
+            sin_t = np.clip(0.5 * self.wavelength / d, 0.0, 1.0)
+            centers = 2.0 * np.degrees(np.arcsin(sin_t)) + zero
+        else:                       # 非正交晶胞暂不支持精修，用固定位置
+            centers = self.table.tth + zero
         sig, gam = reflection_sig_gam(
             centers, self.wavelength,
             u=p["u"], v=p["v"], w=p["w"], x=p["x"], y=p["y"], z=p["z"],
@@ -354,18 +387,63 @@ class _Model:
         """解线性参数：结构模式 = scale + 背景；Le Bail = 每峰强度 + 背景。"""
         if self.refine_intensities:
             M = self.peak_columns(p)
-            A = (M if self.background_basis is None
-                 else np.column_stack([M, self.background_basis]))
+            n_peaks = M.shape[1]
+            bg_basis = self.background_basis
+            # 逐峰强度必须非负：先用无约束 lstsq，再把负的峰剔掉重解
+            # （active-set）。直接上 lsq_linear 在这个高度共线的
+            # 峰+背景问题上很慢且不稳定；剔负峰又快又稳。
+            active = np.ones(n_peaks, dtype=bool)
+            coef = np.zeros(0)
+            a_active = np.zeros(0)
+            for _ in range(6):
+                cols = [M[:, active]]
+                if bg_basis is not None:
+                    cols.append(bg_basis)
+                A = np.column_stack(cols) if cols[0].shape[1] or len(cols) > 1 \
+                    else np.empty((len(self.y), 0))
+                coef, *_ = np.linalg.lstsq(
+                    A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
+                n_act = int(active.sum())
+                a_active = np.asarray(coef[:n_act], dtype=float)
+                if not active.any() or np.all(a_active >= 0.0):
+                    break
+                new_active = active.copy()
+                new_active[active] = a_active >= 0.0
+                if not new_active.any():
+                    active = new_active
+                    a_active = np.zeros(0)
+                    if bg_basis is not None:
+                        coef, *_ = np.linalg.lstsq(
+                            bg_basis * self.sqrt_w[:, None],
+                            self.y * self.sqrt_w, rcond=None)
+                    else:
+                        coef = np.zeros(0)
+                    break
+                active = new_active
+            n_act = int(active.sum())
+            # 最后一次 active 可能与循环里的 coef 不同步（第 6 轮刚剔峰），
+            # 这里按最终 active 重解一次，保证系数与列一一对应。
+            cols = [M[:, active]]
+            if bg_basis is not None:
+                cols.append(bg_basis)
+            A = (np.column_stack(cols)
+                 if (n_act or bg_basis is not None)
+                 else np.empty((len(self.y), 0)))
             coef, *_ = np.linalg.lstsq(
                 A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
-            amps = np.asarray(coef[:M.shape[1]], dtype=float)
-            if self.background_basis is None:
+            a_active = np.asarray(coef[:n_act], dtype=float)
+            amps = np.zeros(n_peaks, dtype=float)
+            if n_act:
+                amps[active] = a_active[:n_act]
+            if bg_basis is None:
                 bg = np.zeros_like(self.y)
                 coeffs = np.array([])
+                y_calc = M @ amps
             else:
-                bg = self.background_basis @ coef[M.shape[1]:]
-                coeffs = np.asarray(coef[M.shape[1]:], dtype=float)
-            y_calc = A @ coef
+                bcoef = np.asarray(coef[n_act:], dtype=float)
+                bg = bg_basis @ bcoef
+                coeffs = bcoef
+                y_calc = M @ amps + bg
             return y_calc, 1.0, bg, coeffs, amps, None
 
         if self.intensity_poly:
@@ -469,7 +547,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 two_theta_range=None, nmax=10,
                 background=4, background_poly=0, background_knots=0.0,
                 weights="poisson", refine_intensities=False,
-                intensity_poly=0,
+                intensity_poly=0, cell_refine=None,
                 free=("zero", "u", "v", "w"),
                 stages=None, initial=None, bounds=None,
                 size_mix=1.0, strain_mix=1.0,
@@ -500,8 +578,13 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            强度乘 1 + a1·z + a2·z²（z = 归一化 2θ）。
                            吸收/消光/偏振这类平滑响应用它，比逐峰自由强度
                            更有物理约束；系数与 scale 一起线性解出。
-        free               要精修的参数名（U/V/W/X/Y/Z/size_um/mustrain/
-                           b_iso/polariz/zero）；scale 与背景总是线性解出
+        cell_refine        True = 用逐反射 hkl/d 重建峰位，a/b/c 即使不在
+                           free 里也按 initial 固定在该晶胞；None（默认）
+                           = 仅当 free 含 a/b/c 时启用。
+        free               要精修的参数名（zero/U/V/W/X/Y/Z/size_um/
+                           mustrain/b_iso/polariz；正交晶胞可加 a/b/c）；
+                           scale 与背景总是线性解出。a/b/c 只支持
+                           α=β=γ=90° 的正交晶胞（橄榄石就是）。
         stages             分阶段精修，默认 DEFAULT_STAGES 按 free 过滤
         initial            初值覆盖（同名参数）
         bounds             边界覆盖（同名参数）
@@ -518,9 +601,15 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     if two_theta_range is None:
         two_theta_range = (float(tth[0]), float(tth[-1]))
 
-    # ── 峰表（固定结构） ────────────────────────────────────────────
+    free = tuple(free)
+    if cell_refine is None:
+        cell_refine = any(n in free for n in ("a", "b", "c"))
+    else:
+        cell_refine = bool(cell_refine)
+
+    # ── 峰表（固定结构；精修晶胞时保留 hkl/d、不做 2θ 合并） ────────
     table = _PeakTable(structure, wavelength, two_theta_range, nmax,
-                       b_iso, polariz)
+                       b_iso, polariz, keep_unmerged=cell_refine, md=md)
 
     # ── 权重（用原始计数；固定背景扣除不改变权重口径） ─────────────
     if isinstance(weights, str):
@@ -570,7 +659,6 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         y_target = y_raw - fixed_bg
 
     # ── 初值 ────────────────────────────────────────────────────────
-    free = tuple(free)
     bad = [n for n in free if n not in _ALLOWED]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")
@@ -583,6 +671,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             raise ValueError("Le Bail 模式下 intensity_poly 没有意义")
     if int(intensity_poly) < 0 or int(intensity_poly) > 4:
         raise ValueError("intensity_poly 取 0–4")
+    if cell_refine and not table.orthorhombic:
+        raise ValueError("a/b/c 精修目前只支持正交晶胞（α=β=γ=90°）")
     auto_zero, auto_u, auto_v, auto_w = _estimate_initial_profile(
         tth, y_target, table)
     init = {
@@ -590,6 +680,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         "u": auto_u,
         "v": auto_v,
         "w": auto_w,
+        "a": table.a0,
+        "b": table.b0,
+        "c": table.c0,
         "x": 0.0,
         "y": 0.0,
         "z": 0.0,
@@ -614,7 +707,12 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     if initial:
         init.update(initial)
     user_bounds = bounds or {}
-    bounds = {**DEFAULT_BOUNDS, **user_bounds}
+    cell_bounds = {
+        "a": (table.a0 - 1.0, table.a0 + 1.0),
+        "b": (table.b0 - 1.0, table.b0 + 1.0),
+        "c": (table.c0 - 1.0, table.c0 + 1.0),
+    }
+    bounds = {**DEFAULT_BOUNDS, **cell_bounds, **user_bounds}
     if isinstance(b_iso, dict) and "b_iso" not in user_bounds:
         # 字典 B 时自由参数是 ΔB，允许为负（实验样品的 B 可能比 CIF 小）
         bounds["b_iso"] = (-50.0, 50.0)
@@ -662,8 +760,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     model.free_names = list(free)
     model.fixed = {k: v for k, v in values.items() if k not in free}
     vec = np.array([values[n] for n in free], dtype=float)
+    p_final = model.params(vec)
     y_calc_target, scale, bg, coeffs, amps, inten_coeffs = \
-        model.solve_linear(model.params(vec))
+        model.solve_linear(p_final)
     if fixed_bg is not None:
         y_calc_total = y_calc_target + fixed_bg
         # solve_linear 返回的是固定背景之上的修正项；报告里给总背景
@@ -703,8 +802,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         initial=init, stages=tuple(used_stages),
         peak_intensities=peak_intensities,
         peak_table_intensities=(None if amps is None else table.inten.copy()),
-        peak_tth=(None if amps is None
-                  else table.tth + float(values["zero"])))
+        peak_tth=(None if amps is None else model._parts(p_final)[0]))
 
 
 def rwp(y_obs, y_calc, weights="poisson"):

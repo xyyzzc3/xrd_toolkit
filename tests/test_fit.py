@@ -170,6 +170,32 @@ class TestFitModes(unittest.TestCase):
         self.assertLess(float(np.mean(np.abs(res.background - true_bg))),
                         float(np.mean(np.abs(wrong_bg - true_bg))))
 
+    def test_cell_refinement_recovers_scaled_lattice(self):
+        from pymatgen.core import Lattice, Structure
+        base = core.load_structure(STRUCT_DIR / "LiFePO4_olivine.cif")
+        lat = Lattice.from_parameters(
+            base.lattice.a * 1.01, base.lattice.b * 1.01,
+            base.lattice.c * 1.01, *base.lattice.angles)
+        scaled = Structure(
+            lat, [site.species for site in base],
+            [site.frac_coords for site in base])
+        tth, y, _, _ = simulate_pattern_gsas(
+            scaled, wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+            step_deg=0.01, scale=1000.0, w=18.033, size_um=1e5,
+            mustrain=0.0)
+        res = fit_pattern(
+            base, tth, y, background=None, weights="uniform",
+            free=("a", "b", "c"),
+            initial={"zero": 0.0, "u": 0.0, "v": 0.0, "w": 18.033})
+        # 基础强度表按初始晶胞算的 B/LP 不再重算，允许 ~1% 的强度差
+        self.assertLess(res.rwp, 2.0)
+        self.assertAlmostEqual(res.params["a"], base.lattice.a * 1.01,
+                               delta=0.01)
+        self.assertAlmostEqual(res.params["b"], base.lattice.b * 1.01,
+                               delta=0.01)
+        self.assertAlmostEqual(res.params["c"], base.lattice.c * 1.01,
+                               delta=0.01)
+
     def test_x_y_default_bounds_are_nonnegative(self):
         from xrd_toolkit.simulation.fit import DEFAULT_BOUNDS
         self.assertEqual(DEFAULT_BOUNDS["x"][0], 0.0)

@@ -295,6 +295,58 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
     return two_thetas, intensities, peaks, is_hex
 
 
+def reflection_table(structure, wavelength=1.5406, two_theta_range=(10.0, 80.0),
+                     nmax=10, b_iso=None, md=None, polariz=0.5):
+    """逐条反射的“可精修晶胞”表：代表 hkl、d、2θ、未归一化强度。
+
+    与 `pattern_from_structure` 的区别：**不按 2θ 合并**，并保留 hkl 与 d。
+    拟合器要改晶胞时，必须知道每条峰对应的 hkl 才能重算 d/2θ；合并后
+    （如 (300)+(221)）就没法各自随晶胞移动了。
+
+    返回 (hkl, d, tth, intensity) 四个数组；hkl 形如 (N,3)，d 单位 Å，
+    tth 单位度，intensity = m·|F|²·LP·P_md（相对值，未归一化）。
+    """
+    lo, hi = two_theta_range
+    lattice = structure.lattice.matrix
+    is_hex = structure.lattice.is_hexagonal()
+    rot_mats = distinct_rotations(structure.get_space_group_info()[0])
+
+    hkls, ds, tths, ints = [], [], [], []
+    visited = set()
+    for h in range(-nmax, nmax + 1):
+        for k in range(-nmax, nmax + 1):
+            for l in range(-nmax, nmax + 1):
+                if (h, k, l) == (0, 0, 0):
+                    continue
+                d = d_spacing((h, k, l), lattice)
+                tt = two_theta_from_d(d, wavelength)
+                if tt is None or not (lo <= tt <= hi):
+                    continue
+                if (h, k, l) in visited:
+                    continue
+                orbit = multiplicity((h, k, l), rot_mats)
+                visited |= orbit
+                m = len(orbit)
+                theta = math.radians(tt / 2.0)
+                s = math.sin(theta) / wavelength
+                F = structure_factor((h, k, l), structure, s, b_iso=b_iso)
+                intensity = m * abs(F) ** 2 * lp_factor(theta, polariz)
+                if md is not None:
+                    axis, r_md = md
+                    intensity *= march_dollase((h, k, l), axis, r_md, lattice)
+                rep = (_hex_representative(orbit) if is_hex
+                       else _positive_representative(orbit))
+                hkls.append(rep)
+                ds.append(d)
+                tths.append(tt)
+                ints.append(intensity)
+    order = np.argsort(tths)
+    return (np.asarray(hkls, dtype=int)[order],
+            np.asarray(ds, dtype=float)[order],
+            np.asarray(tths, dtype=float)[order],
+            np.asarray(ints, dtype=float)[order])
+
+
 def b_iso_from_cif(cif_path):
     """从 CIF 原子行读**各向同性**温度因子 Uiso → {元素符号: B}（Å²）。
 
