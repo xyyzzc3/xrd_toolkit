@@ -84,6 +84,7 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 - **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
 - **Desktop app over the same engine** — five stage entrances, a live parameter panel, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF export.
 - **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is an optional extra: `pip install 'xrd-toolkit[simulation]'`).
+- **Full-pattern fitting of measured patterns** — a GSAS-II-consistent profile engine (area-conserving pseudo-Voigt, Caglioti + Lorentzian widths; Le Bail or structural fits). The LaB₆ standard fixes the instrument profile (Le Bail Rwp 4.24%); LMFP electrode data are fitted with a (111)-textured Al substrate and a rock-salt LiF impurity (Le Bail Rwp 1.70%, structural 2.90%), after masking fixed detector hot spots before integration. Examples: `showcase/simulation/sim_xrd_fit_LaB6.png`, `showcase/simulation/sim_xrd_fit_LMFP_00029.png`.
 
 ## Install (from source)
 
@@ -104,6 +105,8 @@ python scripts/integrate_pattern.py  --file data/xxx.tif
 python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
 # simulate a theoretical powder pattern from a CIF (structures ship in data/structures/)
 python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
+# fit an experimental pattern (LaB6 standard + LMFP electrode; hot-spot mask, Al/LiF phases)
+python scripts/fit_lmfp.py
 ```
 
 Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). Outputs land in `outputs/{dataset}/`. Omit `--file` and each script shows an interactive menu of everything in `data/`; the three consuming scripts take `--config NAME` (default `lmfp1_lab6`). **Script table and full flag list: [docs/NOTES.md](docs/NOTES.md#cli-scripts).**

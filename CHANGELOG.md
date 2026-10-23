@@ -38,15 +38,13 @@
   加速），`fit_lmfp.py` / `analyze_pattern.py` 默认对**样品**启用，
   `--no-hot-mask` 关闭；**标样不掩**（LaB6 的亮斑是真实衍射）。
   LMFP 结构/Le Bail **8.07/6.93 → 3.48/2.29%**；2.8° 的两相候选图
-  作废并移出 showcase。**展示图改用 Le Bail + Al 相**（逐峰强度 +
-  Al scale，Rwp 2.29–2.31%），结构拟合（3.48%）只负责晶胞/微结构；
-  4.88°/5.72° 的弱峰由 Le Bail 接住，3.449° 是 [321]+[212] 的叠合，
-  仍有小残差。
+  作废并移出 showcase。（后续 CIF 修正与 LiF 相把口径更新为
+  Le Bail **1.70%** / 结构 **2.90%**，见上面两条。）
 - **拟合图统一成论文式布局**（2026-10-23）：观测点 / 计算线 / 背景 +
   obs−calc 差值 + 每相一行的布拉格峰位刻度。`plot_fit` 默认用
   `FitResult.peak_tth`（主相）和 `extra_peak_tth`（第二相）自动生成
   刻度，`phase_label` 可覆盖主相名（固溶体 reduced formula 会被约简）；
-  LMFP 图显示主相 + Al 两行，LaB6 一行。`sim_xrd_vs_experiment_LaB6.png`
+  LMFP 图显示主相 + Al + LiF 三行，LaB6 一行。`sim_xrd_vs_experiment_LaB6.png`
   改成实验点 + 模拟线 + 差值（原来是两条线叠在一起）。坐标轴/图例按
   通行文案：**Observed / Calculated / Background / Difference /
   Bragg positions**，y 轴带 counts 单位；Rwp/Rp 在图题里写成下标

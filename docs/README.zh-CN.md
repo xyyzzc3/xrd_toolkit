@@ -77,6 +77,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **偏置束心与扇形分析**——束心打在探测器边缘/角落的数据全程支持（pyFAI 分箱不可靠时自动切自研 numpy 积分）；36 扇区瀑布图一眼看出择优取向与被切环的几何。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
 - **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 为可选依赖：`pip install 'xrd-toolkit[simulation]'`）。
+- **实测谱全谱拟合**——GSAS-II 口径峰形引擎（面积守恒伪 Voigt、Caglioti + Lorentzian 峰宽、Le Bail/结构拟合）。LaB₆ 标样定仪器峰形（Le Bail Rwp 4.24%）；LMFP 电极数据带 (111) 织构 Al 基片与岩盐 LiF 杂质（Le Bail Rwp 1.70%，结构 2.90%），积分前自动掩掉探测器固定坏点。图见 `showcase/simulation/sim_xrd_fit_LaB6.png`、`showcase/simulation/sim_xrd_fit_LMFP_00029.png`。
 
 ## 安装（从源码跑）
 
@@ -95,6 +96,8 @@ python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --
 # 用已标定的几何做全角度积分；扇形积分 + 瀑布图
 python scripts/integrate_pattern.py  --file data/xxx.tif
 python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
+# 全谱拟合实测谱（LaB6 标样 + LMFP 电极；坏点掩膜、Al/LiF 相）
+python scripts/fit_lmfp.py
 # 从 CIF 模拟理论粉末谱（参考结构随仓库附在 data/structures/）
 python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
 ```
