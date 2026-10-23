@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QHeaderView, QPushButton
 
 from xrd_toolkit.services import stage_cache
 from xrd_toolkit.gui import watchdog as gui_watchdog
@@ -119,6 +119,10 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertLessEqual(w.peak_table.maximumWidth(), 320,
                                  "全屏时表格不许被拉宽")
             self.assertLessEqual(w.peak_box.maximumWidth(), 320)
+            for col in range(3):
+                self.assertEqual(
+                    w.peak_table.horizontalHeader().sectionResizeMode(col),
+                    QHeaderView.Stretch, "三列应当平均分宽度")
             self.assertLess(w.peak_table.height(), 130,
                             "两根峰不该占一块空表")
             self.assertIn("寻峰：2 根", w.log_text.toPlainText())

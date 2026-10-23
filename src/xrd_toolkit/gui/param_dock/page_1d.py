@@ -165,13 +165,9 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_box.setMaximumWidth(320)
     peak_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     peak_table.verticalHeader().setDefaultSectionSize(22)
-    # 2θ 占剩下的宽度；FWHM/高度按内容（数字比列头短，别平均分）
+    # 三列平均分宽度（用户 2026-10-24："峰表三列平均分宽度吧"）
     peak_table.horizontalHeader().setSectionResizeMode(
-        0, QHeaderView.Stretch)
-    peak_table.horizontalHeader().setSectionResizeMode(
-        1, QHeaderView.ResizeToContents)
-    peak_table.horizontalHeader().setSectionResizeMode(
-        2, QHeaderView.ResizeToContents)
+        QHeaderView.Stretch)
     peak_lay.addWidget(peak_caption)
     peak_lay.addWidget(peak_table)
     peak_box.setVisible(False)
