@@ -29,6 +29,9 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 
 ## 一览
 
+<details>
+<summary>展开截图与拟合图</summary>
+
 <table>
   <tr>
     <td align="center" width="50%">
@@ -79,6 +82,8 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
     </td>
   </tr>
 </table>
+
+</details>
 
 ## 亮点
 

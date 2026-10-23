@@ -36,6 +36,9 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 
 ## At a glance
 
+<details>
+<summary>Show the screenshots and fit figures</summary>
+
 <table>
   <tr>
     <td align="center" width="50%">
@@ -86,6 +89,8 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
     </td>
   </tr>
 </table>
+
+</details>
 
 ## Highlights
 
