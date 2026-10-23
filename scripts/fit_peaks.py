@@ -36,6 +36,7 @@ from xrd_toolkit.services.background import estimate_baseline_sliding  # noqa: E
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
+from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     core, fit_pattern, fit_single_peak, load_structure, plot_williamson_hall,
     reflection_sig_gam, sig_gam_to_fwhm_eta, williamson_hall)
@@ -67,15 +68,9 @@ def instrument_profile(path, geom, lam):
 
 
 def detect_peaks(t, y, bg, n=12):
-    from scipy.signal import find_peaks
-    ys = y - bg
-    med = float(np.median(ys))
-    sigma = 1.4826 * float(np.median(np.abs(ys - med)))
-    prom = max(5.0 * sigma, 0.02 * float(np.max(ys)))
-    dist = max(2, int(round(0.008 / max(float(np.median(np.diff(t))), 1e-9))))
-    idx, _ = find_peaks(ys, prominence=prom, distance=dist)
-    idx = idx[np.argsort(ys[idx])[::-1]][:n]
-    return np.sort(t[idx])
+    """自动找最强的 n 根峰（峰位按 2θ 升序）。"""
+    peaks = find_peaks_1d(t, y, baseline=bg, max_peaks=n)
+    return np.array([p.center for p in peaks])
 
 
 def main():
