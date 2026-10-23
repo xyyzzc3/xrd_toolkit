@@ -716,8 +716,8 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     im_t, ir_t = inter_stats(tail)
     im_l, ir_l = inter_stats(lebail)
     out = outdir / f"sim_xrd_fit_{material}.png"
-    plot_fit(lebail, f"{material} — profile fit (GSAS-II + Le Bail "
-                     f"intensities, λ = {lam:.4f} Å)", str(out),
+    plot_fit(lebail, f"{material} — profile fit with Le Bail intensities, "
+                     f"λ = {lam:.4f} Å", str(out),
              zoom=(1.6, 2.6))
     out_b = outdir / f"sim_xrd_fit_bottom_{material}.png"
     plot_fit_bottom(
