@@ -7,6 +7,9 @@ data/*
 outputs/
 # outputs/ 是脚本的本地工作区（按数据文件名分文件夹，带运行编号），不上传
 # （保护实验数据隐私）；README 展示用的精选图统一放在 showcase/ 里提交
+# 样品派生的图/报告也只放本地：fit_lmfp/analyze_pattern 默认写 outputs/；
+# showcase 里只留标样（LaB6）示例，样品图即使误生成也不进 git
+showcase/**/*LMFP*
 __pycache__/
 *.pyc
 *.egg-info/

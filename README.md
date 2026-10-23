@@ -112,7 +112,7 @@ pip install -e .                       # numpy / scipy / matplotlib / fabio / py
 python -m xrd_toolkit.gui              # the desktop app
 ```
 
-> Sample data are not in the repository — point `--file` at your own diffraction images.
+> Sample data are not in the repository — point `--file` at your own diffraction images. Sample-derived figures and reports go under `outputs/` (gitignored); the repository ships code, CIFs and standard-sample (LaB₆) examples only.
 
 ```bash
 # calibrate + integrate one image (prints a config entry to paste into config.py)

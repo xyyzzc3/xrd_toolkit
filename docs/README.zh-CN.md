@@ -105,7 +105,7 @@ pip install -e .                       # numpy / scipy / matplotlib / fabio / py
 python -m xrd_toolkit.gui              # 桌面界面
 ```
 
-> 示例数据没有上传到仓库，请把 `--file` 换成你自己的衍射数据路径。
+> 示例数据没有上传到仓库，请把 `--file` 换成你自己的衍射数据路径。样品派生的图/报告写到 `outputs/`（不进 git）；仓库只放代码、CIF 和 LaB₆ 标样示例。
 
 ```bash
 # 校准 + 积分一张图（跑完会打印一段可直接粘进 config.py 的配置条目）
