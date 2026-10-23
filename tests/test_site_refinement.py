@@ -66,10 +66,17 @@ class TestCoordinateRefinement(unittest.TestCase):
         cls.init = dict(zero=0.0, u=0.5, v=-0.1, w=18.0, x=0.0, y=0.0,
                         size_um=1e5, mustrain=0.0, b_iso=0.0, polariz=0.5)
 
-    def _synthetic(self, values):
+    def _synthetic(self, values, occupancy=None):
         coords = self.model.positions(values)
-        moved = Structure(self.st.lattice,
-                          [s.species for s in self.st], coords)
+        orbit = self.model.orbit("Fe5")
+        species = []
+        for i, site in enumerate(self.st):
+            if occupancy is not None and i in orbit.indices:
+                species.append({sp: occ * occupancy
+                                for sp, occ in site.species.items()})
+            else:
+                species.append(site.species)
+        moved = Structure(self.st.lattice, species, coords)
         return simulate_pattern_gsas(
             moved, wavelength=CU_KA, two_theta_range=(10.0, 45.0),
             step_deg=0.01, zero_deg=0.0, u=0.5, v=-0.1, w=18.0,
@@ -91,6 +98,38 @@ class TestCoordinateRefinement(unittest.TestCase):
         self.assertAlmostEqual(x, orbit.base[0] + true["x_Fe5"], delta=2e-4)
         self.assertAlmostEqual(z, orbit.base[2] + true["z_Fe5"], delta=2e-4)
         self.assertAlmostEqual(y0, orbit.base[1], delta=1e-6)  # y 被对称性固定
+
+    def test_fe5_occupancy_recovered(self):
+        tth, y, _, _ = self._synthetic({}, occupancy=0.90)
+        res = fit_pattern(self.st, tth, y, background=None,
+                          weights="uniform", free=("occ_Fe5",),
+                          initial=self.init)
+        self.assertLess(res.rwp, 0.01)
+        self.assertAlmostEqual(res.params["occ_Fe5"], 0.90, delta=0.01)
+
+    def test_coordinate_and_occupancy_together(self):
+        orbit = self.model.orbit("Fe5")
+        true = {orbit.params[0]: 0.008, orbit.params[1]: -0.004}
+        tth, y, _, _ = self._synthetic(true, occupancy=0.92)
+        res = fit_pattern(self.st, tth, y, background=None,
+                          weights="uniform",
+                          free=("coord_Fe5", "occ_Fe5"),
+                          initial=self.init)
+        self.assertLess(res.rwp, 0.01)
+        self.assertAlmostEqual(res.params["occ_Fe5"], 0.92, delta=0.01)
+        self.assertAlmostEqual(res.params[orbit.params[0]],
+                               true[orbit.params[0]], delta=5e-4)
+        self.assertAlmostEqual(res.params[orbit.params[1]],
+                               true[orbit.params[1]], delta=5e-4)
+
+    def test_occupancy_scale_keeps_equivalent_sites_together(self):
+        orbit = self.model.orbit("Fe5")
+        scale = self.model.occupancy_scale({"occ_Fe5": 0.9})
+        for j in orbit.indices:
+            self.assertAlmostEqual(scale[j], 0.9, places=12)
+        rest = len(self.st) - len(orbit.indices)
+        self.assertAlmostEqual(float(np.sum(scale)),
+                               0.9 * len(orbit.indices) + rest)
 
     def test_special_position_has_no_coordinate(self):
         tth, y, _, _ = self._synthetic({})
@@ -125,6 +164,17 @@ class TestCoordinateRefinement(unittest.TestCase):
             fit_pattern(self.st, tth, y, background=None,
                         weights="uniform", refine_intensities=True,
                         free=("coord_Fe5",), initial=self.init)
+        with self.assertRaises(ValueError):
+            fit_pattern(self.st, tth, y, background=None,
+                        weights="uniform", refine_intensities=True,
+                        free=("occ_Fe5",), initial=self.init)
+
+    def test_unknown_occupancy_rejected(self):
+        tth, y, _, _ = self._synthetic({})
+        with self.assertRaises(ValueError):
+            fit_pattern(self.st, tth, y, background=None,
+                        weights="uniform", free=("occ_Fe99",),
+                        initial=self.init)
 
 
 if __name__ == "__main__":

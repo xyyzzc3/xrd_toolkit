@@ -307,17 +307,21 @@ class _PeakTable:
         self.b_iso_absolute = (not isinstance(b_iso, dict)
                                and b_iso is not None)
 
-    def site_intensity(self, coords, b_species, s2, md_r=None):
-        """逐位点模型：当前坐标/温度因子下的相对强度（归一化）。
+    def site_intensity(self, coords, b_species, s2, md_r=None,
+                       occ_scale=None):
+        """逐位点模型：当前坐标/占位/温度因子下的相对强度（归一化）。
 
         coords     (n_sites, 3) 分数坐标
         b_species  (n_species,) 每个元素的绝对 B（Å²）
         s2         (n_ref,) 当前晶胞下的 sin²θ/λ²
         md_r       March–Dollase R；None = 用表里的固定值
+        occ_scale  (n_sites,) 每个位点的占位缩放（相对 CIF 值）
         """
         bw = np.exp(-np.asarray(b_species, dtype=float)[None, :]
                     * np.asarray(s2, dtype=float)[:, None])
-        amp = (self.f_species * bw) @ self.site_occ.T      # (n_ref, n_sites)
+        occ = self.site_occ if occ_scale is None else \
+            self.site_occ * np.asarray(occ_scale, dtype=float)[:, None]
+        amp = (self.f_species * bw) @ occ.T                # (n_ref, n_sites)
         phase = self.hkl @ np.asarray(coords, dtype=float).T
         f = np.sum(amp * np.exp(2j * np.pi * phase), axis=1)
         inten = self.mult * self.lp * np.abs(f) ** 2
@@ -481,10 +485,12 @@ class _Model:
                            + float(p.get("b_iso", 0.0)))
                 b_sp.append(b_e)
             coords = self.table.site_model.positions(p)
+            occ_scale = self.table.site_model.occupancy_scale(p)
             inten = self.table.site_intensity(
                 coords, np.asarray(b_sp, dtype=float), s2,
                 md_r=(float(p["md_r"]) if "md_r" in p
-                      else self.table.md_fixed))
+                      else self.table.md_fixed),
+                occ_scale=occ_scale)
         elif self.table.dynamic:
             # 分元素 B + 可精修织构：逐反射重算 |Σ_e A_e e^(−B_e s²)|²
             s2 = (np.sin(np.radians(centers / 2.0)) / self.wavelength) ** 2
@@ -794,7 +800,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            给 md=(轴, R) 作初始/边界参考；**原子坐标**用
                            coord_<位点标签>（如 coord_Fe5），按空间群把
                            等效位点绑成一组、只精修 Wyckoff 允许的方向；
-                           scale 与背景总是线性解出。a/b/c 只支持
+                           占位率用 occ_<位点>（如 occ_Fe5，精修**总占位**，
+                           混合位点的物种比例不动）；scale 与背景总是线性
+                           解出。a/b/c 只支持
                            α=β=γ=90° 的正交晶胞（橄榄石就是）。
         stages             分阶段精修，默认 DEFAULT_STAGES 按 free 过滤
                            （坐标参数会在最后的联合收口前自动加一阶段；
@@ -816,27 +824,40 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         two_theta_range = (float(tth[0]), float(tth[-1]))
 
     free = tuple(free)
-    # ── 原子坐标：coord_<位点> 展开成按空间群约束的参数名 ───────────
-    site_aliases = [n for n in free if n.startswith("coord_")]
+    # ── 原子坐标/占位：coord_<位点>、occ_<位点> 按空间群展开 ─────
+    coord_aliases = [n for n in free if n.startswith("coord_")]
+    occ_aliases = [n for n in free if n.startswith("occ_")]
     site_model = None
     site_params = []
-    if site_aliases:
-        if len(set(site_aliases)) != len(site_aliases):
-            raise ValueError(f"坐标参数重复：{site_aliases}")
+    occ_params = []
+    if coord_aliases or occ_aliases:
+        if len(set(coord_aliases)) != len(coord_aliases):
+            raise ValueError(f"坐标参数重复：{coord_aliases}")
+        if len(set(occ_aliases)) != len(occ_aliases):
+            raise ValueError(f"占位参数重复：{occ_aliases}")
         site_model = SiteModel(structure, symprec=site_symprec)
-        for name in site_aliases:
+        for name in coord_aliases:
             orbit = site_model.orbit(name[len("coord_"):])
             if orbit.n_free == 0:
                 raise ValueError(
                     f"位点 {orbit.label}（{orbit.wyckoff}）没有可精修的"
                     "坐标方向（特殊位置由对称性固定）")
             site_params.extend(orbit.params)
-        dup = [n for n in site_params if n in free]
+        for name in occ_aliases:
+            orbit = site_model.orbit(name[len("occ_"):])
+            if orbit.base_occ <= 0:
+                raise ValueError(
+                    f"位点 {orbit.label} 的 CIF 占位为 0，无法精修")
+            occ_params.append(orbit.occ_param)
+        extra_params = site_params + occ_params
+        aliases = set(coord_aliases) | set(occ_aliases)
+        dup = [n for n in extra_params if n in free and n not in aliases]
         if dup:
             raise ValueError(
-                f"坐标参数重复：{dup}（coord_* 与显式参数只能给一种）")
-        free = (tuple(n for n in free if n not in site_aliases)
-                + tuple(site_params))
+                f"坐标/占位参数重复：{dup}（别名与显式参数只能给一种）")
+        free = (tuple(n for n in free
+                      if n not in coord_aliases and n not in occ_aliases)
+                + tuple(site_params) + tuple(occ_params))
     if len(set(free)) != len(free):
         raise ValueError(f"free 里有重复参数：{free}")
     if cell_refine is None:
@@ -857,8 +878,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     if refine_intensities and (elem_names or md_refine
                                or site_model is not None):
         raise ValueError(
-            "Le Bail 模式下逐峰强度已自由，分元素 B / 织构 R / 原子坐标"
-            "会简并")
+            "Le Bail 模式下逐峰强度已自由，分元素 B / 织构 R / 原子坐标 / "
+            "占位率会简并")
     if elem_names and "b_iso" in free:
         raise ValueError("b_iso（全局 ΔB）不能和分元素 B 同时精修")
     if md_refine and md is None:
@@ -925,7 +946,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     # ── 初值 ────────────────────────────────────────────────────────
     dynamic_names = ([f"b_{e}" for e in elem_names]
                      + (["md_r"] if md_refine else [])
-                     + list(site_params))
+                     + list(site_params) + list(occ_params))
     bad = [n for n in free if n not in _ALLOWED and n not in dynamic_names]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")
@@ -968,6 +989,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         init[f"b_{elem}"] = float(table.b_elem_base.get(elem, 0.0))
     for name in site_params:
         init[name] = 0.0            # 位移系数，0 = CIF 原位
+    for name in occ_params:
+        orbit = site_model.orbit(name[len("occ_"):])
+        init[name] = float(orbit.base_occ)
     if md_refine:
         init["md_r"] = float(md[1]) if md is not None else 1.0
     if isinstance(b_iso, dict):
@@ -996,6 +1020,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     for name in site_params:
         # 位移系数（分数坐标）；±0.05 ≈ 0.5 Å，远大于真实热振动
         bounds.setdefault(name, (-0.05, 0.05))
+    for name in occ_params:
+        bounds.setdefault(name, (0.0, 1.0))
     if md_refine:
         bounds.setdefault("md_r", (0.05, 20.0))
 
@@ -1009,7 +1035,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 stages.append(hit)
         covered = {n for s in stages for n in s}
         rest = tuple(n for n in free
-                     if n not in covered and n not in site_params)
+                     if n not in covered and n not in site_params
+                     and n not in occ_params)
         if rest:
             stages.append(rest)
     else:
@@ -1017,9 +1044,15 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bad = [n for s in stages for n in s if n not in free]
         if bad:
             raise ValueError(f"stages 中有未在 free 里的参数：{bad}")
-    if site_params and default_stages:
-        # 坐标放在峰形/背景/B 之后、最后的联合收口之前
-        stages.insert(max(0, len(stages) - 1), tuple(site_params))
+    if default_stages and (site_params or occ_params):
+        # 坐标 → 占位，放在峰形/背景之后、B 与最后的联合收口之前
+        extra = [tuple(s) for s in (site_params, occ_params) if s]
+        pos = max(0, len(stages) - 1)
+        for stage in reversed(extra):
+            stages.insert(pos, stage)
+        if site_params and occ_params:
+            # 坐标与占位相关：各自精修完再联合收口一次
+            stages.append(tuple(site_params + occ_params))
 
     # X/Y（Lorentzian 尾巴）同时从 0 出发容易掉进"几乎没有尾巴"的
     # 局部极小：2026-10-23 用 LaB6 实测，停在 X≈0.03 / Y≈0.6 时

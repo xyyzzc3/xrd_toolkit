@@ -7,9 +7,11 @@ Rietveld 里原子坐标**不能**按 P1 给每个原子各放三个参数：等
   * 代表位点的标签（CIF 里的原子名，如 Fe5）；
   * 允许的位移方向 `basis`（3×d，分数坐标）；
   * 每个等效位点的对称操作 `transforms`（代表位点 → 该位点）；
-  * 优化器参数名（x_Fe5 / z_Fe5 …；轴向无法对齐时叫 c0_Fe5）。
+  * 优化器参数名（x_Fe5 / z_Fe5 …；轴向无法对齐时叫 c0_Fe5）；
+  * 占位率参数 `occ_Fe5`（精修该轨道**总占位**，Fe:Mn 比例不动）。
 
-把参数值交给 `positions()` 就得到全部原子的分数坐标。LMFP（Pnma，
+把参数值交给 `positions()` 就得到全部原子的分数坐标；
+`occupancy_scale()` 给出每个位点相对 CIF 的占位缩放。LMFP（Pnma，
 28 个原子）按这套只有 6 条轨道、11 个坐标参数；Li 的 4a 位点是 0 维，
 自动固定。
 
@@ -77,6 +79,8 @@ class SiteOrbit:
     basis: np.ndarray          # 允许的位移方向 (3, d)
     transforms: tuple          # 每个等效位点对应的对称操作（代表 → 该位点）
     params: tuple              # 参数名，如 ("x_Fe5", "z_Fe5")
+    base_occ: float            # CIF 里的位点总占位（混合位点是各物种之和）
+    occ_param: str             # 占位率参数名（occ_Fe5）
 
     @property
     def n_free(self):
@@ -145,10 +149,12 @@ class SiteModel:
                 name = (f"{axis}_{key}" if axis is not None
                         else f"c{j}_{key}")
                 params.append(name)
+            base_occ = float(sum(structure[rep].species.values()))
             orbit = SiteOrbit(
                 label=label, param_key=key, rep_index=rep, indices=inds,
                 wyckoff=str(wyckoff), base=base, basis=basis,
-                transforms=tuple(transforms), params=tuple(params))
+                transforms=tuple(transforms), params=tuple(params),
+                base_occ=base_occ, occ_param=f"occ_{key}")
             self.orbits[key] = orbit
             self.param_names.extend(params)
             for name in params:
@@ -187,6 +193,24 @@ class SiteModel:
             for j, op in zip(orbit.indices, orbit.transforms):
                 coords[j] = np.asarray(op.operate(rep_new), dtype=float) % 1.0
         return coords
+
+    def occupancy_scale(self, values):
+        """参数值 → 每个位点的占位缩放因子（相对 CIF 值，默认 1）。
+
+        `occ_Fe5 = 0.9` 表示该轨道**总占位**变成 0.9（Fe:Mn 比例不动，
+        两者一起缩放）。返回的长度 = 结构位点数。
+        """
+        scale = np.ones(len(self.structure), dtype=float)
+        for orbit in self.orbits.values():
+            if orbit.occ_param not in values:
+                continue
+            if orbit.base_occ <= 0:
+                raise ValueError(
+                    f"位点 {orbit.label} 的 CIF 占位为 0，无法精修")
+            factor = float(values[orbit.occ_param]) / orbit.base_occ
+            for j in orbit.indices:
+                scale[j] = factor
+        return scale
 
     def summary(self, values):
         """报告用：{标签: (wyckoff, x, y, z)}，坐标取代表位点。"""
