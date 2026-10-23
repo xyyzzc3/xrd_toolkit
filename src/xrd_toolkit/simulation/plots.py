@@ -447,3 +447,34 @@ def plot_profile(tth, curve, peaks, is_hex, title, out_path, *,
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
+
+
+def plot_williamson_hall(result, out_path, title="Williamson–Hall"):
+    """W-H 图：(βcosθ)² vs sin²θ，点 + 拟合直线。
+
+    `result` 是 `microstructure.WilliamsonHallResult`（鸭子类型即可）。
+    """
+    import matplotlib.pyplot as plt
+    x = np.asarray(result.x, dtype=float)
+    y = np.asarray(result.y, dtype=float)
+    fig, ax = plt.subplots(figsize=(6.4, 4.8))
+    ax.plot(x, y, "o", ms=5, color="#1f5fa8", label="peaks")
+    xs = np.linspace(float(x.min()), float(x.max()), 100)
+    ax.plot(xs, result.intercept + result.slope * xs, "-", color="#d0544e",
+            lw=1.3, label="linear fit")
+    ax.set_xlabel(r"$\sin^2\theta$")
+    ax.set_ylabel(r"$(\beta\cos\theta)^2$  (rad$^2$)")
+    size = ("nan" if result.size_nm != result.size_nm
+            else f"{result.size_nm:.1f}")
+    strain = ("nan" if result.strain != result.strain
+              else f"{result.strain:.2e}")
+    ax.set_title(f"{title}: D = {size} nm, ε = {strain}", fontsize=10.5)
+    ax.grid(alpha=0.2, linestyle=":")
+    ax.legend(fontsize=8.5, frameon=True, framealpha=0.9)
+    if result.warning:
+        ax.text(0.02, 0.97, result.warning, transform=ax.transAxes,
+                va="top", fontsize=8, color="#b03030")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path

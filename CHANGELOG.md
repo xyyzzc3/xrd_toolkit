@@ -18,6 +18,14 @@
 
 ### 模拟
 
+- **单峰峰形拟合 + Scherrer/Williamson–Hall**（2026-10-23）：新增
+  `simulation/peakfit.py`——Gaussian / Lorentzian / pseudo-Voigt /
+  split-Pearson VII 的单峰非线性最小二乘拟合（局部线性/二次背景，
+  返回峰位、FWHM、η、m、左/右 FWHM、面积与 Rwp）；新增
+  `simulation/microstructure.py`——Scherrer 尺寸与**带仪器校正**的
+  Williamson–Hall 分析（quadrature / linear 两种扣法），并配 W-H 图
+  `plot_williamson_hall`。测试覆盖四线型反解、Pearson 极限、Gaussian
+  面积、W-H 反解与仪器校正偏差。
 - **分元素 B + 可精修织构（md_r）**（2026-10-23）：`fit_pattern` 新增
   两类动态参数——`b_<元素>`（分元素绝对 B，动态结构因子，不能与
   全局 `b_iso` 同修）和 `md_r`（March–Dollase R 可精修，需给
@@ -269,6 +277,14 @@
 
 ### 模拟
 
+- **单峰峰形拟合 + Scherrer/Williamson–Hall**（2026-10-23）：新增
+  `simulation/peakfit.py`——Gaussian / Lorentzian / pseudo-Voigt /
+  split-Pearson VII 的单峰非线性最小二乘拟合（局部线性/二次背景，
+  返回峰位、FWHM、η、m、左/右 FWHM、面积与 Rwp）；新增
+  `simulation/microstructure.py`——Scherrer 尺寸与**带仪器校正**的
+  Williamson–Hall 分析（quadrature / linear 两种扣法），并配 W-H 图
+  `plot_williamson_hall`。测试覆盖四线型反解、Pearson 极限、Gaussian
+  面积、W-H 反解与仪器校正偏差。
 - **分元素 B + 可精修织构（md_r）**（2026-10-23）：`fit_pattern` 新增
   两类动态参数——`b_<元素>`（分元素绝对 B，动态结构因子，不能与
   全局 `b_iso` 同修）和 `md_r`（March–Dollase R 可精修，需给

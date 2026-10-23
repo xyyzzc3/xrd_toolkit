@@ -35,6 +35,16 @@ from xrd_toolkit.simulation.gsas_profile import (
     simulate_pattern_gsas,
 )
 from xrd_toolkit.simulation.fit import FitResult, fit_pattern, rwp
+from xrd_toolkit.simulation.microstructure import (
+    WilliamsonHallResult,
+    scherrer_size_nm,
+    williamson_hall,
+)
+from xrd_toolkit.simulation.peakfit import (
+    SHAPES,
+    SinglePeakFit,
+    fit_single_peak,
+)
 from xrd_toolkit.simulation.plots import (
     plot_annotated,
     plot_fit,
@@ -42,6 +52,7 @@ from xrd_toolkit.simulation.plots import (
     plot_intensity_ratios,
     plot_pattern,
     plot_profile,
+    plot_williamson_hall,
 )
 from xrd_toolkit.simulation.profile import (
     caglioti_fwhm_deg,
@@ -63,6 +74,7 @@ __all__ = [
     "pattern_from_structure_pymatgen", "pattern_from_cif_pymatgen",
     "load_structure", "plot_pattern", "plot_annotated", "plot_profile",
     "plot_fit", "plot_fit_bottom", "plot_intensity_ratios",
+    "plot_williamson_hall",
     "caglioti_fwhm_deg", "lorentz_fwhm_deg", "scherrer_fwhm_deg",
     "strain_fwhm_deg", "tch_fwhm_eta", "pseudo_voigt", "profile_fwhm_eta",
     "simulate_pattern",
@@ -70,4 +82,6 @@ __all__ = [
     "reflection_sig_gam", "sig_gam_to_fwhm_eta", "pv_area_normalized",
     "polarization", "lp_gsas", "legacy_to_gsas", "W_CONV", "GAM_CONV",
     "fit_pattern", "FitResult", "rwp",
+    "SHAPES", "SinglePeakFit", "fit_single_peak",
+    "WilliamsonHallResult", "scherrer_size_nm", "williamson_hall",
 ]
