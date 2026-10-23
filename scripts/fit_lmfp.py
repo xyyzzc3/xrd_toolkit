@@ -154,7 +154,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--cif", default=str(DEFAULT_CIF))
     ap.add_argument("--images", nargs="*", default=[str(p) for p in DEFAULT_IMAGES])
-    ap.add_argument("--outdir", default=str(ROOT / "showcase" / "simulation"))
+    ap.add_argument("--outdir", default=str(ROOT / "outputs" / "simulation"),
+                    help="输出目录（默认 outputs/simulation，不进仓库）")
     ap.add_argument("--exclude", default="2.90,3.08",
                     help="排除区间 lo,hi（度）；Le Bail 始终排除 Al 区")
     ap.add_argument("--exclude-al", action="store_true",

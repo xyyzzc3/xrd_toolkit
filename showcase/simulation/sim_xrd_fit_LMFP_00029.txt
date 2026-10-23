@@ -1,8 +1,0 @@
-LMFP_1_atten0-00029.tif
-primary: LiMn0.5Fe0.5PO4_olivine.cif scale=0.9890
-  LiMn0.5Fe0.5PO4_olivine.cif: score=1.023 scale=0.9890 coverage=0.963 purity=0.299
-  LiFePO4_olivine.cif: score=1.019 scale=0.9950 coverage=0.963 purity=0.283
-  LiMnPO4_olivine.cif: score=0.981 scale=0.9820 coverage=0.926 purity=0.278
-exclude: [(2.9067318646176927, 3.0867318646176924)]
-structural Rwp=2.908% a=10.3537 b=6.0222 c=4.7030 Size=0.0879 strain=0.000000 B=3.8998 Al_scale=0.638455 LiF_scale=0.0780486
-Le Bail Rwp=1.696%
