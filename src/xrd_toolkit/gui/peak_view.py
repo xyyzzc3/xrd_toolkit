@@ -1,7 +1,7 @@
 """1D 面板的寻峰标记与峰表（2026-10-23）。
 
 界面里的"寻峰"只做**显示**：按该面板快照里的参数调用
-`services.peak_finding.find_peaks_1d`，在曲线上画峰位短线和 2θ 标签，
+`services.peak_finding.find_peaks_1d`，在曲线上标 2θ（有标签的峰不画线，没标签的峰留短线），
 并把结果填进「1D」页下方的峰表。不写产物、不改曲线、不重算积分。
 
 口径：
@@ -209,7 +209,7 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
     """在 1D 轴上画峰位竖线与 2θ 标签，返回检出的峰。
 
     在坐标范围（含纵轴自动）定好之后调用；`ax.clear()` 会清掉旧标记，
-    所以每次重画都重建。**所有峰都有竖线**；标签按屏幕位置避让，
+    所以每次重画都重建。**有标签的峰不画线**，没标签的峰留 4 px 短线；标签按屏幕位置避让，
     默认放不下就不标（峰表列全），「标注全部峰位」打开时允许重叠。
     """
     peaks = detect_peaks_for_dock(window, dock, tth, intensity)
@@ -234,20 +234,14 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
     dock.labeled_peaks = len(labels)
     labeled = {id(peak) for _txt, peak, _yy, _bb in labels}
 
-    # 竖线最后画：有标签的画到标签下沿，没标签的只画短刻度——
-    # 后画可以盖在标签底下（zorder 更低），不会把字截断
+    # 行业常见画法（2026-10-24 定）：有标签的峰**不再画线**，文字就
+    # 悬在峰顶上方；只有放不下标签的峰留一根 4 px 短线，免得它们从
+    # 图上消失。这样橙色线只剩"没有名字的峰"的短刻度。
     for peak, yy in items:
-        d = ax.transData.transform((peak.center, yy))
         if id(peak) in labeled:
-            bb = next(b for _t, p, _y, b in labels if p is peak)
-            top = ax.transData.inverted().transform(
-                (d[0], bb.y0 - 1.0))[1]
-        else:
-            span = ax.get_ylim()[1] - ax.get_ylim()[0]
-            top = yy + (0.03 * span if not log else 0.0)
-            if log:
-                top = ax.transData.inverted().transform(
-                    (d[0], d[1] + 8.0))[1]
+            continue
+        d = ax.transData.transform((peak.center, yy))
+        top = ax.transData.inverted().transform((d[0], d[1] + 4.0))[1]
         line, = ax.plot([peak.center, peak.center], [yy, top],
                         color=PEAK_COLOR, lw=1.0, zorder=5,
                         label="_peak_marker")

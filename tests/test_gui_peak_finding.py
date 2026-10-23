@@ -112,7 +112,9 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertEqual(len(peaks), 2)
             self.assertAlmostEqual(peaks[0].center, 1.5, delta=2e-3)
             self.assertAlmostEqual(peaks[1].center, 2.2, delta=2e-3)
-            self.assertEqual(len(_markers(ax)), 2)
+            self.assertEqual(len(_labels(ax)), 2)
+            self.assertEqual(len(_markers(ax)), 0,
+                             "有标签的峰不再画橙线")
             self.assertFalse(w.peak_box.isHidden())
             self.assertEqual(w.peak_table.rowCount(), 2)
             self.assertEqual(w.peak_caption.text(), "峰表 · 2 根")
@@ -137,10 +139,11 @@ class TestGuiPeakFinding(unittest.TestCase):
             ax = panel_state._content(dock).axes_1d
             w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
-            self.assertEqual(len(_markers(ax)), 2)
+            self.assertEqual(len(_labels(ax)), 2)
 
             w.params["显示峰位"].setChecked(False)
             QApplication.processEvents()
+            self.assertEqual(len(_labels(ax)), 0)
             self.assertEqual(len(_markers(ax)), 0)
             self.assertTrue(w.peak_box.isHidden())
         finally:
@@ -200,6 +203,9 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertGreaterEqual(len(boxes), 1)
             # 密集的两根峰只标一根：默认模式不再纵向错层（没有长引线）
             self.assertLess(len(boxes), len(dock.detected_peaks))
+            self.assertEqual(len(_markers(ax)),
+                             len(dock.detected_peaks) - len(boxes),
+                             "只有没标签的峰留短刻度")
             for bb in boxes:
                 self.assertGreaterEqual(bb.x0, ax.bbox.x0 - 1)
                 self.assertLessEqual(bb.x1, ax.bbox.x1 + 1)
@@ -239,6 +245,7 @@ class TestGuiPeakFinding(unittest.TestCase):
             labels = _labels(ax)
             self.assertEqual(len(labels), len(dock.detected_peaks),
                              "「标注全部峰位」打开后每根峰都要有标签")
+            self.assertEqual(len(_markers(ax)), 0)
             # 全标时标签贴峰顶，不许再拉长引线
             by_center = {round(p.center, 3): p for p in dock.detected_peaks}
             for txt in labels:
