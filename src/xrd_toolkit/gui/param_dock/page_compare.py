@@ -174,7 +174,7 @@ def build_compare_page(window, form_cmp):
     cv_lo, cv_hi = add_range(
         window, form_cmp, "视图 2θ 下限 (°)", "视图 2θ 上限 (°)", 0.0, 90.0,
         DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
-        label="视图 2θ", suffix="°", decimals=1,
+        label="视图 2θ", suffix="°", decimals=1, step=0.1,
         tooltip="对比横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
                 "图上的缩放/平移会实时写回这两个框")
     cv_lo.valueChanged.connect(lambda _v: _refresh_heat_view(window))
@@ -268,7 +268,7 @@ def build_heatmap_section(window, form_cmp):
     wv_lo, wv_hi = add_range(
         window, form_cmp, "热图视图 2θ 下限 (°)", "热图视图 2θ 上限 (°)", 0.0, 90.0,
         DATA_PARAM_DEFAULTS["2θ 下限 (°)"], DATA_PARAM_DEFAULTS["2θ 上限 (°)"],
-        label="视图 2θ", suffix="°", decimals=1,
+        label="视图 2θ", suffix="°", decimals=1, step=0.1,
         tooltip="热图横轴只看这一段 2θ：填完立刻裁剪重画（重看，不重算）；"
                 "图上的缩放/平移会实时写回这两个框。数据按各文件自己的积分"
                 "范围算——超出已算范围的那一段是空白")

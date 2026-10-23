@@ -154,6 +154,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         box.setRange(0.0, 90.0)
         box.setValue(DATA_PARAM_DEFAULTS[key])   # 初值只有一处定义（见 panel_state）
         box.setDecimals(1)
+        box.setSingleStep(0.1)      # 2θ 范围按 0.1° 走，默认 1° 太粗
         box.setSuffix("°")
         _fit_max_width(box)          # 上限 = 完整显示 "90.0°" 所需（随平台字体）
         # 显式小下限 = 允许被压窄而不是把整行撑出坞外：Windows 上
@@ -169,6 +170,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     npt = QSpinBox()
     npt.setRange(100, 100000)
     npt.setValue(DATA_PARAM_DEFAULTS["输出点数"])
+    npt.setSingleStep(100)           # 3000 点按 1 点滚太慢，按 100 点
     _fit_max_width(npt)              # 上限 = 完整显示 "100000" 所需
     npt.setMinimumWidth(56)
     npt.setToolTip("2θ 范围内的采样点数——只在「1D」页显示；"

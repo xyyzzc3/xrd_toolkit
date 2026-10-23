@@ -55,6 +55,20 @@ from xrd_toolkit.services.integrator import (
     calibrate_geometry, refine_geometry_from_points, snap_ring)
 from xrd_toolkit.services.ring_metrics import ring_metrics
 
+# 校准几何框的滚轮/箭头步长（2026-10-24）：这些值直接决定几何，
+# Qt 默认的 1.0 一滚就能把波长从 0.1223 改成 1.1223。按参数量级给。
+CALIB_FIELD_STEPS = {
+    "pixel_um": 1.0,          # 像素 ~200 µm
+    "wavelength_a": 0.001,    # 同步辐射 ~0.12 Å / Cu Kα ~1.54 Å
+    "dist_mm": 0.1,           # 距离 ~1600 mm
+    "poni1_px": 0.5,          # PONI 亚像素
+    "poni2_px": 0.5,
+    "rot1_deg": 0.01,         # 倾斜角通常 <1°
+    "rot2_deg": 0.01,
+}
+CALIB_BEAM_STEP = 0.5         # 束心行/列（px）
+
+
 def _edit_current(window: QMainWindow) -> None:
     """[编辑…]：对话框里改当前配置的几何（改完标成"自定义"）。
 
@@ -101,6 +115,8 @@ def _edit_current(window: QMainWindow) -> None:
         box = QDoubleSpinBox()
         box.setRange(-1e5, 1e5)
         box.setDecimals(dec)
+        box.setSingleStep(CALIB_FIELD_STEPS.get(key_, 1.0))
+        box.setObjectName(f"calib_{key_}_spin")
         if suffix:
             box.setSuffix(suffix)
         box.setValue(float(value))
@@ -113,6 +129,7 @@ def _edit_current(window: QMainWindow) -> None:
         box = QDoubleSpinBox()
         box.setRange(-1e5, 1e5)
         box.setDecimals(2)
+        box.setSingleStep(CALIB_BEAM_STEP)
         box.setValue(float(init) if init is not None else 0.0)
         box.setObjectName(f"{key_}_spin")     # 测试按名字找（不靠索引顺序）
         form.addRow(text, box)

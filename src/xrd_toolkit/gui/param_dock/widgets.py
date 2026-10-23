@@ -86,7 +86,7 @@ def add_float(window, form, name, lo, hi, value, decimals=2,
 
 
 def add_range(window, form, lo_name, hi_name, lo, hi, lo_value, hi_value,
-              label, suffix="", decimals=1, tooltip=""):
+              label, suffix="", decimals=1, tooltip="", step=None):
     """成对的上下限并排一行：左框 ~ 右框，共用一个行标签。
 
     window.params 的键保持原来的 lo_name/hi_name 不动（快照回放、
@@ -107,6 +107,8 @@ def add_range(window, form, lo_name, hi_name, lo, hi, lo_value, hi_value,
             box.setSuffix(suffix)
         if tooltip:
             box.setToolTip(tooltip)
+        if step is not None:
+            box.setSingleStep(step)
         _fit_max_width(box, 84)
     window.params[lo_name] = lo_box
     window.params[hi_name] = hi_box
