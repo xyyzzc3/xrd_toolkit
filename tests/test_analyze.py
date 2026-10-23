@@ -26,6 +26,16 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
     def setUpClass(cls):
         cls.lifepo4 = ap.OLIVINE_LIB[0]
 
+    def test_detect_peaks_returns_positions_and_local_heights(self):
+        x = np.arange(1.0, 2.0, 0.001)
+        bg = np.full(x.size, 100.0)
+        y = bg + 300.0 * np.exp(
+            -4.0 * np.log(2.0) * ((x - 1.5) / 0.02) ** 2)
+        t, h = ap.detect_peaks(x, y, bg)
+        self.assertEqual(len(t), 1)
+        self.assertAlmostEqual(t[0], 1.5, delta=2e-3)
+        self.assertAlmostEqual(h[0], 300.0, delta=10.0)
+
     def test_scale_scan_finds_scaled_cell(self):
         base = core.load_structure(str(self.lifepo4))
         lat = Lattice.from_parameters(

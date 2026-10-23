@@ -2,9 +2,9 @@
 """只给数据，自动分析（LMFP 第一版，2026-10-22）。
 
 输入：2D TIFF（或 1D 文本暂未接） + 批次几何配置。
-输出：自动找峰 → 在内置橄榄石相库里筛相（粗扫晶胞缩放）→ 自动识别
-Al 集流体 (111) → 结构拟合（晶胞/Size/应变/B/背景）→ Le Bail 非负峰强
-→ 图 + 文本报告。
+输出：自动找峰（`services/peak_finding`）→ 在内置橄榄石相库里筛相
+（粗扫晶胞缩放）→ 自动识别 Al 集流体 (111) → 结构拟合
+（晶胞/Size/应变/B/背景）→ Le Bail 非负峰强 → 图 + 文本报告。
 
 相库/几何仍是先验：
   * 几何来自 `--config`（LMFP 默认 `lmfp1_lab6`，λ=0.1223 Å）；
@@ -25,13 +25,12 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from scipy.signal import find_peaks  # noqa: E402
-
 from xrd_toolkit.config import get_config  # noqa: E402
 from xrd_toolkit.services.background import estimate_baseline_sliding  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
+from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, core, fit_pattern, load_structure, plot_fit)
 
@@ -79,13 +78,10 @@ def instrument_profile(geom, lam):
 
 
 def detect_peaks(t, y, bg):
-    ys = y - bg
-    med = float(np.median(ys))
-    sigma = 1.4826 * float(np.median(np.abs(ys - med)))
-    prom = max(5.0 * sigma, 0.02 * float(np.max(ys)))
-    dist = max(2, int(round(0.008 / max(float(np.median(np.diff(t))), 1e-9))))
-    idx, _ = find_peaks(ys, prominence=prom, distance=dist)
-    return t[idx], ys[idx]
+    """自动找峰，返回 (2θ, 峰高)；峰高 = 强度 − 基线。"""
+    peaks = find_peaks_1d(t, y, baseline=bg)
+    return (np.array([p.center for p in peaks]),
+            np.array([p.height for p in peaks]))
 
 
 def _reflection_data(cif, lam, tmin, tmax):
