@@ -4428,10 +4428,11 @@ class TestProductGroups(unittest.TestCase):
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
-                                                 "csv": False, "bg": False}):
+                                                 "csv": False, "bg": False,
+                                                 "name": "source_probe"}):
                 gui_export._run_export(w, sources=[src])
             # 单条导出 = 平铺一个文件（用户 2026-10-02 定的布局）
-            target = outdir / f"{files[0].stem}_处理产物.txt"
+            target = outdir / "source_probe.txt"
             self.assertTrue(target.exists(), "右键导出该落一份文件")
             data = np.loadtxt(str(target))
             self.assertEqual(list(data[:, 1]), [7.0, 8.0, 9.0])
@@ -5206,8 +5207,8 @@ class TestProcessingChain(unittest.TestCase):
     def test_export_skips_cut_points_and_notes_the_chain(self):
         """导出：裁剪点不写行、头里写明类别与处理链（纯 ASCII）。
 
-        单个数据集 = 光一个文件（用户 2026-10-02）；扣过背景的名字带
-        `_处理产物` 尾缀——文件自己说清它是什么。总表里空单元格那条
+        单个数据集 = 光一个文件（用户 2026-10-02）；这里用自定义名，
+        文件头自己说清它是什么。总表里空单元格那条
         见 TestExportCsv.test_cut_columns_become_blank_cells。
         """
         w = create_window()
@@ -5220,9 +5221,10 @@ class TestProcessingChain(unittest.TestCase):
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
-                                                 "csv": True, "bg": True}):
+                                                 "csv": True, "bg": True,
+                                                 "name": "cut_probe"}):
                 gui_export._run_export(w)
-            txt = outdir / f"{path.stem}_处理产物.txt"
+            txt = outdir / "cut_probe.txt"
             self.assertTrue(txt.exists(), "该导出一份 txt")
             text = txt.read_text()
             self.assertIn("data category: Processed", text)
@@ -5235,7 +5237,7 @@ class TestProcessingChain(unittest.TestCase):
             self.assertTrue(np.isfinite(data[:, 1]).all(),
                             "文件里不该出现 nan 行")
             self.assertEqual(sorted(p.name for p in outdir.iterdir()),
-                             [f"{path.stem}_处理产物.txt"],
+                             ["cut_probe.txt"],
                              "单条导出不建文件夹、不出总表")
         finally:
             w.close()
