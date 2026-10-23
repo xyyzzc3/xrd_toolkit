@@ -215,6 +215,28 @@ class TestFitModes(unittest.TestCase):
         self.assertAlmostEqual(res.params["c"], base.lattice.c * 1.01,
                                delta=0.01)
 
+    def test_cubic_cell_refinement_recovers_scaled_a(self):
+        from pymatgen.core import Lattice, Structure
+        base = core.load_structure(STRUCT_DIR / "LaB6_1000055.cif")
+        scaled = Structure(
+            Lattice.cubic(base.lattice.a * 1.005),
+            [site.species for site in base],
+            [site.frac_coords for site in base])
+        tth, y, _, _ = simulate_pattern_gsas(
+            scaled, wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+            step_deg=0.005, scale=1000.0, w=18.0, size_um=1e5,
+            mustrain=0.0)
+        res = fit_pattern(
+            base, tth, y, background=None, weights="uniform",
+            free=("zero", "w", "a"),
+            initial={"w": 18.0, "a": base.lattice.a})
+        self.assertLess(res.rwp, 1.0)
+        self.assertAlmostEqual(res.params["a"], 1.005 * base.lattice.a,
+                               delta=0.002)
+        with self.assertRaises(ValueError):
+            fit_pattern(base, tth, y, background=None, weights="uniform",
+                        free=("a", "b"))
+
     def test_extra_phase_scale_recovered(self):
         main = core.load_structure(STRUCT_DIR / "LiFePO4_olivine.cif")
         al = core.load_structure(STRUCT_DIR / "Al_metal.cif")

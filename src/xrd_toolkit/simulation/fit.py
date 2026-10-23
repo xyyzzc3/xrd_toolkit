@@ -81,6 +81,8 @@ DEFAULT_STAGES = (
     # （2026-10-23 实测 LaB6：不抛光时 X/Y 阶段被前一步 U/V/W 的落点
     # 锁在次优谷底，Rwp 4.65；联合后回到 4.55 且峰高比 1.005）。
     ("u", "v", "w", "x", "y"),
+    # 晶胞、零点与常数宽也强耦合（立方晶胞尤其）：最后再联合收口一次。
+    ("zero", "w", "a", "b", "c"),
 )
 
 _ALLOWED = set(DEFAULT_BOUNDS)
@@ -179,6 +181,8 @@ class _PeakTable:
                  b_iso, polariz, keep_unmerged=False, md=None,
                  dynamic=False, md_refine=False):
         self.a0, self.b0, self.c0 = (float(x) for x in structure.lattice.abc)
+        self.cubic = (max(self.a0, self.b0, self.c0)
+                      - min(self.a0, self.b0, self.c0) < 1e-4)
         self.cell_refine = bool(keep_unmerged) or bool(dynamic)
         self.dynamic = bool(dynamic)
         self.md_refine = bool(md_refine)
@@ -378,8 +382,8 @@ class _Model:
         zero = float(p["zero"])
         if self.table.orthorhombic:
             a = float(p["a"])
-            b = float(p["b"])
-            c = float(p["c"])
+            b = a if self.table.cubic else float(p["b"])
+            c = a if self.table.cubic else float(p["c"])
             h = self.table.hkl[:, 0].astype(float)
             k = self.table.hkl[:, 1].astype(float)
             l = self.table.hkl[:, 2].astype(float)
@@ -688,7 +692,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            更有物理约束；系数与 scale 一起线性解出。
         cell_refine        True = 用逐反射 hkl/d 重建峰位，a/b/c 即使不在
                            free 里也按 initial 固定在该晶胞；None（默认）
-                           = 仅当 free 含 a/b/c 时启用。
+                           = 仅当 free 含 a/b/c 时启用。立方晶胞只精修
+                           a（b = c = a 绑定）。
         phase_label        主相标签（布拉格刻度行/报告用）；None = 取
                            pymatgen 的 reduced_formula（如 LaB6）。固溶体
                            的 reduced_formula 会被约简（Li2MnFe(PO4)2），
@@ -748,6 +753,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                        b_iso, polariz,
                        keep_unmerged=cell_refine or dynamic, md=md,
                        dynamic=dynamic, md_refine=md_refine)
+    if table.cubic:
+        bad_cell = [n for n in free if n in ("b", "c")]
+        if bad_cell:
+            raise ValueError("立方晶胞只精修 a（b = c = a）")
 
     # ── 权重（用原始计数；固定背景扣除不改变权重口径） ─────────────
     if isinstance(weights, str):

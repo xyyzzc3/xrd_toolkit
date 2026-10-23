@@ -18,6 +18,11 @@
 
 ### 模拟
 
+- **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
+  `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
+  分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
+  拖累（LaB6 立方放大 1.005× 实测：分开 Rwp 64%，联合 0.08%）。
+  合成 LaB6 能精确反解晶胞。
 - **单峰峰形拟合 + Scherrer/Williamson–Hall**（2026-10-23）：新增
   `simulation/peakfit.py`——Gaussian / Lorentzian / pseudo-Voigt /
   split-Pearson VII 的单峰非线性最小二乘拟合（局部线性/二次背景，
@@ -277,6 +282,11 @@
 
 ### 模拟
 
+- **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
+  `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
+  分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
+  拖累（LaB6 立方放大 1.005× 实测：分开 Rwp 64%，联合 0.08%）。
+  合成 LaB6 能精确反解晶胞。
 - **单峰峰形拟合 + Scherrer/Williamson–Hall**（2026-10-23）：新增
   `simulation/peakfit.py`——Gaussian / Lorentzian / pseudo-Voigt /
   split-Pearson VII 的单峰非线性最小二乘拟合（局部线性/二次背景，
