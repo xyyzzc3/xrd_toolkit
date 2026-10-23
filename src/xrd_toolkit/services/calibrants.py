@@ -29,10 +29,12 @@ MAX_GUI_RINGS = 64
 #   - 顺序就是下拉框顺序；默认项排第一。
 #   - 标签里写证书编号：LaB6 / Si 的不同 SRM 变体 d 值只差几十 ppm，
 #     但对距离是几十 µm 级的系统差，选到具体变体才算溯源。
+#   - 默认 LaB6 只标「SRM 660c 数值」：项目里这张标样没有证书记录
+#     （用户 2026-10-24 确认），不能写成已鉴定为 660c。
 #   - 文件名关键字用于进校准时预选标样（只认完整词块，见
 #     detect_calibrant_from_stem；`si` 不会误中 `series`）。
 COMMON_CALIBRANTS = (
-    ("LaB6", "LaB₆（NIST SRM 660c，默认）",
+    ("LaB6", "LaB₆（默认；SRM 660c 数值）",
      ("lab6", "lab6c", "lab6_srm660c")),
     ("LaB6_SRM660a", "LaB₆（NIST SRM 660a）", ("lab6_srm660a", "lab6a")),
     ("LaB6_SRM660b", "LaB₆（NIST SRM 660b）", ("lab6_srm660b", "lab6b")),
@@ -59,7 +61,7 @@ _COMMON_BY_NAME = {name: (label, aliases)
                    for name, label, aliases in COMMON_CALIBRANTS}
 # 旧配置/CLI 里可能还写着 LaB6_SRM660c（与默认 LaB6 的 d 值逐位相同，
 # 2026-10-24 从下拉框去重）——保留友好标签，别让旧条目显示成裸名称。
-_LABEL_OVERRIDES = {"LaB6_SRM660c": "LaB₆（NIST SRM 660c）"}
+_LABEL_OVERRIDES = {"LaB6_SRM660c": "LaB₆（SRM 660c 数值）"}
 # 常用别名（文件名里的 lab6/ceo2/si…）也允许命令行直接输：精确 pyFAI
 # 名称优先，找不到时才走别名，最后才报错。大小写不敏感。
 _ALIAS_TO_NAME = {alias: name
@@ -97,6 +99,9 @@ def calibrant_tooltip(name) -> str:
         if d.size:
             lines.append("前三条 d：" + "、".join(f"{v:.4f} Å" for v in d))
         lines.append("请按标样证书选到具体变体（不同 SRM 的 d 值差几十 ppm）。")
+        if str(name) == DEFAULT_CALIBRANT:
+            lines.append("默认项按 pyFAI 的 LaB6 数值（等同 SRM 660c）；"
+                         "没有证书时保持默认即可，溯源写明“证书未确认”。")
         return "\n".join(lines)
     except Exception:                                    # noqa: BLE001
         return str(name)

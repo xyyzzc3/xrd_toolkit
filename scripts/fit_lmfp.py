@@ -42,7 +42,8 @@ DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
 ]
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
-# 实验拟合用 NIST SRM 660c 室温晶胞（a=4.156826 Å）：几何就是按同一套
+# 实验拟合用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c，a=4.156826 Å；
+# 实际标样证书未记录）：几何就是按同一套
 # 参考标定的；COD 的 4.157597 Å 偏大，会让模型峰位系统性偏低。
 LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 

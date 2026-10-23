@@ -46,7 +46,7 @@ DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
 ]
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
-# 实验拟合用 NIST SRM 660c 室温晶胞（与几何标定参考一致）
+# 实验拟合用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c；证书未记录）
 LAB6_CIF = STRUCT / "LaB6_NIST660c.cif"
 # 默认输出到系统临时目录：脚本不许往仓库的 outputs/ 写东西（隔离护栏）
 DEFAULT_OOB = Path(tempfile.gettempdir()) / "xrd_toolkit_analysis"

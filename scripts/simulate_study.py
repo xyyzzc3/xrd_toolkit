@@ -27,7 +27,8 @@
     python scripts/simulate_study.py fit
 
 主 CIF 默认 LaB₆（与第三周的实验数据同材料，任务四要对得上）；
-实验拟合/对照用 NIST SRM 660c 室温晶胞，与几何标定的参考一致。
+实验拟合/对照用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c；实际标样
+证书未记录），与几何标定的参考一致。
 """
 import argparse
 import sys
@@ -44,7 +45,8 @@ from xrd_toolkit.simulation import (  # noqa: E402
     plot_intensity_ratios, plot_profile, simulate_pattern,
     simulate_pattern_gsas, two_theta_from_d)
 
-# 默认用 NIST SRM 660c 室温晶胞（a=4.156826 Å）：实验图的几何按同一套
+# 默认用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c，a=4.156826 Å；
+# 证书未记录）：实验图的几何按同一套
 # 参考标定，拟合/对照才不会带 2θ 系统性偏差。教学模拟用哪个晶胞都行。
 DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 

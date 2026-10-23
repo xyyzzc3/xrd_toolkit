@@ -329,7 +329,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
         # 不在这里给每一项算 tooltip：那会把 18 个标样的 d 值库全部
         # 同步加载一遍（实测建窗卡 8 秒，界面看门狗报警）。选中/同步时
         # 只算当前这一项，见 _sync_calibrant_widgets。
-    # 下拉文字（“LaB₆（NIST SRM 660c，默认）”）很长，别让它按文字要宽度
+    # 下拉文字（“LaB₆（默认；SRM 660c 数值）”）很长，别让它按文字要宽度
     # 把参数坞撑宽：水平 SizePolicy=Ignored，列宽由页面其余内容定。
     combo.setSizePolicy(QSizePolicy.Ignored,
                         combo.sizePolicy().verticalPolicy())

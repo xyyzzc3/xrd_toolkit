@@ -363,7 +363,7 @@ class TestCommonCalibrants(unittest.TestCase):
             calibrant_2theta("LaB6", WAVELENGTH_M, 16))
 
     def test_duplicate_lab6_660c_is_not_listed(self):
-        """LaB6 默认项就是 SRM 660c：下拉框不再重复列 660c（2026-10-24）。"""
+        """LaB6 默认项数值等同 SRM 660c：下拉框不再重复列 660c（2026-10-24）。"""
         names = [name for name, _label, _aliases in COMMON_CALIBRANTS]
         self.assertNotIn("LaB6_SRM660c", names)
         # 旧名称/小写别名仍可用，且与默认项是同一条阶梯
