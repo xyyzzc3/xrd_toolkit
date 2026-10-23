@@ -15,6 +15,7 @@
 docs/使用说明.md）：
     gui_welcome     刚打开软件：中间空白、参数坞收起        → 使用说明 §1
     gui_main        LaB₆ 积到 1D，右侧参数坞（1D 页）        → README
+    gui_peaks       1D 寻峰：标签 + 峰表                      → 使用说明 §5
     gui_calib       校准页三列 + Δ + 结论（自动取点两轮）     → README / 使用说明 §3
     gui_compare_heat 同一批 8 个文件：堆叠对比（左）+ 热图（右）→ README / 使用说明 §7
     gui_panel_bar   面板顶上那一行按钮（裁图，所有视图通用） → 使用说明 §4
@@ -278,6 +279,21 @@ def shot_main(window) -> None:
     settle(400)
     fit_panel(window, key)
     save(window, "gui_main")
+
+
+def shot_peaks(window) -> None:
+    """1D 寻峰：曲线标签 + 峰表（使用说明 §5 的配图）。"""
+    add_all(window, [LAB6], entrance="1D")
+    window.view_buttons["1D"].click()
+    key = "1D|" + LAB6
+    wait_for(lambda: key in window.plot_docks
+             and len(content_of(window, key).axes_1d.lines) > 0)
+    window.params["显示峰位"].setChecked(True)
+    settle(800)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_panel(window, key)
+    save(window, "gui_peaks")
 
 
 def shot_compare(window) -> None:
@@ -657,6 +673,7 @@ def shot_calib(window) -> None:
 
 
 SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
+         "gui_peaks": shot_peaks,
          "gui_compare": shot_compare, "gui_compare_heat": shot_compare_heat,
          "gui_panel_bar": shot_panel_bar, "gui_customize": shot_customize,
          "gui_views": shot_views, "gui_batch": shot_batch,
