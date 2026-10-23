@@ -14659,11 +14659,17 @@ def _summary_csv(path) -> tuple:
 
 
 def _only_batch_dir(outdir: Path) -> Path:
-    """批量导出目录：outdir 下恰好一个 `导出_时间戳` 文件夹（按前缀找，
-    不 mock 时间——顺带把命名规范也测进去）。"""
-    found = [p for p in Path(outdir).iterdir()
-             if p.is_dir() and p.name.startswith(data_export.BATCH_PREFIX)]
+    """批量导出目录：outdir 下恰好一个文件夹（名字由默认/自定义规则定）。"""
+    found = [p for p in Path(outdir).iterdir() if p.is_dir()]
     assert len(found) == 1, f"应当恰好一个批量目录，实际 {found}"
+    return found[0]
+
+
+def _only_file(outdir: Path, suffix: str = ".txt") -> Path:
+    """单条导出目录里恰好一个曲线文件。"""
+    found = [p for p in Path(outdir).iterdir()
+             if p.is_file() and p.suffix == suffix]
+    assert len(found) == 1, f"应当恰好一个 {suffix} 文件，实际 {found}"
     return found[0]
 
 
@@ -14706,13 +14712,14 @@ class TestExportData(unittest.TestCase):
             with mock.patch.object(gui_export, "_build_export_dialog",
                                    return_value={"dir": outdir,
                                                  "suffix": ".txt",
-                                                 "csv": False}):
+                                                 "csv": False,
+                                                 "name": "重复导出"}):
                 gui_export._run_export(w)
                 gui_export._run_export(w)
-            self.assertTrue((outdir / "fake_a.txt").is_file())
-            self.assertTrue((outdir / "fake_a_2.txt").is_file(),
+            self.assertTrue((outdir / "重复导出.txt").is_file())
+            self.assertTrue((outdir / "重复导出_2.txt").is_file(),
                             "第二次导出不许覆盖第一份")
-            self.assertIn("已存在，这一份存为 fake_a_2.txt",
+            self.assertIn("已存在，这一份存为 重复导出_2.txt",
                           w.log_text.toPlainText())
         finally:
             w.close()
@@ -14729,9 +14736,11 @@ class TestExportData(unittest.TestCase):
                                                  "csv": False}):
                 gui_export._run_export(w)
             batch = _only_batch_dir(outdir)
-            # 文件夹名带内容标签（2026-10-03）：这批是原始曲线 → `_原始`
-            self.assertTrue(batch.name.endswith("_原始"),
-                            f"批量文件夹名要带内容标签：{batch.name}")
+            # 默认名 = 标样-样品-数据类型-时间（2026-10-23）
+            self.assertIn("原始", batch.name,
+                          f"批量文件夹名要带内容标签：{batch.name}")
+            self.assertTrue(batch.name.startswith("LaB6-fake_a等2张-"),
+                            f"默认名格式不对：{batch.name}")
             target = batch / data_export.TXT_DIR_NAME / "fake_a.txt"
             self.assertTrue(target.is_file())
             lines = target.read_text(encoding="utf-8").splitlines()
@@ -14768,9 +14777,11 @@ class TestExportData(unittest.TestCase):
                                                  "suffix": ".txt",
                                                  "csv": True}):
                 gui_export._run_export(w)
-            self.assertTrue((outdir / "fake_b.txt").is_file())
-            self.assertEqual(sorted(p.name for p in outdir.iterdir()),
-                             ["fake_b.txt"], "单条导出不建文件夹、不出总表")
+            target = _only_file(outdir)
+            self.assertIn("fake_b", target.name)
+            self.assertIn("原始", target.name)
+            self.assertEqual(len(list(outdir.iterdir())), 1,
+                             "单条导出不建文件夹、不出总表")
             self.assertIn("导出完成：1 个文件", w.log_text.toPlainText())
         finally:
             w.close()
@@ -14797,9 +14808,10 @@ class TestExportData(unittest.TestCase):
                                                  "suffix": ".txt",
                                                  "csv": False, "bg": True}):
                 gui_export._run_export(w)
-            self.assertTrue((outdir / "fake_b.txt").is_file(),
-                            "没做处理的曲线不该带 _处理产物 尾缀")
-            text = (outdir / "fake_b.txt").read_text()
+            target = _only_file(outdir)
+            self.assertNotIn("处理产物", target.name,
+                             "没做处理的曲线不该标成处理产物")
+            text = target.read_text()
             self.assertIn("# data category: Raw", text)
             self.assertIn("# chain: none", text)
         finally:
@@ -15019,7 +15031,7 @@ class TestExportCsv(unittest.TestCase):
             batch = _only_batch_dir(outdir)
             self.assertTrue(
                 (batch / data_export.TXT_DIR_NAME / "fake_b.txt").is_file())
-            csv = batch / data_export.CSV_NAME
+            csv = batch / data_export.summary_filename(batch.name)
             names, data = _summary_csv(csv)
             self.assertEqual(names, ["2theta(deg)", "fake_a", "fake_b"])
             self.assertEqual(data.shape, (3, 3))
@@ -16730,6 +16742,41 @@ class TestBackgroundSubtraction(unittest.TestCase):
             raw = np.asarray(_fake_bg_compute("", {}, 0)[1], dtype=float)
             self.assertFalse(np.allclose(np.asarray(intensity, dtype=float),
                                          raw), "平滑要真的生效")
+        finally:
+            w.close()
+
+    def test_export_dialog_has_name_field_and_preview(self):
+        """名称输入框 + 默认四段名预览（2026-10-23）。"""
+        w = create_window()
+        try:
+            captured = {}
+            results = [("LMFP_1_1D", np.array([1.0]), np.array([1.0]),
+                        "none", data_export.CATEGORY_ONED, "lmfp1_lab6")]
+
+            def fake_exec(self):
+                captured["edit"] = self.findChild(
+                    QLineEdit, "export_name_edit")
+                captured["preview"] = self.findChild(
+                    QLabel, "export_name_preview").text()
+                return QDialog.Rejected
+
+            with mock.patch.object(QDialog, "exec", new=fake_exec):
+                gui_export._build_export_dialog(w, 1, results)
+            self.assertIsNotNone(captured["edit"])
+            self.assertEqual(captured["edit"].text(), "")
+            self.assertIn("LaB6-LMFP_1-1D产物-", captured["preview"])
+        finally:
+            w.close()
+
+    def test_custom_name_is_sanitized(self):
+        w = create_window()
+        try:
+            results = [("a", np.array([1.0]), np.array([1.0]),
+                        "none", data_export.CATEGORY_RAW, "lmfp1_lab6")]
+            base = gui_export._export_base_name(
+                w, results, {"name": "我的/数据: v2"})
+            self.assertEqual(base, "我的-数据- v2")
+            self.assertIn("非法字符已替换", w.log_text.toPlainText())
         finally:
             w.close()
 

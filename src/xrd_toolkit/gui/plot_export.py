@@ -7,12 +7,13 @@ _checked_1d_results：勾选文件的 1D 曲线（没算过的会提示先出图
 处理链按需求叠加（导出原始还是处理后的由弹窗决定；设置开着但实际
 没做成的照实写 Raw，见该函数）。
 
-目录结构与文件格式（2026-10-02 用户定，规范见 docs/UI_COPY.zh-CN.md
-「导出文件规范」）：单个数据集 = 光一个 txt；两个及以上 = 一个
-`导出_时间戳_{内容标签}/` 文件夹（里面 全部数据.csv + txt/ 子目录；
-标签 = 原始/1D产物/处理产物/混合）。写文件的
-格式与写法全部在 services/export（唯一出处，CLI 共用）；本模块只管
-交互（弹窗、勾选、网格不一致的三选）与目录布局。
+目录结构与文件格式（2026-10-02 定，2026-10-23 加自定义名；规范见
+docs/UI_COPY.zh-CN.md「导出文件规范」）：单个数据集 = 光一个文件；
+两个及以上 = 一个以导出名命名的文件夹（里面 `名称_全部数据.csv` +
+txt/ 子目录）。导出名默认 = 标样-样品-数据类型-时间，弹窗里可自定义；
+旧格式 `导出_时间戳_{内容标签}/` 只在没给名字时兜底。写文件的格式与
+写法全部在 services/export（唯一出处，CLI 共用）；本模块只管交互
+（弹窗、勾选、网格不一致的三选）与目录布局。
 """
 import time
 from pathlib import Path
@@ -25,12 +26,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSpinBox,
     QVBoxLayout, QWidget)
 
+from xrd_toolkit import config as config_mod
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (_content, _log, _proc_curve,
                                             _proc_settings)
 from xrd_toolkit.services import export as data_export
 from xrd_toolkit.services import process, stage_cache
+from xrd_toolkit.services.calibrants import DEFAULT_CALIBRANT
 
 
 def _ask_save_options(window: QMainWindow):
@@ -255,8 +258,46 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
     return out
 
 
-def _build_export_dialog(window: QMainWindow, n_results: int):
-    """导出设置弹窗：输出目录 + 后缀（.txt/.chi）+ 全部数据总表开关。
+def _calibrant_for_config(config_name):
+    """某几何配置条目用的标样短名（旧条目/缺配置按 LaB6）。"""
+    if not config_name:
+        return DEFAULT_CALIBRANT
+    try:
+        entry = config_mod.get_config(config_name)
+    except ValueError:
+        return DEFAULT_CALIBRANT
+    return str(entry.get("calibrant") or DEFAULT_CALIBRANT)
+
+
+def _default_export_name(window: QMainWindow, results) -> str:
+    """按 标样-样品-数据类型-时间 生成默认名（结果为空时返回空串）。"""
+    if not results:
+        return ""
+    fallback = getattr(window, "config_name", None)
+    calibrants = [_calibrant_for_config(r[5] or fallback) for r in results]
+    samples = [r[0] for r in results]
+    return data_export.default_export_name(
+        calibrants, samples, data_export.category_tag(results))
+
+
+def _export_base_name(window: QMainWindow, results, fields) -> str:
+    """弹窗里的自定义名 → 清洗后的基名；留空/清空后用默认四段名。"""
+    text = str(fields.get("name") or "").strip()
+    if text:
+        clean = data_export.safe_filename(text, fallback="")
+        if clean:
+            if clean != text:
+                _log(window, f"名称里的非法字符已替换：{text} → {clean}")
+            return clean
+        _log(window, "名称清理后为空，改用自动名")
+    base = _default_export_name(window, results)
+    if base:
+        _log(window, f"导出名：{base}")
+    return base
+
+
+def _build_export_dialog(window: QMainWindow, n_results: int, results=None):
+    """导出设置弹窗：输出目录 + 名称 + 后缀（.txt/.chi）+ 全部数据总表开关。
 
     输出目录默认是项目根 outputs 的**完整绝对路径**（2026-10-02 起；
     以前是字面的 "outputs"，跟着进程工作目录跑，会写进意想不到的地方
@@ -287,6 +328,37 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     row_lay.addWidget(dir_edit, 1)
     row_lay.addWidget(browse)
     lay.addRow("输出目录", row)
+
+    # 名称（2026-10-23）：留空 = 标样-样品-数据类型-时间；填了就用填的
+    default_name = _default_export_name(window, results)
+    name_edit = QLineEdit()
+    name_edit.setObjectName("export_name_edit")
+    name_edit.setPlaceholderText(default_name or "留空 = 自动命名")
+    preview = QLabel()
+    preview.setObjectName("export_name_preview")
+    preview.setWordWrap(True)
+    preview.setStyleSheet("color: gray;")
+
+    def sync_name_preview(*_args):
+        text = name_edit.text().strip()
+        if not text:
+            preview.setText(f"留空 = {default_name}" if default_name
+                            else "留空 = 按导出内容自动命名")
+            return
+        clean = data_export.safe_filename(text, fallback="")
+        if not clean:
+            preview.setText("名称清理后为空，将改用自动名"
+                            + (f"：{default_name}" if default_name else ""))
+        elif clean != text:
+            preview.setText(f"导出名：{clean}（非法字符已替换）")
+        else:
+            preview.setText(f"导出名：{clean}")
+
+    name_edit.textChanged.connect(sync_name_preview)
+    sync_name_preview()
+    lay.addRow("名称", name_edit)
+    lay.addRow("", preview)
+
     suffix_combo = QComboBox()
     suffix_combo.setObjectName("export_suffix_combo")
     suffix_combo.addItem(".txt（两列文本）", ".txt")
@@ -330,7 +402,8 @@ def _build_export_dialog(window: QMainWindow, n_results: int):
     if dlg.exec() != QDialog.Accepted:
         return None
     return {"dir": Path(dir_edit.text()), "suffix": suffix_combo.currentData(),
-            "csv": csv_check.isChecked(), "bg": bg_check.isChecked()}
+            "csv": csv_check.isChecked(), "bg": bg_check.isChecked(),
+            "name": name_edit.text().strip(), "default_name": default_name}
 
 
 def _write_export(target: Path, tth, intensity, chain: str = "", *,
@@ -377,7 +450,7 @@ def _ask_csv_range(window: QMainWindow) -> str:
 
 
 def _write_csv_summary(window: QMainWindow, results,
-                       target_dir: Path) -> None:
+                       target_dir: Path, filename: str = None) -> None:
     """把一批 1D 结果汇总成一张全部数据总表（第一列 2θ，其后每文件一列强度）。
 
     所有结果的 2θ 网格一致（同 npt 同范围）时直接按列拼；网格不一致时
@@ -419,7 +492,7 @@ def _write_csv_summary(window: QMainWindow, results,
             _log(window, f"全部数据总表跳过 {len(results) - len(kept)} 个"
                          f" 2θ 网格不同的文件")
             results = kept
-    target = Path(target_dir) / data_export.CSV_NAME
+    target = Path(target_dir) / (filename or data_export.CSV_NAME)
     try:
         data_export.write_csv(target, results)
     except OSError as err:
@@ -435,11 +508,11 @@ def _write_csv_summary(window: QMainWindow, results,
 def _run_export(window: QMainWindow, sources=None) -> None:
     """[导出数据]：勾选文件（或指定的一组来源）的 1D 结果批量写文件。
 
-    目录结构（用户 2026-10-02 定，规范见 docs/UI_COPY.zh-CN.md）：
-    单个数据集 = 光一个 txt（不包文件夹）；两个及以上 = 一个
-    `导出_时间戳_{内容标签}/` 文件夹（里面 全部数据.csv + txt/ 子目录；
-    标签 = 原始/1D产物/处理产物/混合，2026-10-03 加）。**任何一份已存在
-    的曲线文件都不覆盖**——同名就顺延 _2 并把新名字记进日志（同一条
+    目录结构（2026-10-02 定，2026-10-23 加自定义名；规范见
+    docs/UI_COPY.zh-CN.md）：单个数据集 = 光一个文件；两个及以上 = 一个
+    以导出名命名的文件夹（里面 `名称_全部数据.csv` + txt/ 子目录）。
+    导出名默认 = 标样-样品-数据类型-时间，弹窗里可自定义。**任何一份
+    已存在的曲线文件都不覆盖**——同名就顺延 _2 并把新名字记进日志（同一条
     曲线两套参数各导一次，两份都要在）。文件格式与 CLI 同源
     （services/export 唯一出处）；右键"导出这一条/这一组"走 sources
     那条路，同一套布局。单个文件写盘失败只记日志、不中断批处理；
@@ -447,12 +520,13 @@ def _run_export(window: QMainWindow, sources=None) -> None:
     """
     # 先数一遍（确定"扣不扣背景"要等弹窗，但弹窗标题要个数量）——这一遍
     # 静默：否则"跳过 X：还没有 1D 结果"会在下面第二遍里再打一次
-    n = len(_checked_1d_results(window, quiet=True, sources=sources))
+    preview = _checked_1d_results(window, quiet=True, sources=sources)
+    n = len(preview)
     if not n:
         # 让跳过/空结果的原因照常记进日志
         _checked_1d_results(window, sources=sources)
         return
-    fields = _build_export_dialog(window, n)
+    fields = _build_export_dialog(window, n, preview)
     if fields is None:
         _log(window, "已取消导出")
         return
@@ -465,23 +539,28 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         # 而此处读到的控件值只反映当前编辑对象
         _log(window, "导出：按各面板自己的处理设置（背景/平滑/裁剪）")
     outdir, suffix = fields["dir"], fields["suffix"]
+    base_name = _export_base_name(window, results, fields)
+    if len(results) == 1 and base_name.lower().endswith(suffix.lower()):
+        base_name = base_name[:-len(suffix)]      # 用户自己带了后缀
+    if not base_name:
+        base_name = _default_export_name(window, results) or "export"
     started = time.perf_counter()
     if len(results) == 1:
         # 单个数据集：光一个文件，不包文件夹
         txt_dir = target_dir = outdir
-        landing = outdir / f"{results[0][0]}{suffix}"
+        landing = outdir / f"{base_name}{suffix}"
     else:
-        # 文件夹名带内容标签（原始 / 1D产物 / 处理产物 / 混合）：从外面
-        # 一眼看出这袋子里装的是什么（用户 2026-10-03）
-        target_dir = data_export.batch_dir(
-            outdir, tag=data_export.category_tag(results))
+        # 文件夹名 = 自定义名或四段默认名（旧格式只在无名字时兜底）
+        target_dir = data_export.batch_dir(outdir, name=base_name)
         txt_dir = target_dir / data_export.TXT_DIR_NAME
         landing = target_dir
     _log(window, f"开始导出：{len(results)} 个文件 → {landing}")
     ok = dropped = 0
     for stem, tth, intensity, chain, category, config in results:
-        target = data_export.unique_path(txt_dir / f"{stem}{suffix}")
-        if target.name != f"{stem}{suffix}":
+        # 单条导出用导出名；批量里每条保留自己的曲线名（否则同名相撞）
+        name = base_name if len(results) == 1 else stem
+        target = data_export.unique_path(txt_dir / f"{name}{suffix}")
+        if target.name != f"{name}{suffix}":
             # 不覆盖已有文件：同一条曲线用两套参数各导一次时，两份都要留下
             _log(window, f"{stem}{suffix} 已存在，这一份存为 {target.name}")
         if not np.isfinite(np.asarray(intensity, dtype=float)).all():
@@ -502,4 +581,5 @@ def _run_export(window: QMainWindow, sources=None) -> None:
                      f"{time.perf_counter() - started:.1f} 秒 → {landing}")
     # 单个数据集不出总表（用户 2026-10-02 定；弹窗里也禁用并说明了）
     if fields.get("csv") and len(results) > 1:
-        _write_csv_summary(window, results, target_dir)
+        _write_csv_summary(window, results, target_dir,
+                           filename=data_export.summary_filename(base_name))

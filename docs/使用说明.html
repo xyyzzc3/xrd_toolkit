@@ -250,12 +250,16 @@
 </thead>
 <tbody>
 <tr>
+<td><strong>名称</strong></td>
+<td>留空 = <code>标样-样品-数据类型-时间</code>，如 <code>LaB6-LMFP_1-原始-2026-10-23_235500</code>；填了就用填的名字（<code>/ \ : * ? " &lt; &gt; |</code> 会替换成 <code>-</code>）</td>
+</tr>
+<tr>
 <td><strong>文件后缀</strong></td>
 <td><code>.txt</code>（两列文本，Excel/Origin 通用）或 <code>.chi</code>（同格式、给部分软件）</td>
 </tr>
 <tr>
 <td><strong>同时生成全部数据总表</strong></td>
-<td>勾选 ≥2 条时可用（默认勾）：多出一张 <code>全部数据.csv</code>，每个文件一列强度</td>
+<td>勾选 ≥2 条时可用（默认勾）：多出一张 <code>名称_全部数据.csv</code>，每个文件一列强度</td>
 </tr>
 <tr>
 <td><strong>导出处理后的曲线（背景/平滑/裁剪）</strong></td>
@@ -263,8 +267,9 @@
 </tr>
 </tbody>
 </table>
-<p><strong>确认</strong>：得到文件——单条 = 一个 <code>xxx_1D.txt</code>；多条 = 新建文件夹
-<code>导出_日期_时间_内容标签/</code>（内含每条一个 <code>txt/</code> 和一张 <code>全部数据.csv</code>）。
+<p><strong>确认</strong>：得到文件——单条 = 一个以导出名命名的 <code>.txt</code>；多条 = 新建以
+导出名命名的文件夹（内含每条一个 <code>txt/</code> 和一张 <code>名称_全部数据.csv</code>）。
+默认导出名是 <code>标样-样品-数据类型-时间</code>；在「名称」里自己填就用你的。
 <strong>同名文件不会被覆盖</strong>，自动加序号（<code>_2</code>、<code>_3</code>），日志写明。</p>
 <p><strong>这一节还能做什么</strong></p>
 <ul>
@@ -376,8 +381,8 @@
 <p>所有东西都在 <strong><code>个人文件夹/XRD_Toolkit</code></strong>（Windows 是 <code>文档\XRD_Toolkit</code>），
 导出对话框显示的也是这个路径：</p>
 <ul>
-<li><strong>导出的数据</strong>：由你自己指定目录；单条 = 一个文件，多条 = 一个
-  <code>导出_日期_时间_内容标签/</code> 文件夹（见第 5 节）；</li>
+<li><strong>导出的数据</strong>：由你自己指定目录；单条 = 一个文件，多条 = 一个以
+  导出名命名的文件夹（默认 <code>标样-样品-数据类型-时间</code>，见第 5 节）；</li>
 <li><strong><code>_stage</code></strong>：计算缓存（可删，见第 8 节）；</li>
 <li><strong><code>config_user.json</code></strong>：你的标定配置（别删）；</li>
 <li><strong><code>recent.json</code></strong>：最近打开记录（随便删）；</li>

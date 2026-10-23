@@ -110,6 +110,51 @@ class TestBatchDir(unittest.TestCase):
         self.assertTrue(d.is_dir())
 
 
+class TestExportNames(unittest.TestCase):
+    """默认名 / 自定义名（2026-10-23）：标样-样品-数据类型-时间。"""
+
+    def test_default_name_format(self):
+        name = data_export.default_export_name(
+            ["LaB6"], ["LMFP_1_atten0-00029"], "原始", NOW)
+        self.assertEqual(
+            name, "LaB6-LMFP_1_atten0-00029-原始-2026-10-02_225503")
+
+    def test_product_tails_are_stripped_for_samples(self):
+        name = data_export.default_export_name(
+            ["LaB6"], ["LMFP_1_1D", "LMFP_1_处理产物", "LMFP_2"],
+            "混合", NOW)
+        self.assertIn("LMFP_1等2张", name)
+        self.assertNotIn("_1D", name)
+        self.assertNotIn("_处理产物", name)
+
+    def test_mixed_calibrants(self):
+        name = data_export.default_export_name(
+            ["LaB6", "CeO2"], ["a"], "原始", NOW)
+        self.assertTrue(name.startswith("多标样-"))
+
+    def test_safe_filename_rules(self):
+        clean = data_export.safe_filename('a/b:c*"d<>?|')
+        for ch in '<>:"/\\|?*':
+            self.assertNotIn(ch, clean)
+        self.assertEqual(data_export.safe_filename("  name. .  "), "name")
+        self.assertEqual(data_export.safe_filename("CON"), "_CON")
+        self.assertEqual(data_export.safe_filename("..."), "export")
+        self.assertEqual(data_export.safe_filename("", fallback="x"), "x")
+        self.assertLessEqual(len(data_export.safe_filename("x" * 500)), 120)
+
+    def test_summary_filename(self):
+        self.assertEqual(data_export.summary_filename("我的数据"),
+                         "我的数据_全部数据.csv")
+
+    def test_batch_dir_custom_name_and_collision(self):
+        out = _tmpdir()
+        first = data_export.batch_dir(out, name="我的 数据/名称", now=NOW)
+        second = data_export.batch_dir(out, name="我的 数据/名称", now=NOW)
+        self.assertEqual(first.name, "我的 数据-名称")
+        self.assertEqual(second.name, "我的 数据-名称_2")
+        self.assertTrue(first.is_dir() and second.is_dir())
+
+
 class TestCategoryTag(unittest.TestCase):
     """内容标签按曲线**实际**类别判定（不猜、不美化）。"""
 

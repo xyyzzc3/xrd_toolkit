@@ -8,15 +8,19 @@
 
 目录约定（详见 docs/UI_COPY.zh-CN.md「导出文件规范」）：
 
-    单个数据集    {目录}/{曲线名}.txt            光一个文件，不包文件夹
+    单个数据集    {目录}/{导出名}.txt            光一个文件，不包文件夹
                   （同名已存在就顺延 _2、_3…，绝不覆盖）
-    多个数据集    {目录}/导出_{时间}_{内容标签}/txt/…      每条一个
-                  {目录}/导出_{时间}_{内容标签}/全部数据.csv  大集合
-                  内容标签 = 原始 / 1D产物 / 处理产物 / 混合（见 category_tag）
+    多个数据集    {目录}/{导出名}/txt/…          每条一个（曲线名不变）
+                  {目录}/{导出名}/{导出名}_全部数据.csv  大集合
+
+导出名（2026-10-23）：默认 = 标样-样品-数据类型-导出时间（见
+default_export_name）；GUI 可自定义，留空用默认。旧格式
+`导出_{时间}_{内容标签}/` + `全部数据.csv` 只在没给名字的调用里兜底。
 
 曲线名 = 文件栏条目的显示名（原始数据 = 文件 stem；产物 = stem_1D /
 stem_处理产物），由 GUI 的 _checked_1d_results 给出，本模块只管写。
 """
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -29,12 +33,96 @@ CATEGORY_RAW = "Raw"
 CATEGORY_ONED = "1D product"
 CATEGORY_PROCESSED = "Processed"
 
-BATCH_PREFIX = "导出_"        # 批量文件夹前缀（测试按它 + 下一条常量找目录）
+BATCH_PREFIX = "导出_"        # 旧批量前缀（CLI/未给名字时的兼容默认）
 TXT_DIR_NAME = "txt"          # 批量文件夹里单条 txt 的子目录
-CSV_NAME = "全部数据.csv"     # 大集合文件名
+CSV_NAME = "全部数据.csv"     # 旧大集合文件名（未指定名称时的兼容默认）
+
+# 名称规范（2026-10-23）：默认 = 标样-样品-数据类型-导出时间。
+# 分隔符用 ASCII 连字符（市场常见、Windows/macOS 都稳），时间内部用下划线。
+NAME_SEP = "-"
+NAME_TIME_FMT = "%Y-%m-%d_%H%M%S"
+MAX_NAME_LEN = 120
+_ILLEGAL_CHARS = set('<>:"/\\|?*')
+_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+# 产物条目的显示名尾缀（与 gui/sources.KIND_TAIL 同值；services 不反向依赖 GUI）
+_PRODUCT_TAILS = ("_1D", "_处理产物")
 
 # 曲线文件第一行：外部约定（测试、探针、别的工具都认它），逐字不动
 FIRST_LINE = "2theta(deg)  intensity"
+
+
+def safe_filename(name, *, fallback="export", maxlen=MAX_NAME_LEN):
+    """把用户/默认名称清洗成跨平台可用的文件名或文件夹名。
+
+    规则：非法字符 `<>:"/\\|?*` 与控制字符 → `-`；全角空格→普通空格；
+    连续空白压成一个；去掉结尾的点和空格（Windows 静默截断的坑）；
+    Windows 保留名（CON/PRN/COM1…）前加 `_`；超长截断。清完为空就
+    用 fallback。
+    """
+    text = str(name or "").strip().replace("　", " ")
+    text = "".join("-" if (ch in _ILLEGAL_CHARS or ord(ch) < 32) else ch
+                   for ch in text)
+    text = re.sub(r"\s+", " ", text).strip().rstrip(" .")
+    if not text or set(text) <= {"."}:
+        return fallback
+    if text.split(".", 1)[0].upper() in _RESERVED:
+        text = "_" + text
+    if len(text) > maxlen:
+        text = text[:maxlen].rstrip(" .-")
+    return text or fallback
+
+
+def default_export_name(calibrants, samples, category, now=None):
+    """默认导出名：`标样-样品-数据类型-导出时间`（2026-10-23）。
+
+    calibrants  标样名列表（取并集；不同就写"多标样"）
+    samples     样品名列表（产物尾缀 `_1D`/`_处理产物` 先去掉；
+                多于一个不同样品时写"第一个等N张"）
+    category    数据类型（原始 / 1D产物 / 处理产物 / 混合）
+    """
+    std = []
+    for item in calibrants or []:
+        label = str(item or "").strip()
+        if label and label not in std:
+            std.append(label)
+    if not std:
+        std_label = "未知标样"
+    elif len(std) == 1:
+        std_label = std[0]
+    else:
+        std_label = "多标样"
+
+    names = []
+    for item in samples or []:
+        sample = str(item or "").strip()
+        for tail in _PRODUCT_TAILS:
+            if sample.endswith(tail):
+                sample = sample[:-len(tail)]
+                break
+        if sample and sample not in names:
+            names.append(sample)
+    if not names:
+        sample_label = "样品"
+    elif len(names) == 1:
+        sample_label = names[0]
+    else:
+        sample_label = f"{names[0]}等{len(names)}张"
+
+    stamp = (now or datetime.now()).strftime(NAME_TIME_FMT)
+    raw = NAME_SEP.join([std_label, sample_label,
+                         str(category or "数据"), stamp])
+    return safe_filename(raw, fallback=f"export{NAME_SEP}{stamp}")
+
+
+def summary_filename(base):
+    """批量总表的文件名：`{名称}_全部数据.csv`（名称已清洗）。"""
+    stem = safe_filename(f"{base}_全部数据", fallback="全部数据",
+                         maxlen=MAX_NAME_LEN - len(".csv"))
+    return f"{stem}.csv"
 
 
 def stamp(now: datetime = None) -> str:
@@ -42,20 +130,23 @@ def stamp(now: datetime = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def batch_dir(outdir: Path, now: datetime = None, tag: str = "") -> Path:
-    """批量导出的文件夹：{outdir}/导出_YYYY-MM-DD_HHMMSS[_标签]，**建好并返回**。
+def batch_dir(outdir: Path, now: datetime = None, tag: str = "",
+              name: str = None) -> Path:
+    """批量导出的文件夹，**建好并返回**。
 
-    秒级时间戳；同一秒里再导一次（脚本连跑、手快）就依次 _2、_3…——
-    不覆盖上一批，也不为撞名去等一秒。
-
-    tag = 这批内容的一句话标签（见 category_tag）——用户 2026-10-03：
-    "同一条数据导两次、一次勾处理一次不勾，怎么做出区分"：文件里面本来
-    就分得清（文件名尾缀 + 表头 category），但**文件夹名只有时间戳**，
-    两个文件夹并排站着从外面看一模一样。标签让它一眼可辨。
+    name 给定（自定义名或 default_export_name 的四段名）时直接用清洗后的
+    名称；否则退回旧格式 `导出_YYYY-MM-DD_HHMMSS[_标签]`（CLI 兼容）。
+    同一秒/同名重复导出就依次 _2、_3…——不覆盖上一批，也不为撞名等一秒。
     """
-    base = f"{BATCH_PREFIX}{(now or datetime.now()):%Y-%m-%d_%H%M%S}"
-    if tag:
-        base += f"_{tag}"
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+    if name is not None and str(name).strip():
+        base = safe_filename(name, fallback="")
+        if not base:
+            base = f"{BATCH_PREFIX}{stamp}"
+    else:
+        base = f"{BATCH_PREFIX}{stamp}"
+        if tag:
+            base += f"_{tag}"
     n = 1
     while True:
         target = Path(outdir) / (base if n == 1 else f"{base}_{n}")
