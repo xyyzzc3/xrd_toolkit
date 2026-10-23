@@ -145,10 +145,6 @@ def _place_labels(ax, items, label_all):
         ticks[id(peak)] = [d[0], d[1], d[1] + 6.0]
     if not texts:
         return []
-    step = max(txt.get_window_extent(renderer).height
-               for txt, _peak, _yy in texts) + 2.0
-    step = max(step, 6.0)
-
     if label_all:
         # 「标注全部峰位」= 每根都标、允许重叠；标签就贴在各自峰顶
         # 上方 6 px，不做错层避让——否则密集处会被抬到很高，出现
@@ -168,87 +164,44 @@ def _place_labels(ax, items, label_all):
             out.append((txt, peak, yy, bb))
         return out
 
+    # 默认模式：标签只放在峰顶上方 6 px，同一高度放不下就跳过——
+    # 不做纵向错层，所以没有长引线（用户 2026-10-24 讨论后定，
+    # 与 HighScore/Jade 的"只标放得下的峰"一致）。
     placed = []
     out = []
     for txt, peak, yy in sorted(texts, key=lambda it: -it[1].height):
         d = ax.transData.transform((peak.center, yy))
         x_disp = d[0]
-        best = None
-        # 默认模式不许把标签抬得太远（长引线会横穿别的峰）；标注全部
-        # 时放宽到坐标框能容纳为止
-        max_k = 40 if label_all else max(2, int(0.35 * ax_box.height / step))
-        for k in range(max_k):
-            shift = 6.0 + k * step
-            y_data = ax.transData.inverted().transform(
-                (x_disp, d[1] + shift))[1]
-            txt.set_position((peak.center, y_data))
-            bb = txt.get_window_extent(renderer)
-            if bb.y1 > ax_box.y1:
-                break
+        y_data = ax.transData.inverted().transform(
+            (x_disp, d[1] + 6.0))[1]
+        txt.set_position((peak.center, y_data))
+        bb = txt.get_window_extent(renderer)
+        bad = bb.y1 > ax_box.y1
+        if not bad:
             bad = any(_bbox_overlap(bb, other) for other in placed)
-            if not bad:
-                # 避开别的峰的竖线/峰顶
-                for pid, seg in ticks.items():
-                    if pid == id(peak):
-                        continue
-                    if (bb.x0 - 2 <= seg[0] <= bb.x1 + 2
-                            and not (bb.y1 < seg[1] - 2
-                                     or bb.y0 > seg[2] + 2)):
-                        bad = True
-                        break
-            if not bad and pts_disp.size:
-                # 避开曲线本身（峰体），否则标签会压在邻峰上
-                inside = ((pts_disp[:, 0] >= bb.x0 - 2)
-                          & (pts_disp[:, 0] <= bb.x1 + 2)
-                          & (pts_disp[:, 1] >= bb.y0 - 2)
-                          & (pts_disp[:, 1] <= bb.y1 + 2))
-                bad = bool(np.any(inside))
-                if not bad:
-                    # 自己的引线也不许横穿曲线
-                    col = np.abs(pts_disp[:, 0] - x_disp) <= 2.0
-                    span = ((pts_disp[:, 1] > d[1] + 2.0)
-                            & (pts_disp[:, 1] < bb.y0 - 2.0))
-                    bad = bool(np.any(col & span))
-            if not bad and placed:
-                # 自己的引线不许穿过已放好的标签
-                for other in placed:
-                    if (other.x0 - 2 <= x_disp <= other.x1 + 2
-                            and not (other.y1 < d[1]
-                                     or other.y0 > bb.y0)):
-                        bad = True
-                        break
-            if not bad:
-                best = (txt, peak, yy, bb)
-                break
-
-        if best is None:
-            if not label_all:
-                txt.remove()               # A：放不下就不标，峰表仍列全
-                continue
-            # B：放到坐标范围内最高处（允许重叠，但保证看得见）
-            last = None
-            for k in range(60):
-                shift = 6.0 + k * step
-                y_data = ax.transData.inverted().transform(
-                    (x_disp, d[1] + shift))[1]
-                txt.set_position((peak.center, y_data))
-                bb = txt.get_window_extent(renderer)
-                if bb.y1 > ax_box.y1:
+        if not bad:
+            # 避开别的峰的竖线/峰顶
+            for pid, seg in ticks.items():
+                if pid == id(peak):
+                    continue
+                if (bb.x0 - 2 <= seg[0] <= bb.x1 + 2
+                        and not (bb.y1 < seg[1] - 2
+                                 or bb.y0 > seg[2] + 2)):
+                    bad = True
                     break
-                last = bb
-            if last is None:               # 连一格都放不下：贴顶但别出框
-                bb = txt.get_window_extent(renderer)
-                for _ in range(3):
-                    y_data = ax.transData.inverted().transform(
-                        (x_disp, ax_box.y1 - 1.0 - bb.height))[1]
-                    txt.set_position((peak.center, y_data))
-                    bb = txt.get_window_extent(renderer)
-            else:
-                bb = last
-            best = (txt, peak, yy, bb)
-        out.append(best)
-        placed.append(best[3])
-        ticks[id(peak)][2] = best[3].y0 - 1.0
+        if not bad and pts_disp.size:
+            # 避开曲线本身（峰体），否则标签会压在邻峰上
+            inside = ((pts_disp[:, 0] >= bb.x0 - 2)
+                      & (pts_disp[:, 0] <= bb.x1 + 2)
+                      & (pts_disp[:, 1] >= bb.y0 - 2)
+                      & (pts_disp[:, 1] <= bb.y1 + 2))
+            bad = bool(np.any(inside))
+        if bad:
+            txt.remove()               # 放不下就不标，峰表仍列全
+            continue
+        out.append((txt, peak, yy, bb))
+        placed.append(bb)
+        ticks[id(peak)][2] = bb.y0 - 1.0
     return out
 
 

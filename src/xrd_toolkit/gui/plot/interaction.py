@@ -422,7 +422,16 @@ def _hover_label(dock, name: str, x: float, y: float) -> str:
     prefix = f"{name}：" if name else ""
     if view == "剖面":
         return f"{prefix}距离 {x:.4g} px，强度 {y:.4g}"
-    return f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
+    text = f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
+    if view == "1D":
+        # 密集区标签可能没地方画：鼠标靠近某根峰时把它的 FWHM 报出来
+        # （2026-10-24 讨论：静态标签放不下就靠悬停/峰表补全）
+        peaks = getattr(dock, "detected_peaks", None) or []
+        if peaks:
+            near = min(peaks, key=lambda p: abs(p.center - x))
+            if abs(near.center - x) <= max(5.0 * near.fwhm, 0.05):
+                text += f"；峰 {near.center:.3f}°，FWHM {near.fwhm:.4f}°"
+    return text
 
 def _hover_motion(window: QMainWindow, key: str, event) -> None:
     """鼠标在曲线上移动时：选最近的那条线、吸附最近的真实数据点，

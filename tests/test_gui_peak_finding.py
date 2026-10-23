@@ -18,6 +18,7 @@ from xrd_toolkit.services import stage_cache
 from xrd_toolkit.gui import watchdog as gui_watchdog
 from xrd_toolkit.gui import panel_state
 from xrd_toolkit.gui import peak_view
+from xrd_toolkit.gui.plot.interaction import _hover_label
 from xrd_toolkit.gui.app import create_window
 from xrd_toolkit.gui.plot import spawn as gui_plot_spawn
 
@@ -55,7 +56,7 @@ def _curve_close():
     x = np.arange(1.0, 3.0, 0.002)
     y = 100.0
     for center, height, fwhm in ((1.500, 300.0, 0.006),
-                                 (1.504, 220.0, 0.006),
+                                 (1.512, 300.0, 0.006),
                                  (2.200, 200.0, 0.030)):
         y += height * np.exp(
             -4.0 * np.log(2.0) * ((x - center) / fwhm) ** 2)
@@ -197,6 +198,8 @@ class TestGuiPeakFinding(unittest.TestCase):
             QApplication.processEvents()
             boxes = _label_boxes(ax)
             self.assertGreaterEqual(len(boxes), 1)
+            # 密集的两根峰只标一根：默认模式不再纵向错层（没有长引线）
+            self.assertLess(len(boxes), len(dock.detected_peaks))
             for bb in boxes:
                 self.assertGreaterEqual(bb.x0, ax.bbox.x0 - 1)
                 self.assertLessEqual(bb.x1, ax.bbox.x1 + 1)
@@ -224,6 +227,12 @@ class TestGuiPeakFinding(unittest.TestCase):
                               & (disp[:, 1] <= bb.y1 + 2))
                     self.assertFalse(np.any(inside),
                                      "标签压到曲线上了")
+
+            near_peak = min(dock.detected_peaks,
+                            key=lambda p: abs(p.center - 1.512))
+            text = _hover_label(dock, "", near_peak.center, 0.0)
+            self.assertIn("FWHM", text)
+            self.assertIn(f"{near_peak.center:.3f}", text)
 
             w.params["标注全部峰位"].setChecked(True)
             QApplication.processEvents()
