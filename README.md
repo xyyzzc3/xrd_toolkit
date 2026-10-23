@@ -79,6 +79,12 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
       <sub>Full-pattern fit of the LaB₆ standard — observed (points), calculated (line), background, the observed−calculated difference and the Bragg-position ticks (Le Bail intensities, Rwp 4.24%)</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/simulation/sim_xrd_gsas_keys.png" width="100%"><br>
+      <sub>Two hard checks behind the profile model — area is conserved (peak height ∝ 1/FWHM), and the calculated FWHM agrees with GSAS-II to within 1.2% across the W / X / Size / Mustrain channels</sub>
+    </td>
+  </tr>
 </table>
 
 ## Highlights

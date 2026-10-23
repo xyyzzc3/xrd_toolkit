@@ -72,6 +72,12 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
       <sub>LaB₆ 标样的全谱拟合——观测（点）/计算（线）/背景、差值曲线与布拉格峰位刻度（Le Bail 强度，Rwp 4.24%）</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="../showcase/simulation/sim_xrd_gsas_keys.png" width="100%"><br>
+      <sub>峰形模型的两条硬指标——面积守恒（峰高 ∝ 1/FWHM），以及 W / X / Size / Mustrain 四个通道的 FWHM 与 GSAS-II 偏差都在 1.2% 以内</sub>
+    </td>
+  </tr>
 </table>
 
 ## 亮点
