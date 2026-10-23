@@ -241,7 +241,8 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
             axb.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0)
         first = False
     ax.set_ylabel("Intensity (counts)")
-    ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
+    ax.set_title(f"{title}\n$R_{{wp}}$ = {result.rwp:.2f}%   "
+                 f"$R_p$ = {result.rp:.2f}%",
                  fontsize=10.5, pad=9)
     ax.legend(loc="upper right", fontsize=8.5, frameon=True,
               framealpha=0.9, edgecolor="0.85")

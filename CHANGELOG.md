@@ -25,7 +25,8 @@
   LMFP 图显示主相 + Al 两行，LaB6 一行。`sim_xrd_vs_experiment_LaB6.png`
   改成实验点 + 模拟线 + 差值（原来是两条线叠在一起）。坐标轴/图例按
   通行文案：**Observed / Calculated / Background / Difference /
-  Bragg positions**，y 轴带 counts 单位；LMFP 标题去掉重复的 Rwp。
+  Bragg positions**，y 轴带 counts 单位；Rwp/Rp 在图题里写成下标
+  $R_{wp}$ / $R_p$；LMFP 标题去掉重复的 Rwp。
   旧的两栏布局仍可通过 `bragg=None` 得到。
 - **LaB₆ 标样全谱拟合修好"峰高不够"**（2026-10-23）：根因不是峰宽，而是
   Lorentzian 尾巴参数 X/Y 从 0 出发时掉进"几乎没有尾巴"的局部极小

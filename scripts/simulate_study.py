@@ -578,7 +578,7 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     axes[0].legend(loc="upper right", fontsize=8.5, frameon=True,
                    framealpha=0.9, edgecolor="0.85")
     axes[0].set_title(f"(a) {material} — simulation vs experiment "
-                      f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5,
+                      f"(λ = {lam:.4f} Å, $R_{{wp}}$ {fit.rwp:.2f}%)", fontsize=10.5,
                       pad=9)
     axes[0].set_ylabel("Intensity (counts)")
     axes[0].tick_params(labelbottom=False)
