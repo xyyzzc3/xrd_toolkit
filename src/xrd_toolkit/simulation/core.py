@@ -96,6 +96,98 @@ def structure_factor(hkl, structure, s, b_iso=None):
     return F
 
 
+def structure_factor_partials(hkl, structure, s):
+    """分元素的复结构因子（不含温度因子）：{元素: Σ occ·f(s²)·e^{iφ}}。
+
+    与 `structure_factor` 的区别：不乘 Debye-Waller，按元素分组返回。
+    精修分元素 B 时，F(hkl) = Σ_e A_e · exp(−B_e·s²)，可以每步重算而
+    不用重建整张峰表。
+    """
+    h, k, l = hkl
+    s2 = s * s
+    out = {}
+    for site in structure:
+        for sp, occ in site.species.items():
+            f = scattering_factor(sp.symbol, s2)
+            phase = 2.0 * math.pi * (h * site.frac_coords[0]
+                                     + k * site.frac_coords[1]
+                                     + l * site.frac_coords[2])
+            z = f * occ * complex(math.cos(phase), math.sin(phase))
+            out[sp.symbol] = out.get(sp.symbol, 0j) + z
+    return out
+
+
+def march_dollase_cos2(hkl, axis, lattice_matrix):
+    """晶面法向与取向轴夹角的 cos²（March-Dollase 的几何因子）。"""
+    g_star = np.linalg.inv(np.asarray(lattice_matrix)
+                           @ np.asarray(lattice_matrix).T)
+    h = np.asarray(hkl, dtype=float)
+    a = np.asarray(axis, dtype=float)
+    hg, ag = h @ g_star @ h, a @ g_star @ a
+    if hg <= 0 or ag <= 0:
+        return 0.0
+    cos_a = float(h @ g_star @ a) / math.sqrt(hg * ag)
+    cos_a = min(1.0, max(-1.0, cos_a))
+    return cos_a * cos_a
+
+
+def reflection_table_details(structure, wavelength=1.5406,
+                             two_theta_range=(10.0, 80.0), nmax=10,
+                             polariz=0.5):
+    """逐条反射的**动态强度**表：hkl/d/2θ/多重性/LP/s²/分元素复 F。
+
+    给分元素 B 与可精修织构用：强度不再一次性算死，模型可以在每次
+    最小二乘评估时按当前的 B_e / R 重算：
+        I_r = m_r·LP_r·|Σ_e A_{r,e}·exp(−B_e·s²)|² · P_md(hkl; R)
+    返回 (hkl, d, tth, mult, lp, s2, partials)，partials 是
+    {元素: 复数数组}（无温度因子）；hkl 是代表反射。
+    """
+    lo, hi = two_theta_range
+    lattice = structure.lattice.matrix
+    is_hex = structure.lattice.is_hexagonal()
+    rot_mats = distinct_rotations(structure.get_space_group_info()[0])
+    hkls, ds, tths, ms, lps, s2s = [], [], [], [], [], []
+    partials = {}
+    visited = set()
+    for h in range(-nmax, nmax + 1):
+        for k in range(-nmax, nmax + 1):
+            for l in range(-nmax, nmax + 1):
+                if (h, k, l) == (0, 0, 0):
+                    continue
+                d = d_spacing((h, k, l), lattice)
+                tt = two_theta_from_d(d, wavelength)
+                if tt is None or not (lo <= tt <= hi):
+                    continue
+                if (h, k, l) in visited:
+                    continue
+                orbit = multiplicity((h, k, l), rot_mats)
+                visited |= orbit
+                m = len(orbit)
+                theta = math.radians(tt / 2.0)
+                s = math.sin(theta) / wavelength
+                part = structure_factor_partials((h, k, l), structure, s)
+                rep = (_hex_representative(orbit) if is_hex
+                       else _positive_representative(orbit))
+                hkls.append(rep)
+                ds.append(d)
+                tths.append(tt)
+                ms.append(m)
+                lps.append(lp_factor(theta, polariz))
+                s2s.append(s * s)
+                for elem, val in part.items():
+                    partials.setdefault(elem, []).append(val)
+    order = np.argsort(tths)
+    hkls = np.asarray(hkls, dtype=int)[order]
+    ds = np.asarray(ds, dtype=float)[order]
+    tths = np.asarray(tths, dtype=float)[order]
+    ms = np.asarray(ms, dtype=float)[order]
+    lps = np.asarray(lps, dtype=float)[order]
+    s2s = np.asarray(s2s, dtype=float)[order]
+    partials = {e: np.asarray(v, dtype=complex)[order]
+                for e, v in partials.items()}
+    return hkls, ds, tths, ms, lps, s2s, partials
+
+
 def march_dollase(hkl, axis, r, lattice_matrix):
     """择优取向的 March-Dollase 因子 P(hkl)（单参数模型）。
 

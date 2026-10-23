@@ -248,6 +248,47 @@ class TestFitModes(unittest.TestCase):
         self.assertEqual(DEFAULT_BOUNDS["y"][0], 0.0)
 
 
+class TestDynamicRefinement(unittest.TestCase):
+    """分元素 B 与可精修织构（md_r）：合成谱能精确反解。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.st = core.load_structure(STRUCT_DIR / "LaB6_1000055.cif")
+        cls.kw = dict(wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+                      step_deg=0.005, scale=1000.0, size_um=1e5,
+                      mustrain=0.0)
+        cls.true = dict(zero_deg=0.01, u=0.5, v=-0.1, w=18.0, x=0.0, y=0.0)
+        cls.init = dict(zero=0.01, u=0.5, v=-0.1, w=18.0, x=0.0, y=0.0,
+                        size_um=1e5, mustrain=0.0, b_iso=0.0, polariz=0.5)
+
+    def test_per_element_b_recovered(self):
+        tth, y, _, _ = simulate_pattern_gsas(
+            self.st, b_iso={"La": 0.5, "B": 2.0}, **self.kw, **self.true)
+        res = fit_pattern(
+            self.st, tth, y, background=None, weights="uniform",
+            free=("b_La", "b_B"),
+            initial={**self.init, "b_La": 1.0, "b_B": 1.0})
+        self.assertLess(res.rwp, 0.05)
+        self.assertAlmostEqual(res.params["b_La"], 0.5, delta=0.02)
+        self.assertAlmostEqual(res.params["b_B"], 2.0, delta=0.02)
+
+    def test_march_dollase_r_recovered(self):
+        tth, y, _, _ = simulate_pattern_gsas(
+            self.st, md=((1, 1, 1), 0.7), **self.kw, **self.true)
+        res = fit_pattern(
+            self.st, tth, y, md=((1, 1, 1), 1.0), background=None,
+            weights="uniform", free=("md_r",),
+            initial={**self.init, "md_r": 1.0})
+        self.assertLess(res.rwp, 0.05)
+        self.assertAlmostEqual(res.params["md_r"], 0.7, delta=0.01)
+
+    def test_rejects_global_and_element_b_together(self):
+        tth, y = _synth(self.st)
+        with self.assertRaises(ValueError):
+            fit_pattern(self.st, tth, y, background=2, weights="uniform",
+                        free=("b_iso", "b_La"))
+
+
 class TestPlotFitLayout(unittest.TestCase):
     """论文式拟合图：默认自动加布拉格刻度，旧的两栏布局仍可用。"""
 

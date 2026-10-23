@@ -176,10 +176,58 @@ class _PeakTable:
     """
 
     def __init__(self, structure, wavelength, two_theta_range, nmax,
-                 b_iso, polariz, keep_unmerged=False, md=None):
+                 b_iso, polariz, keep_unmerged=False, md=None,
+                 dynamic=False, md_refine=False):
         self.a0, self.b0, self.c0 = (float(x) for x in structure.lattice.abc)
-        self.cell_refine = bool(keep_unmerged)
-        if keep_unmerged:
+        self.cell_refine = bool(keep_unmerged) or bool(dynamic)
+        self.dynamic = bool(dynamic)
+        self.md_refine = bool(md_refine)
+        self.partials = None
+        self.mult = None
+        self.lp = None
+        self.s2_ref = None
+        self.md_cos2 = None
+        self.md_fixed = None
+        self._inten_norm = 1.0
+        self.elements = []
+        base = (b_iso if isinstance(b_iso, dict)
+                else {e.symbol: (0.0 if b_iso is None else float(b_iso))
+                      for site in structure for e in site.species})
+        self.b_elem_base = dict(base)
+        if self.dynamic:
+            # 分元素 B / 可精修织构：保留逐反射的分元素复 F，强度每次重算
+            hkl, d0, tth, mult, lp, s2r, partials = \
+                core.reflection_table_details(
+                    structure, wavelength=wavelength,
+                    two_theta_range=two_theta_range, nmax=nmax,
+                    polariz=polariz)
+            self.hkl = np.asarray(hkl, dtype=int)
+            self.d0 = np.asarray(d0, dtype=float)
+            self.partials = partials
+            self.mult = np.asarray(mult, dtype=float)
+            self.lp = np.asarray(lp, dtype=float)
+            self.s2_ref = np.asarray(s2r, dtype=float)
+            self.elements = sorted(partials)
+            self.orthorhombic = all(
+                abs(float(a) - 90.0) < 1e-3 for a in structure.lattice.angles)
+            if md is not None:
+                axis, r_fixed = md
+                self.md_fixed = float(r_fixed)
+                self.md_cos2 = np.asarray([
+                    core.march_dollase_cos2(h, axis, structure.lattice.matrix)
+                    for h in hkl], dtype=float)
+            f = np.zeros(len(tth), dtype=complex)
+            for elem, amp in partials.items():
+                f += amp * np.exp(-float(base.get(elem, 0.0)) * self.s2_ref)
+            inten = self.mult * self.lp * np.abs(f) ** 2
+            if md is not None and not self.md_refine:
+                c2 = self.md_cos2
+                inten *= (r_fixed ** 2 * c2
+                          + (1.0 - c2) / r_fixed) ** -1.5
+            self._inten_norm = float(inten.max()) if inten.size else 1.0
+            self.inten = (inten / self._inten_norm * 100.0
+                          if inten.size and self._inten_norm > 0 else inten)
+        elif keep_unmerged:
             hkl, d0, tth, inten = core.reflection_table(
                 structure, wavelength=wavelength,
                 two_theta_range=two_theta_range, nmax=nmax,
@@ -197,13 +245,15 @@ class _PeakTable:
             self.d0 = None
             self.orthorhombic = False
         self.tth = np.asarray(tth, dtype=float)
-        inten = np.asarray(inten, dtype=float)
-        self.inten = (inten / inten.max() * 100.0
-                      if inten.size and inten.max() > 0 else inten)
+        if not self.dynamic:
+            inten = np.asarray(inten, dtype=float)
+            self.inten = (inten / inten.max() * 100.0
+                          if inten.size and inten.max() > 0 else inten)
         theta = np.radians(self.tth / 2.0)
         self.s2 = (np.sin(theta) / float(wavelength)) ** 2
         self.pol_base = polarization(self.tth, polariz)
-        self.b_iso_base = None if isinstance(b_iso, dict) else b_iso
+        self.b_iso_base = None if (isinstance(b_iso, dict) or self.dynamic) \
+            else b_iso
 
 
 def _measure_observed_fwhm(tth, y, center, span):
@@ -345,12 +395,28 @@ class _Model:
             size_um=p["size_um"], mustrain=p["mustrain"],
             size_mix=p["size_mix"], strain_mix=p["strain_mix"])
         fwhm, eta = sig_gam_to_fwhm_eta(sig, gam)
-        inten = self.table.inten.copy()
-        # 温度因子：全局 B 对 |F|² 整体乘 exp(−2ΔB·s²)
-        b = float(p["b_iso"])
-        if self.table.b_iso_base is not None:
-            inten *= np.exp(-2.0 * (b - float(self.table.b_iso_base))
-                            * self.table.s2)
+        if self.table.dynamic:
+            # 分元素 B + 可精修织构：逐反射重算 |Σ_e A_e e^(−B_e s²)|²
+            s2 = (np.sin(np.radians(centers / 2.0)) / self.wavelength) ** 2
+            f = np.zeros(len(centers), dtype=complex)
+            for elem, amp in self.table.partials.items():
+                b_e = float(p.get(f"b_{elem}",
+                                  self.table.b_elem_base.get(elem, 0.0)))
+                f += amp * np.exp(-b_e * s2)
+            inten = self.table.mult * self.table.lp * np.abs(f) ** 2
+            if self.table.md_cos2 is not None:
+                r_md = float(p.get("md_r", self.table.md_fixed))
+                c2 = self.table.md_cos2
+                inten = inten * (r_md * r_md * c2
+                                 + (1.0 - c2) / r_md) ** -1.5
+            inten = inten / self.table._inten_norm
+        else:
+            inten = self.table.inten.copy()
+            # 温度因子：全局 B 对 |F|² 整体乘 exp(−2ΔB·s²)
+            b = float(p["b_iso"])
+            if self.table.b_iso_base is not None:
+                inten *= np.exp(-2.0 * (b - float(self.table.b_iso_base))
+                                * self.table.s2)
         # 偏振度：只改偏振项，Lorentz 项不动
         pol = polarization(centers, float(p["polariz"]))
         inten *= pol / self.table.pol_base
@@ -601,7 +667,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         polariz           光束偏振度；0.5 = 非偏振
         b_iso              初始/固定温度因子：float、{元素: B} 或 None。
                            若 free 含 b_iso：标量 = 绝对 B；字典 = 在 CIF
-                           各元素 B 上叠加的**全局 ΔB**。
+                           各元素 B 上叠加的**全局 ΔB**。若 free 里出现
+                           b_<元素>（如 b_Fe、b_O），改为**分元素 B 精修**
+                           （绝对 B，不能与 b_iso 同时精修）。
         two_theta_range    峰表范围；None = 由观测网格首尾决定
         background         背景：int = Chebyshev 阶数；None = 无；
                            数组 = 固定背景曲线（如自动基线）
@@ -630,9 +698,11 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            mustrain、b_iso、md。额外相的晶胞/微结构固定，
                            只有 scale 是自由线性参数；仪器峰形跟随主相。
         free               要精修的参数名（zero/U/V/W/X/Y/Z/size_um/
-                           mustrain/b_iso/polariz；正交晶胞可加 a/b/c）；
-                           scale 与背景总是线性解出。a/b/c 只支持
-                           α=β=γ=90° 的正交晶胞（橄榄石就是）。
+                           mustrain/b_iso/polariz；正交晶胞可加 a/b/c；
+                           分元素 B 用 b_<元素>；织构强度用 md_r，需同时
+                           给 md=(轴, R) 作初始/边界参考）；scale 与背景
+                           总是线性解出。a/b/c 只支持 α=β=γ=90° 的正交
+                           晶胞（橄榄石就是）。
         stages             分阶段精修，默认 DEFAULT_STAGES 按 free 过滤
         initial            初值覆盖（同名参数）
         bounds             边界覆盖（同名参数）
@@ -655,9 +725,28 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     else:
         cell_refine = bool(cell_refine)
 
-    # ── 峰表（固定结构；精修晶胞时保留 hkl/d、不做 2θ 合并） ────────
+    # ── 分元素 B / 可精修织构（动态强度） ─────────────────────────
+    elem_names = [n[2:] for n in free if n.startswith("b_")]
+    md_refine = "md_r" in free
+    dynamic = bool(elem_names) or md_refine
+    structure_elems = {sp.symbol for site in structure
+                       for sp in site.species}
+    bad_elems = [e for e in elem_names if e not in structure_elems]
+    if bad_elems:
+        raise ValueError(f"结构里没有这些元素：{bad_elems}")
+    if refine_intensities and (elem_names or md_refine):
+        raise ValueError(
+            "Le Bail 模式下逐峰强度已自由，分元素 B / 织构 R 会简并")
+    if elem_names and "b_iso" in free:
+        raise ValueError("b_iso（全局 ΔB）不能和分元素 B 同时精修")
+    if md_refine and md is None:
+        raise ValueError("精修 md_r 时必须给 md=(轴, R)")
+
+    # ── 峰表（固定结构；精修晶胞/动态强度时保留 hkl/d） ──────────
     table = _PeakTable(structure, wavelength, two_theta_range, nmax,
-                       b_iso, polariz, keep_unmerged=cell_refine, md=md)
+                       b_iso, polariz,
+                       keep_unmerged=cell_refine or dynamic, md=md,
+                       dynamic=dynamic, md_refine=md_refine)
 
     # ── 权重（用原始计数；固定背景扣除不改变权重口径） ─────────────
     if isinstance(weights, str):
@@ -707,7 +796,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         y_target = y_raw - fixed_bg
 
     # ── 初值 ────────────────────────────────────────────────────────
-    bad = [n for n in free if n not in _ALLOWED]
+    dynamic_names = ([f"b_{e}" for e in elem_names]
+                     + (["md_r"] if md_refine else []))
+    bad = [n for n in free if n not in _ALLOWED and n not in dynamic_names]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")
     if refine_intensities:
@@ -745,6 +836,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         "size_mix": float(size_mix),
         "strain_mix": float(strain_mix),
     }
+    for elem in elem_names:
+        init[f"b_{elem}"] = float(table.b_elem_base.get(elem, 0.0))
+    if md_refine:
+        init["md_r"] = float(md[1]) if md is not None else 1.0
     if isinstance(b_iso, dict):
         init["b_iso"] = 0.0          # 峰表已带各元素 B；自由参数是 ΔB
     if "b_iso" in free:
@@ -766,6 +861,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     if isinstance(b_iso, dict) and "b_iso" not in user_bounds:
         # 字典 B 时自由参数是 ΔB，允许为负（实验样品的 B 可能比 CIF 小）
         bounds["b_iso"] = (-50.0, 50.0)
+    for elem in elem_names:
+        bounds.setdefault(f"b_{elem}", (0.0, 50.0))
+    if md_refine:
+        bounds.setdefault("md_r", (0.05, 20.0))
 
     # ── 分阶段 ──────────────────────────────────────────────────────
     default_stages = stages is None
