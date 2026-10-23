@@ -18,6 +18,19 @@
 
 ### 模拟
 
+- **LaB₆ 标样全谱拟合修好"峰高不够"**（2026-10-23）：根因不是峰宽，而是
+  Lorentzian 尾巴参数 X/Y 从 0 出发时掉进"几乎没有尾巴"的局部极小
+  （停在 X≈0.03/Y≈0.6，Le Bail Rwp 6.4%，峰高比实测低 ~5%）。拟合器
+  现在：X/Y 精修时给小的非零初值（0.1/3 centideg）；默认分阶段给 X/Y
+  阶段多起点、取加权残差最小；末尾追加一轮 U/V/W/X/Y 联合抛光。标样
+  CIF 改用新增的 `data/structures/LaB6_NIST660c.cif`（NIST SRM 660c
+  室温晶胞 4.156826 Å，与 pyFAI 几何标定的参考一致；COD 的 4.157597 Å
+  大 1.9e-4，模型峰位系统性偏低）；脚本用 Le Bail 逐峰强度定标样的
+  仪器参数，结构强度模型的误差不再挤进峰形。LaB₆ Le Bail Rwp
+  **6.39% → 4.52%**，峰高/计算 1.05 → 1.01、FWHM 比 0.95 → 1.00；
+  LMFP 结构/Le Bail **8.10/6.99% → 8.06/6.95%**。展示图已重拍
+  （`sim_xrd_fit_LaB6.png`、`sim_xrd_fit_bottom_LaB6.png`、
+  `sim_xrd_intensity_ratios_LaB6.png`、LMFP 两张）
 - **六方晶系峰位标注默认改三位卡片式**（用户 2026-10-17："hkl 就显示三位，
   图上不要写四位"）：如 (104)、(116)，与 PDF 卡片行号一致；四位 (h k i l)
   是显式选项（CLI `--four-index` / `four_index=True`）。第 6 周那张刚玉

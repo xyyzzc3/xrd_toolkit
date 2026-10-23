@@ -19,14 +19,15 @@
 
 用法：
     python scripts/simulate_study.py basic
-    python scripts/simulate_study.py instrument --cif data/structures/LaB6_1000055.cif
+    python scripts/simulate_study.py instrument --cif data/structures/LaB6_NIST660c.cif
     # crosscheck 两步走（GSAS-II 在独立环境）：
     conda run -n gsas2 python scripts/gsas2_crosscheck.py --cif … --out /tmp/g2.npz --w 18.033
     conda run -n gsas2 python scripts/gsas2_crosscheck.py --cif … --out /tmp/g2z.npz --w 18.033 --zero 0.05
     python scripts/simulate_study.py crosscheck --gsas2-npz /tmp/g2.npz --gsas2-zero-npz /tmp/g2z.npz
     python scripts/simulate_study.py fit
 
-主 CIF 默认 LaB₆（与第三周的实验数据同材料，任务四要对得上）。
+主 CIF 默认 LaB₆（与第三周的实验数据同材料，任务四要对得上）；
+实验拟合/对照用 NIST SRM 660c 室温晶胞，与几何标定的参考一致。
 """
 import argparse
 import sys
@@ -43,7 +44,9 @@ from xrd_toolkit.simulation import (  # noqa: E402
     plot_intensity_ratios, plot_profile, simulate_pattern,
     simulate_pattern_gsas, two_theta_from_d)
 
-DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_1000055.cif"
+# 默认用 NIST SRM 660c 室温晶胞（a=4.156826 Å）：实验图的几何按同一套
+# 参考标定，拟合/对照才不会带 2θ 系统性偏差。教学模拟用哪个晶胞都行。
+DEFAULT_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 
 
 def _material_name(cif: Path) -> str:

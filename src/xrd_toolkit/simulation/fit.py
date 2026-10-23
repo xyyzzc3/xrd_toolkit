@@ -77,6 +77,10 @@ DEFAULT_STAGES = (
     ("x", "y"),
     ("b_iso",),
     ("polariz",),
+    # 收口：Caglioti 与 X/Y 有强耦合，分开各精修一次后再联合抛光一遍
+    # （2026-10-23 实测 LaB6：不抛光时 X/Y 阶段被前一步 U/V/W 的落点
+    # 锁在次优谷底，Rwp 4.65；联合后回到 4.55 且峰高比 1.005）。
+    ("u", "v", "w", "x", "y"),
 )
 
 _ALLOWED = set(DEFAULT_BOUNDS)
@@ -719,8 +723,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         "a": table.a0,
         "b": table.b0,
         "c": table.c0,
-        "x": 0.0,
-        "y": 0.0,
+        # X/Y 不精修时必须保持 0（否则等于偷偷给模型加 Lorentzian 尾巴）；
+        # 精修时给一个小非零起点，避免停在"几乎没有尾巴"的局部极小。
+        "x": 0.1 if "x" in free else 0.0,
+        "y": 3.0 if "y" in free else 0.0,
         "z": 0.0,
         # 要放开的微结构项给一个"有宽度但不夸张"的起点（1 µm / 1 个
         # GSAS 微应变单位）；不放开时用"无限大晶粒、零应变"。
@@ -754,6 +760,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bounds["b_iso"] = (-50.0, 50.0)
 
     # ── 分阶段 ──────────────────────────────────────────────────────
+    default_stages = stages is None
     if stages is None:
         stages = []
         for s in DEFAULT_STAGES:
@@ -769,6 +776,13 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bad = [n for s in stages for n in s if n not in free]
         if bad:
             raise ValueError(f"stages 中有未在 free 里的参数：{bad}")
+
+    # X/Y（Lorentzian 尾巴）同时从 0 出发容易掉进"几乎没有尾巴"的
+    # 局部极小：2026-10-23 用 LaB6 实测，停在 X≈0.03 / Y≈0.6 时
+    # Rwp 5.8、峰高比计算低 5%，而 X≈0.1 / Y≈1–3 的谷底 Rwp 4.6、
+    # 峰高与实测一致。默认分阶段下给这一阶段几个小起点，各跑一遍取
+    # 加权残差最小者；显式传 stages 的调用保持原样。
+    _XY_STARTS = ({"x": 0.1, "y": 1.0}, {"x": 0.1, "y": 3.0})
 
     extra_models = []
     for spec in (extra_phases or []):
@@ -815,13 +829,25 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         used_stages.append(tuple(names))
         model.free_names = names
         model.fixed = {k: v for k, v in values.items() if k not in names}
-        x0 = np.array([values[n] for n in names], dtype=float)
+        starts = [None]
+        if default_stages and set(names) <= {"x", "y"}:
+            starts += [{k: v for k, v in s.items() if k in names}
+                       for s in _XY_STARTS]
         lo = np.array([bounds[n][0] for n in names], dtype=float)
         hi = np.array([bounds[n][1] for n in names], dtype=float)
-        x0 = np.clip(x0, lo, hi)
-        result = least_squares(
-            model.residual, x0, bounds=(lo, hi), x_scale="jac",
-            max_nfev=max_nfev, xtol=1e-12, ftol=1e-12, gtol=1e-12)
+        best = None
+        for start in starts:
+            trial = dict(values)
+            if start:
+                trial.update(start)
+            x0 = np.clip(np.array([trial[n] for n in names], dtype=float),
+                         lo, hi)
+            cand = least_squares(
+                model.residual, x0, bounds=(lo, hi), x_scale="jac",
+                max_nfev=max_nfev, xtol=1e-12, ftol=1e-12, gtol=1e-12)
+            if best is None or cand.cost < best.cost:
+                best = cand
+        result = best
         values.update(dict(zip(names, result.x)))
 
     # ── 最终曲线与指标（全部 free 参数一起） ─────────────────────────

@@ -88,6 +88,25 @@ class TestFitRecovery(unittest.TestCase):
         self.assertAlmostEqual(res.params["zero"], 0.01, delta=0.005)
         self.assertAlmostEqual(res.params["w"], 18.0, delta=2.0)
 
+    def test_lorentzian_profile_found_from_default_staging(self):
+        """默认分阶段、不喂初值：X=5/Y=1 的 Lorentzian 峰形也能找回。
+
+        2026-10-23 的坑：X/Y 从 0 同时出发时，拟合会停在"几乎没有尾巴"
+        的局部极小；默认小非零初值 + X/Y 阶段多起点 + 末尾联合抛光
+        必须保住这个解。
+        """
+        true = dict(zero=0.012, u=20.0, v=-5.0, w=18.0, x=5.0, y=1.0)
+        tth, y = _synth(self.st, **{f"{k}_deg" if k == "zero" else k: val
+                                    for k, val in true.items()})
+        y = y + 20.0 + 0.3 * (tth - 10.0)
+        res = fit_pattern(
+            self.st, tth, y, background=2, weights="uniform",
+            free=("zero", "u", "v", "w", "x", "y"))
+        self.assertLess(res.rwp, 0.2)
+        for name, expected in true.items():
+            self.assertAlmostEqual(res.params[name], expected,
+                                   delta=max(0.05 * abs(expected), 0.05))
+
     def test_fixed_background_array(self):
         tth, y = _synth(self.st, u=0.0, v=0.0, x=0.0, y=0.0)
         bg = 30.0 + 0.5 * (tth - 10.0)

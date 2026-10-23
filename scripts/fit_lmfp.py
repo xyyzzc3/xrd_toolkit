@@ -40,7 +40,9 @@ DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
 ]
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
-LAB6_CIF = ROOT / "data" / "structures" / "LaB6_1000055.cif"
+# 实验拟合用 NIST SRM 660c 室温晶胞（a=4.156826 Å）：几何就是按同一套
+# 参考标定的；COD 的 4.157597 Å 偏大，会让模型峰位系统性偏低。
+LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 
 # 样品晶胞初值：由低角峰 (200)/(101)/(111)/(020) 粗估（Å）
 SAMPLE_CELL = (10.376, 6.040, 4.708)
@@ -54,14 +56,19 @@ def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000):
 
 
 def instrument_profile(geom, lam):
-    """用 LaB₆ 标样拟合 zero/U/V/W/X/Y（样品拟合时固定）。"""
+    """用 LaB₆ 标样拟合 zero/U/V/W/X/Y（样品拟合时固定）。
+
+    峰强用 **Le Bail** 逐峰自由：标样的结构强度模型（B 因子/占位）本来就
+    有误差，若一起精修，会把强度残差挤进峰形参数里。逐峰强度放开后，
+    U/V/W/X/Y 只由峰形决定（2026-10-23 实测 Rwp 6.1 → 4.5）。
+    """
     st = load_structure(str(LAB6_CIF))
     b6 = b_iso_from_cif(str(LAB6_CIF))
     t, y = load_1d(LAB6_TIF, geom)
     bg = estimate_baseline_sliding(t, y, 0.2)
     return fit_pattern(
         st, t, y, wavelength=lam, b_iso=b6, background=bg,
-        background_knots=0.25, weights="poisson",
+        background_knots=0.25, weights="poisson", refine_intensities=True,
         free=("zero", "u", "v", "w", "x", "y"), max_nfev=200)
 
 

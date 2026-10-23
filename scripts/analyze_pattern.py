@@ -46,7 +46,8 @@ DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
 ]
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
-LAB6_CIF = STRUCT / "LaB6_1000055.cif"
+# 实验拟合用 NIST SRM 660c 室温晶胞（与几何标定参考一致）
+LAB6_CIF = STRUCT / "LaB6_NIST660c.cif"
 # 默认输出到系统临时目录：脚本不许往仓库的 outputs/ 写东西（隔离护栏）
 DEFAULT_OOB = Path(tempfile.gettempdir()) / "xrd_toolkit_analysis"
 
@@ -58,6 +59,8 @@ def load_1d(path, geom, tmin, tmax, npt=3000):
 
 
 def instrument_profile(geom, lam):
+    """标样的峰形用 Le Bail 定 U/V/W/X/Y（逐峰强度放开，避免结构强度
+    模型的误差挤进峰形参数）；没有标样图时退化为 None。"""
     if not LAB6_TIF.exists():
         return None
     st = load_structure(str(LAB6_CIF))
@@ -66,7 +69,7 @@ def instrument_profile(geom, lam):
     bg = estimate_baseline_sliding(t, y, 0.2)
     return fit_pattern(
         st, t, y, wavelength=lam, b_iso=b6, background=bg,
-        background_knots=0.25, weights="poisson",
+        background_knots=0.25, weights="poisson", refine_intensities=True,
         free=("zero", "u", "v", "w", "x", "y"), max_nfev=200)
 
 

@@ -105,6 +105,10 @@ class TestManualMatchesPymatgen(unittest.TestCase):
     def test_lab6(self):
         self._check("LaB6_1000055.cif")
 
+    def test_lab6_nist(self):
+        # 实验拟合用的派生 CIF（只换 NIST SRM 660c 室温晶胞）
+        self._check("LaB6_NIST660c.cif")
+
     def test_al2o3(self):
         self._check("Al2O3_1000032.cif")
 
