@@ -192,10 +192,15 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
         extra_phases=extras, phase_label=label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
+    # 强度/展示用 Le Bail（带 Al 相时把 Al scale 也解出来）；结构拟合
+    # 只负责晶胞/微结构。
+    leb_weights = w if use_al else w_leb
+    leb_extras = extras if use_al else []
     lebail = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, weights=w_leb, cell_refine=True,
+        background_knots=0.25, weights=leb_weights, cell_refine=True,
         refine_intensities=True, phase_label=label,
+        extra_phases=leb_extras,
         free=("size_um", "mustrain"),
         initial={**init, "a": struct.params["a"], "b": struct.params["b"],
                  "c": struct.params["c"],
@@ -203,10 +208,10 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
                  "mustrain": struct.params["mustrain"]}, max_nfev=200)
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
-    plot_src = struct if use_al else lebail
+    plot_src = lebail
     plot_fit(plot_src, f"{path.name} — auto: {primary_name}"
                        + (" + Al (111) textured" if use_al else "")
-                       + f" {'structural' if use_al else 'Le Bail'} fit, "
+                       + " Le Bail fit, "
                        f"λ = {lam:.4f} Å",
              str(out), zoom=(2.6, 3.2),
              exclude_ranges=[] if use_al else list(exclude))

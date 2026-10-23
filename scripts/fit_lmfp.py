@@ -113,12 +113,16 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
         extra_phases=extras, phase_label=phase_label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
-    # Le Bail 始终排除 Al 区、不带 Al 相：它给的是“样品峰形/峰强”的
-    # 参考值；结构拟合可以另带 Al 第二相。
+    # 展示/强度口径：带 Al 相时用 Le Bail（逐峰强度 + Al scale）——
+    # 弱反射的相对强度受织构/晶粒统计影响，结构模型压不住；结构拟合
+    # 只负责晶胞/微结构。不带 Al 时仍用排除 Al 区的 Le Bail。
+    leb_weights = w if use_al else w_leb
+    leb_extras = extras if use_al else []
     lebail = fit_pattern(
         structure, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, weights=w_leb, cell_refine=True,
+        background_knots=0.25, weights=leb_weights, cell_refine=True,
         refine_intensities=True, phase_label=phase_label,
+        extra_phases=leb_extras,
         free=("size_um", "mustrain"),
         initial={**init, "a": struct.params["a"],
                  "b": struct.params["b"], "c": struct.params["c"],
@@ -126,11 +130,11 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
                  "mustrain": struct.params["mustrain"]}, max_nfev=200)
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
-    plot_src = struct if use_al else lebail
+    plot_src = lebail
     plot_fit(
         plot_src,
-        f"{path.name} — "
-        f"{'structural fit (Al (111) textured)' if use_al else 'Le Bail fit'}"
+        f"{path.name} — Le Bail fit"
+        f"{' (Al (111) textured)' if use_al else ''}"
         f", 2θ = 1–8°, λ = {lam:.4f} Å",
         str(out), zoom=(2.6, 3.2),
         exclude_ranges=[] if use_al else list(exclude))
@@ -175,7 +179,7 @@ def main():
              if not use_al and exclude else "Al (111) 织构第二相"))
     print(f"{'image':>28} {'Rwp结构':>8} {'RwpLeBail':>10} "
           f"{'a':>7} {'b':>7} {'c':>7} {'size/µm':>8} {'ε/1e-3':>7} "
-          f"{'B':>6} {'Al scale':>8}")
+          f"{'B':>6} {'Al(LeB)':>8}")
 
     for image in a.images:
         p = Path(image)
@@ -186,7 +190,8 @@ def main():
             p, structure, geom, lam, inst, outdir, exclude, SAMPLE_CELL,
             use_al=use_al, phase_label=cif.stem.split("_")[0],
             hot_mask=not a.no_hot_mask)
-        al_scale = struct.params.get("Al:scale")
+        al_scale = (lebail.params.get("Al:scale") if use_al
+                    and lebail is not None else struct.params.get("Al:scale"))
         leb_txt = (f"{lebail.rwp:10.3f}" if lebail is not None
                    else f"{chr(8212):>10}")
         print(f"{p.name:>28} {struct.rwp:8.3f} {leb_txt} "
@@ -198,7 +203,8 @@ def main():
         print(f"  结构参数：Size={struct.params['size_um']:.3f} µm，"
               f"应变={struct.params['mustrain'] / 4e6 * 1e3:.3f}e-3，"
               f"ΔB={struct.params['b_iso']:+.2f} Å²"
-              + (f"，Al scale={al_scale:.3g}" if al_scale is not None else "")
+              + (f"，Al scale（Le Bail）={al_scale:.3g}"
+                 if al_scale is not None else "")
               + f"；→ {out}")
 
 

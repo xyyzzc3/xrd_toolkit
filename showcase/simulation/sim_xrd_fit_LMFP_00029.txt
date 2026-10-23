@@ -5,4 +5,4 @@ primary: LiMn0.5Fe0.5PO4_olivine.cif scale=1.0020
   LiMnPO4_olivine.cif: score=1.021 scale=1.0020 coverage=0.963 purity=0.292
 exclude: [(2.9067318646176927, 3.0867318646176924)]
 structural Rwp=3.483% a=10.3533 b=6.0216 c=4.7034 Size=0.0872 strain=0.000000 B=3.3928 Al_scale=0.715508
-Le Bail Rwp=2.290%
+Le Bail Rwp=2.292%
