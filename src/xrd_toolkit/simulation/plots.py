@@ -9,8 +9,9 @@
 - `plot_profile`（2026-10-17 第七周加）：连续模拟谱——细网格曲线为主体，
   可选把理想竖线以浅色垫在下面（一眼看出"理论棒 → 模拟谱"的关系），
   峰顶同样竖排 (hkl) 标注（沿用同一套避叠字规矩）。
-- `plot_fit`（2026-10-22 加）：全谱拟合图——观测/计算/背景 + 残差，
-  可选一个放大窗（看峰形与峰间底部）。
+- `plot_fit`（2026-10-22 加，2026-10-23 起默认论文式布局）：观测点 /
+  计算线 / 背景 + 残差 + 每相一行的布拉格峰位刻度（`peak_tth` /
+  `extra_peak_tth` 自动生成），可选一个放大窗（看峰形与峰间底部）。
 - `plot_fit_bottom`（2026-10-22 加）：把残差 y 轴按峰间噪声的 ±8σ 收窄，
   专看"峰间底部平不平"（主图残差被峰顶几千 counts 撑满，看不见 ±10）。
 - `plot_intensity_ratios`（2026-10-22 加）：逐峰 obs/fit 面积比 + 两条
@@ -156,93 +157,144 @@ def plot_fit_bottom(result, title, out_path, *, inter_mask=None, zoom=None):
     return out_path
 
 
+_MAIN_COLOR = "#1f5fa8"
+_EXTRA_COLORS = ("#e08a1e", "#2a9d8f", "#8e5aa8")
+_OBS_COLOR = "#333333"
+_BG_COLOR = "#d0544e"
+_BRAGG_MERGE_DEG = 0.02   # 显示上合并更近的反射（拟合本身仍保留逐反射）
+
+
+def _thin_bragg(pos, tol=_BRAGG_MERGE_DEG):
+    """把显示上挨得太近的反射位置合并成一个刻度。"""
+    if len(pos) < 2:
+        return pos
+    keep = [pos[0]]
+    for x in pos[1:]:
+        if x - keep[-1] > tol:
+            keep.append(x)
+    return np.asarray(keep)
+
+
 def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
-             bragg=None):
-    """拟合结果图（论文式布局）：观测/计算/背景 → 残差 → 布拉格峰位。
+             bragg="auto"):
+    """拟合结果图（论文式布局，2026-10-23 起为默认画法）。
 
-    `result` 是 `simulation.fit.FitResult`（鸭子类型即可：tth / y_obs /
-    y_calc / background / residual / rwp / rp）。zoom 给 (lo, hi) 时
-    在上图里再嵌一个放大窗；exclude_ranges 给 [(lo, hi), …] 时把
-    被排除的区域（如 Al 基片的强峰）画成灰带。
+    三栏：观测点 / 计算线 / 背景虚线 → obs−calc 差值 → 布拉格峰位刻度
+    （每相一行）。`result` 是 `FitResult`（鸭子类型即可：tth / y_obs /
+    y_calc / background / residual / rwp / rp / peak_tth）。
+    zoom 给 (lo, hi) 时在上图里嵌放大窗；exclude_ranges 把排除区画灰带。
 
-    bragg（2026-10-23 加）：布拉格峰位刻度，list of
-    (label, positions, color)。每个 (label, positions) 画一行短竖线，
-    多相时每相一行（如主相 + Al 基片）。positions 传 %s 拟合后的 2θ
-    （`FitResult.peak_tth` / `extra_peak_tth[label]`），已含零点/晶胞
-    修正；不传则保持原来的两栏布局。
+    bragg：
+        "auto"（默认）= 用 `result.peak_tth`（主相，`phase_label` 命名）
+            和 `result.extra_peak_tth`（第二相）自动生成刻度行；
+        None = 不画刻度，回到旧的两栏布局；
+        [(label, positions, color), …] = 手工指定刻度行。
     """
     import matplotlib.pyplot as plt
-    rows = [(str(label), np.asarray(pos, dtype=float), color)
-            for label, pos, color in (bragg or [])]
+    rows = []
+    if bragg == "auto":
+        if result.peak_tth is not None and len(result.peak_tth):
+            rows.append((result.phase_label or "main phase",
+                         np.asarray(result.peak_tth, dtype=float),
+                         _MAIN_COLOR))
+        for i, (label, pos) in enumerate((result.extra_peak_tth or {}).items()):
+            rows.append((str(label), np.asarray(pos, dtype=float),
+                         _EXTRA_COLORS[i % len(_EXTRA_COLORS)]))
+    elif bragg:
+        rows = [(str(label), np.asarray(pos, dtype=float), color)
+                for label, pos, color in bragg]
+
     if rows:
-        fig, axes = plt.subplots(
-            3, 1, sharex=True, figsize=(11.5, 7.2),
-            gridspec_kw={"height_ratios": [3.2, 1.0, 0.55]})
-        ax, axr, axb = axes
+        fig = plt.figure(figsize=(11.5, 7.6))
+        gs = fig.add_gridspec(3, 1, height_ratios=[3.2, 0.95, 0.55],
+                              hspace=0.07)
+        ax = fig.add_subplot(gs[0])
+        axr = fig.add_subplot(gs[1], sharex=ax)
+        axb = fig.add_subplot(gs[2], sharex=ax)
+        ax.tick_params(labelbottom=False)
+        axr.tick_params(labelbottom=False)
     else:
-        fig, (ax, axr) = plt.subplots(
-            2, 1, sharex=True, figsize=(11.5, 6.2),
-            gridspec_kw={"height_ratios": [3.2, 1.0]})
+        fig = plt.figure(figsize=(11.5, 6.5))
+        gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 0.95],
+                              hspace=0.07)
+        ax = fig.add_subplot(gs[0])
+        axr = fig.add_subplot(gs[1], sharex=ax)
         axb = None
-    ax.plot(result.tth, result.y_obs, ".", ms=2.0, color="0.25",
+        ax.tick_params(labelbottom=False)
+
+    tth = np.asarray(result.tth, dtype=float)
+    xlo, xhi = float(tth.min()), float(tth.max())
+
+    ax.plot(tth, result.y_obs, ".", ms=1.7, color=_OBS_COLOR, alpha=0.85,
             label="observed")
-    ax.plot(result.tth, result.y_calc, color="#2b6cb0", lw=1.4,
+    ax.plot(tth, result.y_calc, color=_MAIN_COLOR, lw=1.3,
             label="calculated")
     if result.background is not None:
-        ax.plot(result.tth, result.background, "--", color="#d94b2b",
-                lw=1.0, label="background")
-    xlo = float(result.tth.min())
-    xhi = float(result.tth.max())
+        ax.plot(tth, result.background, "--", color=_BG_COLOR, lw=0.9,
+                label="background")
     first = True
     for lo, hi in exclude_ranges or []:
-        ax.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0,
+        ax.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0,
                    label="excluded" if first else None)
-        axr.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0)
+        axr.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0)
         if axb is not None:
-            axb.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0)
+            axb.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0)
         first = False
     ax.set_ylabel("Intensity")
     ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
-                 fontsize=10.5)
-    ax.legend(loc="upper right", fontsize=9)
-    ax.grid(alpha=0.25, linestyle=":")
+                 fontsize=10.5, pad=9)
+    ax.legend(loc="upper right", fontsize=8.5, frameon=True,
+              framealpha=0.9, edgecolor="0.85")
+    ax.grid(alpha=0.18, linestyle=":")
+    ax.tick_params(labelsize=9)
+    ax.set_xlim(xlo, xhi)
 
-    axr.axhline(0.0, color="0.6", lw=0.8)
-    axr.plot(result.tth, result.residual, color="#2b6cb0", lw=0.9)
+    resid = np.asarray(result.residual, dtype=float)
+    axr.axhline(0.0, color="0.55", lw=0.8)
+    axr.plot(tth, resid, color=_MAIN_COLOR, lw=0.8)
     axr.set_ylabel("obs − calc")
-    axr.grid(alpha=0.25, linestyle=":")
-    axr.set_xlim(xlo, xhi)
+    axr.grid(alpha=0.18, linestyle=":")
+    axr.tick_params(labelsize=8.5)
+    if resid.size:
+        lim = float(np.percentile(np.abs(resid), 99.8))
+        if lim > 0:
+            axr.set_ylim(-1.15 * lim, 1.15 * lim)
 
+    xlbl = r"2$\theta$ (degrees)"
     if axb is not None:
         n = len(rows)
         axb.set_ylim(0.0, float(n))
         axb.set_yticks([n - 0.5 - i for i in range(n)])
-        axb.set_yticklabels([label for label, _pos, _c in rows], fontsize=8)
-        axb.tick_params(axis="y", length=0)
+        axb.set_yticklabels([label for label, _pos, _c in rows],
+                            fontsize=7.5)
+        axb.tick_params(axis="y", length=0, pad=4)
         for i, (_label, pos, color) in enumerate(rows):
-            inside = pos[(pos >= xlo) & (pos <= xhi)]
+            inside = _thin_bragg(pos[(pos >= xlo) & (pos <= xhi)])
             if inside.size:
                 y = float(n - 1 - i)
-                axb.vlines(inside, y + 0.12, y + 0.88, color=color, lw=0.9)
-        axb.set_ylabel("Bragg", fontsize=8)
-        axb.grid(alpha=0.25, axis="x", linestyle=":")
-        axb.spines["left"].set_visible(False)
-        axb.set_xlabel(r"2$\theta$ (degrees)")
+                axb.vlines(inside, y + 0.30, y + 0.70, color=color, lw=0.85)
+        for side in ("left", "right", "top"):
+            axb.spines[side].set_visible(False)
+        axb.tick_params(axis="x", labelsize=9)
+        axb.set_xlabel(xlbl)
     else:
-        axr.set_xlabel(r"2$\theta$ (degrees)")
+        axr.set_xlabel(xlbl)
 
     if zoom is not None:
         lo, hi = zoom
-        ins = ax.inset_axes([0.52, 0.52, 0.44, 0.42])
-        ins.plot(result.tth, result.y_obs, ".", ms=2.5, color="0.25")
-        ins.plot(result.tth, result.y_calc, color="#2b6cb0", lw=1.3)
+        ins = ax.inset_axes([0.53, 0.50, 0.43, 0.40])
+        ins.plot(tth, result.y_obs, ".", ms=2.3, color=_OBS_COLOR,
+                 alpha=0.85)
+        ins.plot(tth, result.y_calc, color=_MAIN_COLOR, lw=1.2)
         ins.set_xlim(lo, hi)
         ins.set_ylim(bottom=0)
-        ins.tick_params(labelsize=7)
-        ins.grid(alpha=0.25, linestyle=":")
-        ins.set_title("zoom", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+        ins.tick_params(labelsize=6.5)
+        ins.grid(alpha=0.18, linestyle=":")
+        ins.set_title("zoom", fontsize=7.5, pad=3)
+        for side in ins.spines.values():
+            side.set_color("0.7")
+
+    fig.savefig(out_path, dpi=160)
     plt.close(fig)
     return out_path
 

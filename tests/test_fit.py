@@ -248,6 +248,41 @@ class TestFitModes(unittest.TestCase):
         self.assertEqual(DEFAULT_BOUNDS["y"][0], 0.0)
 
 
+class TestPlotFitLayout(unittest.TestCase):
+    """论文式拟合图：默认自动加布拉格刻度，旧的两栏布局仍可用。"""
+
+    def _result(self):
+        tth = np.linspace(10.0, 20.0, 200)
+        peak = np.exp(-((tth - 15.0) / 0.1) ** 2)
+
+        class Res:
+            pass
+
+        r = Res()
+        r.tth = tth
+        r.y_obs = 100.0 + peak
+        r.y_calc = 100.0 + 0.98 * peak
+        r.residual = r.y_obs - r.y_calc
+        r.background = np.full_like(tth, 100.0)
+        r.rwp = 1.0
+        r.rp = 1.0
+        r.peak_tth = np.array([15.0])
+        r.extra_peak_tth = {"Al": np.array([16.0])}
+        r.phase_label = "LaB6"
+        return r
+
+    def test_auto_bragg_and_legacy_layout(self):
+        import tempfile
+        from xrd_toolkit.simulation.plots import plot_fit
+        root = Path(tempfile.mkdtemp(prefix="xrd_plot_"))
+        out = root / "auto.png"
+        plot_fit(self._result(), "test", str(out))
+        self.assertTrue(out.exists() and out.stat().st_size > 0)
+        out2 = root / "legacy.png"
+        plot_fit(self._result(), "test", str(out2), bragg=None)
+        self.assertTrue(out2.exists() and out2.stat().st_size > 0)
+
+
 class TestFitHelpers(unittest.TestCase):
     def test_rwp_matches_manual(self):
         obs = np.array([10.0, 20.0, 30.0, 40.0])

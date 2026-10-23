@@ -180,16 +180,18 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
         ip.update(zero=0.0, u=0.0, v=0.0, w=0.65, x=0.0, y=0.0)
     init = {**ip, "a": cell0[0], "b": cell0[1], "c": cell0[2],
             "size_um": 0.2, "mustrain": 1000.0, "b_iso": 0.5}
+    label = Path(primary_name).stem.split("_")[0]
     struct = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
         background_knots=0.25, intensity_poly=2, weights=w_struct,
-        extra_phases=extras,
+        extra_phases=extras, phase_label=label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
     lebail = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
         background_knots=0.25, weights=w_leb, cell_refine=True,
-        refine_intensities=True, free=("size_um", "mustrain"),
+        refine_intensities=True, phase_label=label,
+        free=("size_um", "mustrain"),
         initial={**init, "a": struct.params["a"], "b": struct.params["b"],
                  "c": struct.params["c"],
                  "size_um": struct.params["size_um"],

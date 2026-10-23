@@ -556,44 +556,70 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
         rows.append((tt, c, fw, sim_fwhm_at(c), h / h_max * 100.0, i_sim))
     i_sim_max = max(r[5] for r in rows)
 
-    # 图：论文式布局——上排观测点/模拟线，下排差值；左列全谱，右两列放大
+    # 图：论文式布局——上排观测点/模拟线，中排差值，左列底部布拉格刻度
+    main_color, obs_color = "#1f5fa8", "#333333"
     strongest = max(rows, key=lambda r: r[4])
     mid = min(rows, key=lambda r: abs(r[0] - (TMIN + TMAX) / 2))
-    fig = plt.figure(figsize=(15, 6.6))
-    gs = fig.add_gridspec(2, 3, width_ratios=[2.0, 1, 1],
-                          height_ratios=[3.0, 1.0], hspace=0.08, wspace=0.22)
+    fig = plt.figure(figsize=(15, 7.4))
+    gs = fig.add_gridspec(3, 3, width_ratios=[2.0, 1, 1],
+                          height_ratios=[3.0, 1.0, 0.55],
+                          hspace=0.07, wspace=0.22)
     axes = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]),
             fig.add_subplot(gs[0, 2])]
     axes_r = [fig.add_subplot(gs[1, i], sharex=axes[i]) for i in range(3)]
+    axb = fig.add_subplot(gs[2, 0], sharex=axes[0])
+    axes_r[0].tick_params(labelbottom=False)   # 左列 x 轴让给布拉格刻度行
     diff = y_obs_peaks - y_sim
-    axes[0].plot(t_sim, y_obs_peaks, ".", ms=1.8, color="0.25",
-                 label="experiment (background subtracted)")
-    axes[0].plot(t_sim, y_sim, color="#2b6cb0", lw=1.1,
+    axes[0].plot(t_sim, y_obs_peaks, ".", ms=1.7, color=obs_color,
+                 alpha=0.85, label="experiment (background subtracted)")
+    axes[0].plot(t_sim, y_sim, color=main_color, lw=1.3,
                  label="simulation (full-pattern fit)")
     axes[0].set_xlim(TMIN, TMAX); axes[0].set_ylim(bottom=0)
-    axes[0].legend(loc="upper right", fontsize=9)
+    axes[0].legend(loc="upper right", fontsize=8.5, frameon=True,
+                   framealpha=0.9, edgecolor="0.85")
     axes[0].set_title(f"{material} — simulation vs experiment "
-                      f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5)
+                      f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5,
+                      pad=9)
     axes[0].set_ylabel("Intensity")
+    axes[0].tick_params(labelbottom=False)
     for ax, axr, (tt, c, fw, fws, h_rel, _i) in zip(
             axes[1:], axes_r[1:], (strongest, mid)):
         w = 0.15
-        ax.plot(t_sim, y_obs_peaks, ".", ms=2.0, color="0.25")
-        ax.plot(t_sim, y_sim, color="#2b6cb0", lw=1.1)
+        ax.plot(t_sim, y_obs_peaks, ".", ms=1.9, color=obs_color, alpha=0.85)
+        ax.plot(t_sim, y_sim, color=main_color, lw=1.3)
         ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
         ax.set_title(f"$2\\theta$ ≈ {c:.3f}°  (FWHM {fw:.3f}° / sim {fws:.3f}°)",
-                     fontsize=9.5)
-    for axr in axes_r:
-        axr.axhline(0.0, color="0.6", lw=0.8)
-        axr.plot(t_sim, diff, color="#2b6cb0", lw=0.8)
+                     fontsize=9.5, pad=9)
+        ax.tick_params(labelbottom=False)
+    lim = float(np.percentile(np.abs(diff), 99.8))
+    for i, axr in enumerate(axes_r):
+        axr.axhline(0.0, color="0.55", lw=0.8)
+        axr.plot(t_sim, diff, color=main_color, lw=0.8)
+        if lim > 0:
+            axr.set_ylim(-1.15 * lim, 1.15 * lim)
         axr.set_ylabel("obs − calc", fontsize=8.5)
-        axr.set_xlabel(r"2$\theta$ (degrees)")
-        axr.grid(alpha=0.25, linestyle=":")
+        if i:                       # 左列的 x 轴标签让给布拉格刻度行
+            axr.set_xlabel(r"2$\theta$ (degrees)")
+        axr.grid(alpha=0.18, linestyle=":")
+        axr.tick_params(labelsize=8.5)
     for ax in axes:
-        ax.grid(alpha=0.25, linestyle=":")
+        ax.grid(alpha=0.18, linestyle=":")
+        ax.tick_params(labelsize=9)
+    # 布拉格刻度：用拟合后的峰位（含零点），与主拟合图同款
+    bragg_pos = np.asarray(fit.peak_tth, dtype=float)
+    axb.set_ylim(0.0, 1.0)
+    axb.set_yticks([0.5])
+    axb.set_yticklabels([material], fontsize=7.5)
+    axb.tick_params(axis="y", length=0, pad=4)
+    inside = bragg_pos[(bragg_pos >= TMIN) & (bragg_pos <= TMAX)]
+    axb.vlines(inside, 0.30, 0.70, color=main_color, lw=0.85)
+    for side in ("left", "right", "top"):
+        axb.spines[side].set_visible(False)
+    axb.tick_params(axis="x", labelsize=9)
+    axb.set_xlabel(r"2$\theta$ (degrees)")
     fig.tight_layout()
     out = outdir / f"sim_xrd_vs_experiment_{material}.png"
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=160)
     plt.close(fig)
 
     print(f"{material} 任务四：模拟 vs 实验（λ = {lam:.4f} Å，{TMIN:g}–{TMAX:g}°）")
@@ -690,8 +716,7 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     out = outdir / f"sim_xrd_fit_{material}.png"
     plot_fit(lebail, f"{material} — profile fit (GSAS-II + Le Bail "
                      f"intensities, λ = {lam:.4f} Å)", str(out),
-             zoom=(1.6, 2.6),
-             bragg=[(material, lebail.peak_tth, "#2b6cb0")])
+             zoom=(1.6, 2.6))
     out_b = outdir / f"sim_xrd_fit_bottom_{material}.png"
     plot_fit_bottom(
         lebail, f"{material} — inter-peak bottom residual (Le Bail fit)",

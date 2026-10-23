@@ -73,7 +73,7 @@ def instrument_profile(geom, lam):
 
 
 def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
-            use_al=False):
+            use_al=False, phase_label=None):
     t, y = load_1d(path, geom)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
@@ -105,7 +105,7 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     struct = fit_pattern(
         structure, t, y, wavelength=lam, b_iso=0.5, background=bg,
         background_knots=0.25, intensity_poly=2, weights=w_struct,
-        extra_phases=extras,
+        extra_phases=extras, phase_label=phase_label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
     # Le Bail 始终排除 Al 区、不带 Al 相：它给的是“样品峰形/峰强”的
@@ -113,7 +113,7 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     lebail = fit_pattern(
         structure, t, y, wavelength=lam, b_iso=0.5, background=bg,
         background_knots=0.25, weights=w_leb, cell_refine=True,
-        refine_intensities=True,
+        refine_intensities=True, phase_label=phase_label,
         free=("size_um", "mustrain"),
         initial={**init, "a": struct.params["a"],
                  "b": struct.params["b"], "c": struct.params["c"],
@@ -177,7 +177,7 @@ def main():
             continue
         struct, lebail, out = fit_one(
             p, structure, geom, lam, inst, outdir, exclude, SAMPLE_CELL,
-            use_al=use_al)
+            use_al=use_al, phase_label=cif.stem.split("_")[0])
         al_scale = struct.params.get("Al:scale")
         leb_txt = (f"{lebail.rwp:10.3f}" if lebail is not None
                    else f"{chr(8212):>10}")

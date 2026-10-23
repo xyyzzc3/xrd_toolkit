@@ -113,6 +113,8 @@ class FitResult:
     peak_tth: Optional[np.ndarray] = None
     # 第二相（如 Al 基片）的峰位：{label: 2θ 数组}，给布拉格刻度用
     extra_peak_tth: Optional[dict] = None
+    # 主相标签（化学式，如 LaB6），给布拉格刻度行命名
+    phase_label: Optional[str] = None
 
     def report(self) -> str:
         """人读的参数表 + 拟合优度（英文，便于直接贴报告）。"""
@@ -589,7 +591,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 free=("zero", "u", "v", "w"),
                 stages=None, initial=None, bounds=None,
                 size_mix=1.0, strain_mix=1.0,
-                max_nfev=2000):
+                phase_label=None, max_nfev=2000):
     """用 GSAS-II 口径的全谱模型拟合一条 1D 谱。
 
     参数：
@@ -619,6 +621,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         cell_refine        True = 用逐反射 hkl/d 重建峰位，a/b/c 即使不在
                            free 里也按 initial 固定在该晶胞；None（默认）
                            = 仅当 free 含 a/b/c 时启用。
+        phase_label        主相标签（布拉格刻度行/报告用）；None = 取
+                           pymatgen 的 reduced_formula（如 LaB6）。固溶体
+                           的 reduced_formula 会被约简（Li2MnFe(PO4)2），
+                           需要显示原始配方时显式传字符串。
         extra_phases       额外相列表（如 Al 基片）：每项 dict 支持
                            structure（必填）、label、a/b/c、size_um、
                            mustrain、b_iso、md。额外相的晶胞/微结构固定，
@@ -897,6 +903,11 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     # 第二相的位置从各自的 _Model 取（_extra_curves 已用 p_final 更新过）。
     extra_tth = {label: np.asarray(em._parts(em.fixed)[0], dtype=float)
                  for label, em in model.extra_models}
+    if phase_label is None:
+        try:
+            phase_label = structure.composition.reduced_formula
+        except Exception:               # pragma: no cover - 非 pymatgen 对象
+            phase_label = None
     return FitResult(
         params=params, stderr=stderr, rwp=rwp, rp=rp, chi2=chi2,
         reduced_chi2=reduced, n_obs=len(y_raw), n_params=n_params,
@@ -908,7 +919,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         peak_intensities=peak_intensities,
         peak_table_intensities=(None if amps is None else table.inten.copy()),
         peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
-        extra_peak_tth=(extra_tth or None))
+        extra_peak_tth=(extra_tth or None),
+        phase_label=phase_label)
 
 
 def rwp(y_obs, y_calc, weights="poisson"):
