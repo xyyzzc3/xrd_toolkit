@@ -2,10 +2,14 @@
 
 2026-10-22 从 builder.py 的 _build_param_dock 原样搬出（只改结构，不动逻辑）。
 """
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import (
+    QAbstractItemView, QCheckBox, QHBoxLayout, QHeaderView, QLabel,
+    QPushButton, QSpinBox, QTableWidget, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
-from xrd_toolkit.gui.param_dock.widgets import add_caption, add_range
+from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
+from xrd_toolkit.gui.peak_view import (
+    install_peak_view, zoom_to_peak)
 from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
 
@@ -68,6 +72,85 @@ def build_1d_page(window, form_1d, btns_1d):
         lambda _v=0.0: _refresh_1d_display(window))
     window.params["纵轴上限"].valueChanged.connect(
         lambda _v=0.0: _refresh_1d_display(window))
+
+    # ── 寻峰（2026-10-23）──
+    # 只是显示：按面板快照里的参数在画出来的曲线上找峰、画标记、填峰表。
+    # 默认关——不在别人图上冒标记；参数改了立刻重画（同「1D 显示」）。
+    add_caption(form_1d, "寻峰")
+    add_float(window, form_1d, "寻峰显著度", 0.5, 50.0, 5.0,
+              decimals=1, suffix=" σ", label="显著度",
+              tooltip="噪声的倍数：越高越只留明显的峰（默认 5σ）")
+    add_float(window, form_1d, "寻峰最小峰距 (°)", 0.0, 1.0, 0.008,
+              decimals=4, suffix=" °", label="最小峰距",
+              tooltip="两根峰之间至少隔多少度；靠得太近只留较高的一根")
+    add_float(window, form_1d, "寻峰最小 FWHM (°)", 0.0, 1.0, 0.0,
+              decimals=4, suffix=" °", label="最小 FWHM",
+              tooltip="只保留不窄于它的峰；0 = 不过滤（噪声尖通常很窄）")
+    spin_max = QSpinBox()
+    spin_max.setRange(1, 100)
+    spin_max.setValue(20)
+    spin_max.setToolTip("最多列出多少根峰（按高度取最强的）")
+    window.params["寻峰最多根数"] = spin_max
+    form_1d.addRow("最多根数", spin_max)
+
+    show_peaks = QCheckBox("显示峰位")
+    show_peaks.setToolTip("在曲线上画出峰位短线与 2θ 标签，并在下方列出峰表"
+                          "（按当前面板自己的参数）")
+    window.params["显示峰位"] = show_peaks
+    form_1d.addRow(show_peaks)
+    for name in ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
+                 "寻峰最多根数"):
+        window.params[name].valueChanged.connect(
+            lambda _v=0.0: _refresh_1d_display(window))
+
+    def run_peak_finding():
+        if window.focus_panel is None or \
+                not str(window.focus_panel).startswith("1D|"):
+            _log(window, "寻峰：先点开一张 1D 图（或双击文件栏的「1D 产物」）")
+            return
+        if not show_peaks.isChecked():
+            show_peaks.setChecked(True)      # 触发一次重画
+        else:
+            _refresh_1d_display(window)
+        dock = window.plot_docks.get(window.focus_panel)
+        n = len(getattr(dock, "detected_peaks", None) or [])
+        factor = window.params["寻峰显著度"].value()
+        distance = window.params["寻峰最小峰距 (°)"].value()
+        _log(window, f"寻峰：{n} 根（显著度 ≥{factor:g}σ，"
+                     f"最小间距 {distance:g}°）")
+
+    btn_find = QPushButton("寻峰")
+    btn_find.setObjectName("find_peaks_btn")
+    btn_find.setToolTip("按上面的参数在当前 1D 曲线上找峰；结果显示在图上"
+                        "和下方峰表里（不写产物、不改数据）")
+    btn_find.clicked.connect(run_peak_finding)
+    form_1d.addRow(btn_find)
+    show_peaks.toggled.connect(lambda _=False: _refresh_1d_display(window))
+
+    # 峰表：没有峰时整块隐藏（页面不留一块空表）
+    peak_box = QWidget()
+    peak_lay = QVBoxLayout(peak_box)
+    peak_lay.setContentsMargins(0, 2, 0, 0)
+    peak_lay.setSpacing(2)
+    peak_caption = QLabel("峰表（双击一行放大）")
+    peak_caption.setStyleSheet("color: gray; font-weight: 600;")
+    peak_table = QTableWidget(0, 3)
+    peak_table.setHorizontalHeaderLabels(["2θ (°)", "FWHM (°)", "高度"])
+    peak_table.verticalHeader().setVisible(False)
+    peak_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    peak_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    peak_table.setMaximumHeight(160)
+    peak_table.horizontalHeader().setSectionResizeMode(
+        QHeaderView.Stretch)
+    peak_lay.addWidget(peak_caption)
+    peak_lay.addWidget(peak_table)
+    peak_box.setVisible(False)
+    window.peak_box = peak_box
+    window.peak_table = peak_table
+    form_1d.addRow(peak_box)
+    peak_table.cellDoubleClicked.connect(
+        lambda row, _col: zoom_to_peak(window, row))
+    install_peak_view(window)
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图

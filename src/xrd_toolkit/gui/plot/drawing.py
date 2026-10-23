@@ -12,6 +12,7 @@ from xrd_toolkit.gui.panel_state import (
     _AUX_GID_PREFIX, _auto_contrast_values, _auto_y_range, _content,
     _gradient_color, _panel_param, _param_box_set, _proc_curve, _proc_params,
     _proc_settings)
+from xrd_toolkit.gui.peak_view import draw_peak_markers, fill_peak_table
 from xrd_toolkit.gui.plot.canvas import (
     _apply_text_guards, _data_lines, _restore_line_styles, _settle_scale,
     _snapshot_canvas)
@@ -192,6 +193,9 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
         # 线型/线宽/标记照旧保护
         _restore_line_styles(ax, old_lines, restore_color=False)
         ax.grid(alpha=0.3)
+        peaks = draw_peak_markers(window, dock, ax, tth, intensity)
+        if window.plot_docks.get(window.focus_panel) is dock:
+            fill_peak_table(window, dock, peaks)
         _content(dock).draw()
     finally:
         window._setting_limits = prev_limits
