@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -20,7 +21,7 @@ from xrd_toolkit.services import stage_cache
 from xrd_toolkit.gui import watchdog as gui_watchdog
 from xrd_toolkit.gui import panel_state
 from xrd_toolkit.gui import peak_view
-from xrd_toolkit.gui.plot.interaction import _hover_label
+from xrd_toolkit.gui.plot.interaction import _hover_label, _hover_motion
 from xrd_toolkit.gui.app import create_window
 from xrd_toolkit.gui.plot import spawn as gui_plot_spawn
 
@@ -258,9 +259,12 @@ class TestGuiPeakFinding(unittest.TestCase):
 
             near_peak = min(dock.detected_peaks,
                             key=lambda p: abs(p.center - 1.512))
-            text = _hover_label(dock, "", near_peak.center, 0.0)
+            text = _hover_label(dock, "", near_peak.center, 0.0,
+                                near_peak)
+            self.assertIn("峰 2θ", text)
             self.assertIn("FWHM", text)
-            self.assertIn(f"{near_peak.center:.3f}", text)
+            self.assertIn("峰高", text)
+            self.assertIn(f"{near_peak.center:.4f}", text)
 
         finally:
             w.close()
@@ -288,6 +292,30 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertIn(1.5, centres)
             labels = [txt.get_text() for txt in _labels(ax)]
             self.assertIn("1.500", labels)
+        finally:
+            w.close()
+
+
+    def test_hover_snaps_to_peak_apex(self):
+        """光标靠近峰顶：读数直接报这根峰，不混鼠标点的 2θ。"""
+        w = create_window()
+        try:
+            dock = _open_1d(w, curve=_curve_close)
+            ax = panel_state._content(dock).axes_1d
+            w.params["显示峰位"].setChecked(True)
+            QApplication.processEvents()
+            peak = dock.detected_peaks[0]
+            i = int(np.searchsorted(dock.last_tth, peak.center))
+            px, py = ax.transData.transform(
+                (peak.center, dock.last_intensity[i]))
+            event = SimpleNamespace(
+                inaxes=ax, xdata=peak.center,
+                ydata=dock.last_intensity[i], x=px, y=py)
+            _hover_motion(w, w.focus_panel, event)
+            text = w.coord_label.text()
+            self.assertIn("峰 2θ", text)
+            self.assertIn(f"{peak.center:.4f}", text)
+            self.assertIn("FWHM", text)
         finally:
             w.close()
 

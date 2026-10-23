@@ -406,7 +406,7 @@ def _connect_axis_sync(window: QMainWindow, key: str, ax=None,
     ax.callbacks.connect("ylim_changed",
                          lambda a, k=key: _on_ylim_changed(window, k, a))
 
-def _hover_label(dock, name: str, x: float, y: float) -> str:
+def _hover_label(dock, name: str, x: float, y: float, peak=None) -> str:
     """悬停读数文本：坐标名按视图走。
 
     剖面 x = 到束心的像素距离；瀑布 y = 堆叠后的强度（已加行偏移）。
@@ -422,16 +422,12 @@ def _hover_label(dock, name: str, x: float, y: float) -> str:
     prefix = f"{name}：" if name else ""
     if view == "剖面":
         return f"{prefix}距离 {x:.4g} px，强度 {y:.4g}"
-    text = f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
-    if view == "1D":
-        # 密集区标签可能没地方画：鼠标靠近某根峰时把它的 FWHM 报出来
-        # （2026-10-24 讨论：静态标签放不下就靠悬停/峰表补全）
-        peaks = getattr(dock, "detected_peaks", None) or []
-        if peaks:
-            near = min(peaks, key=lambda p: abs(p.center - x))
-            if abs(near.center - x) <= max(5.0 * near.fwhm, 0.05):
-                text += f"；峰 {near.center:.3f}°，FWHM {near.fwhm:.4f}°"
-    return text
+    if view == "1D" and peak is not None:
+        # 鼠标吸附到最近的峰：读数只报这根峰，不再同时出现"鼠标点"和
+        # "最近峰"两个 2θ（用户 2026-10-24："峰有歧义"）
+        return (f"{prefix}峰 2θ {peak.center:.4f}°，"
+                f"FWHM {peak.fwhm:.4f}°，峰高 {peak.height:.0f}")
+    return f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
 
 def _hover_motion(window: QMainWindow, key: str, event) -> None:
     """鼠标在曲线上移动时：选最近的那条线、吸附最近的真实数据点，
@@ -478,6 +474,24 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     xd = line.get_xdata()
     i = int(np.argmin(np.abs(xd - event.xdata)))
     x, y = float(xd[i]), float(line.get_ydata()[i])
+    # 1D 有寻峰结果时，光标靠近某根峰就吸附到峰顶：读数是"这根峰"
+    # 的 2θ/FWHM/峰高，而不是鼠标点的坐标（避免两个 2θ 打架）。
+    peak = None
+    if dock.panel_key.split("|", 1)[0] == "1D":
+        best = None
+        for cand in (getattr(dock, "detected_peaks", None) or []):
+            if not (xd[0] <= cand.center <= xd[-1]):
+                continue
+            yp = float(np.interp(cand.center, xd, line.get_ydata()))
+            px, _py = ax.transData.transform((cand.center, yp))
+            # 按横向距离选峰：双峰靠得很近时纵坐标几乎一样，用二维
+            # 距离会选到旁边那根（实测 1.500/1.512 会吸到 1.512）
+            dx = abs(px - event.x)
+            if best is None or dx < best[0]:
+                best = (dx, cand, yp)
+        if best is not None and best[0] <= 10.0:
+            peak = best[1]
+            x, y = float(peak.center), best[2]
     # 白边圆点（ax.clear() 会删掉它 → 不在当前轴上就重建）
     marker = getattr(dock, "hover_marker", None)
     if marker is None or marker.axes is not ax:
@@ -502,7 +516,7 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     name = line.get_label()
     if not name or name.startswith("_child"):
         name = ""
-    window.coord_label.setText(_hover_label(dock, name, x, y))
+    window.coord_label.setText(_hover_label(dock, name, x, y, peak))
 
 def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
     """鼠标离开曲线/坐标轴：藏起圆点、清空坐标标签（常驻标签留空）。"""
