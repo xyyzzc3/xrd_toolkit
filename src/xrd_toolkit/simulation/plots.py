@@ -226,12 +226,12 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
     xlo, xhi = float(tth.min()), float(tth.max())
 
     ax.plot(tth, result.y_obs, ".", ms=1.7, color=_OBS_COLOR, alpha=0.85,
-            label="observed")
+            label="Observed")
     ax.plot(tth, result.y_calc, color=_MAIN_COLOR, lw=1.3,
-            label="calculated")
+            label="Calculated")
     if result.background is not None:
         ax.plot(tth, result.background, "--", color=_BG_COLOR, lw=0.9,
-                label="background")
+                label="Background")
     first = True
     for lo, hi in exclude_ranges or []:
         ax.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0,
@@ -240,7 +240,7 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         if axb is not None:
             axb.axvspan(lo, hi, color="0.88", alpha=0.6, zorder=0)
         first = False
-    ax.set_ylabel("Intensity")
+    ax.set_ylabel("Intensity (counts)")
     ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
                  fontsize=10.5, pad=9)
     ax.legend(loc="upper right", fontsize=8.5, frameon=True,
@@ -252,7 +252,7 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
     resid = np.asarray(result.residual, dtype=float)
     axr.axhline(0.0, color="0.55", lw=0.8)
     axr.plot(tth, resid, color=_MAIN_COLOR, lw=0.8)
-    axr.set_ylabel("obs − calc")
+    axr.set_ylabel("Difference")
     axr.grid(alpha=0.18, linestyle=":")
     axr.tick_params(labelsize=8.5)
     if resid.size:
@@ -268,6 +268,7 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         axb.set_yticklabels([label for label, _pos, _c in rows],
                             fontsize=7.5)
         axb.tick_params(axis="y", length=0, pad=4)
+        axb.set_ylabel("Bragg positions", fontsize=7.5)
         for i, (_label, pos, color) in enumerate(rows):
             inside = _thin_bragg(pos[(pos >= xlo) & (pos <= xhi)])
             if inside.size:
@@ -290,7 +291,7 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         ins.set_ylim(bottom=0)
         ins.tick_params(labelsize=6.5)
         ins.grid(alpha=0.18, linestyle=":")
-        ins.set_title("zoom", fontsize=7.5, pad=3)
+        ins.set_title(f"zoom {lo:g}–{hi:g}°", fontsize=7.5, pad=3)
         for side in ins.spines.values():
             side.set_color("0.7")
 

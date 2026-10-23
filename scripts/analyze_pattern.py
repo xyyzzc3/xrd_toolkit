@@ -201,7 +201,8 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
     plot_src = struct if use_al else lebail
     plot_fit(plot_src, f"{path.name} — auto: {primary_name}"
                        + (" + Al (111) textured" if use_al else "")
-                       + f" (Rwp {plot_src.rwp:.2f}%)",
+                       + f" {'structural' if use_al else 'Le Bail'} fit, "
+                       f"λ = {lam:.4f} Å",
              str(out), zoom=(2.6, 3.2),
              exclude_ranges=[] if use_al else list(exclude))
     return struct, lebail, out

@@ -571,24 +571,25 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     axes_r[0].tick_params(labelbottom=False)   # 左列 x 轴让给布拉格刻度行
     diff = y_obs_peaks - y_sim
     axes[0].plot(t_sim, y_obs_peaks, ".", ms=1.7, color=obs_color,
-                 alpha=0.85, label="experiment (background subtracted)")
+                 alpha=0.85, label="Experiment (background subtracted)")
     axes[0].plot(t_sim, y_sim, color=main_color, lw=1.3,
-                 label="simulation (full-pattern fit)")
+                 label="Simulation (full-pattern fit)")
     axes[0].set_xlim(TMIN, TMAX); axes[0].set_ylim(bottom=0)
     axes[0].legend(loc="upper right", fontsize=8.5, frameon=True,
                    framealpha=0.9, edgecolor="0.85")
-    axes[0].set_title(f"{material} — simulation vs experiment "
+    axes[0].set_title(f"(a) {material} — simulation vs experiment "
                       f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5,
                       pad=9)
-    axes[0].set_ylabel("Intensity")
+    axes[0].set_ylabel("Intensity (counts)")
     axes[0].tick_params(labelbottom=False)
-    for ax, axr, (tt, c, fw, fws, h_rel, _i) in zip(
-            axes[1:], axes_r[1:], (strongest, mid)):
+    for k, (ax, axr, (tt, c, fw, fws, h_rel, _i)) in enumerate(
+            zip(axes[1:], axes_r[1:], (strongest, mid)), start=1):
         w = 0.15
         ax.plot(t_sim, y_obs_peaks, ".", ms=1.9, color=obs_color, alpha=0.85)
         ax.plot(t_sim, y_sim, color=main_color, lw=1.3)
         ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
-        ax.set_title(f"$2\\theta$ ≈ {c:.3f}°  (FWHM {fw:.3f}° / sim {fws:.3f}°)",
+        ax.set_title(f"({'bc'[k - 1]}) zoom: $2\\theta$ ≈ {c:.3f}°  "
+                     f"(FWHM {fw:.3f}° / sim {fws:.3f}°)",
                      fontsize=9.5, pad=9)
         ax.tick_params(labelbottom=False)
     lim = float(np.percentile(np.abs(diff), 99.8))
@@ -597,7 +598,7 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
         axr.plot(t_sim, diff, color=main_color, lw=0.8)
         if lim > 0:
             axr.set_ylim(-1.15 * lim, 1.15 * lim)
-        axr.set_ylabel("obs − calc", fontsize=8.5)
+        axr.set_ylabel("Difference", fontsize=8.5)
         if i:                       # 左列的 x 轴标签让给布拉格刻度行
             axr.set_xlabel(r"2$\theta$ (degrees)")
         axr.grid(alpha=0.18, linestyle=":")
@@ -611,6 +612,7 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     axb.set_yticks([0.5])
     axb.set_yticklabels([material], fontsize=7.5)
     axb.tick_params(axis="y", length=0, pad=4)
+    axb.set_ylabel("Bragg positions", fontsize=7.5)
     inside = bragg_pos[(bragg_pos >= TMIN) & (bragg_pos <= TMAX)]
     axb.vlines(inside, 0.30, 0.70, color=main_color, lw=0.85)
     for side in ("left", "right", "top"):
