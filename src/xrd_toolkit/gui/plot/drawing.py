@@ -173,6 +173,11 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
                 yhi = max(yhi, hi_proc)
                 if not eff_log:
                     ylo = min(ylo, -0.02 * abs(yhi))
+            if _panel_param(window, dock, "显示峰位", False):
+                # 给峰位标签留头顶空间（2026-10-24）：否则高处的标签
+                # 会被坐标框裁掉（用户："有的因为峰太高导致看不见"）
+                span = max(yhi - ylo, 1e-9)
+                yhi = yhi * 1.6 if eff_log else yhi + 0.18 * span
             if window.plot_docks.get(window.focus_panel) is dock:
                 # 程序回填必须挂旗标（同 10-08 对比度那对）：裸 setValue 会触发
                 # 即改即画钩子（_refresh_1d_display）、重入一次本函数——重入的

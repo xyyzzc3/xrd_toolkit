@@ -58,11 +58,16 @@ def add_caption(form, text):
 
 
 def add_float(window, form, name, lo, hi, value, decimals=2,
-              label=None, suffix="", tooltip="", readonly=False):
+              label=None, suffix="", tooltip="", readonly=False,
+              step=None):
     box = QDoubleSpinBox()
     box.setRange(lo, hi)
     box.setValue(value)
     box.setDecimals(decimals)
+    if step is not None:
+        # 滚轮/上下箭头的步长；QDoubleSpinBox 默认 1.0，对 0.008 这种
+        # 量程 0–1 的参数等于废掉（2026-10-24 用户："滚轮和按钮很无效"）
+        box.setSingleStep(step)
     if suffix:
         box.setSuffix(suffix)   # 单位跟在数字后（标签不再带括号单位）
     if tooltip:

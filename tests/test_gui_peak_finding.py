@@ -50,9 +50,22 @@ def _curve():
     return x, y
 
 
-def _open_1d(w, path="data/fake_peak.tif"):
+def _curve_close():
+    """两个挨得很近的峰（1.500 / 1.504）+ 一个远处的峰（2.200）。"""
+    x = np.arange(1.0, 3.0, 0.002)
+    y = 100.0
+    for center, height, fwhm in ((1.500, 300.0, 0.006),
+                                 (1.504, 220.0, 0.006),
+                                 (2.200, 200.0, 0.030)):
+        y += height * np.exp(
+            -4.0 * np.log(2.0) * ((x - center) / fwhm) ** 2)
+    y += np.random.default_rng(1).normal(0.0, 0.5, x.size)
+    return x, y
+
+
+def _open_1d(w, path="data/fake_peak.tif", curve=None):
     with mock.patch.object(gui_plot_spawn, "_compute_integration",
-                           return_value=_curve()):
+                           return_value=(curve or _curve)()):
         w.add_files([path], select=True)
         w.view_buttons["1D"].click()
         ok = _wait_until(
@@ -69,6 +82,16 @@ def _markers(ax):
             if str(ln.get_gid() or "").startswith("bg:peak_marker")]
 
 
+def _labels(ax):
+    return [txt for txt in ax.texts
+            if str(txt.get_gid() or "").startswith("bg:peak_label")]
+
+
+def _label_boxes(ax):
+    renderer = ax.figure.canvas.get_renderer()
+    return [txt.get_window_extent(renderer) for txt in _labels(ax)]
+
+
 class TestGuiPeakFinding(unittest.TestCase):
     def test_find_peaks_draws_markers_and_table(self):
         w = create_window()
@@ -78,7 +101,7 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertTrue(w.peak_box.isHidden())
             self.assertEqual(len(_markers(ax)), 0)
 
-            w.findChild(QPushButton, "find_peaks_btn").click()
+            w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
             self.assertTrue(w.params["显示峰位"].isChecked())
             peaks = dock.detected_peaks
@@ -98,7 +121,7 @@ class TestGuiPeakFinding(unittest.TestCase):
         try:
             dock = _open_1d(w)
             ax = panel_state._content(dock).axes_1d
-            w.findChild(QPushButton, "find_peaks_btn").click()
+            w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
             self.assertEqual(len(_markers(ax)), 2)
 
@@ -113,7 +136,7 @@ class TestGuiPeakFinding(unittest.TestCase):
         w = create_window()
         try:
             dock = _open_1d(w)
-            w.findChild(QPushButton, "find_peaks_btn").click()
+            w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
             peak_view.zoom_to_peak(w, 0)
             QApplication.processEvents()
@@ -130,9 +153,54 @@ class TestGuiPeakFinding(unittest.TestCase):
     def test_no_focus_logs_guidance(self):
         w = create_window()
         try:
-            w.findChild(QPushButton, "find_peaks_btn").click()
+            w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
             self.assertIn("先点开一张 1D 图", w.log_text.toPlainText())
+        finally:
+            w.close()
+
+
+    def test_peak_spin_steps_are_fine(self):
+        """滚轮/箭头步长要细：显著度 0.1、峰距/FWHM 0.001（2026-10-24）。"""
+        w = create_window()
+        try:
+            self.assertAlmostEqual(
+                w.params["寻峰显著度"].singleStep(), 0.1)
+            self.assertAlmostEqual(
+                w.params["寻峰最小峰距 (°)"].singleStep(), 0.001)
+            self.assertAlmostEqual(
+                w.params["寻峰最小 FWHM (°)"].singleStep(), 0.001)
+            self.assertIsNone(w.findChild(QPushButton, "find_peaks_btn"),
+                              "寻峰按钮已并入「寻峰并显示峰位」复选框")
+        finally:
+            w.close()
+
+    def test_labels_avoid_overlap_and_can_show_all(self):
+        w = create_window()
+        try:
+            dock = _open_1d(w, curve=_curve_close)
+            ax = panel_state._content(dock).axes_1d
+            w.params["显示峰位"].setChecked(True)
+            QApplication.processEvents()
+            boxes = _label_boxes(ax)
+            self.assertGreaterEqual(len(boxes), 1)
+            for bb in boxes:
+                self.assertGreaterEqual(bb.x0, ax.bbox.x0 - 1)
+                self.assertLessEqual(bb.x1, ax.bbox.x1 + 1)
+                self.assertGreaterEqual(bb.y0, ax.bbox.y0 - 1)
+                self.assertLessEqual(bb.y1, ax.bbox.y1 + 1)
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    a, b = boxes[i], boxes[j]
+                    self.assertFalse(
+                        a.x1 > b.x0 and b.x1 > a.x0
+                        and a.y1 > b.y0 and b.y1 > a.y0,
+                        "默认模式标签不许重叠")
+
+            w.params["标注全部峰位"].setChecked(True)
+            QApplication.processEvents()
+            self.assertEqual(len(_labels(ax)), len(dock.detected_peaks),
+                             "「标注全部峰位」打开后每根峰都要有标签")
         finally:
             w.close()
 
@@ -145,6 +213,7 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertFalse(snap["显示峰位"])
             self.assertAlmostEqual(snap["寻峰显著度"], 5.0)
             self.assertAlmostEqual(snap["寻峰最小峰距 (°)"], 0.008)
+            self.assertFalse(snap["标注全部峰位"])
         finally:
             w.close()
 

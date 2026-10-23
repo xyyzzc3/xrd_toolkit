@@ -10,8 +10,6 @@
   * 裁剪留下的断点（NaN）按连续段分别寻峰，不会在断点处造出假峰；
   * 峰表双击一行 = 把视图缩放到那根峰（写回该面板的"视图 2θ"）。
 """
-from math import ceil
-
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QTableWidgetItem
@@ -23,7 +21,7 @@ from xrd_toolkit.services.peak_finding import find_peaks_1d
 
 PEAK_COLOR = "#E69F00"          # Okabe–Ito 橙：与曲线蓝、背景绿都分得开
 PEAK_KEYS = ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
-             "寻峰最多根数", "显示峰位")
+             "寻峰最多根数", "显示峰位", "标注全部峰位")
 TABLE_COLUMNS = ("2θ (°)", "FWHM (°)", "高度")
 
 
@@ -86,40 +84,173 @@ def detect_peaks_for_dock(window, dock, tth=None, intensity=None):
     return found
 
 
+def _bbox_overlap(a, b, pad=2.0):
+    """两个显示坐标包围盒是否相交（留 pad 像素）。"""
+    return not (a.x1 + pad < b.x0 or b.x1 + pad < a.x0
+                or a.y1 + pad < b.y0 or b.y1 + pad < a.y0)
+
+
+def _place_labels(ax, items, curve_t, curve_y, label_all):
+    """在显示坐标里给峰位标签找位置，返回 [(text, peak, y, bbox)]。
+
+    规则（2026-10-24 用户拍板，业内主流做法）：先保证标签之间、标签
+    与峰线/曲线不相交；放不下的标签默认不画（峰表里仍然列全），
+    勾「标注全部峰位」时改为"尽量避让、实在放不下就允许重叠"。
+    """
+    try:
+        renderer = ax.figure.canvas.get_renderer()
+    except Exception:                    # pragma: no cover - 极端后端
+        return []
+    ax_box = ax.bbox
+    # 曲线在显示坐标里的点（抽稀到 ~1200 个，用于避开峰体）
+    pts = np.column_stack([np.asarray(curve_t, dtype=float),
+                           np.asarray(curve_y, dtype=float)])
+    pts = pts[np.isfinite(pts).all(axis=1)]
+    if pts.shape[0] > 1200:
+        pts = pts[::max(1, pts.shape[0] // 1200)]
+    pts_disp = ax.transData.transform(pts) if pts.size else np.zeros((0, 2))
+    pts_disp = pts_disp[np.isfinite(pts_disp).all(axis=1)]
+
+    texts = []
+    ticks = {}
+    for peak, yy in items:
+        txt = ax.text(peak.center, yy, f"{peak.center:.3f}", rotation=90,
+                      fontsize=7, color=PEAK_COLOR, ha="center",
+                      va="bottom", clip_on=True, zorder=6,
+                      label="_peak_label")
+        txt.set_gid(_AUX_GID_PREFIX + "peak_label")
+        texts.append((txt, peak, yy))
+        d = ax.transData.transform((peak.center, yy))
+        ticks[id(peak)] = [d[0], d[1], d[1] + 6.0]
+    if not texts:
+        return []
+    first = texts[0][0].get_window_extent(renderer)
+    step = max(first.height + 2.0, 6.0)
+
+    placed = []
+    out = []
+    for txt, peak, yy in sorted(texts, key=lambda it: -it[1].height):
+        d = ax.transData.transform((peak.center, yy))
+        x_disp = d[0]
+        best = None
+        for k in range(40):
+            shift = 3.0 + k * step
+            y_data = ax.transData.inverted().transform(
+                (x_disp, d[1] + shift))[1]
+            txt.set_position((peak.center, y_data))
+            bb = txt.get_window_extent(renderer)
+            if bb.y1 > ax_box.y1 - 1.0:
+                break
+            bad = any(_bbox_overlap(bb, other) for other in placed)
+            if not bad:
+                # 避开别的峰的竖线/峰顶
+                for pid, seg in ticks.items():
+                    if pid == id(peak):
+                        continue
+                    if (bb.x0 - 2 <= seg[0] <= bb.x1 + 2
+                            and not (bb.y1 < seg[1] - 2
+                                     or bb.y0 > seg[2] + 2)):
+                        bad = True
+                        break
+            if not bad and pts_disp.size:
+                # 避开曲线本身（峰体），否则标签会压在邻峰上
+                inside = ((pts_disp[:, 0] >= bb.x0 - 1)
+                          & (pts_disp[:, 0] <= bb.x1 + 1)
+                          & (pts_disp[:, 1] >= bb.y0 - 1)
+                          & (pts_disp[:, 1] <= bb.y1 + 1))
+                bad = bool(np.any(inside))
+            if not bad and placed:
+                # 自己的引线不许穿过已放好的标签
+                for other in placed:
+                    if (other.x0 - 2 <= x_disp <= other.x1 + 2
+                            and not (other.y1 < d[1]
+                                     or other.y0 > bb.y0)):
+                        bad = True
+                        break
+            if not bad:
+                best = (txt, peak, yy, bb)
+                break
+
+        if best is None:
+            if not label_all:
+                txt.remove()               # A：放不下就不标，峰表仍列全
+                continue
+            # B：放到坐标范围内最高处（允许重叠，但保证看得见）
+            last = None
+            for k in range(60):
+                shift = 3.0 + k * step
+                y_data = ax.transData.inverted().transform(
+                    (x_disp, d[1] + shift))[1]
+                txt.set_position((peak.center, y_data))
+                bb = txt.get_window_extent(renderer)
+                if bb.y1 > ax_box.y1 - 1.0:
+                    break
+                last = bb
+            if last is None:               # 连一格都放不下：贴顶但别出框
+                bb = txt.get_window_extent(renderer)
+                for _ in range(3):
+                    y_data = ax.transData.inverted().transform(
+                        (x_disp, ax_box.y1 - 1.0 - bb.height))[1]
+                    txt.set_position((peak.center, y_data))
+                    bb = txt.get_window_extent(renderer)
+            else:
+                bb = last
+            best = (txt, peak, yy, bb)
+        out.append(best)
+        placed.append(best[3])
+        ticks[id(peak)][2] = best[3].y0 - 1.0
+    return out
+
+
 def draw_peak_markers(window, dock, ax, tth, intensity):
     """在 1D 轴上画峰位竖线与 2θ 标签，返回检出的峰。
 
     在坐标范围（含纵轴自动）定好之后调用；`ax.clear()` 会清掉旧标记，
-    所以每次重画都重建。峰太多时只标前 ~15 个标签，短线仍全部画。
+    所以每次重画都重建。**所有峰都有竖线**；标签按屏幕位置避让，
+    默认放不下就不标（峰表列全），「标注全部峰位」打开时允许重叠。
     """
     peaks = detect_peaks_for_dock(window, dock, tth, intensity)
     dock.detected_peaks = peaks
     if not peaks:
+        dock.labeled_peaks = 0
         return peaks
     y = np.asarray(intensity, dtype=float)
     t = np.asarray(tth, dtype=float)
-    lo, hi = ax.get_ylim()
     log = ax.get_yscale() == "log"
-    span = hi - lo if hi > lo else 1.0
-    stride = max(1, ceil(len(peaks) / 15))
-    for k, peak in enumerate(peaks):
-        i = int(np.clip(np.searchsorted(t, peak.center),
-                        0, t.size - 1))
+    items = []
+    for peak in peaks:
+        i = int(np.clip(np.searchsorted(t, peak.center), 0, t.size - 1))
         yy = float(y[i]) if np.isfinite(y[i]) else float(peak.height)
-        if not np.isfinite(yy) or (log and yy <= 0):
-            continue
-        top = yy * 1.25 if log else yy + 0.04 * span
+        if np.isfinite(yy) and not (log and yy <= 0):
+            items.append((peak, yy))
+    if not items:
+        return peaks
+
+    label_all = bool(_panel_param(window, dock, "标注全部峰位", False))
+    labels = _place_labels(ax, items, t, y, label_all)
+    dock.labeled_peaks = len(labels)
+    labeled = {id(peak) for _txt, peak, _yy, _bb in labels}
+
+    # 竖线最后画：有标签的画到标签下沿，没标签的只画短刻度——
+    # 后画可以盖在标签底下（zorder 更低），不会把字截断
+    for peak, yy in items:
+        d = ax.transData.transform((peak.center, yy))
+        if id(peak) in labeled:
+            bb = next(b for _t, p, _y, b in labels if p is peak)
+            top = ax.transData.inverted().transform(
+                (d[0], bb.y0 - 1.0))[1]
+        else:
+            span = ax.get_ylim()[1] - ax.get_ylim()[0]
+            top = yy + (0.03 * span if not log else 0.0)
+            if log:
+                top = ax.transData.inverted().transform(
+                    (d[0], d[1] + 8.0))[1]
         line, = ax.plot([peak.center, peak.center], [yy, top],
                         color=PEAK_COLOR, lw=1.0, zorder=5,
                         label="_peak_marker")
         # 标成辅助线：重画的 Customize 保护按"数据线"顺序回填样式，
         # 把标记线算进去会让曲线线型错位（同背景辅助线，见 _is_aux_line）
         line.set_gid(_AUX_GID_PREFIX + "peak_marker")
-        if k % stride:
-            continue
-        ax.text(peak.center, top, f"{peak.center:.3f}", rotation=90,
-                fontsize=7, color=PEAK_COLOR, ha="center", va="bottom",
-                clip_on=True, zorder=6)
     return peaks
 
 
@@ -133,6 +264,9 @@ def fill_peak_table(window, dock, peaks):
     if not peaks:
         box.setVisible(False)
         return
+    caption = getattr(window, "peak_caption", None)
+    if caption is not None:
+        caption.setText(f"峰表（{len(peaks)} 根）· 双击一行放大")
     table.setRowCount(len(peaks))
     for row, peak in enumerate(peaks):
         for col, text in enumerate((
