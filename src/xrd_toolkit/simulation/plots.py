@@ -156,18 +156,34 @@ def plot_fit_bottom(result, title, out_path, *, inter_mask=None, zoom=None):
     return out_path
 
 
-def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None):
-    """拟合结果图：上=观测/计算/背景，下=残差（2026-10-22 拟合工具）。
+def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
+             bragg=None):
+    """拟合结果图（论文式布局）：观测/计算/背景 → 残差 → 布拉格峰位。
 
     `result` 是 `simulation.fit.FitResult`（鸭子类型即可：tth / y_obs /
     y_calc / background / residual / rwp / rp）。zoom 给 (lo, hi) 时
     在上图里再嵌一个放大窗；exclude_ranges 给 [(lo, hi), …] 时把
     被排除的区域（如 Al 基片的强峰）画成灰带。
+
+    bragg（2026-10-23 加）：布拉格峰位刻度，list of
+    (label, positions, color)。每个 (label, positions) 画一行短竖线，
+    多相时每相一行（如主相 + Al 基片）。positions 传 %s 拟合后的 2θ
+    （`FitResult.peak_tth` / `extra_peak_tth[label]`），已含零点/晶胞
+    修正；不传则保持原来的两栏布局。
     """
     import matplotlib.pyplot as plt
-    fig, (ax, axr) = plt.subplots(
-        2, 1, sharex=True, figsize=(11.5, 6.2),
-        gridspec_kw={"height_ratios": [3.2, 1.0]})
+    rows = [(str(label), np.asarray(pos, dtype=float), color)
+            for label, pos, color in (bragg or [])]
+    if rows:
+        fig, axes = plt.subplots(
+            3, 1, sharex=True, figsize=(11.5, 7.2),
+            gridspec_kw={"height_ratios": [3.2, 1.0, 0.55]})
+        ax, axr, axb = axes
+    else:
+        fig, (ax, axr) = plt.subplots(
+            2, 1, sharex=True, figsize=(11.5, 6.2),
+            gridspec_kw={"height_ratios": [3.2, 1.0]})
+        axb = None
     ax.plot(result.tth, result.y_obs, ".", ms=2.0, color="0.25",
             label="observed")
     ax.plot(result.tth, result.y_calc, color="#2b6cb0", lw=1.4,
@@ -175,11 +191,15 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None):
     if result.background is not None:
         ax.plot(result.tth, result.background, "--", color="#d94b2b",
                 lw=1.0, label="background")
+    xlo = float(result.tth.min())
+    xhi = float(result.tth.max())
     first = True
     for lo, hi in exclude_ranges or []:
         ax.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0,
                    label="excluded" if first else None)
         axr.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0)
+        if axb is not None:
+            axb.axvspan(lo, hi, color="0.9", alpha=0.65, zorder=0)
         first = False
     ax.set_ylabel("Intensity")
     ax.set_title(f"{title}\nRwp = {result.rwp:.2f}%   Rp = {result.rp:.2f}%",
@@ -189,10 +209,27 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None):
 
     axr.axhline(0.0, color="0.6", lw=0.8)
     axr.plot(result.tth, result.residual, color="#2b6cb0", lw=0.9)
-    axr.set_xlabel(r"2$\theta$ (degrees)")
     axr.set_ylabel("obs − calc")
     axr.grid(alpha=0.25, linestyle=":")
-    axr.set_xlim(float(result.tth.min()), float(result.tth.max()))
+    axr.set_xlim(xlo, xhi)
+
+    if axb is not None:
+        n = len(rows)
+        axb.set_ylim(0.0, float(n))
+        axb.set_yticks([n - 0.5 - i for i in range(n)])
+        axb.set_yticklabels([label for label, _pos, _c in rows], fontsize=8)
+        axb.tick_params(axis="y", length=0)
+        for i, (_label, pos, color) in enumerate(rows):
+            inside = pos[(pos >= xlo) & (pos <= xhi)]
+            if inside.size:
+                y = float(n - 1 - i)
+                axb.vlines(inside, y + 0.12, y + 0.88, color=color, lw=0.9)
+        axb.set_ylabel("Bragg", fontsize=8)
+        axb.grid(alpha=0.25, axis="x", linestyle=":")
+        axb.spines["left"].set_visible(False)
+        axb.set_xlabel(r"2$\theta$ (degrees)")
+    else:
+        axr.set_xlabel(r"2$\theta$ (degrees)")
 
     if zoom is not None:
         lo, hi = zoom

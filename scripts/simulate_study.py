@@ -556,12 +556,17 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
         rows.append((tt, c, fw, sim_fwhm_at(c), h / h_max * 100.0, i_sim))
     i_sim_max = max(r[5] for r in rows)
 
-    # 图：全谱 + 两处放大（rows 是 6 元组：(2θ, 实验位置, FWHM实验, FWHM模拟, I%实验, I模拟)）
+    # 图：论文式布局——上排观测点/模拟线，下排差值；左列全谱，右两列放大
     strongest = max(rows, key=lambda r: r[4])
     mid = min(rows, key=lambda r: abs(r[0] - (TMIN + TMAX) / 2))
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4),
-                             gridspec_kw={"width_ratios": [2.0, 1, 1]})
-    axes[0].plot(t_sim, y_obs_peaks, color="0.25", lw=1.9,
+    fig = plt.figure(figsize=(15, 6.6))
+    gs = fig.add_gridspec(2, 3, width_ratios=[2.0, 1, 1],
+                          height_ratios=[3.0, 1.0], hspace=0.08, wspace=0.22)
+    axes = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]),
+            fig.add_subplot(gs[0, 2])]
+    axes_r = [fig.add_subplot(gs[1, i], sharex=axes[i]) for i in range(3)]
+    diff = y_obs_peaks - y_sim
+    axes[0].plot(t_sim, y_obs_peaks, ".", ms=1.8, color="0.25",
                  label="experiment (background subtracted)")
     axes[0].plot(t_sim, y_sim, color="#2b6cb0", lw=1.1,
                  label="simulation (full-pattern fit)")
@@ -569,16 +574,21 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     axes[0].legend(loc="upper right", fontsize=9)
     axes[0].set_title(f"{material} — simulation vs experiment "
                       f"(λ = {lam:.4f} Å, Rwp {fit.rwp:.2f}%)", fontsize=10.5)
-    axes[0].set_xlabel(r"2$\theta$ (degrees)"); axes[0].set_ylabel("Intensity")
-    for ax, (tt, c, fw, fws, h_rel, _i) in zip(
-            axes[1:], (strongest, mid)):
+    axes[0].set_ylabel("Intensity")
+    for ax, axr, (tt, c, fw, fws, h_rel, _i) in zip(
+            axes[1:], axes_r[1:], (strongest, mid)):
         w = 0.15
-        ax.plot(t_sim, y_obs_peaks, color="0.25", lw=1.9)
+        ax.plot(t_sim, y_obs_peaks, ".", ms=2.0, color="0.25")
         ax.plot(t_sim, y_sim, color="#2b6cb0", lw=1.1)
         ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
         ax.set_title(f"$2\\theta$ ≈ {c:.3f}°  (FWHM {fw:.3f}° / sim {fws:.3f}°)",
                      fontsize=9.5)
-        ax.set_xlabel(r"2$\theta$ (degrees)")
+    for axr in axes_r:
+        axr.axhline(0.0, color="0.6", lw=0.8)
+        axr.plot(t_sim, diff, color="#2b6cb0", lw=0.8)
+        axr.set_ylabel("obs − calc", fontsize=8.5)
+        axr.set_xlabel(r"2$\theta$ (degrees)")
+        axr.grid(alpha=0.25, linestyle=":")
     for ax in axes:
         ax.grid(alpha=0.25, linestyle=":")
     fig.tight_layout()
@@ -680,7 +690,8 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     out = outdir / f"sim_xrd_fit_{material}.png"
     plot_fit(lebail, f"{material} — profile fit (GSAS-II + Le Bail "
                      f"intensities, λ = {lam:.4f} Å)", str(out),
-             zoom=(1.6, 2.6))
+             zoom=(1.6, 2.6),
+             bragg=[(material, lebail.peak_tth, "#2b6cb0")])
     out_b = outdir / f"sim_xrd_fit_bottom_{material}.png"
     plot_fit_bottom(
         lebail, f"{material} — inter-peak bottom residual (Le Bail fit)",

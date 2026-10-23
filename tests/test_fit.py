@@ -233,6 +233,14 @@ class TestFitModes(unittest.TestCase):
         self.assertLess(res.rwp, 0.2)
         self.assertGreater(res.params["Al:scale"], 0.0)
         self.assertGreater(res.params["scale"], 0.0)
+        # 峰位（含 zero）与第二相峰位：布拉格刻度要用，结构模式也要给
+        self.assertIsNotNone(res.peak_tth)
+        self.assertGreater(len(res.peak_tth), 5)
+        self.assertIsNotNone(res.extra_peak_tth)
+        self.assertIn("Al", res.extra_peak_tth)
+        al_tt = res.extra_peak_tth["Al"]
+        # 铝 (111) 在 Cu Kα 下约 38.5°
+        self.assertTrue(np.any((al_tt > 38.0) & (al_tt < 39.0)))
 
     def test_x_y_default_bounds_are_nonnegative(self):
         from xrd_toolkit.simulation.fit import DEFAULT_BOUNDS

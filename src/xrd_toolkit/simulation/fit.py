@@ -111,6 +111,8 @@ class FitResult:
     peak_intensities: Optional[np.ndarray] = None
     peak_table_intensities: Optional[np.ndarray] = None
     peak_tth: Optional[np.ndarray] = None
+    # 第二相（如 Al 基片）的峰位：{label: 2θ 数组}，给布拉格刻度用
+    extra_peak_tth: Optional[dict] = None
 
     def report(self) -> str:
         """人读的参数表 + 拟合优度（英文，便于直接贴报告）。"""
@@ -891,6 +893,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             params[f"{label}:{key}"] = float(em.fixed[key])
     peak_intensities = (None if amps is None
                         else np.asarray(amps, dtype=float) * table.inten)
+    # 峰位（含 zero/晶胞精修后的位置）总是给出：布拉格刻度/报告都要用。
+    # 第二相的位置从各自的 _Model 取（_extra_curves 已用 p_final 更新过）。
+    extra_tth = {label: np.asarray(em._parts(em.fixed)[0], dtype=float)
+                 for label, em in model.extra_models}
     return FitResult(
         params=params, stderr=stderr, rwp=rwp, rp=rp, chi2=chi2,
         reduced_chi2=reduced, n_obs=len(y_raw), n_params=n_params,
@@ -901,7 +907,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         initial=init, stages=tuple(used_stages),
         peak_intensities=peak_intensities,
         peak_table_intensities=(None if amps is None else table.inten.copy()),
-        peak_tth=(None if amps is None else model._parts(p_final)[0]))
+        peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
+        extra_peak_tth=(extra_tth or None))
 
 
 def rwp(y_obs, y_calc, weights="poisson"):
