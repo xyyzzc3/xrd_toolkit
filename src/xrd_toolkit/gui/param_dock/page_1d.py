@@ -100,16 +100,10 @@ def build_1d_page(window, form_1d, btns_1d):
                           "（按当前面板自己的参数；勾上即为寻峰）")
     window.params["显示峰位"] = show_peaks
     form_1d.addRow(show_peaks)
-    label_all = QCheckBox("标注全部峰位")
-    label_all.setToolTip("默认只标放得下的峰（峰表里仍列全，双击放大后补齐）；"
-                         "勾上后每根都标、标签贴峰顶，密集处允许重叠")
-    window.params["标注全部峰位"] = label_all
-    form_1d.addRow(label_all)
     for name in ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
                  "寻峰最多根数"):
         window.params[name].valueChanged.connect(
             lambda _v=0.0: _refresh_1d_display(window))
-    label_all.toggled.connect(lambda _=False: _refresh_1d_display(window))
 
     def toggle_peaks(checked):
         if checked and not str(window.focus_panel or "").startswith("1D|"):
@@ -124,7 +118,7 @@ def build_1d_page(window, form_1d, btns_1d):
         shown = int(getattr(dock, "labeled_peaks", n))
         factor = window.params["寻峰显著度"].value()
         distance = window.params["寻峰最小峰距 (°)"].value()
-        extra = ("" if shown >= n or label_all.isChecked()
+        extra = ("" if shown >= n
                  else f"；图上标了 {shown} 个，其余放大后补全")
         _log(window, f"寻峰：{n} 根（显著度 ≥{factor:g}σ，"
                      f"最小间距 {distance:g}°{extra}）")

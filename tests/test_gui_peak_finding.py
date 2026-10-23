@@ -192,7 +192,7 @@ class TestGuiPeakFinding(unittest.TestCase):
         finally:
             w.close()
 
-    def test_labels_avoid_overlap_and_can_show_all(self):
+    def test_labels_avoid_overlap(self):
         w = create_window()
         try:
             dock = _open_1d(w, curve=_curve_close)
@@ -240,23 +240,6 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertIn("FWHM", text)
             self.assertIn(f"{near_peak.center:.3f}", text)
 
-            w.params["标注全部峰位"].setChecked(True)
-            QApplication.processEvents()
-            labels = _labels(ax)
-            self.assertEqual(len(labels), len(dock.detected_peaks),
-                             "「标注全部峰位」打开后每根峰都要有标签")
-            self.assertEqual(len(_markers(ax)), 0)
-            # 全标时标签贴峰顶，不许再拉长引线
-            by_center = {round(p.center, 3): p for p in dock.detected_peaks}
-            for txt in labels:
-                peak = by_center[round(float(txt.get_text()), 3)]
-                i = int(np.clip(np.searchsorted(
-                    dock.last_tth, peak.center), 0, len(dock.last_tth) - 1))
-                apex = ax.transData.transform(
-                    (peak.center, dock.last_intensity[i]))[1]
-                bb = txt.get_window_extent(ax.figure.canvas.get_renderer())
-                self.assertLessEqual(bb.y0 - apex, 16.0,
-                                     "标注全部的标签应当贴着峰顶")
         finally:
             w.close()
 
@@ -295,7 +278,6 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertFalse(snap["显示峰位"])
             self.assertAlmostEqual(snap["寻峰显著度"], 5.0)
             self.assertAlmostEqual(snap["寻峰最小峰距 (°)"], 0.008)
-            self.assertFalse(snap["标注全部峰位"])
         finally:
             w.close()
 

@@ -21,7 +21,7 @@ from xrd_toolkit.services.peak_finding import find_peaks_1d
 
 PEAK_COLOR = "#E69F00"          # Okabe–Ito 橙：与曲线蓝、背景绿都分得开
 PEAK_KEYS = ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
-             "寻峰最多根数", "显示峰位", "标注全部峰位")
+             "寻峰最多根数", "显示峰位")
 TABLE_COLUMNS = ("2θ (°)", "FWHM (°)", "高度")
 
 
@@ -117,13 +117,12 @@ def _plotted_points(ax):
     return disp[np.isfinite(disp).all(axis=1)]
 
 
-def _place_labels(ax, items, label_all):
+def _place_labels(ax, items):
     """在显示坐标里给峰位标签找位置，返回 [(text, peak, y, bbox)]。
 
-    规则（2026-10-24 用户拍板，业内主流做法）：默认先保证标签之间、
-    标签与峰线/主曲线不相交；放不下的标签不画（峰表里仍然列全）。
-    勾「标注全部峰位」时每根都标、允许重叠，标签贴各自峰顶，不做
-    错层避让（避免长引线）。
+    规则（2026-10-24 用户拍板，业内主流做法）：标签之间、标签与峰线/
+    主曲线都不相交；放不下的标签不画（峰表里仍然列全，放大后补齐）。
+    标签只放在峰顶上方 6 px，不错层，所以没有长引线。
     """
     try:
         renderer = ax.figure.canvas.get_renderer()
@@ -145,28 +144,9 @@ def _place_labels(ax, items, label_all):
         ticks[id(peak)] = [d[0], d[1], d[1] + 6.0]
     if not texts:
         return []
-    if label_all:
-        # 「标注全部峰位」= 每根都标、允许重叠；标签就贴在各自峰顶
-        # 上方 6 px，不做错层避让——否则密集处会被抬到很高，出现
-        # 一串长引线（用户 2026-10-24："为什么突然出现长线"）。
-        out = []
-        for txt, peak, yy in texts:
-            d = ax.transData.transform((peak.center, yy))
-            y_data = ax.transData.inverted().transform(
-                (d[0], d[1] + 6.0))[1]
-            txt.set_position((peak.center, y_data))
-            bb = txt.get_window_extent(renderer)
-            if bb.y1 > ax_box.y1:      # 贴顶时往下挪，别出框
-                y_data = ax.transData.inverted().transform(
-                    (d[0], ax_box.y1 - 1.0 - bb.height))[1]
-                txt.set_position((peak.center, y_data))
-                bb = txt.get_window_extent(renderer)
-            out.append((txt, peak, yy, bb))
-        return out
-
-    # 默认模式：标签只放在峰顶上方 6 px，同一高度放不下就跳过——
-    # 不做纵向错层，所以没有长引线（用户 2026-10-24 讨论后定，
-    # 与 HighScore/Jade 的"只标放得下的峰"一致）。
+    # 标签只放在峰顶上方 6 px，同一高度放不下就跳过——不做纵向错层，
+    # 所以没有长引线（用户 2026-10-24 讨论后定，与 HighScore/Jade 的
+    # "只标放得下的峰"一致）。
     placed = []
     out = []
     for txt, peak, yy in sorted(texts, key=lambda it: -it[1].height):
@@ -209,8 +189,8 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
     """在 1D 轴上画峰位竖线与 2θ 标签，返回检出的峰。
 
     在坐标范围（含纵轴自动）定好之后调用；`ax.clear()` 会清掉旧标记，
-    所以每次重画都重建。**有标签的峰不画线**，没标签的峰留 4 px 短线；标签按屏幕位置避让，
-    默认放不下就不标（峰表列全），「标注全部峰位」打开时允许重叠。
+    所以每次重画都重建。**有标签的峰不画线**，没标签的峰留 4 px 短线；
+    标签按屏幕位置避让，放不下就不标（峰表列全，放大后补齐）。
     """
     peaks = detect_peaks_for_dock(window, dock, tth, intensity)
     dock.detected_peaks = peaks
@@ -229,8 +209,7 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
     if not items:
         return peaks
 
-    label_all = bool(_panel_param(window, dock, "标注全部峰位", False))
-    labels = _place_labels(ax, items, label_all)
+    labels = _place_labels(ax, items)
     dock.labeled_peaks = len(labels)
     labeled = {id(peak) for _txt, peak, _yy, _bb in labels}
 
