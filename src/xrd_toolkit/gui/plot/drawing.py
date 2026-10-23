@@ -174,10 +174,26 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
                 if not eff_log:
                     ylo = min(ylo, -0.02 * abs(yhi))
             if _panel_param(window, dock, "显示峰位", False):
-                # 给峰位标签留头顶空间（2026-10-24）：否则高处的标签
-                # 会被坐标框裁掉（用户："有的因为峰太高导致看不见"）
-                span = max(yhi - ylo, 1e-9)
-                yhi = yhi * 1.6 if eff_log else yhi + 0.18 * span
+                # 给峰位标签留头顶空间（2026-10-24）：自动范围按 99.9%
+                # 分位算，窄而高的峰可能整个在框外（实测 LMFP 2.98° 峰
+                # 2407 counts、99.9% 只到 ~2020）——先把最高点抬进来，
+                # 再加 18% 给标签。否则最高的那根永远没有标签。
+                finite = np.asarray(ref, dtype=float)
+                finite = finite[np.isfinite(finite)]
+                if finite.size:
+                    top = float(finite.max())
+                    if eff_log:
+                        yhi = max(yhi, top) * 1.6
+                    else:
+                        yhi = max(yhi, top)
+                        span = max(yhi - ylo, 1e-9)
+                        head = 0.18 * span
+                        # 小面板里 18% 可能不够一个竖排标签（实测 172 px
+                        # 高的框只让出 31 px，标签要 ~33 px）——按像素兜底
+                        if ax.bbox.height > 20:
+                            head = max(head,
+                                       40.0 * span / float(ax.bbox.height))
+                        yhi += head
             if window.plot_docks.get(window.focus_panel) is dock:
                 # 程序回填必须挂旗标（同 10-08 对比度那对）：裸 setValue 会触发
                 # 即改即画钩子（_refresh_1d_display）、重入一次本函数——重入的

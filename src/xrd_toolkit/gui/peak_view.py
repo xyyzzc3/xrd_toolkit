@@ -90,11 +90,38 @@ def _bbox_overlap(a, b, pad=2.0):
                 or a.y1 + pad < b.y0 or b.y1 + pad < a.y0)
 
 
-def _place_labels(ax, items, curve_t, curve_y, label_all):
+def _plotted_points(ax):
+    """主曲线在显示坐标里的全部点（原始/基线辅助线不参与避让）。
+
+    标签要避开**画出来的那条谱**（含窄峰顶部），所以不抽稀到几十点；
+    辅助线是虚线/点线，压到字上不影响读数，反而会把标签逼得没地方。
+    """
+    chunks = []
+    for line in ax.lines:
+        gid = str(line.get_gid() or "")
+        if gid.startswith(_AUX_GID_PREFIX):
+            continue
+        x = np.asarray(line.get_xdata(), dtype=float)
+        y = np.asarray(line.get_ydata(), dtype=float)
+        if x.size < 5 or x.size != y.size:
+            continue
+        keep = np.isfinite(x) & np.isfinite(y)
+        if np.any(keep):
+            chunks.append(np.column_stack([x[keep], y[keep]]))
+    if not chunks:
+        return np.zeros((0, 2))
+    pts = np.vstack(chunks)
+    if pts.shape[0] > 8000:
+        pts = pts[::max(1, pts.shape[0] // 8000)]
+    disp = ax.transData.transform(pts)
+    return disp[np.isfinite(disp).all(axis=1)]
+
+
+def _place_labels(ax, items, label_all):
     """在显示坐标里给峰位标签找位置，返回 [(text, peak, y, bbox)]。
 
     规则（2026-10-24 用户拍板，业内主流做法）：先保证标签之间、标签
-    与峰线/曲线不相交；放不下的标签默认不画（峰表里仍然列全），
+    与峰线/已画曲线不相交；放不下的标签默认不画（峰表里仍然列全），
     勾「标注全部峰位」时改为"尽量避让、实在放不下就允许重叠"。
     """
     try:
@@ -102,14 +129,7 @@ def _place_labels(ax, items, curve_t, curve_y, label_all):
     except Exception:                    # pragma: no cover - 极端后端
         return []
     ax_box = ax.bbox
-    # 曲线在显示坐标里的点（抽稀到 ~1200 个，用于避开峰体）
-    pts = np.column_stack([np.asarray(curve_t, dtype=float),
-                           np.asarray(curve_y, dtype=float)])
-    pts = pts[np.isfinite(pts).all(axis=1)]
-    if pts.shape[0] > 1200:
-        pts = pts[::max(1, pts.shape[0] // 1200)]
-    pts_disp = ax.transData.transform(pts) if pts.size else np.zeros((0, 2))
-    pts_disp = pts_disp[np.isfinite(pts_disp).all(axis=1)]
+    pts_disp = _plotted_points(ax)
 
     texts = []
     ticks = {}
@@ -124,8 +144,9 @@ def _place_labels(ax, items, curve_t, curve_y, label_all):
         ticks[id(peak)] = [d[0], d[1], d[1] + 6.0]
     if not texts:
         return []
-    first = texts[0][0].get_window_extent(renderer)
-    step = max(first.height + 2.0, 6.0)
+    step = max(txt.get_window_extent(renderer).height
+               for txt, _peak, _yy in texts) + 2.0
+    step = max(step, 6.0)
 
     placed = []
     out = []
@@ -133,13 +154,16 @@ def _place_labels(ax, items, curve_t, curve_y, label_all):
         d = ax.transData.transform((peak.center, yy))
         x_disp = d[0]
         best = None
-        for k in range(40):
-            shift = 3.0 + k * step
+        # 默认模式不许把标签抬得太远（长引线会横穿别的峰）；标注全部
+        # 时放宽到坐标框能容纳为止
+        max_k = 40 if label_all else max(2, int(0.35 * ax_box.height / step))
+        for k in range(max_k):
+            shift = 6.0 + k * step
             y_data = ax.transData.inverted().transform(
                 (x_disp, d[1] + shift))[1]
             txt.set_position((peak.center, y_data))
             bb = txt.get_window_extent(renderer)
-            if bb.y1 > ax_box.y1 - 1.0:
+            if bb.y1 > ax_box.y1:
                 break
             bad = any(_bbox_overlap(bb, other) for other in placed)
             if not bad:
@@ -154,11 +178,17 @@ def _place_labels(ax, items, curve_t, curve_y, label_all):
                         break
             if not bad and pts_disp.size:
                 # 避开曲线本身（峰体），否则标签会压在邻峰上
-                inside = ((pts_disp[:, 0] >= bb.x0 - 1)
-                          & (pts_disp[:, 0] <= bb.x1 + 1)
-                          & (pts_disp[:, 1] >= bb.y0 - 1)
-                          & (pts_disp[:, 1] <= bb.y1 + 1))
+                inside = ((pts_disp[:, 0] >= bb.x0 - 2)
+                          & (pts_disp[:, 0] <= bb.x1 + 2)
+                          & (pts_disp[:, 1] >= bb.y0 - 2)
+                          & (pts_disp[:, 1] <= bb.y1 + 2))
                 bad = bool(np.any(inside))
+                if not bad:
+                    # 自己的引线也不许横穿曲线
+                    col = np.abs(pts_disp[:, 0] - x_disp) <= 2.0
+                    span = ((pts_disp[:, 1] > d[1] + 2.0)
+                            & (pts_disp[:, 1] < bb.y0 - 2.0))
+                    bad = bool(np.any(col & span))
             if not bad and placed:
                 # 自己的引线不许穿过已放好的标签
                 for other in placed:
@@ -178,12 +208,12 @@ def _place_labels(ax, items, curve_t, curve_y, label_all):
             # B：放到坐标范围内最高处（允许重叠，但保证看得见）
             last = None
             for k in range(60):
-                shift = 3.0 + k * step
+                shift = 6.0 + k * step
                 y_data = ax.transData.inverted().transform(
                     (x_disp, d[1] + shift))[1]
                 txt.set_position((peak.center, y_data))
                 bb = txt.get_window_extent(renderer)
-                if bb.y1 > ax_box.y1 - 1.0:
+                if bb.y1 > ax_box.y1:
                     break
                 last = bb
             if last is None:               # 连一格都放不下：贴顶但别出框
@@ -227,7 +257,7 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
         return peaks
 
     label_all = bool(_panel_param(window, dock, "标注全部峰位", False))
-    labels = _place_labels(ax, items, t, y, label_all)
+    labels = _place_labels(ax, items, label_all)
     dock.labeled_peaks = len(labels)
     labeled = {id(peak) for _txt, peak, _yy, _bb in labels}
 
@@ -266,7 +296,9 @@ def fill_peak_table(window, dock, peaks):
         return
     caption = getattr(window, "peak_caption", None)
     if caption is not None:
-        caption.setText(f"峰表（{len(peaks)} 根）· 双击一行放大")
+        # 窄坞：标题只留「峰表 · N 根」；双击提示放进表格 tooltip
+        caption.setText(f"峰表 · {len(peaks)} 根")
+    table.setToolTip("双击一行放大到该峰")
     table.setRowCount(len(peaks))
     for row, peak in enumerate(peaks):
         for col, text in enumerate((

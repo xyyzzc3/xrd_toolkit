@@ -4,7 +4,7 @@
 """
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QPushButton, QSpinBox, QTableWidget, QVBoxLayout)
+    QLabel, QPushButton, QSizePolicy, QSpinBox, QTableWidget, QVBoxLayout)
 
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
 from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
@@ -140,8 +140,11 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_lay = QVBoxLayout(peak_box)
     peak_lay.setContentsMargins(8, 7, 8, 7)
     peak_lay.setSpacing(4)
-    peak_caption = QLabel("峰表 · 双击一行放大")
+    peak_caption = QLabel("峰表")
     peak_caption.setStyleSheet("color: #5b6773; font-weight: 600;")
+    peak_caption.setWordWrap(True)
+    peak_caption.setSizePolicy(QSizePolicy.Ignored,
+                               peak_caption.sizePolicy().verticalPolicy())
     peak_table = QTableWidget(0, 3)
     peak_table.setHorizontalHeaderLabels(["2θ (°)", "FWHM (°)", "高度"])
     peak_table.verticalHeader().setVisible(False)

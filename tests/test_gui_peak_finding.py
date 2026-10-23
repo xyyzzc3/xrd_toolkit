@@ -196,11 +196,52 @@ class TestGuiPeakFinding(unittest.TestCase):
                         a.x1 > b.x0 and b.x1 > a.x0
                         and a.y1 > b.y0 and b.y1 > a.y0,
                         "默认模式标签不许重叠")
+            # 标签也不许压在曲线上（用全部点，不抽稀）
+            renderer = ax.figure.canvas.get_renderer()
+            for line in ax.lines:
+                x = np.asarray(line.get_xdata(), dtype=float)
+                y = np.asarray(line.get_ydata(), dtype=float)
+                if x.size < 5 or x.size != y.size:
+                    continue
+                disp = ax.transData.transform(np.column_stack([x, y]))
+                for bb in boxes:
+                    inside = ((disp[:, 0] >= bb.x0 - 2)
+                              & (disp[:, 0] <= bb.x1 + 2)
+                              & (disp[:, 1] >= bb.y0 - 2)
+                              & (disp[:, 1] <= bb.y1 + 2))
+                    self.assertFalse(np.any(inside),
+                                     "标签压到曲线上了")
 
             w.params["标注全部峰位"].setChecked(True)
             QApplication.processEvents()
             self.assertEqual(len(_labels(ax)), len(dock.detected_peaks),
                              "「标注全部峰位」打开后每根峰都要有标签")
+        finally:
+            w.close()
+
+
+    def test_tall_narrow_peak_stays_inside_and_labelled(self):
+        """99.9% 分位以下的矮峰不能把最高峰挤出框（2026-10-24 实测）。"""
+        def spike():
+            x = np.arange(1.0, 3.0, 0.002)
+            y = 100.0 + 5000.0 * np.exp(
+                -4.0 * np.log(2.0) * ((x - 1.5) / 0.002) ** 2)
+            y += 200.0 * np.exp(
+                -4.0 * np.log(2.0) * ((x - 2.2) / 0.03) ** 2)
+            return x, y
+
+        w = create_window()
+        try:
+            dock = _open_1d(w, curve=spike)
+            ax = panel_state._content(dock).axes_1d
+            w.params["显示峰位"].setChecked(True)
+            QApplication.processEvents()
+            y = np.asarray(dock.last_intensity, dtype=float)
+            self.assertGreaterEqual(ax.get_ylim()[1], float(y.max()))
+            centres = [round(p.center, 3) for p in dock.detected_peaks]
+            self.assertIn(1.5, centres)
+            labels = [txt.get_text() for txt in _labels(ax)]
+            self.assertIn("1.500", labels)
         finally:
             w.close()
 
