@@ -24,7 +24,8 @@ from pyFAI.goniometer import Geometry
 
 from xrd_toolkit.config import config_entry_template
 from xrd_toolkit.services.calibrants import (
-    DEFAULT_CALIBRANT, complete_ring_count, detect_calibrant_from_stem)
+    COMMON_CALIBRANTS, DEFAULT_CALIBRANT, calibrant_label,
+    complete_ring_count, detect_calibrant_from_stem)
 from xrd_toolkit.services.integrator import (
     calibrant_2theta, calibrate_geometry, lab6_theoretical_2theta,
     refine_geometry_from_points, snap_ring, theoretical_ring_paths)
@@ -360,6 +361,20 @@ class TestCommonCalibrants(unittest.TestCase):
         np.testing.assert_allclose(
             calibrant_2theta("lab6", WAVELENGTH_M, 16),
             calibrant_2theta("LaB6", WAVELENGTH_M, 16))
+
+    def test_duplicate_lab6_660c_is_not_listed(self):
+        """LaB6 默认项就是 SRM 660c：下拉框不再重复列 660c（2026-10-24）。"""
+        names = [name for name, _label, _aliases in COMMON_CALIBRANTS]
+        self.assertNotIn("LaB6_SRM660c", names)
+        # 旧名称/小写别名仍可用，且与默认项是同一条阶梯
+        np.testing.assert_allclose(
+            calibrant_2theta("LaB6_SRM660c", WAVELENGTH_M, 16),
+            calibrant_2theta("LaB6", WAVELENGTH_M, 16))
+        np.testing.assert_allclose(
+            calibrant_2theta("lab6_srm660c", WAVELENGTH_M, 16),
+            calibrant_2theta("LaB6", WAVELENGTH_M, 16))
+        self.assertEqual(detect_calibrant_from_stem("lab6_srm660c-1"), "LaB6")
+        self.assertIn("660c", calibrant_label("LaB6_SRM660c"))
 
     def test_unknown_calibrant_has_readable_error(self):
         with self.assertRaisesRegex(ValueError, "未知标样"):

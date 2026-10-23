@@ -32,10 +32,10 @@ MAX_GUI_RINGS = 64
 #   - 文件名关键字用于进校准时预选标样（只认完整词块，见
 #     detect_calibrant_from_stem；`si` 不会误中 `series`）。
 COMMON_CALIBRANTS = (
-    ("LaB6", "LaB₆（NIST SRM 660c，默认）", ("lab6", "lab6c")),
+    ("LaB6", "LaB₆（NIST SRM 660c，默认）",
+     ("lab6", "lab6c", "lab6_srm660c")),
     ("LaB6_SRM660a", "LaB₆（NIST SRM 660a）", ("lab6_srm660a", "lab6a")),
     ("LaB6_SRM660b", "LaB₆（NIST SRM 660b）", ("lab6_srm660b", "lab6b")),
-    ("LaB6_SRM660c", "LaB₆（NIST SRM 660c）", ("lab6_srm660c",)),
     ("CeO2", "CeO₂（NIST SRM 674b）", ("ceo2", "ceria")),
     ("Si_SRM640", "Si（NIST SRM 640）", ("si", "silicon", "si_srm640")),
     ("Si_SRM640a", "Si（NIST SRM 640a）", ("si_srm640a",)),
@@ -57,6 +57,9 @@ COMMON_CALIBRANTS = (
 
 _COMMON_BY_NAME = {name: (label, aliases)
                    for name, label, aliases in COMMON_CALIBRANTS}
+# 旧配置/CLI 里可能还写着 LaB6_SRM660c（与默认 LaB6 的 d 值逐位相同，
+# 2026-10-24 从下拉框去重）——保留友好标签，别让旧条目显示成裸名称。
+_LABEL_OVERRIDES = {"LaB6_SRM660c": "LaB₆（NIST SRM 660c）"}
 # 常用别名（文件名里的 lab6/ceo2/si…）也允许命令行直接输：精确 pyFAI
 # 名称优先，找不到时才走别名，最后才报错。大小写不敏感。
 _ALIAS_TO_NAME = {alias: name
@@ -67,7 +70,7 @@ _ALIAS_TO_NAME = {alias: name
 def calibrant_label(name) -> str:
     """界面上显示的名字：常用标样给友好标签，其他原样返回。"""
     label = _COMMON_BY_NAME.get(str(name), (None, None))[0]
-    return label or str(name)
+    return label or _LABEL_OVERRIDES.get(str(name)) or str(name)
 
 
 def calibrant_short_label(name) -> str:
