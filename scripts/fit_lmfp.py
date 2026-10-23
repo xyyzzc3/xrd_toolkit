@@ -20,6 +20,7 @@ Fe0.5/Mn0.5 得到，作为起始模型；样品实际 Mn/Fe 比未知）。
 """
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -148,8 +149,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--cif", default=str(DEFAULT_CIF))
     ap.add_argument("--images", nargs="*", default=[str(p) for p in DEFAULT_IMAGES])
-    ap.add_argument("--outdir", default=str(ROOT / "outputs" / "simulation"),
-                    help="输出目录（默认 outputs/simulation，不进仓库）")
+    ap.add_argument("--outdir",
+                    default=str(Path(tempfile.gettempdir())
+                                / "xrd_toolkit_lmfp"),
+                    help="输出目录（默认系统临时目录；脚本不写仓库 outputs/）")
     ap.add_argument("--exclude", default="2.90,3.08",
                     help="排除区间 lo,hi（度）；Le Bail 始终排除 Al 区")
     ap.add_argument("--exclude-al", action="store_true",

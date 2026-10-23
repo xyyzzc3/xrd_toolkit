@@ -13,7 +13,8 @@
         --wh --instrument-from data/lab6-00024.tif
 
 线型：gaussian / lorentzian / pseudovoigt / split_pearson7。
-输出：终端表格；`--wh` 时另存 W-H 图到 `--outdir`（默认 outputs/peaks）。
+输出：终端表格；`--wh` 时另存 W-H 图到 `--outdir`（默认系统临时目录，
+不写仓库 outputs/）。
 
 注意：W-H 要求各峰**彼此孤立、窗口里没有邻峰**；重叠严重的谱（如 LMFP
 低角）单峰 FWHM 会被背景/邻峰带偏，得到的尺寸/应变只作趋势参考，
@@ -22,6 +23,7 @@
 """
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -91,7 +93,10 @@ def main():
     ap.add_argument("--wh", action="store_true", help="做 Williamson–Hall")
     ap.add_argument("--instrument-from", default=None,
                     help="LaB6 标样图，用于扣仪器宽度（W-H 用）")
-    ap.add_argument("--outdir", default=str(ROOT / "outputs" / "peaks"))
+    ap.add_argument("--outdir",
+                    default=str(Path(tempfile.gettempdir())
+                                / "xrd_toolkit_peaks"),
+                    help="W-H 图输出目录（默认系统临时目录；脚本不写仓库 outputs/）")
     a = ap.parse_args()
     geom = dict(get_config(a.config)["geometry"])
     lam = geom["wavelength_m"] * 1e10

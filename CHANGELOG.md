@@ -21,8 +21,9 @@
 - **单峰拟合 / W-H 命令行入口**（2026-10-23）：`scripts/fit_peaks.py`
   把四线型单峰拟合、LaB6 仪器宽度和 Williamson–Hall 串起来；
   `--hot-mask` 可先掩坏点团，`--wh --instrument-from` 用标样扣仪器
-  宽度并出 W-H 图。注意 W-H 要求峰彼此孤立；重叠谱的单峰 FWHM 只作
-  趋势参考（定量用全谱 Size/Mustrain）。
+  宽度并出 W-H 图；产物默认写到系统临时目录（`fit_lmfp.py` 同改），
+  脚本不再默认往仓库 `outputs/` 里留图。注意 W-H 要求峰彼此孤立；
+  重叠谱的单峰 FWHM 只作趋势参考（定量用全谱 Size/Mustrain）。
 - **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
   `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
   分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
@@ -287,47 +288,6 @@
 
 ### 模拟
 
-- **单峰拟合 / W-H 命令行入口**（2026-10-23）：`scripts/fit_peaks.py`
-  把四线型单峰拟合、LaB6 仪器宽度和 Williamson–Hall 串起来；
-  `--hot-mask` 可先掩坏点团，`--wh --instrument-from` 用标样扣仪器
-  宽度并出 W-H 图。注意 W-H 要求峰彼此孤立；重叠谱的单峰 FWHM 只作
-  趋势参考（定量用全谱 Size/Mustrain）。
-- **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
-  `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
-  分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
-  拖累（LaB6 立方放大 1.005× 实测：分开 Rwp 64%，联合 0.08%）。
-  合成 LaB6 能精确反解晶胞。
-- **单峰峰形拟合 + Scherrer/Williamson–Hall**（2026-10-23）：新增
-  `simulation/peakfit.py`——Gaussian / Lorentzian / pseudo-Voigt /
-  split-Pearson VII 的单峰非线性最小二乘拟合（局部线性/二次背景，
-  返回峰位、FWHM、η、m、左/右 FWHM、面积与 Rwp）；新增
-  `simulation/microstructure.py`——Scherrer 尺寸与**带仪器校正**的
-  Williamson–Hall 分析（quadrature / linear 两种扣法），并配 W-H 图
-  `plot_williamson_hall`。测试覆盖四线型反解、Pearson 极限、Gaussian
-  面积、W-H 反解与仪器校正偏差。
-- **分元素 B + 可精修织构（md_r）**（2026-10-23）：`fit_pattern` 新增
-  两类动态参数——`b_<元素>`（分元素绝对 B，动态结构因子，不能与
-  全局 `b_iso` 同修）和 `md_r`（March–Dollase R 可精修，需给
-  `md=(轴, R)`）。合成谱可精确反解（B ±0.02、md_r ±0.01）。
-  **但在 LMFP 电极数据上分元素 B 没有改善**：结构 Rwp 3.06%（全局
-  B 版 3.01%），B_Li/Fe/Mn/P/O = 1.2/5.1/3.9/3.7/4.4 Å²，仍非物理；
-  说明剩余强度残差不是温度因子能修的（更像织构/吸收/碳/结构模型）。
-  Le Bail **1.72%** 仍是强度口径；完整 Rietveld（原子坐标）暂无足够
-  证据支持。
-- **LMFP 三个弱峰 = Al 基片 (200)/(220)/(311)**（2026-10-23，更正
-  早期的 LiF 判断）：3.449/4.881/5.724° 与 Al 基片（Fm-3m,
-  a=4.061 Å）的 (200)/(220)/(311) 完全重合。LiF 与 Al 同为岩盐、
-  晶胞几乎相同，2θ 上完全退化——之前加 LiF 等价于把 Al 织构 R 从
-  0.5 调到 ~0.72。现在只调 **Al 织构 R=0.72**（不再加 LiF，LiF CIF
-  已删）：LMFP Le Bail **1.72%**、结构 **3.01%**（与 LiF 版
-  1.70/2.90 相当，但模型更简单、物理来源正确）。
-- **橄榄石 CIF 修正**（2026-10-23）：仓库三个 CIF 的晶胞原来都是
-  10.236/5.971/4.655 Å（P1 派生，比实验小 ~1.4%）。换成实验 COD 条目：
-  LiFePO4 10.336/6.006/4.693（COD 4001845）、LMFP 50/50
-  10.383/6.050/4.714（COD 9004883）、LiMnPO4 10.460/6.100/4.744
-  （COD 9011037）；统一到常规轴序、P1 展开，文件头注明 COD 出处。
-  相筛选的晶胞缩放从 1.018 回到 ~0.99。LMFP：结构 3.46%、
-  Le Bail 2.53%（旧错误晶胞下的 2.29 是另一套反射表，不能当作"更对"）。
 - **新增 XRD 模拟模块**（RY04 第六周并入）：`xrd_toolkit.simulation` 从 CIF 计算理论
   粉末 XRD 图谱。手写版（布拉格定律 + 结构因子，公式全自写）与 pymatgen
   `XRDCalculator` 参考版并存；Si / LaB₆ / Al₂O₃ 三个材料逐峰对答案一致

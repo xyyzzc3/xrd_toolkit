@@ -352,6 +352,7 @@ index representatives and layout / the two implementations agreeing).
 | `scripts/analyze_pattern.py` | Automatic phase screening + full-pattern fit/report from a TIFF + config |
 | `scripts/simulate_study.py` | Teaching/simulation studies: basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II cross-check simulations (run inside the separate `gsas2` env) |
+| `scripts/fit_peaks.py` | Single-peak fits (Gaussian/Lorentzian/pseudo-Voigt/split-Pearson VII) + Scherrer/Williamson–Hall with instrument correction from a LaB6 standard |
 | `scripts/check_env.py` | Environment self-check — run this first when something "just won't run" |
 | `scripts/check_gui.py` | GUI link check — drives the interface with real data and real canvas events |
 | `scripts/show_gui.py` | Real-window peek — opens the app, walks three steps, leaves the window up |
