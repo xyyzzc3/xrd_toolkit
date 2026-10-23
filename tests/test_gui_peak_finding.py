@@ -112,6 +112,11 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertEqual(len(_markers(ax)), 2)
             self.assertFalse(w.peak_box.isHidden())
             self.assertEqual(w.peak_table.rowCount(), 2)
+            self.assertEqual(w.peak_caption.text(), "峰表 · 2 根")
+            self.assertIn("双击", w.peak_table.toolTip())
+            self.assertLessEqual(w.peak_table.maximumWidth(), 340,
+                                 "全屏时表格不许被拉宽")
+            self.assertLessEqual(w.peak_box.maximumWidth(), 340)
             self.assertIn("寻峰：2 根", w.log_text.toPlainText())
         finally:
             w.close()
