@@ -37,6 +37,11 @@
 * GSAS 的峰形函数（`getFCJVoigt3`）**按面积归一**（积分 = 0.01/度），
   不是峰顶归一；这正是"面积不变"的实现方式。
 
+参考文献：Caglioti, Paoletti & Ricci (1958) Nucl. Instrum. 3, 223（峰宽）；
+Thompson, Cox & Hastings (1987) J. Appl. Cryst. 20, 79（伪 Voigt/TCH）；
+GSAS-II 的 PXC 口径与单位见 Toby & Von Dreele (2013) J. Appl. Cryst. 46, 544。
+SH/L 轴向发散（Finger, Cox & Jephcoat, 1994）未实现（见下）。
+
 已知简化：不建模 SH/L 轴向发散、不建模 Kα2 双线（对比数据是同步
 辐射单波长）、不建模吸收/消光。这些都可以以后加。
 

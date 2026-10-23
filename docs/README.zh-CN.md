@@ -77,7 +77,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **偏置束心与扇形分析**——束心打在探测器边缘/角落的数据全程支持（pyFAI 分箱不可靠时自动切自研 numpy 积分）；36 扇区瀑布图一眼看出择优取向与被切环的几何。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
 - **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 为可选依赖：`pip install 'xrd-toolkit[simulation]'`）。
-- **实测标样谱全谱拟合**——GSAS-II 口径峰形引擎（面积守恒伪 Voigt、Caglioti + Lorentzian 峰宽、Le Bail/结构拟合）。LaB₆ 标样定仪器峰形，并用 Le Bail 强度拟合标样本身（Rwp 4.24%）；引擎也支持结构拟合、额外相与探测器固定坏点掩膜。图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
+- **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相与固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
 
 ## 安装（从源码跑）
 
