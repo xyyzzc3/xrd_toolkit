@@ -43,6 +43,7 @@ from xrd_toolkit.simulation.gsas_profile import (
     reflection_sig_gam,
     sig_gam_to_fwhm_eta,
 )
+from xrd_toolkit.simulation.site_model import SiteModel
 
 # 可优化的参数与默认边界（GSAS-II 口径）
 DEFAULT_BOUNDS = {
@@ -117,6 +118,8 @@ class FitResult:
     extra_peak_tth: Optional[dict] = None
     # 主相标签（化学式，如 LaB6），给布拉格刻度行命名
     phase_label: Optional[str] = None
+    # 结构精修后的位点坐标：{标签: (wyckoff, x, y, z)}（分数坐标）
+    site_coords: dict = field(default_factory=dict)
 
     def report(self) -> str:
         """人读的参数表 + 拟合优度（英文，便于直接贴报告）。"""
@@ -166,6 +169,12 @@ class FitResult:
         if len(self.background_coeffs):
             lines.append(f"background: correction coefficients "
                          f"{np.array2string(self.background_coeffs, precision=4)}")
+        if self.site_coords:
+            lines.append("site coordinates (fractional):")
+            for label, vals in self.site_coords.items():
+                wy, x, y, z = vals
+                lines.append(f"  {label:>6} {wy:>4}  "
+                             f"x={x:.5f} y={y:.5f} z={z:.5f}")
         if self.stages:
             lines.append("stages: " + " -> ".join("+".join(s) for s in self.stages))
         return "\n".join(lines)
@@ -179,11 +188,14 @@ class _PeakTable:
 
     def __init__(self, structure, wavelength, two_theta_range, nmax,
                  b_iso, polariz, keep_unmerged=False, md=None,
-                 dynamic=False, md_refine=False):
+                 dynamic=False, md_refine=False, site_model=None):
         self.a0, self.b0, self.c0 = (float(x) for x in structure.lattice.abc)
         self.cubic = (max(self.a0, self.b0, self.c0)
                       - min(self.a0, self.b0, self.c0) < 1e-4)
-        self.cell_refine = bool(keep_unmerged) or bool(dynamic)
+        self.site_model = site_model
+        self.site_mode = site_model is not None
+        self.cell_refine = (bool(keep_unmerged) or bool(dynamic)
+                            or self.site_mode)
         self.dynamic = bool(dynamic)
         self.md_refine = bool(md_refine)
         self.partials = None
@@ -198,7 +210,40 @@ class _PeakTable:
                 else {e.symbol: (0.0 if b_iso is None else float(b_iso))
                       for site in structure for e in site.species})
         self.b_elem_base = dict(base)
-        if self.dynamic:
+        if self.site_mode:
+            (hkl, d0, tth, mult, lp, s2r, f_sp,
+             species, occ) = core.reflection_table_sites(
+                structure, wavelength=wavelength,
+                two_theta_range=two_theta_range, nmax=nmax,
+                polariz=polariz)
+            self.hkl = np.asarray(hkl, dtype=float)
+            self.d0 = np.asarray(d0, dtype=float)
+            self.mult = np.asarray(mult, dtype=float)
+            self.lp = np.asarray(lp, dtype=float)
+            self.s2_ref = np.asarray(s2r, dtype=float)
+            self.f_species = np.asarray(f_sp, dtype=float)
+            self.species = list(species)
+            self.site_occ = np.asarray(occ, dtype=float)
+            self.orthorhombic = all(
+                abs(float(a) - 90.0) < 1e-3
+                for a in structure.lattice.angles)
+            if md is not None:
+                axis, r_fixed = md
+                self.md_fixed = float(r_fixed)
+                self.md_cos2 = np.asarray([
+                    core.march_dollase_cos2(h, axis,
+                                            structure.lattice.matrix)
+                    for h in hkl], dtype=float)
+            b0 = np.array([float(base.get(e, 0.0)) for e in self.species])
+            self._inten_norm = 1.0
+            md0 = (1.0 if (md is None or md_refine) else self.md_fixed)
+            raw = self.site_intensity(site_model.positions({}), b0,
+                                      self.s2_ref, md_r=md0)
+            peak = float(raw.max()) if raw.size else 0.0
+            self._inten_norm = peak if peak > 0 else 1.0
+            self.inten = (raw / self._inten_norm * 100.0
+                          if raw.size and peak > 0 else raw)
+        elif self.dynamic:
             # 分元素 B / 可精修织构：保留逐反射的分元素复 F，强度每次重算
             hkl, d0, tth, mult, lp, s2r, partials = \
                 core.reflection_table_details(
@@ -258,6 +303,29 @@ class _PeakTable:
         self.pol_base = polarization(self.tth, polariz)
         self.b_iso_base = None if (isinstance(b_iso, dict) or self.dynamic) \
             else b_iso
+        # 逐位点路径区分"标量 b_iso = 绝对 B"与"字典/None = 在基准上加 ΔB"
+        self.b_iso_absolute = (not isinstance(b_iso, dict)
+                               and b_iso is not None)
+
+    def site_intensity(self, coords, b_species, s2, md_r=None):
+        """逐位点模型：当前坐标/温度因子下的相对强度（归一化）。
+
+        coords     (n_sites, 3) 分数坐标
+        b_species  (n_species,) 每个元素的绝对 B（Å²）
+        s2         (n_ref,) 当前晶胞下的 sin²θ/λ²
+        md_r       March–Dollase R；None = 用表里的固定值
+        """
+        bw = np.exp(-np.asarray(b_species, dtype=float)[None, :]
+                    * np.asarray(s2, dtype=float)[:, None])
+        amp = (self.f_species * bw) @ self.site_occ.T      # (n_ref, n_sites)
+        phase = self.hkl @ np.asarray(coords, dtype=float).T
+        f = np.sum(amp * np.exp(2j * np.pi * phase), axis=1)
+        inten = self.mult * self.lp * np.abs(f) ** 2
+        if self.md_cos2 is not None:
+            r = self.md_fixed if md_r is None else float(md_r)
+            c2 = self.md_cos2
+            inten = inten * (r * r * c2 + (1.0 - c2) / r) ** -1.5
+        return inten / self._inten_norm
 
 
 def _measure_observed_fwhm(tth, y, center, span):
@@ -399,7 +467,25 @@ class _Model:
             size_um=p["size_um"], mustrain=p["mustrain"],
             size_mix=p["size_mix"], strain_mix=p["strain_mix"])
         fwhm, eta = sig_gam_to_fwhm_eta(sig, gam)
-        if self.table.dynamic:
+        if self.table.site_mode:
+            # 逐位点：当前坐标 → 相位；B 仍按元素给
+            s2 = (np.sin(np.radians(centers / 2.0)) / self.wavelength) ** 2
+            b_sp = []
+            for elem in self.table.species:
+                if f"b_{elem}" in p:
+                    b_e = float(p[f"b_{elem}"])
+                elif self.table.b_iso_absolute:
+                    b_e = float(p.get("b_iso", 0.0))
+                else:
+                    b_e = (float(self.table.b_elem_base.get(elem, 0.0))
+                           + float(p.get("b_iso", 0.0)))
+                b_sp.append(b_e)
+            coords = self.table.site_model.positions(p)
+            inten = self.table.site_intensity(
+                coords, np.asarray(b_sp, dtype=float), s2,
+                md_r=(float(p["md_r"]) if "md_r" in p
+                      else self.table.md_fixed))
+        elif self.table.dynamic:
             # 分元素 B + 可精修织构：逐反射重算 |Σ_e A_e e^(−B_e s²)|²
             s2 = (np.sin(np.radians(centers / 2.0)) / self.wavelength) ** 2
             f = np.zeros(len(centers), dtype=complex)
@@ -661,7 +747,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 free=("zero", "u", "v", "w"),
                 stages=None, initial=None, bounds=None,
                 size_mix=1.0, strain_mix=1.0,
-                phase_label=None, max_nfev=2000):
+                phase_label=None, max_nfev=2000, site_symprec=1e-3):
     """用 GSAS-II 口径的全谱模型拟合一条 1D 谱。
 
     参数：
@@ -705,13 +791,18 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         free               要精修的参数名（zero/U/V/W/X/Y/Z/size_um/
                            mustrain/b_iso/polariz；正交晶胞可加 a/b/c；
                            分元素 B 用 b_<元素>；织构强度用 md_r，需同时
-                           给 md=(轴, R) 作初始/边界参考）；scale 与背景
-                           总是线性解出。a/b/c 只支持 α=β=γ=90° 的正交
-                           晶胞（橄榄石就是）。
+                           给 md=(轴, R) 作初始/边界参考；**原子坐标**用
+                           coord_<位点标签>（如 coord_Fe5），按空间群把
+                           等效位点绑成一组、只精修 Wyckoff 允许的方向；
+                           scale 与背景总是线性解出。a/b/c 只支持
+                           α=β=γ=90° 的正交晶胞（橄榄石就是）。
         stages             分阶段精修，默认 DEFAULT_STAGES 按 free 过滤
+                           （坐标参数会在最后的联合收口前自动加一阶段；
+                           显式给 stages 时需自己把坐标参数写进去）
         initial            初值覆盖（同名参数）
         bounds             边界覆盖（同名参数）
         size_mix/strain_mix 尺寸/应变的 LG 混合，GSAS 默认 1（Lorentzian）
+        site_symprec      空间群判定的容差（Å，默认 1e-3）；只影响 coord_*
 
     返回 `FitResult`。拟合在**观测点**上逐点比较，不做插值。
     """
@@ -725,6 +816,29 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         two_theta_range = (float(tth[0]), float(tth[-1]))
 
     free = tuple(free)
+    # ── 原子坐标：coord_<位点> 展开成按空间群约束的参数名 ───────────
+    site_aliases = [n for n in free if n.startswith("coord_")]
+    site_model = None
+    site_params = []
+    if site_aliases:
+        if len(set(site_aliases)) != len(site_aliases):
+            raise ValueError(f"坐标参数重复：{site_aliases}")
+        site_model = SiteModel(structure, symprec=site_symprec)
+        for name in site_aliases:
+            orbit = site_model.orbit(name[len("coord_"):])
+            if orbit.n_free == 0:
+                raise ValueError(
+                    f"位点 {orbit.label}（{orbit.wyckoff}）没有可精修的"
+                    "坐标方向（特殊位置由对称性固定）")
+            site_params.extend(orbit.params)
+        dup = [n for n in site_params if n in free]
+        if dup:
+            raise ValueError(
+                f"坐标参数重复：{dup}（coord_* 与显式参数只能给一种）")
+        free = (tuple(n for n in free if n not in site_aliases)
+                + tuple(site_params))
+    if len(set(free)) != len(free):
+        raise ValueError(f"free 里有重复参数：{free}")
     if cell_refine is None:
         cell_refine = any(n in free for n in ("a", "b", "c"))
     else:
@@ -734,15 +848,17 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     elem_names = [n[2:] for n in free
                   if n.startswith("b_") and n != "b_iso"]
     md_refine = "md_r" in free
-    dynamic = bool(elem_names) or md_refine
+    dynamic = bool(elem_names) or md_refine or site_model is not None
     structure_elems = {sp.symbol for site in structure
                        for sp in site.species}
     bad_elems = [e for e in elem_names if e not in structure_elems]
     if bad_elems:
         raise ValueError(f"结构里没有这些元素：{bad_elems}")
-    if refine_intensities and (elem_names or md_refine):
+    if refine_intensities and (elem_names or md_refine
+                               or site_model is not None):
         raise ValueError(
-            "Le Bail 模式下逐峰强度已自由，分元素 B / 织构 R 会简并")
+            "Le Bail 模式下逐峰强度已自由，分元素 B / 织构 R / 原子坐标"
+            "会简并")
     if elem_names and "b_iso" in free:
         raise ValueError("b_iso（全局 ΔB）不能和分元素 B 同时精修")
     if md_refine and md is None:
@@ -752,7 +868,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     table = _PeakTable(structure, wavelength, two_theta_range, nmax,
                        b_iso, polariz,
                        keep_unmerged=cell_refine or dynamic, md=md,
-                       dynamic=dynamic, md_refine=md_refine)
+                       dynamic=dynamic, md_refine=md_refine,
+                       site_model=site_model)
     if table.cubic:
         bad_cell = [n for n in free if n in ("b", "c")]
         if bad_cell:
@@ -807,7 +924,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
 
     # ── 初值 ────────────────────────────────────────────────────────
     dynamic_names = ([f"b_{e}" for e in elem_names]
-                     + (["md_r"] if md_refine else []))
+                     + (["md_r"] if md_refine else [])
+                     + list(site_params))
     bad = [n for n in free if n not in _ALLOWED and n not in dynamic_names]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")
@@ -848,6 +966,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     }
     for elem in elem_names:
         init[f"b_{elem}"] = float(table.b_elem_base.get(elem, 0.0))
+    for name in site_params:
+        init[name] = 0.0            # 位移系数，0 = CIF 原位
     if md_refine:
         init["md_r"] = float(md[1]) if md is not None else 1.0
     if isinstance(b_iso, dict):
@@ -873,6 +993,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bounds["b_iso"] = (-50.0, 50.0)
     for elem in elem_names:
         bounds.setdefault(f"b_{elem}", (0.0, 50.0))
+    for name in site_params:
+        # 位移系数（分数坐标）；±0.05 ≈ 0.5 Å，远大于真实热振动
+        bounds.setdefault(name, (-0.05, 0.05))
     if md_refine:
         bounds.setdefault("md_r", (0.05, 20.0))
 
@@ -885,7 +1008,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             if hit:
                 stages.append(hit)
         covered = {n for s in stages for n in s}
-        rest = tuple(n for n in free if n not in covered)
+        rest = tuple(n for n in free
+                     if n not in covered and n not in site_params)
         if rest:
             stages.append(rest)
     else:
@@ -893,6 +1017,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bad = [n for s in stages for n in s if n not in free]
         if bad:
             raise ValueError(f"stages 中有未在 free 里的参数：{bad}")
+    if site_params and default_stages:
+        # 坐标放在峰形/背景/B 之后、最后的联合收口之前
+        stages.insert(max(0, len(stages) - 1), tuple(site_params))
 
     # X/Y（Lorentzian 尾巴）同时从 0 出发容易掉进"几乎没有尾巴"的
     # 局部极小：2026-10-23 用 LaB6 实测，停在 X≈0.03 / Y≈0.6 时
@@ -1017,6 +1144,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             phase_label = structure.composition.reduced_formula
         except Exception:               # pragma: no cover - 非 pymatgen 对象
             phase_label = None
+    site_coords = {}
+    if site_model is not None:
+        site_coords = site_model.summary(
+            {n: values[n] for n in site_model.param_names if n in values})
     return FitResult(
         params=params, stderr=stderr, rwp=rwp, rp=rp, chi2=chi2,
         reduced_chi2=reduced, n_obs=len(y_raw), n_params=n_params,
@@ -1029,7 +1160,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         peak_table_intensities=(None if amps is None else table.inten.copy()),
         peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
         extra_peak_tth=(extra_tth or None),
-        phase_label=phase_label)
+        phase_label=phase_label, site_coords=site_coords)
 
 
 def rwp(y_obs, y_calc, weights="poisson"):

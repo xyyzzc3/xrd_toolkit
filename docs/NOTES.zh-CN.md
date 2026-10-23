@@ -305,7 +305,7 @@ pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只�
 | `scripts/integrate_pattern.py` | 全角度积分：2D 图 → 标准 1D 谱 |
 | `scripts/sector_waterfall.py` | 扇形积分（36 扇区）+ 瀑布图 + 方位均匀性统计 |
 | `scripts/simulate_xrd.py` | CIF → 理论粉末 XRD 谱（布拉格 + 结构因子，手写版；`--compare` 对 pymatgen 参考版复核） |
-| `scripts/fit_lmfp.py` | LaB₆ 仪器定标 + LMFP 全谱拟合（Le Bail + Al/LiF 相、坏点掩膜；`--no-lif`、`--no-hot-mask`、`--exclude-al`） |
+| `scripts/fit_lmfp.py` | LaB₆ 仪器定标 + LMFP 全谱拟合（Le Bail + Al 基片相、坏点掩膜；`--no-hot-mask`、`--exclude-al`） |
 | `scripts/analyze_pattern.py` | 只给 TIFF + 配置的自动相筛选 + 全谱拟合/报告 |
 | `scripts/simulate_study.py` | 教学/模拟图：basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II 对拍模拟（在单独的 `gsas2` 环境里跑） |

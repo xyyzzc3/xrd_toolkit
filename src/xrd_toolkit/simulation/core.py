@@ -466,6 +466,37 @@ def b_iso_from_cif(cif_path):
     return out
 
 
+def reflection_table_sites(structure, wavelength=1.5406,
+                           two_theta_range=(10.0, 80.0), nmax=10,
+                           polariz=0.5):
+    """逐**位点**的动态强度表（原子坐标/占位精修用）。
+
+    与 `reflection_table_details` 相同的几何量，但强度不再按元素分组，
+    而是保留每个位点的散射因子，方便每次最小二乘评估时用当前坐标
+    重算相位：
+        F_r = Σ_j [Σ_sp f_sp(s_r)·occ_sp·e^(−B_sp s_r²)]·e^(2πi h_r·x_j)
+    返回 (hkl, d, tth, mult, lp, s2, f_species, species, site_occ)：
+        f_species  (n_ref, n_species) 每个元素在每个反射上的 f(s)
+        species    元素符号列表（f_species 的列顺序）
+        site_occ   (n_sites, n_species) CIF 里的分数占位（混合位点
+                   如 Fe:Mn = 0.497:0.503 会落在同一行）
+    """
+    hkl, d, tth, mult, lp, s2, _partials = reflection_table_details(
+        structure, wavelength=wavelength,
+        two_theta_range=two_theta_range, nmax=nmax, polariz=polariz)
+    species = sorted({sp.symbol for site in structure for sp in site.species})
+    col = {e: i for i, e in enumerate(species)}
+    site_occ = np.zeros((len(structure), len(species)), dtype=float)
+    for j, site in enumerate(structure):
+        for sp, occ in site.species.items():
+            site_occ[j, col[sp.symbol]] += float(occ)
+    f_species = np.empty((len(tth), len(species)), dtype=float)
+    for r, s2r in enumerate(np.asarray(s2, dtype=float)):
+        for c, elem in enumerate(species):
+            f_species[r, c] = scattering_factor(elem, float(s2r))
+    return hkl, d, tth, mult, lp, s2, f_species, species, site_occ
+
+
 def load_structure(cif_path):
     """读 CIF（统一入口的薄包装）。"""
     return Structure.from_file(cif_path)

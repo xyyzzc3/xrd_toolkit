@@ -29,6 +29,15 @@
 
 ### 模拟
 
+- **原子坐标精修（空间群约束）**（2026-10-23）：`fit_pattern` 的 `free`
+  新增 `coord_<位点>`（如 `coord_Fe5`）。新增 `simulation/site_model.py`
+  用 `SpacegroupAnalyzer` 把等效位点绑成轨道，只放开 Wyckoff 允许的
+  方向（LMFP Pnma 的 28 个原子 → 6 条轨道、11 个坐标参数；Li 4a 由
+  对称性固定为 0 维）。合成谱反解（Fe5 位移 0.010/−0.005）误差
+  <2e-4、Rwp 0.004%；真数据试跑只放 Fe5 时结构 Rwp 略降 0.01 个
+  百分点，11 个全放会顶到 ±0.05 边界（过拟合），所以默认不启用，
+  作为引擎能力。Le Bail 模式拒绝坐标参数（与逐峰自由强度简并）。
+  占位率精修尚未实现。
 - **单峰拟合 / W-H 命令行入口**（2026-10-23）：`scripts/fit_peaks.py`
   把四线型单峰拟合、LaB6 仪器宽度和 Williamson–Hall 串起来；
   `--hot-mask` 可先掩坏点团，`--wh --instrument-from` 用标样扣仪器
