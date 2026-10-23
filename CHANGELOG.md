@@ -18,6 +18,11 @@
 
 ### 模拟
 
+- **单峰拟合 / W-H 命令行入口**（2026-10-23）：`scripts/fit_peaks.py`
+  把四线型单峰拟合、LaB6 仪器宽度和 Williamson–Hall 串起来；
+  `--hot-mask` 可先掩坏点团，`--wh --instrument-from` 用标样扣仪器
+  宽度并出 W-H 图。注意 W-H 要求峰彼此孤立；重叠谱的单峰 FWHM 只作
+  趋势参考（定量用全谱 Size/Mustrain）。
 - **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
   `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
   分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
@@ -282,6 +287,11 @@
 
 ### 模拟
 
+- **单峰拟合 / W-H 命令行入口**（2026-10-23）：`scripts/fit_peaks.py`
+  把四线型单峰拟合、LaB6 仪器宽度和 Williamson–Hall 串起来；
+  `--hot-mask` 可先掩坏点团，`--wh --instrument-from` 用标样扣仪器
+  宽度并出 W-H 图。注意 W-H 要求峰彼此孤立；重叠谱的单峰 FWHM 只作
+  趋势参考（定量用全谱 Size/Mustrain）。
 - **立方晶胞精修**（2026-10-23）：`fit_pattern` 支持立方结构的
   `free=("a",)`（b = c = a 绑定；单独精修 b/c 会报错），并在默认
   分阶段末尾加 `zero/w/a/b/c` 联合收口——零点与晶胞分开精修会互相
