@@ -12,8 +12,10 @@
 """
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QTableWidgetItem
+from PySide6.QtWidgets import (
+    QAbstractItemView, QApplication, QTableWidgetItem)
 
+from xrd_toolkit import config as config_mod
 from xrd_toolkit.gui.state.base import _panel_param, _param_box_set
 from xrd_toolkit.gui.state.config import _AUX_GID_PREFIX
 from xrd_toolkit.gui.state.processing import _proc_curve
@@ -22,7 +24,7 @@ from xrd_toolkit.services.peak_finding import find_peaks_1d
 PEAK_COLOR = "#E69F00"          # Okabe–Ito 橙：与曲线蓝、背景绿都分得开
 PEAK_KEYS = ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
              "寻峰最多根数", "显示峰位")
-TABLE_COLUMNS = ("2θ (°)", "FWHM (°)", "高度")
+TABLE_COLUMNS = ("2θ (°)", "d (Å)", "FWHM (°)", "面积")
 
 
 def _finite_segments(tth, intensity):
@@ -230,6 +232,59 @@ def draw_peak_markers(window, dock, ax, tth, intensity):
     return peaks
 
 
+class _NumItem(QTableWidgetItem):
+    """按数值排序的单元格（QTableWidget 默认拿显示文本比大小）。"""
+
+    def __lt__(self, other):
+        a = self.data(Qt.UserRole + 1)
+        b = other.data(Qt.UserRole + 1)
+        if a is None or b is None:
+            return super().__lt__(other)
+        return float(a) < float(b)
+
+
+def _wavelength_for(dock):
+    """该面板几何配置的波长（Å）；不知道就 None（d 列留空）。"""
+    name = (getattr(dock, "params_snapshot", None) or {}).get("config")
+    if not name:
+        return None
+    try:
+        return float(config_mod.get_config(name)["geometry"]["wavelength_m"]
+                     * 1e10)
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def peak_table_tsv(window, selected_only=False):
+    """把峰表按当前显示顺序导成 TSV（表头 + 数据）；没有行返回空串。"""
+    table = getattr(window, "peak_table", None)
+    if table is None or table.rowCount() == 0:
+        return ""
+    if selected_only:
+        rows = sorted({i for rng in table.selectedRanges()
+                       for i in range(rng.topRow(), rng.bottomRow() + 1)})
+    else:
+        rows = list(range(table.rowCount()))
+    if not rows:
+        return ""
+    lines = ["\t".join(table.horizontalHeaderItem(c).text()
+                       for c in range(table.columnCount()))]
+    for row in rows:
+        lines.append("\t".join(
+            (table.item(row, c).text() if table.item(row, c) else "")
+            for c in range(table.columnCount())))
+    return "\n".join(lines)
+
+
+def copy_peak_table(window, selected_only=False):
+    """复制峰表到剪贴板；返回复制的数据行数（0 = 没复制）。"""
+    text = peak_table_tsv(window, selected_only)
+    if not text:
+        return 0
+    QApplication.clipboard().setText(text)
+    return max(0, len(text.splitlines()) - 1)
+
+
 def fill_peak_table(window, dock, peaks):
     """把峰填进「1D」页的峰表；没有峰时整块隐藏。"""
     table = getattr(window, "peak_table", None)
@@ -251,16 +306,37 @@ def fill_peak_table(window, dock, peaks):
     if head_h <= 0:
         head_h = 26
     table.setFixedHeight(min(220, max(58, head_h + rows * 22 + 4)))
+    lam = _wavelength_for(dock)
+    header = table.horizontalHeader()
+    sort_col = header.sortIndicatorSection()
+    sort_order = header.sortIndicatorOrder()
+    table.setSortingEnabled(False)
     table.setRowCount(len(peaks))
     for row, peak in enumerate(peaks):
-        for col, text in enumerate((
-                f"{peak.center:.4f}", f"{peak.fwhm:.4f}",
-                f"{peak.height:.0f}")):
-            item = QTableWidgetItem(text)
+        if lam:
+            d = lam / (2.0 * np.sin(np.radians(peak.center / 2.0)))
+            d_text = f"{d:.4f}"
+        else:
+            d = None
+            d_text = "—"
+        values = ((f"{peak.center:.4f}", peak.center),
+                  (d_text, d),
+                  (f"{peak.fwhm:.4f}", peak.fwhm),
+                  (f"{peak.area:.1f}", peak.area))
+        tip = (f"2θ {peak.center:.4f}°\nd {d_text} Å\n"
+               f"FWHM {peak.fwhm:.4f}°\n面积 {peak.area:.1f}\n"
+               f"峰高 {peak.height:.0f}（相对基线）")
+        for col, (text, sort_key) in enumerate(values):
+            item = _NumItem(text)
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setData(Qt.UserRole + 1, sort_key)
+            item.setToolTip(tip)
             if col == 0:
                 item.setData(Qt.UserRole, (peak.center, peak.fwhm))
             table.setItem(row, col, item)
+    table.setSortingEnabled(True)
+    if sort_col >= 0:
+        table.sortItems(sort_col, sort_order)
     box.setVisible(True)
 
 

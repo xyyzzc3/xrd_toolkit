@@ -2,14 +2,16 @@
 
 2026-10-22 从 builder.py 的 _build_param_dock 原样搬出（只改结构，不动逻辑）。
 """
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QPushButton, QSizePolicy, QSpinBox, QTableWidget, QVBoxLayout)
+    QLabel, QMenu, QPushButton, QSizePolicy, QSpinBox, QTableWidget,
+    QVBoxLayout)
 
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
 from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
 from xrd_toolkit.gui.peak_view import (
-    install_peak_view, zoom_to_peak)
+    TABLE_COLUMNS, copy_peak_table, install_peak_view, zoom_to_peak)
 from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
 
@@ -139,8 +141,8 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_caption.setWordWrap(True)
     peak_caption.setSizePolicy(QSizePolicy.Ignored,
                                peak_caption.sizePolicy().verticalPolicy())
-    peak_table = QTableWidget(0, 3)
-    peak_table.setHorizontalHeaderLabels(["2θ (°)", "FWHM (°)", "高度"])
+    peak_table = QTableWidget(0, len(TABLE_COLUMNS))
+    peak_table.setHorizontalHeaderLabels(list(TABLE_COLUMNS))
     peak_table.verticalHeader().setVisible(False)
     peak_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     peak_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -162,6 +164,24 @@ def build_1d_page(window, form_1d, btns_1d):
     # 三列平均分宽度（用户 2026-10-24："峰表三列平均分宽度吧"）
     peak_table.horizontalHeader().setSectionResizeMode(
         QHeaderView.Stretch)
+    peak_table.setSortingEnabled(True)
+    peak_table.sortItems(0, Qt.AscendingOrder)
+
+    def _peak_menu(pos):
+        menu = QMenu(peak_table)
+        act_sel = menu.addAction("复制选中行")
+        act_all = menu.addAction("复制全部")
+        chosen = menu.exec(peak_table.viewport().mapToGlobal(pos))
+        if chosen is act_sel:
+            n = copy_peak_table(window, True)
+        elif chosen is act_all:
+            n = copy_peak_table(window, False)
+        else:
+            return
+        _log(window, f"已复制峰表 {n} 行" if n else "峰表没有可复制的行")
+
+    peak_table.setContextMenuPolicy(Qt.CustomContextMenu)
+    peak_table.customContextMenuRequested.connect(_peak_menu)
     peak_lay.addWidget(peak_caption)
     peak_lay.addWidget(peak_table)
     peak_box.setVisible(False)

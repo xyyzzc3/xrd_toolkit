@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QHeaderView, QPushButton
 
 from xrd_toolkit.services import stage_cache
@@ -117,6 +118,26 @@ class TestGuiPeakFinding(unittest.TestCase):
                              "有标签的峰不再画橙线")
             self.assertFalse(w.peak_box.isHidden())
             self.assertEqual(w.peak_table.rowCount(), 2)
+            self.assertEqual(w.peak_table.columnCount(), 4)
+            headers = [w.peak_table.horizontalHeaderItem(i).text()
+                       for i in range(4)]
+            self.assertEqual(headers, ["2θ (°)", "d (Å)", "FWHM (°)", "面积"])
+            self.assertIn("峰高", w.peak_table.item(0, 0).toolTip())
+            self.assertNotEqual(w.peak_table.item(0, 1).text(), "—")
+            # 数值排序：默认 2θ 升序，点表头降序后第一行是 2.2°
+            self.assertTrue(w.peak_table.item(0, 0).text().startswith("1.5"))
+            w.peak_table.sortItems(0, Qt.DescendingOrder)
+            self.assertTrue(w.peak_table.item(0, 0).text().startswith("2.2"))
+            self.assertAlmostEqual(
+                w.peak_table.item(0, 0).data(Qt.UserRole)[0], 2.2,
+                delta=2e-3)
+            tsv = peak_view.peak_table_tsv(w)
+            self.assertEqual(len(tsv.splitlines()), 3)
+            self.assertIn("面积", tsv.splitlines()[0])
+            self.assertEqual(peak_view.copy_peak_table(w, False), 2)
+            self.assertIn("面积", QApplication.clipboard().text())
+            w.peak_table.selectRow(0)
+            self.assertEqual(peak_view.copy_peak_table(w, True), 1)
             self.assertEqual(w.peak_caption.text(), "峰表 · 2 根")
             self.assertIn("双击", w.peak_table.toolTip())
             self.assertLessEqual(w.peak_table.maximumWidth(), 320,
