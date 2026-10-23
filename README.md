@@ -73,6 +73,12 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
       <sub>A whole batch at a glance — eight background-subtracted frames stacked beside their 2θ × sample heatmap</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="showcase/simulation/sim_xrd_fit_LaB6.png" width="100%"><br>
+      <sub>Full-pattern fit of the LaB₆ standard — observed (points), calculated (line), background, the observed−calculated difference and the Bragg-position ticks (Le Bail intensities, Rwp 4.24%)</sub>
+    </td>
+  </tr>
 </table>
 
 ## Highlights
