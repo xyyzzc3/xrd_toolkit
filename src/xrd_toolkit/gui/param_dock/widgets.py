@@ -25,9 +25,19 @@ def make_page():
     scroll.setWidgetResizable(True)   # 条目随滚动区宽度自动重排
     scroll.setFrameShape(QFrame.NoFrame)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    # 滚动内容 = 竖直布局：表单在上，页面可以在下面再挂一个可伸缩的
+    # 块（1D 页的峰表）。QFormLayout 本身不会把多余高度分给某一行。
     fields = QWidget()
-    form = QFormLayout(fields)
+    outer = QVBoxLayout(fields)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+    host = QWidget()
+    form = QFormLayout(host)
     form.setContentsMargins(2, 1, 2, 1)
+    outer.addWidget(host, 0)
+    # 页面构建函数通过这两个属性把可伸缩块挂到表单下面
+    form._outer_layout = outer
+    form._host_widget = host
     scroll.setWidget(fields)
     pv.addWidget(scroll, 1)
     return page, form, pv

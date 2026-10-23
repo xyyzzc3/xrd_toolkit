@@ -294,18 +294,19 @@ def fill_peak_table(window, dock, peaks):
     table.setRowCount(0)
     if not peaks:
         box.setVisible(False)
+        hook = getattr(window, "_peak_table_stretch", None)
+        if hook is not None:
+            hook(False)
         return
     caption = getattr(window, "peak_caption", None)
     if caption is not None:
         # 窄坞：标题只留「峰表 · N 根」；双击提示放进表格 tooltip
         caption.setText(f"峰表 · {len(peaks)} 根")
     table.setToolTip("双击一行放大到该峰")
-    # 高度按行数：2 根就两行高，最多露 8 行，余下滚动
-    rows = min(len(peaks), 8)
-    head_h = table.horizontalHeader().height()
-    if head_h <= 0:
-        head_h = 26
-    table.setFixedHeight(min(220, max(60, head_h + rows * 22 + 4)))
+    # 高度由布局决定（卡片在滚动内容里 stretch=1），行多时表内滚动
+    hook = getattr(window, "_peak_table_stretch", None)
+    if hook is not None:
+        hook(True)
     lam = _wavelength_for(dock)
     header = table.horizontalHeader()
     sort_col = header.sortIndicatorSection()

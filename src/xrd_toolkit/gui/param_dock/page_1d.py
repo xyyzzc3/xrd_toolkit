@@ -154,11 +154,11 @@ def build_1d_page(window, form_1d, btns_1d):
     # 卡在卡片/表格 320 px，坞更宽时靠左留白；高度在 fill 时按行数定。
     peak_table.setMinimumSize(0, 0)
     peak_table.setMaximumWidth(320)
-    peak_table.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+    peak_table.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
     peak_table.horizontalHeader().setMinimumSectionSize(30)
     peak_box.setMinimumWidth(0)
     peak_box.setMaximumWidth(320)
-    peak_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    peak_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
     peak_table.verticalHeader().setDefaultSectionSize(22)
     # 三列平均分宽度（用户 2026-10-24："峰表三列平均分宽度吧"）
     peak_table.horizontalHeader().setSectionResizeMode(
@@ -182,13 +182,27 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.setContextMenuPolicy(Qt.CustomContextMenu)
     peak_table.customContextMenuRequested.connect(_peak_menu)
     peak_lay.addWidget(peak_caption)
-    peak_lay.addWidget(peak_table)
+    peak_lay.addWidget(peak_table, 1)
     peak_box.setVisible(False)
     window.peak_box = peak_box
     window.peak_table = peak_table
     window.peak_caption = peak_caption
-    # 峰表直接接在「寻峰并显示峰位」下面（同一页、不另起一层）
-    form_1d.addRow(peak_box)
+    # 峰表直接接在「寻峰并显示峰位」下面：表单结束就是它，不另起一层；
+    # 放在滚动内容的竖直布局里（stretch=1），拿走页面剩下的高度。
+    outer = getattr(form_1d, "_outer_layout", None)
+    host = getattr(form_1d, "_host_widget", None)
+    if outer is not None:
+        outer.addWidget(peak_box, 1)
+        def _update_peak_stretch(visible):
+            if host is not None:
+                outer.setStretch(outer.indexOf(host), 0 if visible else 1)
+            idx = outer.indexOf(peak_box)
+            if idx >= 0:
+                outer.setStretch(idx, 1 if visible else 0)
+        _update_peak_stretch(False)
+        window._peak_table_stretch = _update_peak_stretch
+    else:                              # 防御：旧布局退回表单行
+        form_1d.addRow(peak_box)
     peak_table.cellDoubleClicked.connect(
         lambda row, _col: zoom_to_peak(window, row))
     install_peak_view(window)
