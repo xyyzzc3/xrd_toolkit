@@ -23,3 +23,6 @@ src/xrd_toolkit/config_user.json
 # PyInstaller 打包中间产物与成品（成品走 GitHub Release 附件，不进仓库）
 build/
 dist/
+
+# Claude Code 本机设置（含完成提醒 hook），不进仓库
+.claude/settings.local.json
