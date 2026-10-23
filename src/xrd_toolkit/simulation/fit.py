@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, lsq_linear
 
 from xrd_toolkit.simulation import core
 from xrd_toolkit.simulation.gsas_profile import (
@@ -480,13 +480,17 @@ class _Model:
             if self.background_basis is not None:
                 cols.append(self.background_basis)
             A = np.column_stack(cols)
-            coef, *_ = np.linalg.lstsq(
-                A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
+            ncol = A.shape[1]
+            lb = np.full(ncol, -np.inf)
+            ub = np.full(ncol, np.inf)
+            lb[0] = 0.0                       # 主相 scale 非负
+            lb[n_main:n_main + n_extra] = 0.0  # 额外相 scale 非负
+            sol = lsq_linear(A * self.sqrt_w[:, None],
+                             self.y * self.sqrt_w, bounds=(lb, ub))
+            coef = sol.x
             scale = float(coef[0])
-            if scale > 0:
-                a = np.asarray(coef[1:n_main], dtype=float) / scale
-            else:                       # pragma: no cover - 极罕见
-                a = np.zeros(self.intensity_poly)
+            a = (np.asarray(coef[1:n_main], dtype=float) / scale
+                 if scale > 0 else np.zeros(self.intensity_poly))
             self.extra_scales = [float(x)
                                  for x in coef[n_main:n_main + n_extra]]
             if self.background_basis is None:
@@ -495,43 +499,32 @@ class _Model:
             else:
                 bg = self.background_basis @ coef[n_main + n_extra:]
                 coeffs = np.asarray(coef[n_main + n_extra:], dtype=float)
-            return A @ coef, max(scale, 0.0), bg, coeffs, None, a
+            return A @ coef, scale, bg, coeffs, None, a
 
         y_model = self.peak_curve(p)
         extras = self._extra_curves(p)
         n_extra = len(extras)
+        cols = [y_model] + extras
+        if self.background_basis is not None:
+            cols.append(self.background_basis)
+        A = np.column_stack(cols)
+        ncol = A.shape[1]
+        lb = np.full(ncol, -np.inf)
+        ub = np.full(ncol, np.inf)
+        lb[0] = 0.0                            # 主相 scale 非负
+        lb[1:1 + n_extra] = 0.0                # 额外相 scale 非负
+        sol = lsq_linear(A * self.sqrt_w[:, None], self.y * self.sqrt_w,
+                         bounds=(lb, ub))
+        coef = sol.x
+        scale = float(coef[0])
+        self.extra_scales = [float(x) for x in coef[1:1 + n_extra]]
         if self.background_basis is None:
-            A = np.column_stack([y_model] + extras)
-            coef, *_ = np.linalg.lstsq(
-                A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
-            scale = float(coef[0])
-            self.extra_scales = [float(x) for x in coef[1:]]
             bg = np.zeros_like(self.y)
-            y_calc = A @ coef
             coeffs = np.array([])
         else:
-            A = np.column_stack(
-                [y_model] + extras + [self.background_basis])
-            coef, *_ = np.linalg.lstsq(
-                A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
-            scale = float(coef[0])
-            if scale < 0.0:                 # 物理上比例因子不能为负
-                A2 = np.column_stack(
-                    extras + [self.background_basis])
-                coef2, *_ = np.linalg.lstsq(
-                    A2 * self.sqrt_w[:, None], self.y * self.sqrt_w,
-                    rcond=None)
-                scale = 0.0
-                self.extra_scales = [float(x) for x in coef2[:n_extra]]
-                bg = self.background_basis @ coef2[n_extra:]
-                y_calc = A2 @ coef2
-                coeffs = np.asarray(coef2[n_extra:], dtype=float)
-            else:
-                self.extra_scales = [float(x) for x in coef[1:1 + n_extra]]
-                bg = self.background_basis @ coef[1 + n_extra:]
-                y_calc = A @ coef
-                coeffs = np.asarray(coef[1 + n_extra:], dtype=float)
-        return y_calc, scale, bg, coeffs, None, None
+            bg = self.background_basis @ coef[1 + n_extra:]
+            coeffs = np.asarray(coef[1 + n_extra:], dtype=float)
+        return A @ coef, scale, bg, coeffs, None, None
 
     def residual(self, vec):
         y_calc, *_ = self.solve_linear(self.params(vec))
