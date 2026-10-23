@@ -143,9 +143,9 @@ class TestGuiPeakFinding(unittest.TestCase):
                                  "全屏时表格不许被拉宽")
             self.assertLessEqual(w.peak_box.maximumWidth(), 320)
             self.assertEqual(w.peak_table.sizePolicy().verticalPolicy(),
-                             QSizePolicy.Expanding, "峰表要跟着页面伸缩")
-            self.assertEqual(w.peak_box.sizePolicy().verticalPolicy(),
-                             QSizePolicy.Expanding)
+                             QSizePolicy.Fixed)
+            self.assertLess(w.peak_table.height(), 130,
+                            "两根峰不该占一块空表")
             for col in range(4):
                 self.assertEqual(
                     w.peak_table.horizontalHeader().sectionResizeMode(col),
