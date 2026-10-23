@@ -501,7 +501,10 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
     geom = dict(cfg["geometry"])
     lam = geom["wavelength_m"] * 1e10          # m → Å（实验本身的波长）
     TMIN, TMAX = 1.0, 8.0                      # 第三周处理用的同一窗口
-    NPT = 3000
+    # 2000 点 ≈ 每点 0.5 个探测器像素（1 px ≈ 0.0072°@2θ）。3000 点
+    # （0.32 px/点）对这条斑驳的 LaB₆ 环属于过采样：相邻点从同一批
+    # 像素里各取一部分，峰顶会被方位纹理顶出 2–3% 的假"双尖"。
+    NPT = 2000
 
     # ① 实验 1D（同一条引擎与几何）
     img = load_diffraction_image(str(exp_tif))
@@ -626,7 +629,9 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     geom = dict(cfg["geometry"])
     lam = geom["wavelength_m"] * 1e10
     TMIN, TMAX = 1.0, 8.0
-    NPT = 3000
+    # 2000 点 ≈ 0.5 像素/点；3000 点过采样会把斑驳环的峰顶顶出假双尖
+    # （见 study_compare 里同一段说明）
+    NPT = 2000
 
     img = load_diffraction_image(str(exp_tif))
     tth, y = integrate_1d(img, npt=NPT, tth_min_deg=TMIN,

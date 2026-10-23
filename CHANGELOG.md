@@ -27,10 +27,13 @@
   室温晶胞 4.156826 Å，与 pyFAI 几何标定的参考一致；COD 的 4.157597 Å
   大 1.9e-4，模型峰位系统性偏低）；脚本用 Le Bail 逐峰强度定标样的
   仪器参数，结构强度模型的误差不再挤进峰形。LaB₆ Le Bail Rwp
-  **6.39% → 4.52%**，峰高/计算 1.05 → 1.01、FWHM 比 0.95 → 1.00；
-  LMFP 结构/Le Bail **8.10/6.99% → 8.06/6.95%**。展示图已重拍
+  **6.39% → 4.24%**，峰高/计算 1.05 → 1.01、FWHM 比 0.95 → 1.00；
+  LMFP 结构/Le Bail **8.10/6.99% → 8.06/6.95%**。LaB₆ 的两张实验拟合
+  图把 1D 积分点从 3000 降到 **2000**（≈0.5 探测器像素/点；3000 点
+  是 0.32 px/点，过采样会把斑驳环的峰顶顶出假"双尖"）。展示图已重拍
   （`sim_xrd_fit_LaB6.png`、`sim_xrd_fit_bottom_LaB6.png`、
-  `sim_xrd_intensity_ratios_LaB6.png`、LMFP 两张）
+  `sim_xrd_intensity_ratios_LaB6.png`、`sim_xrd_vs_experiment_LaB6.png`、
+  LMFP 两张）
 - **六方晶系峰位标注默认改三位卡片式**（用户 2026-10-17："hkl 就显示三位，
   图上不要写四位"）：如 (104)、(116)，与 PDF 卡片行号一致；四位 (h k i l)
   是显式选项（CLI `--four-index` / `four_index=True`）。第 6 周那张刚玉
