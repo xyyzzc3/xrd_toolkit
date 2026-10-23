@@ -129,15 +129,16 @@ def build_1d_page(window, form_1d, btns_1d):
 
     # 峰表：带浅色边框的小卡片；没有峰时整块隐藏（页面不留一块空表）
     peak_box = QFrame()
-    peak_box.setObjectName("peak_table_card")
-    peak_box.setStyleSheet(
-        "QFrame#peak_table_card { background: #f7f9fb;"
-        " border: 1px solid #e3e8ee; border-radius: 4px; }")
+    peak_box.setObjectName("peak_section")
+    peak_box.setFrameShape(QFrame.NoFrame)
     peak_lay = QVBoxLayout(peak_box)
-    peak_lay.setContentsMargins(8, 7, 8, 7)
+    peak_lay.setContentsMargins(2, 8, 2, 0)
     peak_lay.setSpacing(4)
+    peak_line = QFrame()
+    peak_line.setFixedHeight(1)
+    peak_line.setStyleSheet("background-color: #d5dae0;")
     peak_caption = QLabel("峰表")
-    peak_caption.setStyleSheet("color: #5b6773; font-weight: 600;")
+    peak_caption.setStyleSheet("color: gray; font-weight: 600;")
     peak_caption.setWordWrap(True)
     peak_caption.setSizePolicy(QSizePolicy.Ignored,
                                peak_caption.sizePolicy().verticalPolicy())
@@ -148,6 +149,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.setSelectionBehavior(QAbstractItemView.SelectRows)
     peak_table.setAlternatingRowColors(True)
     peak_table.setShowGrid(False)
+    peak_table.setFrameShape(QFrame.NoFrame)
     peak_table.setMinimumHeight(60)
     # 窄坞里不许把参数栏撑宽：表格默认的 sizeHint 会随列头要宽度，
     # 全屏时坞变宽它也跟着铺满（用户 2026-10-24："全屏后峰表还是过宽"）。
@@ -181,6 +183,7 @@ def build_1d_page(window, form_1d, btns_1d):
 
     peak_table.setContextMenuPolicy(Qt.CustomContextMenu)
     peak_table.customContextMenuRequested.connect(_peak_menu)
+    peak_lay.addWidget(peak_line)
     peak_lay.addWidget(peak_caption)
     peak_lay.addWidget(peak_table, 1)
     peak_box.setVisible(False)
