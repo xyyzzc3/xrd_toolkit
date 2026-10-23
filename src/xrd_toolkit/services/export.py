@@ -13,8 +13,8 @@
     多个数据集    {目录}/{导出名}/txt/…          每条一个（曲线名不变）
                   {目录}/{导出名}/{导出名}_全部数据.csv  大集合
 
-导出名（2026-10-23）：默认 = 标样-样品-数据类型-导出时间（见
-default_export_name）；GUI 可自定义，留空用默认。旧格式
+导出名（2026-10-24）：默认 = 数据类型-样品-导出时间（见
+default_export_name）；标样留在文件头/配置条目里。GUI 可自定义，留空用默认。旧格式
 `导出_{时间}_{内容标签}/` + `全部数据.csv` 只在没给名字的调用里兜底。
 
 曲线名 = 文件栏条目的显示名（原始数据 = 文件 stem；产物 = stem_1D /
@@ -37,7 +37,7 @@ BATCH_PREFIX = "导出_"        # 旧批量前缀（CLI/未给名字时的兼容
 TXT_DIR_NAME = "txt"          # 批量文件夹里单条 txt 的子目录
 CSV_NAME = "全部数据.csv"     # 旧大集合文件名（未指定名称时的兼容默认）
 
-# 名称规范（2026-10-23）：默认 = 标样-样品-数据类型-导出时间。
+# 名称规范（2026-10-24）：默认 = 数据类型-样品-导出时间。
 # 分隔符用 ASCII 连字符（市场常见、Windows/macOS 都稳），时间内部用下划线。
 NAME_SEP = "-"
 NAME_TIME_FMT = "%Y-%m-%d_%H%M%S"
@@ -76,26 +76,16 @@ def safe_filename(name, *, fallback="export", maxlen=MAX_NAME_LEN):
     return text or fallback
 
 
-def default_export_name(calibrants, samples, category, now=None):
-    """默认导出名：`标样-样品-数据类型-导出时间`（2026-10-23）。
+def default_export_name(samples, category, now=None):
+    """默认导出名：`数据类型-样品-导出时间`（2026-10-24）。
 
-    calibrants  标样名列表（取并集；不同就写"多标样"）
     samples     样品名列表（产物尾缀 `_1D`/`_处理产物` 先去掉；
                 多于一个不同样品时写"第一个等N张"）
     category    数据类型（原始 / 1D产物 / 处理产物 / 混合）
-    """
-    std = []
-    for item in calibrants or []:
-        label = str(item or "").strip()
-        if label and label not in std:
-            std.append(label)
-    if not std:
-        std_label = "未知标样"
-    elif len(std) == 1:
-        std_label = std[0]
-    else:
-        std_label = "多标样"
 
+    标样不进文件名：它已经写在文件头的 `config:` 和配置条目里，
+    所有批次都带同一个 `LaB6-` 前缀只会挤占可读位置。
+    """
     names = []
     for item in samples or []:
         sample = str(item or "").strip()
@@ -113,8 +103,7 @@ def default_export_name(calibrants, samples, category, now=None):
         sample_label = f"{names[0]}等{len(names)}张"
 
     stamp = (now or datetime.now()).strftime(NAME_TIME_FMT)
-    raw = NAME_SEP.join([std_label, sample_label,
-                         str(category or "数据"), stamp])
+    raw = NAME_SEP.join([str(category or "数据"), sample_label, stamp])
     return safe_filename(raw, fallback=f"export{NAME_SEP}{stamp}")
 
 

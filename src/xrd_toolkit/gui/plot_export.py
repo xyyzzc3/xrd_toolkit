@@ -10,7 +10,7 @@ _checked_1d_results：勾选文件的 1D 曲线（没算过的会提示先出图
 目录结构与文件格式（2026-10-02 定，2026-10-23 加自定义名；规范见
 docs/UI_COPY.zh-CN.md「导出文件规范」）：单个数据集 = 光一个文件；
 两个及以上 = 一个以导出名命名的文件夹（里面 `名称_全部数据.csv` +
-txt/ 子目录）。导出名默认 = 标样-样品-数据类型-时间，弹窗里可自定义；
+txt/ 子目录）。导出名默认 = 数据类型-样品-时间，弹窗里可自定义；
 旧格式 `导出_时间戳_{内容标签}/` 只在没给名字时兜底。写文件的格式与
 写法全部在 services/export（唯一出处，CLI 共用）；本模块只管交互
 （弹窗、勾选、网格不一致的三选）与目录布局。
@@ -26,14 +26,12 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSpinBox,
     QVBoxLayout, QWidget)
 
-from xrd_toolkit import config as config_mod
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (_content, _log, _proc_curve,
                                             _proc_settings)
 from xrd_toolkit.services import export as data_export
 from xrd_toolkit.services import process, stage_cache
-from xrd_toolkit.services.calibrants import DEFAULT_CALIBRANT
 
 
 def _ask_save_options(window: QMainWindow):
@@ -258,26 +256,13 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
     return out
 
 
-def _calibrant_for_config(config_name):
-    """某几何配置条目用的标样短名（旧条目/缺配置按 LaB6）。"""
-    if not config_name:
-        return DEFAULT_CALIBRANT
-    try:
-        entry = config_mod.get_config(config_name)
-    except ValueError:
-        return DEFAULT_CALIBRANT
-    return str(entry.get("calibrant") or DEFAULT_CALIBRANT)
-
-
-def _default_export_name(window: QMainWindow, results) -> str:
-    """按 标样-样品-数据类型-时间 生成默认名（结果为空时返回空串）。"""
+def _default_export_name(results) -> str:
+    """按 数据类型-样品-时间 生成默认名（结果为空时返回空串）。"""
     if not results:
         return ""
-    fallback = getattr(window, "config_name", None)
-    calibrants = [_calibrant_for_config(r[5] or fallback) for r in results]
     samples = [r[0] for r in results]
     return data_export.default_export_name(
-        calibrants, samples, data_export.category_tag(results))
+        samples, data_export.category_tag(results))
 
 
 def _export_base_name(window: QMainWindow, results, fields) -> str:
@@ -290,7 +275,7 @@ def _export_base_name(window: QMainWindow, results, fields) -> str:
                 _log(window, f"名称里的非法字符已替换：{text} → {clean}")
             return clean
         _log(window, "名称清理后为空，改用自动名")
-    base = _default_export_name(window, results)
+    base = _default_export_name(results)
     if base:
         _log(window, f"导出名：{base}")
     return base
@@ -329,8 +314,8 @@ def _build_export_dialog(window: QMainWindow, n_results: int, results=None):
     row_lay.addWidget(browse)
     lay.addRow("输出目录", row)
 
-    # 名称（2026-10-23）：留空 = 标样-样品-数据类型-时间；填了就用填的
-    default_name = _default_export_name(window, results)
+    # 名称（2026-10-23）：留空 = 数据类型-样品-时间；填了就用填的
+    default_name = _default_export_name(results)
     name_edit = QLineEdit()
     name_edit.setObjectName("export_name_edit")
     name_edit.setPlaceholderText(default_name or "留空 = 自动命名")
@@ -511,7 +496,7 @@ def _run_export(window: QMainWindow, sources=None) -> None:
     目录结构（2026-10-02 定，2026-10-23 加自定义名；规范见
     docs/UI_COPY.zh-CN.md）：单个数据集 = 光一个文件；两个及以上 = 一个
     以导出名命名的文件夹（里面 `名称_全部数据.csv` + txt/ 子目录）。
-    导出名默认 = 标样-样品-数据类型-时间，弹窗里可自定义。**任何一份
+    导出名默认 = 数据类型-样品-时间，弹窗里可自定义。**任何一份
     已存在的曲线文件都不覆盖**——同名就顺延 _2 并把新名字记进日志（同一条
     曲线两套参数各导一次，两份都要在）。文件格式与 CLI 同源
     （services/export 唯一出处）；右键"导出这一条/这一组"走 sources
@@ -543,7 +528,7 @@ def _run_export(window: QMainWindow, sources=None) -> None:
     if len(results) == 1 and base_name.lower().endswith(suffix.lower()):
         base_name = base_name[:-len(suffix)]      # 用户自己带了后缀
     if not base_name:
-        base_name = _default_export_name(window, results) or "export"
+        base_name = _default_export_name(results) or "export"
     started = time.perf_counter()
     if len(results) == 1:
         # 单个数据集：光一个文件，不包文件夹

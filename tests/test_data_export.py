@@ -111,26 +111,21 @@ class TestBatchDir(unittest.TestCase):
 
 
 class TestExportNames(unittest.TestCase):
-    """默认名 / 自定义名（2026-10-23）：标样-样品-数据类型-时间。"""
+    """默认名 / 自定义名（2026-10-24）：数据类型-样品-时间。"""
 
     def test_default_name_format(self):
         name = data_export.default_export_name(
-            ["LaB6"], ["LMFP_1_atten0-00029"], "原始", NOW)
+            ["LMFP_1_atten0-00029"], "原始", NOW)
         self.assertEqual(
-            name, "LaB6-LMFP_1_atten0-00029-原始-2026-10-02_225503")
+            name, "原始-LMFP_1_atten0-00029-2026-10-02_225503")
+        self.assertNotIn("LaB6", name)
 
     def test_product_tails_are_stripped_for_samples(self):
         name = data_export.default_export_name(
-            ["LaB6"], ["LMFP_1_1D", "LMFP_1_处理产物", "LMFP_2"],
-            "混合", NOW)
-        self.assertIn("LMFP_1等2张", name)
+            ["LMFP_1_1D", "LMFP_1_处理产物", "LMFP_2"], "混合", NOW)
+        self.assertIn("混合-LMFP_1等2张-", name)
         self.assertNotIn("_1D", name)
         self.assertNotIn("_处理产物", name)
-
-    def test_mixed_calibrants(self):
-        name = data_export.default_export_name(
-            ["LaB6", "CeO2"], ["a"], "原始", NOW)
-        self.assertTrue(name.startswith("多标样-"))
 
     def test_safe_filename_rules(self):
         clean = data_export.safe_filename('a/b:c*"d<>?|')

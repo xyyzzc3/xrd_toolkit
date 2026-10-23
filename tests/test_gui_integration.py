@@ -14736,10 +14736,10 @@ class TestExportData(unittest.TestCase):
                                                  "csv": False}):
                 gui_export._run_export(w)
             batch = _only_batch_dir(outdir)
-            # 默认名 = 标样-样品-数据类型-时间（2026-10-23）
+            # 默认名 = 数据类型-样品-时间（2026-10-24）
             self.assertIn("原始", batch.name,
                           f"批量文件夹名要带内容标签：{batch.name}")
-            self.assertTrue(batch.name.startswith("LaB6-fake_a等2张-"),
+            self.assertTrue(batch.name.startswith("原始-fake_a等2张-"),
                             f"默认名格式不对：{batch.name}")
             target = batch / data_export.TXT_DIR_NAME / "fake_a.txt"
             self.assertTrue(target.is_file())
@@ -16764,7 +16764,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
                 gui_export._build_export_dialog(w, 1, results)
             self.assertIsNotNone(captured["edit"])
             self.assertEqual(captured["edit"].text(), "")
-            self.assertIn("LaB6-LMFP_1-1D产物-", captured["preview"])
+            self.assertIn("1D产物-LMFP_1-", captured["preview"])
         finally:
             w.close()
 
