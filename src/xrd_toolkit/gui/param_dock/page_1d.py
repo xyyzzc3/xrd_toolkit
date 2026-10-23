@@ -102,7 +102,7 @@ def build_1d_page(window, form_1d, btns_1d):
     form_1d.addRow(show_peaks)
     label_all = QCheckBox("标注全部峰位")
     label_all.setToolTip("默认只标放得下的峰（峰表里仍列全，双击放大后补齐）；"
-                         "勾上后每根都标，密集处允许重叠")
+                         "勾上后每根都标、标签贴峰顶，密集处允许重叠")
     window.params["标注全部峰位"] = label_all
     form_1d.addRow(label_all)
     for name in ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",

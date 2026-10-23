@@ -227,8 +227,20 @@ class TestGuiPeakFinding(unittest.TestCase):
 
             w.params["标注全部峰位"].setChecked(True)
             QApplication.processEvents()
-            self.assertEqual(len(_labels(ax)), len(dock.detected_peaks),
+            labels = _labels(ax)
+            self.assertEqual(len(labels), len(dock.detected_peaks),
                              "「标注全部峰位」打开后每根峰都要有标签")
+            # 全标时标签贴峰顶，不许再拉长引线
+            by_center = {round(p.center, 3): p for p in dock.detected_peaks}
+            for txt in labels:
+                peak = by_center[round(float(txt.get_text()), 3)]
+                i = int(np.clip(np.searchsorted(
+                    dock.last_tth, peak.center), 0, len(dock.last_tth) - 1))
+                apex = ax.transData.transform(
+                    (peak.center, dock.last_intensity[i]))[1]
+                bb = txt.get_window_extent(ax.figure.canvas.get_renderer())
+                self.assertLessEqual(bb.y0 - apex, 16.0,
+                                     "标注全部的标签应当贴着峰顶")
         finally:
             w.close()
 

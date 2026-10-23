@@ -120,9 +120,10 @@ def _plotted_points(ax):
 def _place_labels(ax, items, label_all):
     """在显示坐标里给峰位标签找位置，返回 [(text, peak, y, bbox)]。
 
-    规则（2026-10-24 用户拍板，业内主流做法）：先保证标签之间、标签
-    与峰线/已画曲线不相交；放不下的标签默认不画（峰表里仍然列全），
-    勾「标注全部峰位」时改为"尽量避让、实在放不下就允许重叠"。
+    规则（2026-10-24 用户拍板，业内主流做法）：默认先保证标签之间、
+    标签与峰线/主曲线不相交；放不下的标签不画（峰表里仍然列全）。
+    勾「标注全部峰位」时每根都标、允许重叠，标签贴各自峰顶，不做
+    错层避让（避免长引线）。
     """
     try:
         renderer = ax.figure.canvas.get_renderer()
@@ -147,6 +148,25 @@ def _place_labels(ax, items, label_all):
     step = max(txt.get_window_extent(renderer).height
                for txt, _peak, _yy in texts) + 2.0
     step = max(step, 6.0)
+
+    if label_all:
+        # 「标注全部峰位」= 每根都标、允许重叠；标签就贴在各自峰顶
+        # 上方 6 px，不做错层避让——否则密集处会被抬到很高，出现
+        # 一串长引线（用户 2026-10-24："为什么突然出现长线"）。
+        out = []
+        for txt, peak, yy in texts:
+            d = ax.transData.transform((peak.center, yy))
+            y_data = ax.transData.inverted().transform(
+                (d[0], d[1] + 6.0))[1]
+            txt.set_position((peak.center, y_data))
+            bb = txt.get_window_extent(renderer)
+            if bb.y1 > ax_box.y1:      # 贴顶时往下挪，别出框
+                y_data = ax.transData.inverted().transform(
+                    (d[0], ax_box.y1 - 1.0 - bb.height))[1]
+                txt.set_position((peak.center, y_data))
+                bb = txt.get_window_extent(renderer)
+            out.append((txt, peak, yy, bb))
+        return out
 
     placed = []
     out = []
