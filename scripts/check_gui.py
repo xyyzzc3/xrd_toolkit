@@ -717,10 +717,10 @@ def check_processing_chain(window, lab6: str) -> None:
     outdir = _P(tempfile.mkdtemp(prefix="xrd_probe_export_"))
     with mock.patch.object(gui_export, "_build_export_dialog",
                            return_value={"dir": outdir, "suffix": ".txt",
-                                         "csv": False, "bg": True}):
+                                         "csv": False, "bg": True,
+                                         "name": "gui_probe"}):
         gui_export._run_export(window)
-    stem = _P(lab6).stem if lab6 else ""
-    target = outdir / f"{stem}_处理产物.txt"
+    target = outdir / "gui_probe.txt"
     ok = target.exists()
     report(ok, "导出落盘", str(target.name))
     if ok:
