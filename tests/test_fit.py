@@ -282,6 +282,14 @@ class TestDynamicRefinement(unittest.TestCase):
         self.assertLess(res.rwp, 0.05)
         self.assertAlmostEqual(res.params["md_r"], 0.7, delta=0.01)
 
+    def test_global_b_iso_is_not_parsed_as_an_element(self):
+        # 回归：b_iso 不能按 b_<元素> 解析成元素 "iso"
+        tth, y = _synth(self.st, x=0.0, y=0.0)
+        res = fit_pattern(
+            self.st, tth, y, background=2, weights="uniform",
+            free=("zero", "w", "b_iso"), initial={"b_iso": 0.5})
+        self.assertIn("b_iso", res.params)
+
     def test_rejects_global_and_element_b_together(self):
         tth, y = _synth(self.st)
         with self.assertRaises(ValueError):

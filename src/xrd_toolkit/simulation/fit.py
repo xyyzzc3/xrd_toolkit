@@ -726,7 +726,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         cell_refine = bool(cell_refine)
 
     # ── 分元素 B / 可精修织构（动态强度） ─────────────────────────
-    elem_names = [n[2:] for n in free if n.startswith("b_")]
+    elem_names = [n[2:] for n in free
+                  if n.startswith("b_") and n != "b_iso"]
     md_refine = "md_r" in free
     dynamic = bool(elem_names) or md_refine
     structure_elems = {sp.symbol for site in structure
