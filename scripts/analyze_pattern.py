@@ -42,8 +42,6 @@ OLIVINE_LIB = [
     STRUCT / "LiMnPO4_olivine.cif",
 ]
 AL_CIF = STRUCT / "Al_metal.cif"
-# 电极里常见的 LiF（SEI/电解液残留）：有效 a=4.062 Å
-LIF_CIF = STRUCT / "LiF_rock_salt.cif"
 DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00029.tif",
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
@@ -162,7 +160,7 @@ def al_substrate_ranges(obs_t, obs_h, lam, tmin, tmax, zero, primary_cif,
 
 
 def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
-            exclude, tmin, tmax, use_al=False, hot_mask=True, use_lif=True):
+            exclude, tmin, tmax, use_al=False, hot_mask=True):
     t, y = load_1d(path, geom, tmin, tmax, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
@@ -171,17 +169,15 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
         w_leb[(t > lo) & (t < hi)] = 0.0
     w_struct = w if use_al else w_leb
     extras = []
-    if use_lif and LIF_CIF.exists():
-        extras.append({"structure": load_structure(str(LIF_CIF)),
-                       "label": "LiF", "size_um": 0.1, "mustrain": 0.0,
-                       "b_iso": 0.5})
     if use_al and AL_CIF.exists():
         al = load_structure(str(AL_CIF))
         extras.append({
             "structure": al, "label": "Al",
             "a": 4.061, "b": 4.061, "c": 4.061,
             "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5,
-            "md": ((1, 1, 1), 0.5),      # 轧制铝箔的 (111) 织构
+            # R 由 (200)/(220)/(311) 弱反射定出（0.72）；LiF 与 Al
+            # 同为岩盐且晶胞几乎相同，位置上完全退化，不再另加 LiF。
+            "md": ((1, 1, 1), 0.72),
         })
     ip = {} if inst is None else {
         "zero": inst.params["zero"], "u": inst.params["u"],
@@ -215,8 +211,7 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
     plot_src = lebail
-    phase_txt = " + ".join((["Al (111) textured"] if use_al else [])
-                           + (["LiF"] if use_lif else []))
+    phase_txt = " + ".join(["Al (111) textured"] if use_al else [])
     plot_fit(plot_src, f"{path.name} — auto: {primary_name}"
                        + (f" + {phase_txt}" if phase_txt else "")
                        + " Le Bail fit, "
@@ -237,11 +232,8 @@ def main():
     ap.add_argument("--tmax", type=float, default=8.0)
     ap.add_argument("--no-hot-mask", action="store_true",
                     help="关掉坏点团掩膜（默认开；标样本来就不过掩膜）")
-    ap.add_argument("--no-lif", action="store_true",
-                    help="不加 LiF 杂质相（默认加；scale 自由，没有时归零）")
     a = ap.parse_args()
     hot_mask = not a.no_hot_mask
-    use_lif = not a.no_lif
     geom = dict(get_config(a.config)["geometry"])
     lam = geom["wavelength_m"] * 1e10
     outdir = Path(a.outdir)
@@ -294,11 +286,10 @@ def main():
         struct, lebail, out = fit_one(
             p, primary, top[1].name, cell0, geom, lam, inst, outdir,
             exclude, a.tmin, a.tmax, use_al=use_al, hot_mask=hot_mask,
-            use_lif=use_lif)
+)
         al_txt = (f" Al={struct.params['Al:scale']:.3g}"
                   if "Al:scale" in struct.params else "")
-        al_txt += (f" LiF={struct.params['LiF:scale']:.3g}"
-                   if "LiF:scale" in struct.params else "")
+
         print(f"  结构：Rwp {struct.rwp:.3f}%  a={struct.params['a']:.4f} "
               f"b={struct.params['b']:.4f} c={struct.params['c']:.4f} "
               f"Size={struct.params['size_um']:.3f} µm "
@@ -323,8 +314,7 @@ def main():
                      f"B={struct.params['b_iso']:.4f}"
                      + (f" Al_scale={struct.params['Al:scale']:.6g}"
                         if "Al:scale" in struct.params else "")
-                     + (f" LiF_scale={struct.params['LiF:scale']:.6g}"
-                        if "LiF:scale" in struct.params else "")
+
                      + "\n")
             fh.write(f"Le Bail Rwp={lebail.rwp:.3f}%\n")
 

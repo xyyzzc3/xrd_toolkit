@@ -109,10 +109,6 @@ class TestManualMatchesPymatgen(unittest.TestCase):
         # 实验拟合用的派生 CIF（只换 NIST SRM 660c 室温晶胞）
         self._check("LaB6_NIST660c.cif")
 
-    def test_lif_rock_salt(self):
-        # LMFP 里的 LiF 杂质相（岩盐，有效 a=4.062 Å）
-        self._check("LiF_rock_salt.cif")
-
     def test_al2o3(self):
         self._check("Al2O3_1000032.cif")
 

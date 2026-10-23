@@ -48,9 +48,6 @@ LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 # 样品晶胞初值：由低角峰 (200)/(101)/(111)/(020) 粗估（Å）
 SAMPLE_CELL = (10.376, 6.040, 4.708)
 AL_CIF = ROOT / "data" / "structures" / "Al_metal.cif"
-# 电极里常见的 LiF（SEI/电解液残留）：有效晶胞 a=4.062 Å；它的
-# (200)/(220)/(311) 正好在 3.45/4.88/5.72°，只放 scale。
-LIF_CIF = ROOT / "data" / "structures" / "LiF_rock_salt.cif"
 
 
 def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000, hot_mask=False):
@@ -81,7 +78,7 @@ def instrument_profile(geom, lam):
 
 
 def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
-            use_al=False, phase_label=None, hot_mask=True, use_lif=True):
+            use_al=False, phase_label=None, hot_mask=True):
     t, y = load_1d(path, geom, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
@@ -93,19 +90,17 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
         w_struct = w_leb
 
     extras = []
-    if use_lif:
-        extras.append({
-            "structure": load_structure(str(LIF_CIF)), "label": "LiF",
-            "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5})
     if use_al:
         al = load_structure(str(AL_CIF))
         extras.append({
             "structure": al, "label": "Al",
             "a": 4.061, "b": 4.061, "c": 4.061,
             "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5,
-            # 铝箔是轧制的，(111) 强取向；固定 (111) 织构才能解释
-            # 2.99° 的强峰与很弱的 (200)/(220)/(311)。
-            "md": ((1, 1, 1), 0.5),
+            # 铝箔是轧制的，(111) 强取向；R 由 (200)/(220)/(311)
+            # 弱反射定出（0.72；早期用 0.5 会把这三根压得过低，
+            # 误加了 LiF 相——LiF 与 Al 同为岩盐、晶胞几乎相同，
+            # 2θ 上完全退化）。
+            "md": ((1, 1, 1), 0.72),
         })
     init = {
         "zero": inst.params["zero"],
@@ -138,8 +133,7 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
     plot_src = lebail
-    phases = (["Al (111) textured"] if use_al else []) + \
-             (["LiF"] if use_lif else [])
+    phases = ["Al (111) textured"] if use_al else []
     phase_txt = f" ({' + '.join(phases)})" if phases else ""
     plot_fit(
         plot_src,
@@ -164,8 +158,6 @@ def main():
     ap.add_argument("--tmax", type=float, default=8.0)
     ap.add_argument("--no-hot-mask", action="store_true",
                     help="关掉坏点团掩膜（默认开；标样本来就不过掩膜）")
-    ap.add_argument("--no-lif", action="store_true",
-                    help="不加 LiF 杂质相（默认加；scale 自由，没有时归零）")
     a = ap.parse_args()
     geom = dict(get_config("lmfp1_lab6")["geometry"])
     lam = geom["wavelength_m"] * 1e10
@@ -201,11 +193,9 @@ def main():
         struct, lebail, out = fit_one(
             p, structure, geom, lam, inst, outdir, exclude, SAMPLE_CELL,
             use_al=use_al, phase_label=cif.stem.split("_")[0],
-            hot_mask=not a.no_hot_mask, use_lif=not a.no_lif)
+            hot_mask=not a.no_hot_mask)
         al_scale = (lebail.params.get("Al:scale") if use_al
                     and lebail is not None else struct.params.get("Al:scale"))
-        lif_scale = (lebail.params.get("LiF:scale")
-                     if lebail is not None else None)
         leb_txt = (f"{lebail.rwp:10.3f}" if lebail is not None
                    else f"{chr(8212):>10}")
         print(f"{p.name:>28} {struct.rwp:8.3f} {leb_txt} "
@@ -219,8 +209,6 @@ def main():
               f"ΔB={struct.params['b_iso']:+.2f} Å²"
               + (f"，Al scale（Le Bail）={al_scale:.3g}"
                  if al_scale is not None else "")
-              + (f"，LiF scale（Le Bail）={lif_scale:.3g}"
-                 if lif_scale is not None else "")
               + f"；→ {out}")
 
 
