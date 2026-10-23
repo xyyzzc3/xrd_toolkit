@@ -153,7 +153,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.setAlternatingRowColors(True)
     peak_table.setShowGrid(False)
     peak_table.setMinimumHeight(0)
-    peak_table.setMaximumHeight(160)
+    peak_table.setMaximumHeight(220)
     # 窄坞里不许把参数栏撑宽：表格默认的 sizeHint 会随列头要宽度，
     # 全屏时坞变宽它也跟着铺满（用户 2026-10-24："全屏后峰表还是过宽"）。
     # 卡在卡片/表格 320 px，坞更宽时靠左留白；高度在 fill 时按行数定。

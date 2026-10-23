@@ -300,11 +300,11 @@ def fill_peak_table(window, dock, peaks):
         caption.setText(f"峰表 · {len(peaks)} 根")
     table.setToolTip("双击一行放大到该峰")
     # 默认高度按行数走：2 根就 2 行高，不留一块空表；最多露 6 行，余下滚动
-    rows = min(len(peaks), 6)
+    rows = min(len(peaks), 8)
     head_h = table.horizontalHeader().height()
     if head_h <= 0:
         head_h = 26
-    table.setFixedHeight(min(160, max(58, head_h + rows * 22 + 4)))
+    table.setFixedHeight(min(220, max(58, head_h + rows * 22 + 4)))
     table.setRowCount(len(peaks))
     for row, peak in enumerate(peaks):
         for col, text in enumerate((

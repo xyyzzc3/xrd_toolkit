@@ -100,6 +100,8 @@ class TestGuiPeakFinding(unittest.TestCase):
             ax = panel_state._content(dock).axes_1d
             self.assertTrue(w.peak_box.isHidden())
             self.assertEqual(len(_markers(ax)), 0)
+            self.assertEqual(w.peak_table.maximumHeight(), 220,
+                             "多峰时表格要能再长一点")
 
             w.params["显示峰位"].setChecked(True)
             QApplication.processEvents()
