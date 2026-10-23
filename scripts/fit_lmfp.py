@@ -7,7 +7,7 @@
 流程：
   1. 用 LaB₆ 标样（`data/lab6-00024.tif`）拟合仪器峰形
      zero/U/V/W/X/Y，之后固定给样品；
-  2. 样品 1D 积分 + 自动基线；**排除 2.90–3.08° 的 Al (111) 基片峰**
+  2. 样品 1D 积分（先掩固定坏点团）+ 自动基线；**排除 2.90–3.08° 的 Al (111) 基片峰**
      （LMFP 电极的铝集流体，d≈2.34 Å；不排除会把强度模型带偏）；
   3. 结构拟合：晶胞 a/b/c + Size/应变 + 全局 B + 0.25° 背景修正，
      用来定晶胞；
@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from xrd_toolkit.config import get_config  # noqa: E402
 from xrd_toolkit.services.background import estimate_baseline_sliding  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
+from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, fit_pattern, load_structure, plot_fit)
@@ -49,8 +50,12 @@ SAMPLE_CELL = (10.376, 6.040, 4.708)
 AL_CIF = ROOT / "data" / "structures" / "Al_metal.cif"
 
 
-def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000):
+def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000, hot_mask=False):
     img = load_diffraction_image(str(path))
+    if hot_mask:
+        img, _mask, info = mask_hot_pixels(img)
+        print(f"  坏点掩膜：{info['masked_components']} 团 / "
+              f"{info['masked_pixels']} px（候选 {info['candidates']}）")
     return integrate_1d(img, npt=npt, tth_min_deg=tmin, tth_max_deg=tmax,
                         **geom)
 
@@ -73,8 +78,8 @@ def instrument_profile(geom, lam):
 
 
 def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
-            use_al=False, phase_label=None):
-    t, y = load_1d(path, geom)
+            use_al=False, phase_label=None, hot_mask=True):
+    t, y = load_1d(path, geom, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
     w_leb = w.copy()
@@ -143,6 +148,8 @@ def main():
                     help="不用 Al 第二相，直接把 Al 区从结构拟合里排除")
     ap.add_argument("--tmin", type=float, default=1.0)
     ap.add_argument("--tmax", type=float, default=8.0)
+    ap.add_argument("--no-hot-mask", action="store_true",
+                    help="关掉坏点团掩膜（默认开；标样本来就不过掩膜）")
     a = ap.parse_args()
     geom = dict(get_config("lmfp1_lab6")["geometry"])
     lam = geom["wavelength_m"] * 1e10
@@ -177,7 +184,8 @@ def main():
             continue
         struct, lebail, out = fit_one(
             p, structure, geom, lam, inst, outdir, exclude, SAMPLE_CELL,
-            use_al=use_al, phase_label=cif.stem.split("_")[0])
+            use_al=use_al, phase_label=cif.stem.split("_")[0],
+            hot_mask=not a.no_hot_mask)
         al_scale = struct.params.get("Al:scale")
         leb_txt = (f"{lebail.rwp:10.3f}" if lebail is not None
                    else f"{chr(8212):>10}")

@@ -30,6 +30,7 @@ from scipy.signal import find_peaks  # noqa: E402
 from xrd_toolkit.config import get_config  # noqa: E402
 from xrd_toolkit.services.background import estimate_baseline_sliding  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
+from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, core, fit_pattern, load_structure, plot_fit)
@@ -52,8 +53,12 @@ LAB6_CIF = STRUCT / "LaB6_NIST660c.cif"
 DEFAULT_OOB = Path(tempfile.gettempdir()) / "xrd_toolkit_analysis"
 
 
-def load_1d(path, geom, tmin, tmax, npt=3000):
+def load_1d(path, geom, tmin, tmax, npt=3000, hot_mask=False):
     img = load_diffraction_image(str(path))
+    if hot_mask:
+        img, _mask, info = mask_hot_pixels(img)
+        print(f"  坏点掩膜：{info['masked_components']} 团 / "
+              f"{info['masked_pixels']} px（候选 {info['candidates']}）")
     return integrate_1d(img, npt=npt, tth_min_deg=tmin, tth_max_deg=tmax,
                         **geom)
 
@@ -155,8 +160,8 @@ def al_substrate_ranges(obs_t, obs_h, lam, tmin, tmax, zero, primary_cif,
 
 
 def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
-            exclude, tmin, tmax, use_al=False):
-    t, y = load_1d(path, geom, tmin, tmax)
+            exclude, tmin, tmax, use_al=False, hot_mask=True):
+    t, y = load_1d(path, geom, tmin, tmax, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
     w_leb = w.copy()
@@ -217,7 +222,10 @@ def main():
     ap.add_argument("--outdir", default=str(DEFAULT_OOB))
     ap.add_argument("--tmin", type=float, default=1.0)
     ap.add_argument("--tmax", type=float, default=8.0)
+    ap.add_argument("--no-hot-mask", action="store_true",
+                    help="关掉坏点团掩膜（默认开；标样本来就不过掩膜）")
     a = ap.parse_args()
+    hot_mask = not a.no_hot_mask
     geom = dict(get_config(a.config)["geometry"])
     lam = geom["wavelength_m"] * 1e10
     outdir = Path(a.outdir)
@@ -236,7 +244,7 @@ def main():
         if not p.exists():
             print(f"跳过（不存在）：{p}")
             continue
-        t, y = load_1d(p, geom, a.tmin, a.tmax)
+        t, y = load_1d(p, geom, a.tmin, a.tmax, hot_mask=hot_mask)
         bg = estimate_baseline_sliding(t, y, 0.2)
         obs_t, obs_h = detect_peaks(t, y, bg)
         print(f"\n{p.name}：检出 {len(obs_t)} 根峰")
@@ -269,7 +277,7 @@ def main():
             print("  未识别到 Al 集流体强峰")
         struct, lebail, out = fit_one(
             p, primary, top[1].name, cell0, geom, lam, inst, outdir,
-            exclude, a.tmin, a.tmax, use_al=use_al)
+            exclude, a.tmin, a.tmax, use_al=use_al, hot_mask=hot_mask)
         al_txt = (f" Al={struct.params['Al:scale']:.3g}"
                   if "Al:scale" in struct.params else "")
         print(f"  结构：Rwp {struct.rwp:.3f}%  a={struct.params['a']:.4f} "
