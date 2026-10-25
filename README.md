@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/github/v/release/xyyzzc3/xrd_toolkit?color=blue)](https://github.com/xyyzzc3/xrd_toolkit/releases/latest)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a standard sample (LaB₆ by default; CeO₂, Si and other common standards are built in), and integrates the 2D pattern into standard 1D powder spectra — as five CLI scripts and as a PySide6 desktop app over the same engine.
+A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a standard sample (LaB₆ by default; CeO₂, Si and other common standards are built in), integrates the 2D pattern into standard 1D powder spectra, and analyses them — peak finding, single-peak and full-pattern profile fitting, Le Bail/structural refinement and CIF-based pattern simulation — as a set of CLI scripts and a PySide6 desktop app over the same engine.
 
 中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Quick start for trial users: [docs/使用说明.html](docs/使用说明.html) (in-app: Help → 使用说明, F1) · Long version: [docs/NOTES.md](docs/NOTES.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Citation: [CITATION.cff](CITATION.cff)
 
@@ -132,17 +132,18 @@ Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geomet
 ## Tests
 
 ```bash
-python scripts/run_tests.py     # 860+ tests, behind a watchdog
+python scripts/run_tests.py     # 990+ tests, behind a watchdog
 ```
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
 
 ## Roadmap
 
-- Peak finding & profile fitting on the 1D patterns (background subtraction landed first — net peak heights are only meaningful once the pedestal is gone)
-- Line-profile analysis: Scherrer / Williamson–Hall size–strain
-- A basic Rietveld refinement engine
+Peak finding, profile fitting and full-pattern (Le Bail/structural) fitting
+landed in v0.1.5. The remaining items are:
+
 - Machine learning: clustering for phase identification and CNN peak-shape classification
+- Experimental validation on laboratory-source data and an Si standard
 
 ## Project structure
 
@@ -152,13 +153,13 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 ├── outputs/                       # script outputs + product cache (local, not tracked)
 ├── showcase/                      # curated example figures (this README, the manual, the simulation module)
 ├── packaging/                     # PyInstaller build (icons, spec, constraints)
-├── scripts/                       # the five analysis scripts + self-check tools
+├── scripts/                       # the analysis scripts + self-check tools
 ├── src/xrd_toolkit/
 │   ├── config.py                  # named geometry configs (one per batch; --config selects)
 │   ├── cli.py                     # shared interactive file-selection menu
 │   ├── core/processor.py          # image processing (line profiles, ring-centre localization)
-│   ├── services/                  # data_loader · integrator · background · range_selector · ring_metrics · stage_cache
-│   ├── simulation/                # CIF → theoretical powder pattern (hand-written; pymatgen optional)
+│   ├── services/                  # data_loader · integrator · background · range_selector · ring_metrics · peak_finding · stage_cache
+│   ├── simulation/                # CIF → powder pattern, peak/profile fitting and microstructure (hand-written; pymatgen optional)
 │   └── gui/                       # PySide6 desktop app (python -m xrd_toolkit.gui)
 ├── tests/                         # synthetic-image unit tests + GUI integration tests
 ├── docs/                          # Chinese README, long-form notes

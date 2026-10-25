@@ -1,6 +1,6 @@
 # XRD Toolkit
 
-XRD 衍射图像处理工具箱：读取 `.tif` / `.edf` / `.cbf` 二维衍射数据，用标样做几何校准（默认 LaB₆，内置 CeO₂、Si 等常用标样），把二维衍射图积分成标准 1D（一维）粉末谱——五个命令行脚本，外加一个跑在同一个引擎上的 PySide6 桌面界面。本项目是香港城市大学 *PHY6528 Advanced Research in Applied Physics* 的课题工作。
+XRD 衍射图像处理工具箱：读取 `.tif` / `.edf` / `.cbf` 二维衍射数据，用标样做几何校准（默认 LaB₆，内置 CeO₂、Si 等常用标样），把二维衍射图积分成标准 1D（一维）粉末谱，再做寻峰、单峰/全谱峰形拟合、Le Bail/结构精修与 CIF 理论谱模拟——一组命令行脚本，外加一个跑在同一个引擎上的 PySide6 桌面界面。本项目是香港城市大学 *PHY6528 Advanced Research in Applied Physics* 的课题工作。
 
 English: [README.md](../README.md) · 试用者上手图文：[使用说明.html](使用说明.html)（程序内：帮助 → 使用说明，快捷键 F1）· 详细说明：[NOTES.zh-CN.md](NOTES.zh-CN.md) · 更新记录：[CHANGELOG.md](../CHANGELOG.md) · 引用：[CITATION.cff](../CITATION.cff)
 
@@ -125,17 +125,17 @@ python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
 ## 测试
 
 ```bash
-python scripts/run_tests.py     # 860+ 条，带看门狗
+python scripts/run_tests.py     # 990+ 条，带看门狗
 ```
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
 
 ## 路线图
 
-- 1D 图谱上的寻峰与峰形拟合（背景扣除先落地——扣掉基线之后峰高与峰面积才有意义）
-- 线形分析：Scherrer / Williamson–Hall 尺寸-应变
-- 基本的 Rietveld 精修引擎
+寻峰、峰形拟合与全谱（Le Bail/结构）拟合已在 v0.1.5 落地。剩下的：
+
 - 机器学习：物相识别聚类 + 峰形 CNN 分类
+- 实验室光源数据与 Si 标样的实验验证
 
 ## 项目结构
 
@@ -145,13 +145,13 @@ python scripts/run_tests.py     # 860+ 条，带看门狗
 ├── outputs/                    # 脚本输出 + 产物缓存（本地，不进 git）
 ├── showcase/                   # 精选示例图（README / 说明书 / 模拟模块用，进 git）
 ├── packaging/                  # PyInstaller 打包（图标、spec、版本钉）
-├── scripts/                    # 五个分析脚本 + 自检/探针工具
+├── scripts/                    # 分析脚本 + 自检/探针工具
 ├── src/xrd_toolkit/
 │   ├── config.py               # 几何配置注册表（每批实验一个条目，--config 选择）
 │   ├── cli.py                  # 命令行共用交互选文件菜单
 │   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
-│   ├── services/               # data_loader · integrator · background · range_selector · ring_metrics · stage_cache
-│   ├── simulation/             # CIF → 理论粉末谱（手写版；pymatgen 可选）
+│   ├── services/               # data_loader · integrator · background · range_selector · ring_metrics · peak_finding · stage_cache
+│   ├── simulation/             # CIF → 理论粉末谱、寻峰/峰形拟合与微结构分析（手写版；pymatgen 可选）
 │   └── gui/                    # PySide6 桌面界面（python -m xrd_toolkit.gui）
 ├── tests/                      # 合成图像单元测试 + 界面集成测试
 ├── docs/                       # 英文 README、详细说明
