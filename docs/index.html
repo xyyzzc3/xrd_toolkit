@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XRD Toolkit — 二维 XRD 数据处理工具箱</title>
 <meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement.">
+<meta name="theme-color" content="#1d5496">
+<link rel="canonical" href="https://xyyzzc3.github.io/xrd_toolkit/">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="XRD Toolkit">
+<meta property="og:title" content="XRD Toolkit — 二维 XRD 数据处理工具箱">
+<meta property="og:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合与全谱精修。支持 Windows / macOS 下载。">
+<meta property="og:url" content="https://xyyzzc3.github.io/xrd_toolkit/">
+<meta property="og:image" content="https://xyyzzc3.github.io/xrd_toolkit/assets/og-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="XRD Toolkit 桌面界面与 LaB6 全谱拟合">
+<meta property="og:locale" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="XRD Toolkit — 二维 XRD 数据处理工具箱">
+<meta name="twitter:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合与全谱精修。">
+<meta name="twitter:image" content="https://xyyzzc3.github.io/xrd_toolkit/assets/og-preview.png">
 <style>
   :root {
     --bg: #ffffff;
@@ -118,7 +138,7 @@
 <div class="wrap">
 
   <header>
-    <div class="eyebrow"><span class="dot"></span> v0.1.5 · MIT · Python 3.9+</div>
+    <div class="eyebrow"><span class="dot"></span> Open source · MIT · Python 3.9+</div>
     <h1>XRD Toolkit</h1>
     <p class="lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
     <p class="lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement. Available as CLI scripts and a PySide6 desktop app.</p>
@@ -130,7 +150,7 @@
   </header>
 
   <figure class="shot">
-    <img src="https://raw.githubusercontent.com/xyyzzc3/xrd_toolkit/main/showcase/gui/gui_main.png"
+    <img src="assets/gui_main.webp" width="1600" height="1000" decoding="async"
          alt="XRD Toolkit 桌面界面：左侧文件栏，中间一维图谱，右侧参数面板">
     <figcaption>桌面界面（同一份真数据）：文件栏 → 1D 图谱 → 参数面板；命令行脚本共用同一套引擎。</figcaption>
   </figure>
@@ -183,7 +203,7 @@
         <span>XRD-Toolkit-macos-intel.zip</span>
       </a>
     </div>
-    <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。</p>
+    <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。如果无法访问 GitHub，请直接联系把本页发给你的人获取安装包。</p>
   </section>
 
   <section>
@@ -205,6 +225,10 @@
         <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CHANGELOG.md">更新记录</a></h3>
         <p>每个版本的改动与已知问题。</p>
       </div>
+      <div class="card">
+        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/issues">问题反馈</a></h3>
+        <p>遇到 bug 或有功能建议，欢迎开 issue。</p>
+      </div>
     </div>
   </section>
 
@@ -212,11 +236,12 @@
     <div class="links">
       <a href="https://github.com/xyyzzc3/xrd_toolkit">GitHub</a>
       <a href="https://github.com/xyyzzc3/xrd_toolkit/releases">Releases</a>
+      <a href="https://github.com/xyyzzc3/xrd_toolkit/issues">问题反馈</a>
       <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CITATION.cff">Citation</a>
       <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/LICENSE">MIT License</a>
       <a href="使用说明.html">使用说明</a>
     </div>
-    <div>Chenze Bian · City University of Hong Kong · XRD Toolkit v0.1.5</div>
+    <div>Chenze Bian · City University of Hong Kong · MIT License</div>
   </footer>
 
 </div>
