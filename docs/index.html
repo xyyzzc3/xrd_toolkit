@@ -7,9 +7,10 @@
 <meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement.">
 <meta name="theme-color" content="#1d5496">
 <link rel="canonical" href="https://xyyzzc3.github.io/xrd_toolkit/">
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="XRD Toolkit">
@@ -66,6 +67,13 @@
   .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
 
   header { padding: 72px 0 36px; }
+  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+  .brand-icon { width: 68px; height: 68px; border-radius: 16px; box-shadow: var(--shadow); flex: 0 0 auto; }
+  .brand h1 { margin-bottom: 0; }
+  @media (max-width: 520px) {
+    .brand { gap: 12px; }
+    .brand-icon { width: 54px; height: 54px; border-radius: 13px; }
+  }
   .eyebrow {
     display: inline-flex; align-items: center; gap: 8px;
     font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
@@ -138,8 +146,13 @@
 <div class="wrap">
 
   <header>
-    <div class="eyebrow"><span class="dot"></span> Open source · MIT · Python 3.9+</div>
-    <h1>XRD Toolkit</h1>
+    <div class="brand">
+      <img class="brand-icon" src="assets/icon-128.png" width="128" height="128" alt="XRD Toolkit 图标">
+      <div>
+        <div class="eyebrow"><span class="dot"></span> Open source · MIT · Python 3.9+</div>
+        <h1>XRD Toolkit</h1>
+      </div>
+    </div>
     <p class="lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
     <p class="lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement. Available as CLI scripts and a PySide6 desktop app.</p>
     <div class="actions">
