@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XRD Toolkit — 二维 XRD 数据处理工具箱</title>
+<meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement.">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #17202a;
+    --muted: #5b6570;
+    --line: #e3e7eb;
+    --card: #f7f9fb;
+    --accent: #1d5496;
+    --accent-strong: #16416f;
+    --accent-soft: #e8f0fa;
+    --shadow: 0 10px 30px rgba(20, 40, 70, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1419;
+      --fg: #e8edf2;
+      --muted: #9aa7b4;
+      --line: #26313c;
+      --card: #161d25;
+      --accent: #7fb0e8;
+      --accent-strong: #a9cbf2;
+      --accent-soft: #1b2a3a;
+      --shadow: 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+  header { padding: 72px 0 36px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 14px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #22a06b; }
+  h1 {
+    margin: 0 0 10px; font-size: clamp(36px, 6vw, 60px);
+    line-height: 1.08; letter-spacing: -.02em;
+  }
+  .lead { margin: 0 0 8px; font-size: clamp(18px, 2.4vw, 23px); color: var(--fg); max-width: 820px; }
+  .lead-en { margin: 0; font-size: 16px; color: var(--muted); max-width: 820px; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 18px; border-radius: 10px; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--line); color: var(--fg); background: var(--bg);
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--shadow); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-strong); }
+  @media (prefers-color-scheme: dark) {
+    .btn.primary { color: #0f1419; }
+  }
+
+  .shot {
+    margin: 44px 0 0; border: 1px solid var(--line); border-radius: 14px;
+    overflow: hidden; box-shadow: var(--shadow); background: var(--card);
+  }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot figcaption { padding: 10px 14px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+
+  section { padding: 48px 0 8px; }
+  h2 { margin: 0 0 8px; font-size: 26px; letter-spacing: -.01em; }
+  .sub { margin: 0 0 24px; color: var(--muted); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; font-size: 14px; color: var(--muted); }
+
+  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .dl {
+    display: block; padding: 16px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--bg); color: var(--fg);
+  }
+  .dl:hover { text-decoration: none; border-color: var(--accent); box-shadow: var(--shadow); }
+  .dl strong { display: block; font-size: 15px; }
+  .dl span { color: var(--muted); font-size: 13px; }
+
+  .note {
+    margin: 18px 0 0; padding: 14px 16px; border-radius: 10px;
+    background: var(--accent-soft); border: 1px solid var(--line);
+    font-size: 14px; color: var(--muted);
+  }
+
+  footer {
+    margin-top: 56px; padding: 24px 0 40px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 13px;
+  }
+  footer .links { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow"><span class="dot"></span> v0.1.5 · MIT · Python 3.9+</div>
+    <h1>XRD Toolkit</h1>
+    <p class="lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
+    <p class="lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement. Available as CLI scripts and a PySide6 desktop app.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest">下载试用版</a>
+      <a class="btn" href="使用说明.html">使用说明（中文图文）</a>
+      <a class="btn" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub 仓库</a>
+    </div>
+  </header>
+
+  <figure class="shot">
+    <img src="https://raw.githubusercontent.com/xyyzzc3/xrd_toolkit/main/showcase/gui/gui_main.png"
+         alt="XRD Toolkit 桌面界面：左侧文件栏，中间一维图谱，右侧参数面板">
+    <figcaption>桌面界面（同一份真数据）：文件栏 → 1D 图谱 → 参数面板；命令行脚本共用同一套引擎。</figcaption>
+  </figure>
+
+  <section>
+    <h2>能做什么</h2>
+    <p class="sub">从原始图像到可发表的图谱和拟合结果。</p>
+    <div class="grid">
+      <div class="card">
+        <h3>校准与 2D → 1D 积分</h3>
+        <p>用 LaB₆、CeO₂、Si 等标样做 pyFAI 几何精修，0°–360° 完整方位角积分，输出标准两列粉末谱。</p>
+      </div>
+      <div class="card">
+        <h3>背景、平滑与裁剪</h3>
+        <p>空扫相减、自动基线、手动锚点；滑动平均 / Savitzky–Golay 平滑与区间裁剪，负值默认保留。</p>
+      </div>
+      <div class="card">
+        <h3>批量对比与热图</h3>
+        <p>整文件夹积分，产物按阶段缓存；对比曲线、堆叠视图与 2θ × 样品热图，两下点击出图。</p>
+      </div>
+      <div class="card">
+        <h3>寻峰与单峰拟合</h3>
+        <p>稳健噪声估计自动寻峰；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 拟合，附 Scherrer 与 Williamson–Hall 分析。</p>
+      </div>
+      <div class="card">
+        <h3>全谱拟合</h3>
+        <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜。</p>
+      </div>
+      <div class="card">
+        <h3>CIF 理论谱模拟</h3>
+        <p>布拉格定律 + 结构因子手写实现，带 (hkl) 标注；与 pymatgen 参考计算逐峰对拍。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>下载</h2>
+    <p class="sub">不用装 Python，解压后双击即可。链接始终指向最新版本。</p>
+    <div class="downloads">
+      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-windows.zip">
+        <strong>Windows 10 / 11</strong>
+        <span>XRD-Toolkit-windows.zip</span>
+      </a>
+      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-apple-silicon.zip">
+        <strong>Mac（Apple Silicon）</strong>
+        <span>M1 / M2 / M3 / M4</span>
+      </a>
+      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-intel.zip">
+        <strong>Mac（Intel）</strong>
+        <span>XRD-Toolkit-macos-intel.zip</span>
+      </a>
+    </div>
+    <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。</p>
+  </section>
+
+  <section>
+    <h2>文档</h2>
+    <div class="grid">
+      <div class="card">
+        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit#readme">English README</a></h3>
+        <p>Features, install from source, CLI examples and project structure.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/README.zh-CN.md">中文说明</a></h3>
+        <p>与英文 README 对应的中文版，适合快速了解功能与安装步骤。</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/NOTES.zh-CN.md">详细笔记</a></h3>
+        <p>命令行参数、校准判定、背景算法与界面工程记录。</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CHANGELOG.md">更新记录</a></h3>
+        <p>每个版本的改动与已知问题。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="links">
+      <a href="https://github.com/xyyzzc3/xrd_toolkit">GitHub</a>
+      <a href="https://github.com/xyyzzc3/xrd_toolkit/releases">Releases</a>
+      <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CITATION.cff">Citation</a>
+      <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/LICENSE">MIT License</a>
+      <a href="使用说明.html">使用说明</a>
+    </div>
+    <div>Chenze Bian · City University of Hong Kong · XRD Toolkit v0.1.5</div>
+  </footer>
+
+</div>
+</body>
+</html>
