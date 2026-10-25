@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XRD Toolkit — 二维 XRD 数据处理工具箱</title>
 <meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement.">
-<meta name="theme-color" content="#1d5496">
+<meta name="theme-color" content="#0e1b37">
 <link rel="canonical" href="https://xyyzzc3.github.io/xrd_toolkit/">
 <link rel="icon" href="assets/icon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="assets/icon-192.png" sizes="192x192" type="image/png">
@@ -26,33 +26,39 @@
 <meta name="twitter:title" content="XRD Toolkit — 二维 XRD 数据处理工具箱">
 <meta name="twitter:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合与全谱精修。">
 <meta name="twitter:image" content="https://xyyzzc3.github.io/xrd_toolkit/assets/og-preview.png">
+
 <style>
   :root {
-    --bg: #ffffff;
+    --navy: #0e1b37;
+    --navy-2: #12244a;
+    --blue: #1d5496;
+    --blue-bright: #4f8fd8;
+    --purple: #7c3aed;
+    --bg: #f7f9fc;
+    --surface: #ffffff;
     --fg: #17202a;
     --muted: #5b6570;
     --line: #e3e7eb;
-    --card: #f7f9fb;
-    --accent: #1d5496;
-    --accent-strong: #16416f;
-    --accent-soft: #e8f0fa;
-    --shadow: 0 10px 30px rgba(20, 40, 70, .08);
+    --soft: #e8f0fa;
+    --link: #1d5496;
+    --shadow: 0 24px 60px rgba(14, 27, 55, .14);
+    --radius: 16px;
+    --max: 1120px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f1419;
+      --bg: #0b1118;
+      --surface: #121a24;
       --fg: #e8edf2;
       --muted: #9aa7b4;
       --line: #26313c;
-      --card: #161d25;
-      --accent: #7fb0e8;
-      --accent-strong: #a9cbf2;
-      --accent-soft: #1b2a3a;
-      --shadow: 0 10px 30px rgba(0, 0, 0, .35);
+      --soft: #1a2a3d;
+      --link: #7fb0e8;
+      --shadow: 0 24px 60px rgba(0, 0, 0, .45);
     }
   }
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  html { scroll-behavior: smooth; color-scheme: light dark; }
   body {
     margin: 0;
     background: var(--bg);
@@ -62,201 +68,373 @@
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--accent); text-decoration: none; }
+  a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
-
-  header { padding: 72px 0 36px; }
-  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
-  .brand-icon { width: 68px; height: 68px; border-radius: 16px; box-shadow: var(--shadow); flex: 0 0 auto; }
-  .brand h1 { margin-bottom: 0; }
-  @media (max-width: 520px) {
-    .brand { gap: 12px; }
-    .brand-icon { width: 54px; height: 54px; border-radius: 13px; }
+  img { max-width: 100%; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+  .skip {
+    position: absolute; left: -9999px; top: 0; z-index: 200;
+    background: #fff; color: #0e1b37; padding: 10px 14px; border-radius: 8px;
   }
-  .eyebrow {
+  .skip:focus { left: 16px; top: 12px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--blue-bright); outline-offset: 3px; }
+
+  /* nav */
+  .nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(14, 27, 55, .92);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 20px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: #fff; font-weight: 700; font-size: 16px; }
+  .brand:hover { text-decoration: none; }
+  .brand img { width: 30px; height: 30px; border-radius: 8px; }
+  .nav-links { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+  .nav-links a { color: #c6d4e6; font-size: 14px; }
+  .nav-links a:hover { color: #fff; text-decoration: none; }
+  .nav-cta { padding: 8px 14px; border: 1px solid rgba(255, 255, 255, .28); border-radius: 9px; color: #fff; }
+  .nav-cta:hover { background: rgba(255, 255, 255, .08); }
+  @media (max-width: 760px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+  }
+
+  /* hero */
+  .hero {
+    position: relative; overflow: hidden; color: #f2f6fb;
+    background:
+      radial-gradient(900px 520px at 82% 8%, rgba(124, 58, 237, .30), transparent 62%),
+      radial-gradient(900px 620px at 6% 92%, rgba(29, 84, 150, .55), transparent 66%),
+      var(--navy);
+  }
+  .hero-rings {
+    position: absolute; right: -180px; top: -220px; width: 860px; height: 860px;
+    opacity: .15; pointer-events: none;
+  }
+  .hero-inner {
+    position: relative; z-index: 1;
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
+    padding: 76px 0 88px;
+  }
+  .hero-badge {
     display: inline-flex; align-items: center; gap: 8px;
-    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
-    color: var(--muted); margin-bottom: 14px;
+    padding: 6px 12px; border: 1px solid rgba(255, 255, 255, .18); border-radius: 999px;
+    background: rgba(255, 255, 255, .06);
+    font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: #c9d6e6;
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #22a06b; }
   h1 {
-    margin: 0 0 10px; font-size: clamp(36px, 6vw, 60px);
-    line-height: 1.08; letter-spacing: -.02em;
+    margin: 18px 0 0; font-size: clamp(46px, 6vw, 76px);
+    line-height: 1.02; letter-spacing: -.035em; color: #fff;
   }
-  .lead { margin: 0 0 8px; font-size: clamp(18px, 2.4vw, 23px); color: var(--fg); max-width: 820px; }
-  .lead-en { margin: 0; font-size: 16px; color: var(--muted); max-width: 820px; }
-
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 0; }
+  .hero-lead { margin: 20px 0 0; font-size: clamp(18px, 2.1vw, 22px); color: #e6edf7; max-width: 560px; }
+  .hero-lead-en { margin: 10px 0 0; font-size: 15px; color: #9fb0c6; max-width: 560px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
   .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 20px; border-radius: 11px; font-weight: 650; font-size: 15px;
+    border: 1px solid transparent;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn.primary { background: #fff; color: var(--navy); border-color: #fff; }
+  .btn.primary:hover { background: #eaf1fa; box-shadow: 0 10px 24px rgba(0, 0, 0, .25); }
+  .btn.ghost { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .3); }
+  .btn.ghost:hover { background: rgba(255, 255, 255, .08); }
+  .trust { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; color: #9fb0c6; font-size: 13px; }
+  .trust span + span::before { content: "·"; margin-right: 10px; color: #5f7390; }
+  .hero-shot { position: relative; }
+  .shot-card {
+    position: relative; border-radius: 18px; overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, .16);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .45);
+    background: #0b1424;
+  }
+  .shot-card img { display: block; width: 100%; height: auto; }
+  .shot-badge {
+    position: absolute; left: 22px; bottom: -18px;
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 11px 18px; border-radius: 10px; font-weight: 600; font-size: 15px;
-    border: 1px solid var(--line); color: var(--fg); background: var(--bg);
-    transition: transform .12s ease, box-shadow .12s ease;
+    padding: 10px 14px; border-radius: 12px;
+    background: #fff; color: #17202a; font-size: 13px;
+    box-shadow: 0 14px 30px rgba(0, 0, 0, .28);
   }
-  .btn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--shadow); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .btn.primary:hover { background: var(--accent-strong); }
-  @media (prefers-color-scheme: dark) {
-    .btn.primary { color: #0f1419; }
+  .shot-badge b { color: var(--blue); }
+  @media (max-width: 940px) {
+    .hero-inner { grid-template-columns: 1fr; gap: 40px; padding: 52px 0 64px; }
+    .hero-lead, .hero-lead-en { max-width: none; }
   }
 
-  .shot {
-    margin: 44px 0 0; border: 1px solid var(--line); border-radius: 14px;
-    overflow: hidden; box-shadow: var(--shadow); background: var(--card);
+  /* sections */
+  .section { padding: 88px 0; }
+  .section.white { background: var(--surface); }
+  .section-head { max-width: 720px; margin-bottom: 36px; }
+  .kicker { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--link); font-weight: 700; }
+  h2 { margin: 8px 0 8px; font-size: clamp(28px, 3.4vw, 38px); letter-spacing: -.02em; line-height: 1.15; }
+  .section-head p { margin: 0; color: var(--muted); font-size: 16px; }
+  [id] { scroll-margin-top: 84px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .feature {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; transition: transform .15s ease, box-shadow .15s ease;
   }
-  .shot img { display: block; width: 100%; height: auto; }
-  .shot figcaption { padding: 10px 14px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
-
-  section { padding: 48px 0 8px; }
-  h2 { margin: 0 0 8px; font-size: 26px; letter-spacing: -.01em; }
-  .sub { margin: 0 0 24px; color: var(--muted); }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 18px 18px 16px;
+  .feature:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .feature .ico {
+    width: 42px; height: 42px; border-radius: 11px; background: var(--soft); color: var(--link);
+    display: flex; align-items: center; justify-content: center; margin-bottom: 14px;
   }
-  .card h3 { margin: 0 0 6px; font-size: 16px; }
-  .card p { margin: 0; font-size: 14px; color: var(--muted); }
+  .feature h3 { margin: 0 0 6px; font-size: 17px; }
+  .feature p { margin: 0; color: var(--muted); font-size: 14px; }
 
-  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  figure.shot {
+    margin: 0; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  figure.shot .img { overflow: hidden; }
+  figure.shot img { display: block; width: 100%; height: auto; transition: transform .3s ease; }
+  figure.shot:hover img { transform: scale(1.02); }
+  figure.shot figcaption { padding: 14px 16px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+  figure.shot figcaption b { color: var(--fg); display: block; font-size: 14px; margin-bottom: 2px; }
+  @media (max-width: 760px) { .gallery { grid-template-columns: 1fr; } }
+
+  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
   .dl {
-    display: block; padding: 16px; border: 1px solid var(--line); border-radius: 12px;
-    background: var(--bg); color: var(--fg);
+    display: flex; align-items: center; gap: 14px; padding: 18px;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+    color: var(--fg); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   }
-  .dl:hover { text-decoration: none; border-color: var(--accent); box-shadow: var(--shadow); }
-  .dl strong { display: block; font-size: 15px; }
-  .dl span { color: var(--muted); font-size: 13px; }
-
+  .dl:hover { text-decoration: none; border-color: var(--blue-bright); box-shadow: var(--shadow); transform: translateY(-2px); }
+  .dl .ico { color: var(--link); flex: 0 0 auto; }
+  .dl strong { display: block; font-size: 15px; color: var(--fg); }
+  .dl span { display: block; color: var(--muted); font-size: 13px; }
   .note {
     margin: 18px 0 0; padding: 14px 16px; border-radius: 10px;
-    background: var(--accent-soft); border: 1px solid var(--line);
+    background: var(--soft); border: 1px solid var(--line);
     font-size: 14px; color: var(--muted);
   }
 
-  footer {
-    margin-top: 56px; padding: 24px 0 40px; border-top: 1px solid var(--line);
-    color: var(--muted); font-size: 13px;
+  .docs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .doc { padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .doc:hover { border-color: var(--blue-bright); }
+  .doc h3 { margin: 0 0 4px; font-size: 15px; }
+  .doc p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  footer { background: var(--navy); color: #c6d4e6; padding: 48px 0 34px; }
+  .footer-grid { display: flex; flex-wrap: wrap; gap: 30px; justify-content: space-between; align-items: flex-start; }
+  .footer-brand { display: flex; align-items: center; gap: 10px; color: #fff; font-weight: 700; }
+  .footer-brand img { width: 28px; height: 28px; border-radius: 7px; }
+  .footer-brand span { display: block; font-weight: 400; font-size: 13px; color: #8fa2ba; margin-top: 2px; }
+  .footer-links { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; }
+  .footer-links a { color: #c6d4e6; }
+  .footer-links a:hover { color: #fff; }
+  .footer-note {
+    margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, .1);
+    font-size: 12px; color: #8fa2ba; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between;
   }
-  footer .links { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <header>
-    <div class="brand">
-      <img class="brand-icon" src="assets/icon-128.png" width="128" height="128" alt="XRD Toolkit 图标">
-      <div>
-        <div class="eyebrow"><span class="dot"></span> Open source · MIT · Python 3.9+</div>
-        <h1>XRD Toolkit</h1>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<nav class="nav" aria-label="主导航">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img src="assets/icon-128.png" alt="" width="30" height="30">
+      <span>XRD Toolkit</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#gallery">展示</a>
+      <a href="#download">下载</a>
+      <a href="#docs">文档</a>
+      <a class="nav-cta" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <svg class="hero-rings" viewBox="0 0 800 800" aria-hidden="true">
+    <g fill="none" stroke="#9fc2ff" stroke-width="1.2">
+      <circle cx="400" cy="400" r="130"/>
+      <circle cx="400" cy="400" r="210"/>
+      <circle cx="400" cy="400" r="290"/>
+      <circle cx="400" cy="400" r="370"/>
+    </g>
+  </svg>
+  <div class="wrap hero-inner">
+    <div>
+      <div class="hero-badge"><span class="dot"></span> Open source · MIT · Python 3.9+</div>
+      <h1>XRD Toolkit</h1>
+      <p class="hero-lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
+      <p class="hero-lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, integration, peak finding, profile fitting and full-pattern refinement.</p>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest">下载试用版</a>
+        <a class="btn ghost" href="使用说明.html">使用说明</a>
+        <a class="btn ghost" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub 仓库</a>
+      </div>
+      <div class="trust">
+        <span>993 tests</span>
+        <span>CI green</span>
+        <span>Windows / macOS</span>
+        <span>MIT</span>
       </div>
     </div>
-    <p class="lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
-    <p class="lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement. Available as CLI scripts and a PySide6 desktop app.</p>
-    <div class="actions">
-      <a class="btn primary" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest">下载试用版</a>
-      <a class="btn" href="使用说明.html">使用说明（中文图文）</a>
-      <a class="btn" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub 仓库</a>
+    <div class="hero-shot">
+      <div class="shot-card">
+        <img src="assets/gui_main.webp" width="1600" height="1000" decoding="async"
+             alt="XRD Toolkit 桌面界面：左侧文件栏，中间一维图谱，右侧参数面板">
+      </div>
+      <div class="shot-badge"><b>LaB₆</b> full-pattern fit · Rwp 4.24%</div>
     </div>
-  </header>
+  </div>
+</header>
 
-  <figure class="shot">
-    <img src="assets/gui_main.webp" width="1600" height="1000" decoding="async"
-         alt="XRD Toolkit 桌面界面：左侧文件栏，中间一维图谱，右侧参数面板">
-    <figcaption>桌面界面（同一份真数据）：文件栏 → 1D 图谱 → 参数面板；命令行脚本共用同一套引擎。</figcaption>
-  </figure>
+<main id="main">
 
-  <section>
-    <h2>能做什么</h2>
-    <p class="sub">从原始图像到可发表的图谱和拟合结果。</p>
-    <div class="grid">
-      <div class="card">
-        <h3>校准与 2D → 1D 积分</h3>
-        <p>用 LaB₆、CeO₂、Si 等标样做 pyFAI 几何精修，0°–360° 完整方位角积分，输出标准两列粉末谱。</p>
+  <section class="section white" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Capabilities</div>
+        <h2>从原始图像到精修结果</h2>
+        <p>一条链路覆盖校准、积分、分析、批量与模拟；命令行和桌面界面共用同一套引擎。</p>
       </div>
-      <div class="card">
-        <h3>背景、平滑与裁剪</h3>
-        <p>空扫相减、自动基线、手动锚点；滑动平均 / Savitzky–Golay 平滑与区间裁剪，负值默认保留。</p>
-      </div>
-      <div class="card">
-        <h3>批量对比与热图</h3>
-        <p>整文件夹积分，产物按阶段缓存；对比曲线、堆叠视图与 2θ × 样品热图，两下点击出图。</p>
-      </div>
-      <div class="card">
-        <h3>寻峰与单峰拟合</h3>
-        <p>稳健噪声估计自动寻峰；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 拟合，附 Scherrer 与 Williamson–Hall 分析。</p>
-      </div>
-      <div class="card">
-        <h3>全谱拟合</h3>
-        <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜。</p>
-      </div>
-      <div class="card">
-        <h3>CIF 理论谱模拟</h3>
-        <p>布拉格定律 + 结构因子手写实现，带 (hkl) 标注；与 pymatgen 参考计算逐峰对拍。</p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>下载</h2>
-    <p class="sub">不用装 Python，解压后双击即可。链接始终指向最新版本。</p>
-    <div class="downloads">
-      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-windows.zip">
-        <strong>Windows 10 / 11</strong>
-        <span>XRD-Toolkit-windows.zip</span>
-      </a>
-      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-apple-silicon.zip">
-        <strong>Mac（Apple Silicon）</strong>
-        <span>M1 / M2 / M3 / M4</span>
-      </a>
-      <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-intel.zip">
-        <strong>Mac（Intel）</strong>
-        <span>XRD-Toolkit-macos-intel.zip</span>
-      </a>
-    </div>
-    <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。如果无法访问 GitHub，请直接联系把本页发给你的人获取安装包。</p>
-  </section>
-
-  <section>
-    <h2>文档</h2>
-    <div class="grid">
-      <div class="card">
-        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit#readme">English README</a></h3>
-        <p>Features, install from source, CLI examples and project structure.</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/README.zh-CN.md">中文说明</a></h3>
-        <p>与英文 README 对应的中文版，适合快速了解功能与安装步骤。</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/NOTES.zh-CN.md">详细笔记</a></h3>
-        <p>命令行参数、校准判定、背景算法与界面工程记录。</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CHANGELOG.md">更新记录</a></h3>
-        <p>每个版本的改动与已知问题。</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://github.com/xyyzzc3/xrd_toolkit/issues">问题反馈</a></h3>
-        <p>遇到 bug 或有功能建议，欢迎开 issue。</p>
+      <div class="grid">
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></div>
+          <h3>校准与 2D → 1D 积分</h3>
+          <p>LaB₆、CeO₂、Si 等标样做 pyFAI 几何精修，0°–360° 完整方位角积分，输出标准两列粉末谱。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 15c3 0 3-6 6-6s3 6 6 6 3-6 6-6"/><path d="M3 20h18" opacity=".45"/></svg></div>
+          <h3>背景、平滑与裁剪</h3>
+          <p>空扫相减、自动基线、手动锚点；滑动平均 / Savitzky–Golay 平滑与区间裁剪，负值默认保留。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+          <h3>批量对比与热图</h3>
+          <p>整文件夹积分，产物按阶段缓存；对比曲线、堆叠视图与 2θ × 样品热图，两下点击出图。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18l5-7 4 4 4-9 5 12"/></svg></div>
+          <h3>寻峰与单峰拟合</h3>
+          <p>稳健噪声估计自动寻峰；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 拟合，附 Scherrer 与 Williamson–Hall 分析。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18c3 0 4-10 7-10s3 7 5 7 3-4 6-4"/><path d="M3 21h18" opacity=".45"/></svg></div>
+          <h3>全谱拟合</h3>
+          <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></div>
+          <h3>CIF 理论谱模拟</h3>
+          <p>布拉格定律 + 结构因子手写实现，带 (hkl) 标注；与 pymatgen 参考计算逐峰对拍。</p>
+        </div>
       </div>
     </div>
   </section>
 
-  <footer>
-    <div class="links">
-      <a href="https://github.com/xyyzzc3/xrd_toolkit">GitHub</a>
-      <a href="https://github.com/xyyzzc3/xrd_toolkit/releases">Releases</a>
-      <a href="https://github.com/xyyzzc3/xrd_toolkit/issues">问题反馈</a>
-      <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CITATION.cff">Citation</a>
-      <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/LICENSE">MIT License</a>
-      <a href="使用说明.html">使用说明</a>
+  <section class="section" id="gallery">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Showcase</div>
+        <h2>实际跑出来的样子</h2>
+        <p>真数据截图，不是示意图：校准、背景、批量对比与全谱拟合。</p>
+      </div>
+      <div class="gallery">
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_calib.webp" width="1200" height="800" loading="lazy" decoding="async" alt="校准工作台：当前几何与对比位 A / B"></div>
+          <figcaption><b>校准工作台</b>当前几何与对比位 A / B 并排，带引擎指标与结论行。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_background.webp" width="1200" height="750" loading="lazy" decoding="async" alt="真 LMFP 图谱上的背景扣除"></div>
+          <figcaption><b>背景扣除</b>真 LMFP 图谱上的自动基线与扣完的曲线，原始、基线、结果同框。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_compare_heat.webp" width="1200" height="750" loading="lazy" decoding="async" alt="批量对比与 2θ × 样品热图"></div>
+          <figcaption><b>批量对比与热图</b>同一批 8 个文件的堆叠对比，以及 2θ × 样品热图。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_fit.webp" width="1200" height="793" loading="lazy" decoding="async" alt="LaB6 全谱拟合"></div>
+          <figcaption><b>LaB₆ 全谱拟合</b>Le Bail 强度拟合，Rwp 4.24%，带差值曲线与布拉格峰位刻度。</figcaption>
+        </figure>
+      </div>
     </div>
-    <div>Chenze Bian · City University of Hong Kong · MIT License</div>
-  </footer>
+  </section>
 
-</div>
+  <section class="section white" id="download">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Download</div>
+        <h2>下载即用</h2>
+        <p>不用装 Python，解压后双击。链接始终指向最新版本。</p>
+      </div>
+      <div class="downloads">
+        <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-windows.zip">
+          <span class="ico"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M3 4.5l8-1.2v7.4H3V4.5zm9-1.4l9-1.3v8.9h-9V3.1zM3 12h8v8.7l-8-1.2V12zm9 0h9v9.2l-9-1.3V12z"/></svg></span>
+          <span><strong>Windows 10 / 11</strong><span>XRD-Toolkit-windows.zip</span></span>
+        </a>
+        <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-apple-silicon.zip">
+          <span class="ico"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M16.7 12.9c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.6.9-.7 0-1.9-.9-3.1-.9-1.6 0-3.1.9-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.5.8 1.2 1.8 2.5 3.1 2.4 1.2-.1 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.5-1-2.5-3.5zM14.4 5.7c.7-.8 1.1-1.9 1-3-1 .1-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.5z"/></svg></span>
+          <span><strong>Mac（Apple Silicon）</strong><span>M1 / M2 / M3 / M4</span></span>
+        </a>
+        <a class="dl" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest/download/XRD-Toolkit-macos-intel.zip">
+          <span class="ico"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span>
+          <span><strong>Mac（Intel）</strong><span>XRD-Toolkit-macos-intel.zip</span></span>
+        </a>
+      </div>
+      <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。如果无法访问 GitHub，请直接联系把本页发给你的人获取安装包。</p>
+    </div>
+  </section>
+
+  <section class="section" id="docs">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Docs & feedback</div>
+        <h2>文档与反馈</h2>
+        <p>从快速上手到实现细节，遇到问题可以直接开 issue。</p>
+      </div>
+      <div class="docs">
+        <a class="doc" href="https://github.com/xyyzzc3/xrd_toolkit#readme"><h3>English README</h3><p>Features, install from source, CLI examples and project structure.</p></a>
+        <a class="doc" href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/README.zh-CN.md"><h3>中文说明</h3><p>与英文 README 对应的中文版，适合快速了解功能与安装步骤。</p></a>
+        <a class="doc" href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/docs/NOTES.zh-CN.md"><h3>详细笔记</h3><p>命令行参数、校准判定、背景算法与界面工程记录。</p></a>
+        <a class="doc" href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CHANGELOG.md"><h3>更新记录</h3><p>每个版本的改动与已知问题。</p></a>
+        <a class="doc" href="https://github.com/xyyzzc3/xrd_toolkit/issues"><h3>问题反馈</h3><p>遇到 bug 或有功能建议，欢迎开 issue。</p></a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="assets/icon-128.png" alt="" width="28" height="28">
+        <div>XRD Toolkit<span>二维 XRD 数据处理与全谱分析</span></div>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/xyyzzc3/xrd_toolkit">GitHub</a>
+        <a href="https://github.com/xyyzzc3/xrd_toolkit/releases">Releases</a>
+        <a href="https://github.com/xyyzzc3/xrd_toolkit/issues">问题反馈</a>
+        <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/CITATION.cff">Citation</a>
+        <a href="https://github.com/xyyzzc3/xrd_toolkit/blob/main/LICENSE">MIT License</a>
+        <a href="使用说明.html">使用说明</a>
+      </div>
+    </div>
+    <div class="footer-note">
+      <span>Chenze Bian · City University of Hong Kong</span>
+      <span>MIT License · 数据不出本机</span>
+    </div>
+  </div>
+</footer>
+
 </body>
 </html>
