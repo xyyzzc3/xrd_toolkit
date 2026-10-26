@@ -487,6 +487,9 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
          zero/U/V/W/X/Y + Size + 全局 ΔB 一起精修；
       ④ 拟合曲线（扣掉背景后的峰部分）直接与实验对比；
       ⑤ 逐峰表：峰位残差 / FWHM（实验 vs 拟合）/ 相对强度。
+
+    并存 `sim_xrd_vs_experiment_{材料}.png` 与同名 `.txt` 报告
+    （全谱拟合参数表 + 逐峰对比表）。
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -590,9 +593,11 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
         ax.plot(t_sim, y_obs_peaks, ".", ms=1.9, color=obs_color, alpha=0.85)
         ax.plot(t_sim, y_sim, color=main_color, lw=1.3)
         ax.set_xlim(c - w, c + w); ax.set_ylim(bottom=0)
-        ax.set_title(f"({'bc'[k - 1]}) zoom: $2\\theta$ ≈ {c:.3f}°  "
-                     f"(FWHM {fw:.3f}° / sim {fws:.3f}°)",
-                     fontsize=9.5, pad=9)
+        # 标题压短：原来 (b)/(c) 两行在 15 in 画布上会横向撞在一起
+        # （2026-10-26 重拍时发现），去掉 "zoom:" 与括号即可放下。
+        ax.set_title(f"({'bc'[k - 1]}) $2\\theta$ ≈ {c:.3f}°  "
+                     f"FWHM {fw:.3f} / {fws:.3f}°",
+                     fontsize=9.0, pad=9)
         ax.tick_params(labelbottom=False)
     lim = float(np.percentile(np.abs(diff), 99.8))
     for i, axr in enumerate(axes_r):
@@ -643,6 +648,29 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
         print(f"  {tt:8.3f} {c - tt - zero_fit:+7.3f} {fw:9.4f} {fws:9.4f} "
               f"{h_rel:7.1f} {i_sim / i_sim_max * 100:7.1f}")
     print(f"  → {out}")
+    # 图旁边的完整参数报告（2026-10-26）：全谱拟合参数 + 逐峰对比表。
+    report = out.with_suffix(".txt")
+    report.write_text("\n".join([
+        f"material: {material}",
+        f"data: {exp_tif.name}",
+        "geometry: lmfp1_lab6",
+        f"wavelength: {lam:.6f} A",
+        f"range: {TMIN:g}-{TMAX:g} deg, {NPT} points",
+        "background: auto sliding baseline 0.2 deg; "
+        "0.25 deg piecewise-linear correction",
+        f"matched peaks: {len(matched)} of {len(st_tt)} theoretical",
+        "",
+        "=== full-pattern fit ===",
+        fit.report(),
+        "",
+        "=== per-peak comparison ===",
+        f"{'2theta_theory':>14} {'d2theta':>8} {'FWHM_exp':>9} "
+        f"{'FWHM_sim':>9} {'I_exp%':>7} {'I_sim%':>7}",
+        *[f"{tt:14.4f} {c - tt - zero_fit:+8.4f} {fw:9.4f} "
+          f"{fws:9.4f} {h_rel:7.2f} {i_sim / i_sim_max * 100:7.2f}"
+          for tt, c, fw, fws, h_rel, i_sim in rows],
+    ]) + "\n", encoding="utf-8")
+    print(f"  → {report}")
 
 
 def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
@@ -653,7 +681,8 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
       ② 再加 Lorentzian 尺寸项（Size）——它是 GSAS 默认的"长尾巴"通道，
          专门改善峰间底部（不是靠抬高基线去凑）。
     打印 Rwp/Rp、参数表、底部（y<5% 最强峰）残差的均值/RMS，
-    并存 `sim_xrd_fit_{材料}.png`（观测/计算/背景 + 残差 + 放大窗）。
+    并存 `sim_xrd_fit_{材料}.png`（观测/计算/背景 + 残差 + 放大窗）
+    与同名 `.txt` 完整参数报告（三段拟合 + 底部统计）。
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -757,6 +786,40 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     print(f"  → {out}")
     print(f"  → {out_b}")
     print(f"  → {out_i}")
+    # 图旁边的完整参数报告（2026-10-26）：三项 FitResult 的参数表、
+    # 底部统计与实验条件都落盘，下次不用重跑才能拿数字。
+    report = out.with_suffix(".txt")
+    report.write_text("\n".join([
+        f"material: {material}",
+        f"data: {exp_tif.name}",
+        "geometry: lmfp1_lab6",
+        f"wavelength: {lam:.6f} A",
+        f"range: {TMIN:g}-{TMAX:g} deg, {NPT} points",
+        "background: auto sliding baseline 0.2 deg; "
+        "0.25 deg piecewise-linear correction",
+        f"size: {tail.params['size_um']:.4f} um (Lorentzian tail term)",
+        f"delta B: {tail.params['b_iso']:+.4f} A^2",
+        f"intensity correction: 1 {a1:+.4f} z {a2:+.4f} z^2",
+        f"bottom residual (y < 5% max, {n_low} points):",
+        f"  1 mean {mean_i:+.2f} RMS {rms_i:.2f} counts",
+        f"  2 mean {mean_t:+.2f} RMS {rms_t:.2f} counts",
+        f"  3 mean {mean_l:+.2f} RMS {rms_l:.2f} counts",
+        f"inter-peak bottom (>0.12 deg from any reflection, "
+        f"{int(inter.sum())} points):",
+        f"  1 {im_i:+.2f} / {ir_i:.2f} counts",
+        f"  2 {im_t:+.2f} / {ir_t:.2f} counts",
+        f"  3 {im_l:+.2f} / {ir_l:.2f} counts",
+        "",
+        "=== 1 instrument + conventional profile ===",
+        instrument.report(),
+        "",
+        "=== 2 + Lorentzian size + global dB + smooth intensity correction ===",
+        tail.report(),
+        "",
+        "=== 3 Le Bail (per-peak intensities) ===",
+        lebail.report(),
+    ]) + "\n", encoding="utf-8")
+    print(f"  → {report}")
 
 
 def study_keys(cif: Path, outdir: Path) -> None:

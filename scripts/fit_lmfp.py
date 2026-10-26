@@ -13,7 +13,8 @@
      用来定晶胞；
   4. Le Bail 拟合：固定上一步的晶胞，逐峰强度自由，给出峰形/背景的
      质量上限（结构强度模型受织构/占位影响时看这个）；
-  5. 存图 `sim_xrd_fit_LMFP_<帧号>.png`（Al 区画灰带）。
+  5. 存图 `sim_xrd_fit_LMFP_<帧号>.png`（Al 区画灰带）与同名完整
+     参数报告 `.txt`（仪器 / 结构 / Le Bail 三段，数字全在里面）。
 
 CIF 默认 `LiMn0.5Fe0.5PO4_olivine.cif`（由 LiFePO4 结构把 Fe 位换成
 Fe0.5/Mn0.5 得到，作为起始模型；样品实际 Mn/Fe 比未知）。
@@ -79,8 +80,54 @@ def instrument_profile(geom, lam):
         free=("zero", "u", "v", "w", "x", "y"), max_nfev=200)
 
 
+def write_report(out, *, image, cif_name, phase_label, geom_name, lam,
+                 struct, lebail, inst, exclude, use_al, hot_mask):
+    """把这次拟合的全部数字写到图旁边（同名 .txt，2026-10-26）。
+
+    `FitResult.report()` 已含参数初值/拟合值/esd、逐峰 Le Bail 强度、
+    背景修正系数、第二相与精修阶段；这里再补实验条件与仪器段。
+    图的标题只留 Rwp，其余数字都在这份报告里。
+    """
+    lines = [
+        f"file: {image.name}",
+        f"CIF: {cif_name}",
+        f"phase label: {phase_label or '?'}",
+        f"geometry: {geom_name}",
+        f"wavelength: {lam:.6f} A",
+        "integration: 1D, 3000 points, 1.0-8.0 deg",
+        "background: auto sliding baseline, 0.2 deg window; "
+        "0.25 deg piecewise-linear correction",
+        f"hot-pixel mask: {'on' if hot_mask else 'off'}",
+        "weights: poisson",
+    ]
+    if use_al:
+        lines.append(
+            "second phase: Al (111) textured, a=4.061 A, size=0.1 um, "
+            "B=0.5 A^2, March-Dollase R=0.72; structural-fit weights "
+            "exclude the Al region")
+    else:
+        lines.append("structural fit excludes: "
+                     + ", ".join(f"{lo:.2f}-{hi:.2f} deg"
+                                 for lo, hi in exclude))
+    lines += [
+        "",
+        "=== instrument (LaB6, Le Bail) ===",
+        inst.report(),
+        "",
+        "=== structural fit ===",
+        struct.report(),
+        "",
+        "=== Le Bail fit ===",
+        lebail.report(),
+    ]
+    txt = out.with_suffix(".txt")
+    txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return txt
+
+
 def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
-            use_al=False, phase_label=None, hot_mask=True):
+            use_al=False, phase_label=None, hot_mask=True,
+            cif_name=None, geom_name=None):
     t, y = load_1d(path, geom, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
@@ -143,7 +190,11 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
         f", 2θ = 1–8°, λ = {lam:.4f} Å",
         str(out), zoom=(2.6, 3.2),
         exclude_ranges=[] if use_al else list(exclude))
-    return struct, lebail, out
+    txt = write_report(
+        out, image=path, cif_name=cif_name or "?", phase_label=phase_label,
+        geom_name=geom_name or "?", lam=lam, struct=struct, lebail=lebail,
+        inst=inst, exclude=exclude, use_al=use_al, hot_mask=hot_mask)
+    return struct, lebail, out, txt
 
 
 def main():
@@ -194,10 +245,11 @@ def main():
         if not p.exists():
             print(f"  跳过（不存在）：{p}")
             continue
-        struct, lebail, out = fit_one(
+        struct, lebail, out, txt = fit_one(
             p, structure, geom, lam, inst, outdir, exclude, SAMPLE_CELL,
             use_al=use_al, phase_label=cif.stem.split("_")[0],
-            hot_mask=not a.no_hot_mask)
+            hot_mask=not a.no_hot_mask,
+            cif_name=cif.name, geom_name="lmfp1_lab6")
         al_scale = (lebail.params.get("Al:scale") if use_al
                     and lebail is not None else struct.params.get("Al:scale"))
         leb_txt = (f"{lebail.rwp:10.3f}" if lebail is not None
@@ -213,7 +265,7 @@ def main():
               f"ΔB={struct.params['b_iso']:+.2f} Å²"
               + (f"，Al scale（Le Bail）={al_scale:.3g}"
                  if al_scale is not None else "")
-              + f"；→ {out}")
+              + f"；→ {out}（报告 {txt.name}）")
 
 
 if __name__ == "__main__":

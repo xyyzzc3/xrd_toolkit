@@ -4,7 +4,8 @@
 输入：2D TIFF（或 1D 文本暂未接） + 批次几何配置。
 输出：自动找峰（`services/peak_finding`）→ 在内置橄榄石相库里筛相
 （粗扫晶胞缩放）→ 自动识别 Al 集流体 (111) → 结构拟合
-（晶胞/Size/应变/B/背景）→ Le Bail 非负峰强 → 图 + 文本报告。
+（晶胞/Size/应变/B/背景）→ Le Bail 非负峰强 → 图 + 文本报告
+（相筛选摘要 + 仪器/结构/Le Bail 三段完整参数表）。
 
 相库/几何仍是先验：
   * 几何来自 `--config`（LMFP 默认 `lmfp1_lab6`，λ=0.1223 Å）；
@@ -313,6 +314,14 @@ def main():
 
                      + "\n")
             fh.write(f"Le Bail Rwp={lebail.rwp:.3f}%\n")
+            # 2026-10-26：摘要之后附完整参数表，“能出的数据都写上”
+            fh.write("\n=== instrument (LaB6, Le Bail) ===\n")
+            fh.write((inst.report() if inst is not None
+                      else "not available") + "\n")
+            fh.write("\n=== structural fit ===\n")
+            fh.write(struct.report() + "\n")
+            fh.write("\n=== Le Bail fit ===\n")
+            fh.write(lebail.report() + "\n")
 
 
 if __name__ == "__main__":

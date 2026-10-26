@@ -354,6 +354,40 @@ class TestPlotFitLayout(unittest.TestCase):
         self.assertTrue(out2.exists() and out2.stat().st_size > 0)
 
 
+class TestFitReport(unittest.TestCase):
+    """报告要能独立当结果看：参数 + 逐峰强度 + 峰位（2026-10-26）。"""
+
+    def _result(self, **overrides):
+        base = dict(
+            params={"a": 4.1568}, stderr={"a": 1e-4}, rwp=1.5, rp=1.0,
+            chi2=2.0, reduced_chi2=1.1, n_obs=100, n_params=1,
+            success=True, message="ok",
+            tth=np.array([1.0, 2.0]), y_obs=np.array([2.0, 3.0]),
+            y_calc=np.array([2.1, 2.9]), residual=np.array([-0.1, 0.1]),
+            background=np.zeros(2), scale=1.0, initial={"a": 4.0},
+            peak_tth=np.array([1.5, 2.5]),
+            peak_intensities=np.array([10.0, 0.0]),
+            peak_table_intensities=np.array([5.0, 0.0]),
+            extra_peak_tth={"Al": np.array([3.0])})
+        base.update(overrides)
+        return FitResult(**base)
+
+    def test_report_contains_per_peak_table_and_extra_positions(self):
+        text = self._result().report()
+        self.assertIn("I_fit", text)
+        self.assertIn(" 1.5000", text)
+        self.assertIn("extra phase Al Bragg 2theta: 3.0000", text)
+        self.assertIn("fit/table ratio", text)
+
+    def test_report_marks_zero_table_intensity_as_nan(self):
+        self.assertIn("nan", self._result().report())
+
+    def test_report_lists_bragg_positions_without_le_bail(self):
+        text = self._result(peak_intensities=None,
+                            peak_table_intensities=None).report()
+        self.assertIn("Bragg 2theta: 1.5000 2.5000", text)
+
+
 class TestFitHelpers(unittest.TestCase):
     def test_rwp_matches_manual(self):
         obs = np.array([10.0, 20.0, 30.0, 40.0])

@@ -149,6 +149,20 @@ class FitResult:
                     f"Le Bail: {len(ratio)} per-peak intensities; "
                     f"fit/table ratio median {np.median(ratio):.3f} "
                     f"range {ratio.min():.2f}–{ratio.max():.2f}")
+                # 逐峰明细（2026-10-26）：报告"能出的数据都写上"，
+                # 免得强度修正只能从图上看趋势。
+                if self.peak_tth is not None and \
+                        len(self.peak_tth) == len(self.peak_intensities):
+                    lines.append(f"{'2theta':>10} {'I_fit':>12} "
+                                 f"{'I_table':>12} {'fit/table':>10}")
+                    for pos, i_fit, i_tab in zip(
+                            self.peak_tth, self.peak_intensities,
+                            self.peak_table_intensities):
+                        i_fit = float(i_fit)
+                        i_tab = float(i_tab)
+                        r = i_fit / i_tab if i_tab else float("nan")
+                        lines.append(f"{float(pos):10.4f} {i_fit:12.6g} "
+                                     f"{i_tab:12.6g} {r:10.3f}")
         a_names = [n for n in self.params if n.startswith("intensity_a")]
         if a_names:
             terms = " ".join(
@@ -166,6 +180,18 @@ class FitResult:
                 f"{p.get(f'{label}:c', float('nan')):.4f}) "
                 f"size={p.get(f'{label}:size_um', float('nan')):.4g} µm "
                 f"B={p.get(f'{label}:b_iso', float('nan')):.3g}")
+        # 第二相的布拉格峰位也落成数字（图上的刻度行只给眼睛看）
+        for label, pos in (self.extra_peak_tth or {}).items():
+            arr = np.asarray(pos, dtype=float)
+            if arr.size:
+                lines.append(f"extra phase {label} Bragg 2theta: "
+                             + " ".join(f"{v:.4f}" for v in arr))
+        # 主相峰位：Le Bail 时上面的逐峰表已含位置，这里只补结构拟合
+        if self.peak_tth is not None and len(self.peak_tth) \
+                and self.peak_intensities is None:
+            lines.append("Bragg 2theta: "
+                         + " ".join(f"{float(v):.4f}"
+                                    for v in self.peak_tth))
         if len(self.background_coeffs):
             lines.append(f"background: correction coefficients "
                          f"{np.array2string(self.background_coeffs, precision=4)}")

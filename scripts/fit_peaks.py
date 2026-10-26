@@ -13,8 +13,8 @@
         --wh --instrument-from data/lab6-00024.tif
 
 线型：gaussian / lorentzian / pseudovoigt / split_pearson7。
-输出：终端表格；`--wh` 时另存 W-H 图到 `--outdir`（默认系统临时目录，
-不写仓库 outputs/）。
+输出：终端表格；完整参数报告 `peakfit_<图名>.txt` 与（`--wh` 时）
+W-H 图都写到 `--outdir`（默认系统临时目录，不写仓库 outputs/）。
 
 注意：W-H 要求各峰**彼此孤立、窗口里没有邻峰**；重叠严重的谱（如 LMFP
 低角）单峰 FWHM 会被背景/邻峰带偏，得到的尺寸/应变只作趋势参考，
@@ -91,7 +91,8 @@ def main():
     ap.add_argument("--outdir",
                     default=str(Path(tempfile.gettempdir())
                                 / "xrd_toolkit_peaks"),
-                    help="W-H 图输出目录（默认系统临时目录；脚本不写仓库 outputs/）")
+                    help="报告/W-H 图输出目录（默认系统临时目录；"
+                         "脚本不写仓库 outputs/）")
     a = ap.parse_args()
     geom = dict(get_config(a.config)["geometry"])
     lam = geom["wavelength_m"] * 1e10
@@ -108,46 +109,111 @@ def main():
     print(f"{'2θ':>8} {'FWHM':>7} {'left':>7} {'right':>7} {'m':>5} "
           f"{'η':>5} {'area':>9} {'Rwp%':>6}")
     results = []
+    failures = []
     for c in centers:
         try:
             fit = fit_single_peak(t, y, c, shape=a.shape,
                                   half_window=a.half_window)
         except Exception as err:                # noqa: BLE001
             print(f"{c:8.4f}  拟合失败：{err}")
+            failures.append((c, str(err)))
             continue
         results.append(fit)
         print(f"{fit.center:8.4f} {fit.fwhm:7.4f} {fit.fwhm_left:7.4f} "
               f"{fit.fwhm_right:7.4f} {fit.m:5.2f} {fit.eta:5.2f} "
               f"{fit.area:9.1f} {fit.rwp:6.2f}")
-    if not a.wh:
-        return
-    if len(results) < 3:
-        ap.error("W-H 至少需要 3 根成功拟合的峰")
-    inst_deg = None
-    if a.instrument_from:
-        inst = instrument_profile(Path(a.instrument_from), geom, lam)
-        print(f"\n仪器（LaB6，Le Bail Rwp {inst.rwp:.2f}%）："
-              f"U={inst.params['u']:.2f} V={inst.params['v']:.2f} "
-              f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
-              f"Y={inst.params['y']:.3f}")
-        sig, gam = reflection_sig_gam(
-            np.array([f.center for f in results]), lam,
-            u=inst.params["u"], v=inst.params["v"], w=inst.params["w"],
-            x=inst.params["x"], y=inst.params["y"],
-            size_um=1e4, mustrain=0.0)
-        inst_deg = sig_gam_to_fwhm_eta(sig, gam)[0]
-    wh = williamson_hall([f.center for f in results],
-                         [f.fwhm for f in results],
-                         wavelength=lam, K=0.9,
-                         instrument_fwhm_deg=inst_deg)
-    print(f"\nW-H：D = {wh.size_nm:.2f} nm，ε = {wh.strain:.3e}"
-          + (f"（{wh.warning}）" if wh.warning else ""))
+
+    # 报告先把单峰这一层写完（W-H 失败也不丢已经拟合出的峰）
     outdir = Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    out = outdir / "williamson_hall.png"
-    plot_williamson_hall(wh, str(out),
-                         title=f"{image.stem} — Williamson–Hall")
-    print(f"→ {out}")
+    report = [
+        f"file: {image.name}",
+        f"geometry: {a.config}",
+        f"wavelength: {lam:.6f} A",
+        f"shape: {a.shape}",
+        f"half window: {a.half_window:.4f} deg",
+        f"peak source: {'manual' if a.peaks.strip() else 'auto'}",
+        f"hot-pixel mask: {'on' if a.hot_mask else 'off'}",
+        "",
+        f"{'2theta':>8} {'FWHM':>8} {'FWHM_left':>10} "
+        f"{'FWHM_right':>11} {'m':>6} {'eta':>6} {'height':>12} "
+        f"{'area':>12} {'Rwp%':>7}",
+    ]
+    for f in results:
+        report.append(
+            f"{f.center:8.4f} {f.fwhm:8.4f} {f.fwhm_left:10.4f} "
+            f"{f.fwhm_right:11.4f} {f.m:6.2f} {f.eta:6.2f} "
+            f"{f.height:12.6g} {f.area:12.6g} {f.rwp:7.3f}")
+    if failures:
+        report.append("")
+        report.append("failed peaks:")
+        for c, err in failures:
+            report.append(f"  {c:.4f}: {err}")
+    report.append("")
+    report.append("per-peak fitted parameters:")
+    for f in results:
+        kv = " ".join(f"{k}={v:.6g}" for k, v in f.params.items())
+        report.append(f"  {f.center:.4f}: {kv}")
+
+    wh_out = None
+    if a.wh and len(results) >= 3:
+        inst_deg = None
+        inst = None
+        if a.instrument_from:
+            inst = instrument_profile(Path(a.instrument_from), geom, lam)
+            print(f"\n仪器（LaB6，Le Bail Rwp {inst.rwp:.2f}%）："
+                  f"U={inst.params['u']:.2f} V={inst.params['v']:.2f} "
+                  f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
+                  f"Y={inst.params['y']:.3f}")
+            sig, gam = reflection_sig_gam(
+                np.array([f.center for f in results]), lam,
+                u=inst.params["u"], v=inst.params["v"],
+                w=inst.params["w"], x=inst.params["x"],
+                y=inst.params["y"], size_um=1e4, mustrain=0.0)
+            inst_deg = sig_gam_to_fwhm_eta(sig, gam)[0]
+        wh = williamson_hall([f.center for f in results],
+                             [f.fwhm for f in results],
+                             wavelength=lam, K=0.9,
+                             instrument_fwhm_deg=inst_deg)
+        print(f"\nW-H：D = {wh.size_nm:.2f} nm，ε = {wh.strain:.3e}"
+              + (f"（{wh.warning}）" if wh.warning else ""))
+        report += [
+            "",
+            "=== Williamson-Hall ===",
+            f"size D = {wh.size_nm:.3f} nm (K = 0.9)",
+            f"strain = {wh.strain:.6e}",
+            f"intercept = {wh.intercept:.6e} rad^2",
+            f"slope = {wh.slope:.6e} rad^2",
+            f"wavelength = {lam:.6f} A",
+            "combine = quadrature",
+            f"instrument correction: {a.instrument_from or 'none'}",
+        ]
+        if inst is not None:
+            report.append(
+                f"instrument zero={inst.params['zero']:.6g} "
+                f"U={inst.params['u']:.6g} "
+                f"V={inst.params['v']:.6g} W={inst.params['w']:.6g} "
+                f"X={inst.params['x']:.6g} Y={inst.params['y']:.6g} "
+                f"Le Bail Rwp={inst.rwp:.3f}%")
+        if wh.warning:
+            report.append(f"warning: {wh.warning}")
+        report.append("")
+        report.append(f"{'2theta':>8} {'sin^2theta':>12} "
+                      f"{'beta_sample':>12}")
+        for f, xx, bb in zip(results, wh.x, wh.beta_sample_deg):
+            report.append(f"{f.center:8.4f} {float(xx):12.6f} "
+                          f"{float(bb):12.6f}")
+        wh_out = outdir / "williamson_hall.png"
+        plot_williamson_hall(wh, str(wh_out),
+                             title=f"{image.stem} — Williamson–Hall")
+
+    txt = outdir / f"peakfit_{image.stem}.txt"
+    txt.write_text("\n".join(report) + "\n", encoding="utf-8")
+    print(f"→ {txt}")
+    if wh_out is not None:
+        print(f"→ {wh_out}")
+    if a.wh and len(results) < 3:
+        ap.error("W-H 至少需要 3 根成功拟合的峰")
 
 
 if __name__ == "__main__":

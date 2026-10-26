@@ -1,0 +1,97 @@
+material: LaB6
+data: lab6-00024.tif
+geometry: lmfp1_lab6
+wavelength: 0.122300 A
+range: 1-8 deg, 2000 points
+background: auto sliding baseline 0.2 deg; 0.25 deg piecewise-linear correction
+size: 1.0437 um (Lorentzian tail term)
+delta B: +0.0943 A^2
+intensity correction: 1 +0.1106 z -0.0490 z^2
+bottom residual (y < 5% max, 1853 points):
+  1 mean -4.91 RMS 78.73 counts
+  2 mean +0.01 RMS 68.87 counts
+  3 mean -0.35 RMS 67.97 counts
+inter-peak bottom (>0.12 deg from any reflection, 718 points):
+  1 -11.89 / 28.04 counts
+  2 -9.63 / 16.64 counts
+  3 -9.36 / 16.07 counts
+
+=== 1 instrument + conventional profile ===
+Rwp = 5.922%   Rp = 3.972%   chi2 = 1.785e+04   reduced chi2 = 9.09
+n_obs = 2000   n_params = 36   success = True   (`ftol` termination condition is satisfied.)
+ parameter      initial       fitted       esd≈
+      zero   -0.0033998  -0.00111881   1.93e-05
+         u      598.046      62.8483       12.7
+         v      -37.071     -2.21612      0.969
+         w       4.0199     0.523434     0.0173
+         x          0.1     0.244531     0.0143
+         y            3  3.81117e-29      0.428
+     scale                   17.6608
+Bragg 2theta: 1.6847 2.3830 2.9190 3.3708 3.7690 4.1289 4.7682 5.0577 5.3315 5.5920 5.8409 6.0797 6.3095 6.7457 6.9536 7.1555 7.3518 7.5431 7.7297 7.9119
+background: correction coefficients [  -9.0063   13.0207  -49.4679 -227.4978   57.3296 -140.4802 -102.7557
+  -30.2234  -68.1407  -23.1794  -39.7358  -57.3527  -50.0722  -32.6991
+   -2.0201  -23.189   -34.2532  -35.4613  -18.2829  -13.7096  -18.4391
+   -7.5637   -5.2392  -11.9627    1.9376  -16.3542   -5.7843    6.5344
+    7.5274]
+stages: zero+w -> u+v+w -> x+y -> u+v+w+x+y -> zero+w
+
+=== 2 + Lorentzian size + global dB + smooth intensity correction ===
+Rwp = 4.478%   Rp = 2.995%   chi2 = 1.021e+04   reduced chi2 = 5.207
+n_obs = 2000   n_params = 40   success = True   (`ftol` termination condition is satisfied.)
+ parameter      initial       fitted       esd≈
+      zero  -0.00111881  -0.00110529   1.46e-05
+         u      62.8483      60.6254        9.7
+         v     -2.21612     -3.20438      0.774
+         w     0.523434      0.55137     0.0145
+         x     0.244531    0.0753156     0.0144
+         y  3.81117e-29      3.68785      0.456
+   size_um         0.75      1.04372   0.000925
+     b_iso            0     0.094328       1.06
+     scale                   19.8618
+intensity correction: 1 +0.1106·z^1 −0.0490·z^2
+Bragg 2theta: 1.6847 2.3830 2.9190 3.3708 3.7690 4.1290 4.7682 5.0577 5.3316 5.5920 5.8410 6.0797 6.3095 6.7457 6.9536 7.1555 7.3519 7.5431 7.7297 7.9119
+background: correction coefficients [ -6.0191   8.6522 -27.6814 -97.3296  19.6978 -87.4685 -60.1082 -34.6214
+ -52.173  -30.6776 -35.2398 -89.612  -61.8316 -50.2901   3.9838 -44.553
+ -78.9808 -79.0594 -59.6014 -31.3142 -37.4408 -72.5213  -6.7227 -32.0743
+ -63.3088 -51.2332 -34.7438 -56.0837  -8.4621]
+stages: zero+w -> u+v+w -> size_um -> x+y -> b_iso -> u+v+w+x+y -> zero+w
+
+=== 3 Le Bail (per-peak intensities) ===
+Rwp = 4.242%   Rp = 2.802%   chi2 = 9161   reduced chi2 = 4.71
+n_obs = 2000   n_params = 55   success = True   (`ftol` termination condition is satisfied.)
+ parameter      initial       fitted       esd≈
+      zero  -0.00111881  -0.00110553   1.39e-05
+         u      62.8483      62.4028       9.26
+         v     -2.21612     -3.36761      0.741
+         w     0.523434      0.55411     0.0139
+         x     0.244531    0.0463204     0.0137
+         y  3.81117e-29      3.75831      0.434
+     scale                         1
+Le Bail: 20 per-peak intensities; fit/table ratio median 18.925 range 15.37–21.24
+    2theta        I_fit      I_table  fit/table
+    1.6847      926.812      60.2821     15.375
+    2.3830      1699.93          100     16.999
+    2.9190      743.542      42.9241     17.322
+    3.3708      403.717      22.5878     17.873
+    3.7690      984.733      53.0885     18.549
+    4.1290      515.757      29.2914     17.608
+    4.7682      202.768      11.0418     18.364
+    5.0577      600.351      31.6956     18.941
+    5.3316      434.854      22.4216     19.394
+    5.5920      273.654      14.0308     19.504
+    5.8410      43.0511      2.41001     17.863
+    6.0797      167.288      8.84689     18.909
+    6.3095      347.801      17.5466     19.822
+    6.7457      54.2282      2.77301     19.556
+    6.9536      253.072      12.8406     19.709
+    7.1555       203.33      10.1251     20.082
+    7.3519      73.5421      3.98425     18.458
+    7.5431      111.385      5.24466     21.238
+    7.7297      196.669      9.93592     19.794
+    7.9119      92.5655      4.51266     20.512
+background: correction coefficients [  -5.5864    7.9264  -24.5756  -79.3447   17.1563  -92.98    -67.2014
+  -32.9468  -51.6351  -32.4586  -31.4712 -107.4888  -50.3746  -41.1814
+   -0.1365  -34.9294  -77.48    -79.6452  -62.9364  -25.9574  -27.8129
+  -74.4719   -7.7437  -29.3467  -67.7602  -42.5316  -44.545   -57.8465
+  -17.8168]
+stages: zero+w -> u+v+w -> x+y -> u+v+w+x+y -> zero+w
