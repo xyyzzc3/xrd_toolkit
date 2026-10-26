@@ -40,10 +40,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import (  # noqa: E402
-    b_iso_from_cif, d_spacing, fit_pattern, format_hkls,
-    load_structure, pattern_from_cif, plot_fit, plot_fit_bottom,
-    plot_intensity_ratios, plot_profile, simulate_pattern,
-    simulate_pattern_gsas, two_theta_from_d)
+    b_iso_from_cif, d_spacing, fit_entries, fit_pattern, fixed_cell_text,
+    format_hkls, load_structure, pattern_from_cif, plot_fit,
+    plot_fit_bottom, plot_intensity_ratios, plot_profile,
+    simulate_pattern, simulate_pattern_gsas, summary_block,
+    two_theta_from_d)
 
 # 默认用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c，a=4.156826 Å；
 # 证书未记录）：实验图的几何按同一套
@@ -649,8 +650,12 @@ def study_compare(cif: Path, outdir: Path, exp_tif: Path) -> None:
               f"{h_rel:7.1f} {i_sim / i_sim_max * 100:7.1f}")
     print(f"  → {out}")
     # 图旁边的完整参数报告（2026-10-26）：全谱拟合参数 + 逐峰对比表。
+    entries, notes = fit_entries(
+        exp_tif.name, material, fit,
+        cell_fixed=fixed_cell_text(structure))
+    entries.append(("峰匹配", f"{len(matched)} / {len(st_tt)} 根理论峰"))
     report = out.with_suffix(".txt")
-    report.write_text("\n".join([
+    report.write_text(summary_block(entries, notes) + "\n" + "\n".join([
         f"material: {material}",
         f"data: {exp_tif.name}",
         "geometry: lmfp1_lab6",
@@ -788,8 +793,11 @@ def study_fit(cif: Path, outdir: Path, exp_tif: Path) -> None:
     print(f"  → {out_i}")
     # 图旁边的完整参数报告（2026-10-26）：三项 FitResult 的参数表、
     # 底部统计与实验条件都落盘，下次不用重跑才能拿数字。
+    entries, notes = fit_entries(
+        exp_tif.name, material, tail, lebail=lebail,
+        cell_fixed=fixed_cell_text(structure))
     report = out.with_suffix(".txt")
-    report.write_text("\n".join([
+    report.write_text(summary_block(entries, notes) + "\n" + "\n".join([
         f"material: {material}",
         f"data: {exp_tif.name}",
         "geometry: lmfp1_lab6",

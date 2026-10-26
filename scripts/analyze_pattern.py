@@ -33,7 +33,8 @@ from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
-    b_iso_from_cif, core, fit_pattern, load_structure, plot_fit)
+    b_iso_from_cif, core, fit_entries, fit_pattern, load_structure,
+    plot_fit, summary_block)
 
 STRUCT = ROOT / "data" / "structures"
 OLIVINE_LIB = [
@@ -296,7 +297,11 @@ def main():
         if struct.params["b_iso"] <= 0.01:
             print("  警告：B 撞到 0，结构强度模型不可信；以 Le Bail 峰强为准")
         print(f"  → {out}")
+        entries, notes = fit_entries(
+            p.name, top[1].stem.split("_")[0], struct, lebail=lebail,
+            al_scale=(struct.params.get("Al:scale") if use_al else None))
         with open(out.with_suffix(".txt"), "w", encoding="utf-8") as fh:
+            fh.write(summary_block(entries, notes) + "\n")
             fh.write(f"{p.name}\nprimary: {top[1].name} scale={scale:.4f}\n")
             for (sc, scale_i, cov, pur), cif in ranked:
                 fh.write(f"  {cif.name}: score={sc:.3f} scale={scale_i:.4f} "

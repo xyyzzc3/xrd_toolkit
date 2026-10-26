@@ -64,6 +64,14 @@ from xrd_toolkit.simulation.profile import (
     strain_fwhm_deg,
     tch_fwhm_eta,
 )
+from xrd_toolkit.simulation.report import (
+    fit_entries,
+    fixed_cell_text,
+    format_pm,
+    format_size_um,
+    format_strain,
+    summary_block,
+)
 
 __all__ = [
     "b_iso_from_cif",
@@ -84,4 +92,6 @@ __all__ = [
     "fit_pattern", "FitResult", "rwp",
     "SHAPES", "SinglePeakFit", "fit_single_peak",
     "WilliamsonHallResult", "scherrer_size_nm", "williamson_hall",
+    "fit_entries", "fixed_cell_text", "format_pm", "format_size_um",
+    "format_strain", "summary_block",
 ]

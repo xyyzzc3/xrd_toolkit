@@ -35,7 +35,8 @@ from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E40
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
-    b_iso_from_cif, fit_pattern, load_structure, plot_fit)
+    b_iso_from_cif, fit_entries, fit_pattern, load_structure, plot_fit,
+    summary_block)
 
 DEFAULT_CIF = ROOT / "data" / "structures" / "LiMn0.5Fe0.5PO4_olivine.cif"
 DEFAULT_IMAGES = [
@@ -84,11 +85,19 @@ def write_report(out, *, image, cif_name, phase_label, geom_name, lam,
                  struct, lebail, inst, exclude, use_al, hot_mask):
     """把这次拟合的全部数字写到图旁边（同名 .txt，2026-10-26）。
 
-    `FitResult.report()` 已含参数初值/拟合值/esd、逐峰 Le Bail 强度、
-    背景修正系数、第二相与精修阶段；这里再补实验条件与仪器段。
-    图的标题只留 Rwp，其余数字都在这份报告里。
+    开头是给用户看的“结果摘要”，分隔线之后是完整参数表
+    （`FitResult.report()`：初值/拟合值/esd、逐峰 Le Bail 强度、
+    背景修正系数、第二相与精修阶段）。
     """
+    # 摘要跟周报口径走：结构拟合的 Al scale（0.626），不是 Le Bail 的 0.5
+    al_scale = struct.params.get("Al:scale")
+    if al_scale is None:
+        al_scale = lebail.params.get("Al:scale")
+    entries, notes = fit_entries(
+        image.name, phase_label or "?", struct, lebail=lebail,
+        al_scale=al_scale)
     lines = [
+        summary_block(entries, notes),
         f"file: {image.name}",
         f"CIF: {cif_name}",
         f"phase label: {phase_label or '?'}",

@@ -22,6 +22,7 @@ W-H 图都写到 `--outdir`（默认系统临时目录，不写仓库 outputs/�
 （见 tests/test_microstructure.py）。
 """
 import argparse
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -39,7 +40,8 @@ from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     core, fit_pattern, fit_single_peak, load_structure, plot_williamson_hall,
-    reflection_sig_gam, sig_gam_to_fwhm_eta, williamson_hall)
+    reflection_sig_gam, sig_gam_to_fwhm_eta, summary_block,
+    williamson_hall)
 
 LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 
@@ -155,6 +157,7 @@ def main():
         kv = " ".join(f"{k}={v:.6g}" for k, v in f.params.items())
         report.append(f"  {f.center:.4f}: {kv}")
 
+    wh = None
     wh_out = None
     if a.wh and len(results) >= 3:
         inst_deg = None
@@ -206,6 +209,33 @@ def main():
         wh_out = outdir / "williamson_hall.png"
         plot_williamson_hall(wh, str(wh_out),
                              title=f"{image.stem} — Williamson–Hall")
+
+    # 结论页：用户先看这几行，参数明细在后面（2026-10-26 方案 A）
+    entries = [("样品", image.name), ("线型", a.shape)]
+    if results:
+        entries.append((
+            "成功拟合",
+            f"{len(results)} 根峰（2θ "
+            f"{results[0].center:.2f}–{results[-1].center:.2f}°）"))
+        mean_fwhm = sum(f.fwhm for f in results) / len(results)
+        entries.append(("平均 FWHM", f"{mean_fwhm:.4f}°"))
+    notes = []
+    degenerate = [f for f in results if f.fwhm < 1e-3]
+    if degenerate:
+        notes.append("、".join(f"{f.center:.3f}°" for f in degenerate)
+                     + " 峰宽异常小，拟合可能退化")
+    if wh is not None:
+        entries.append(("W-H 尺寸",
+                        "不可辨识" if math.isnan(wh.size_nm)
+                        else f"{wh.size_nm:.1f} nm"))
+        entries.append(("微应变",
+                        "不可辨识" if math.isnan(wh.strain)
+                        else f"{wh.strain:.2e}"))
+        if wh.warning:
+            notes.append(wh.warning)
+    if failures:
+        notes.append(f"{len(failures)} 根峰拟合失败（见详情）")
+    report = summary_block(entries, notes).splitlines() + [""] + report
 
     txt = outdir / f"peakfit_{image.stem}.txt"
     txt.write_text("\n".join(report) + "\n", encoding="utf-8")
