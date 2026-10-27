@@ -223,7 +223,7 @@ def _status(res, f_rich, rich_cell, poor_cell, seed, max_rwp,
     return "ok"
 
 
-def _row(frame, path, res, f_rich, timers, status):
+def _row(frame, path, res, f_rich, timers, status, *, usable=False):
     rich_cell = _cell(res) if res is not None else (float("nan"),) * 3
     poor_cell = _cell(res, "LMFP_poor") if res is not None else (
         float("nan"),) * 3
@@ -231,10 +231,21 @@ def _row(frame, path, res, f_rich, timers, status):
             if res is not None else float("nan"))
     _, _, A_al, _ = _fractions(res) if res is not None else (
         float("nan"),) * 4
+    esd = res.stderr if res is not None else {}
+
+    def _e(name):
+        v = esd.get(name)
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return float("nan")
+        return v if math.isfinite(v) else float("nan")
+
     return {
         "frame": frame,
         "file": path.name,
         "status": status,
+        "usable": bool(usable),
         "rwp": res.rwp if res is not None else float("nan"),
         "rp": res.rp if res is not None else float("nan"),
         "f_rich": f_rich,
@@ -242,8 +253,13 @@ def _row(frame, path, res, f_rich, timers, status):
                    else float("nan")),
         "rich_a": rich_cell[0], "rich_b": rich_cell[1],
         "rich_c": rich_cell[2],
+        "rich_a_esd": _e("a"), "rich_b_esd": _e("b"),
+        "rich_c_esd": _e("c"),
         "poor_a": poor_cell[0], "poor_b": poor_cell[1],
         "poor_c": poor_cell[2],
+        "poor_a_esd": _e("LMFP_poor:a"),
+        "poor_b_esd": _e("LMFP_poor:b"),
+        "poor_c_esd": _e("LMFP_poor:c"),
         "al_a": al_a,
         "al_ref": A_al,
         "t_load_s": timers.get("load", float("nan")),
@@ -256,6 +272,7 @@ def _row(frame, path, res, f_rich, timers, status):
 
 def _write_summary(outdir, rows, rigged_mask):
     ok = [r for r in rows if r["status"] == "ok"]
+    usable = [r for r in rows if r.get("usable")]
     n = len(rows)
     total = float(np.nansum([r["t_total_s"] for r in rows]))
     means = {k: float(np.nanmean([r[f"t_{k}_s"] for r in rows]))
@@ -268,6 +285,7 @@ def _write_summary(outdir, rows, rigged_mask):
         "=== LMFP in-situ three-phase batch ===",
         f"frames: {n}",
         f"ok: {len(ok)}  anomalies: {n - len(ok)}",
+        f"usable: {len(usable)}/{n} (Rwp<=max, finite cells, no cell jump)",
         "status: " + ", ".join(f"{k}={v}" for k, v in sorted(status.items())),
         f"mask: {'on' if rigged_mask else 'off'}",
         f"total: {total:.1f} s  ({total / 60.0:.1f} min)",
@@ -405,14 +423,6 @@ def main():
                 f_rich = float("nan")
                 status = f"error: {type(err).__name__}: {err}"
                 print(f"  异常：{status}", flush=True)
-            row = _row(i, path, res, f_rich, timers, status)
-            if fieldnames is None:
-                fieldnames = list(row)
-                writer = csv.DictWriter(fh, fieldnames=fieldnames)
-                writer.writeheader()
-            writer.writerow(row)
-            fh.flush()
-            rows.append(row)
             rich_cell = _cell(res) if res is not None else (
                 float("nan"),) * 3
             poor_cell = _cell(res, "LMFP_poor") if res is not None else (
@@ -426,17 +436,30 @@ def main():
                     for a, b in zip(rich_cell, seed["rich"]))
                 and all(abs(a - b) <= CELL_JUMP_POOR
                         for a, b in zip(poor_cell, seed["poor"])))
-            # 种子口径：Rwp 合格、晶胞有限且没有跳变、不是高 Rwp/错误
-            # 就继承——`not_converged` 只是优化器退出标志，Rwp 仍好时
-            # 它的晶胞对下一帧比一个旧种子更有用（2026-10-27 实测：
-            # 只看 ok 会在相变段一直用旧种子，后面全标 not_converged）。
-            usable = (res is not None and finite_cells and cell_ok
-                      and math.isfinite(row["rwp"])
-                      and row["rwp"] <= args.max_rwp
+            # 种子/usable 口径：Rwp 合格、晶胞有限且没有跳变、不是高
+            # Rwp/错误就继承——`not_converged` 只是优化器退出标志，
+            # Rwp 仍好时它的晶胞对下一帧比旧种子更有用（2026-10-27
+            # 实测：只看 ok 会在相变段一直用旧种子）。
+            # usable = 可用于趋势（Rwp 合格、晶胞/分数有限、非错误）；
+            # cell_jump 仍标在 status 里，但不影响这一帧进趋势图。
+            # seed_ok 才要求不跳变——它决定下一帧初值。
+            usable = (res is not None and finite_cells
+                      and math.isfinite(res.rwp)
+                      and res.rwp <= args.max_rwp
                       and not status.startswith("error")
                       and not status.startswith("high_rwp")
-                      and status not in ("cell_jump", "no_phase_signal"))
-            if usable:
+                      and status != "no_phase_signal")
+            seed_ok = usable and cell_ok
+            row = _row(i, path, res, f_rich, timers, status,
+                       usable=usable)
+            if fieldnames is None:
+                fieldnames = list(row)
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+            writer.writerow(row)
+            fh.flush()
+            rows.append(row)
+            if seed_ok:
                 seed = {"rich": rich_cell, "poor": poor_cell}
             if (res is not None and math.isfinite(f_rich)
                     and not status.startswith("error")):

@@ -7,6 +7,7 @@
   * 额外相规格（poor 晶胞自由、Al 逐反射）。
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,16 +24,20 @@ import fit_insitu as fi  # noqa: E402
 def _result(*, success=True, rwp=2.0, rich_a=10.35):
     return SimpleNamespace(
         success=success, rwp=rwp,
-        scale=2.0,
+        scale=2.0, rp=1.0,
         peak_table_intensities=np.array([10.0, 10.0]),
         peak_table_norm=250.0,
-        params={"LMFP_poor:scale": 1.0},
+        params={"LMFP_poor:scale": 1.0,
+                "a": rich_a, "b": 6.02, "c": 4.70,
+                "LMFP_poor:a": 10.17, "LMFP_poor:b": 5.82,
+                "LMFP_poor:c": 4.78, "Al:a": 4.061},
+        stderr={"a": 0.001, "b": 0.002, "c": 0.003,
+                "LMFP_poor:a": 0.01, "LMFP_poor:b": 0.02,
+                "LMFP_poor:c": 0.03},
         extra_phase_table_sum={"LMFP_poor": 20.0},
         extra_phase_norm={"LMFP_poor": 250.0},
         extra_lebail={"Al": {"i_fit": np.array([5.0]),
-                             "norm": 500.0}},
-        # _cell 读这三个键
-        **{"a": rich_a})
+                             "norm": 500.0}})
 
 
 class TestFrames(unittest.TestCase):
@@ -66,6 +71,33 @@ class TestFractions(unittest.TestCase):
         del res.extra_phase_table_sum
         _a, _b, _al, f_rich = fi._fractions(res)
         self.assertTrue(np.isnan(f_rich))
+
+
+class TestRowAndSummary(unittest.TestCase):
+    def test_row_has_esd_and_usable(self):
+        r = fi._row(1, Path("frame.tif"), _result(), 0.9,
+                    {"load": 0.1, "integrate": 0.2, "bg": 0.0,
+                     "fit": 1.0, "total": 1.3}, "ok", usable=True)
+        self.assertTrue(r["usable"])
+        self.assertAlmostEqual(r["rich_a_esd"], 0.001)
+        self.assertAlmostEqual(r["poor_a_esd"], 0.01)
+        self.assertAlmostEqual(r["rich_a"], 10.35)
+
+    def test_summary_counts_usable(self):
+        rows = [
+            {"status": "ok", "usable": True, "t_total_s": 1.0,
+             "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
+             "t_fit_s": 0.8},
+            {"status": "not_converged", "usable": True, "t_total_s": 2.0,
+             "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
+             "t_fit_s": 1.8},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            path, _means, _total = fi._write_summary(
+                Path(td), rows, True)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("usable: 2/2", text)
+        self.assertIn("convergence: 50.0%", text)
 
 
 class TestStatus(unittest.TestCase):
