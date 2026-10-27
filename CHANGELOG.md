@@ -40,6 +40,9 @@
 - **批量结果展示**（2026-10-28）：`scripts/plot_insitu_summary.py`
   读 CSV 出 4-panel 图（相分数+状态、两相晶胞+esd、Rwp/Rp+异常、
   充放电分区）；CSV 增加 `usable` 与晶胞 esd 列。
+- **模型无关校验**（2026-10-28）：`scripts/check_insitu_peaks.py`
+  用低角 (200) 双峰质心（不依赖三相 Rietveld）对照 f_poor，
+  本批 R²=0.967；双峰总面积是相依赖量，不作守恒量。
 
 ## [0.1.5] — 2026-10-24
 

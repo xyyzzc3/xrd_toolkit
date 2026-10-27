@@ -158,6 +158,22 @@ TOPAS/HighScore 那种定量 Rietveld 的替代品——我们的 f_rich 是相�
 仓库的 `scripts/gsas2_crosscheck.py` 目前只做模拟，顺序精修需要
 单独的 `gsas2` 环境。
 
+### 2.7 模型无关校验（(200) 双峰质心）
+
+三相 Rietveld 的 f_rich 依赖模型；用低角 (200) 双峰做一把独立的尺子：
+
+- rich (200) ≈ 1.35°，poor (200) ≈ 1.43°（λ=0.1223 Å），只差 ~0.08°，
+  单峰窗口切不开；对**整个双峰**做强度加权质心。
+- 每帧：同一 mask/几何 → 1D → 自动基线 → 1.18–1.55° 窗口，
+  两侧平带（1.18–1.28、1.50–1.56）做局部线性背景 → 面积/质心。
+- 结果：质心 **1.352°（第 1 帧）→ 1.419°（第 45 帧）→ 1.359°（第 81 帧）**，
+  与批量 f_poor 的散点 **R² = 0.967**。这条曲线完全没用到三相
+  Rietveld 的结构因子/峰形/背景模型，说明相分数趋势不是模型
+  “编”出来的。
+- (200) 双峰总面积随相变在 ~0.8–1.5× 变化——poor (200) 的结构因子
+  本来比 rich 强，**不是守恒量**；图上只作数据质量参考，不当相分数。
+- 产物：`outputs/insitu/model_independent.csv` / `.png`。
+
 ## 3. 复现
 
 ```bash
@@ -179,6 +195,13 @@ python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
 python scripts/plot_insitu_summary.py \
     --csv outputs/insitu/insitu_fit.csv \
     --out outputs/insitu/insitu_summary.png
+
+# 模型无关 (200) 双峰质心校验
+python scripts/check_insitu_peaks.py \
+    --data ~/Desktop/lmfpdata \
+    --mask outputs/masks/lmfp1_lab6_mask.npy \
+    --batch-csv outputs/insitu/insitu_fit.csv \
+    --outdir outputs/insitu
 ```
 
 ## 4. 交付物
@@ -190,4 +213,5 @@ python scripts/plot_insitu_summary.py \
 - `outputs/insitu/insitu_fit_frame_*.png`（首/中/末）
 - `outputs/insitu/insitu_trends.png`
 - `outputs/insitu/insitu_summary.png`（4-panel 展示图）
+- `outputs/insitu/model_independent.csv` / `.png`（(200) 双峰质心校验）
 - `outputs/insitu/fit_summary.txt`
