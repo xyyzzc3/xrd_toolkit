@@ -17,8 +17,8 @@
   5. 存图 `sim_xrd_fit_LMFP_<帧号>.png` 与同名完整参数报告 `.txt`
      （仪器 / 结构 / Le Bail 三段，数字全在里面）。
 
-CIF 默认 `LiMn0.5Fe0.5PO4_olivine.cif`（由 LiFePO4 结构把 Fe 位换成
-Fe0.5/Mn0.5 得到，作为起始模型；样品实际 Mn/Fe 比未知）。
+CIF 默认 `LiMn0.6Fe0.4PO4_olivine.cif`（COD 橄榄石结构，M 位按
+Mn:Fe = 6:4 占位；样品比例由用户 2026-10-27 提供）。
 """
 import argparse
 import sys
@@ -39,7 +39,7 @@ from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, fit_entries, fit_pattern, load_structure, plot_fit,
     summary_block)
 
-DEFAULT_CIF = ROOT / "data" / "structures" / "LiMn0.5Fe0.5PO4_olivine.cif"
+DEFAULT_CIF = ROOT / "data" / "structures" / "LiMn0.6Fe0.4PO4_olivine.cif"
 DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00029.tif",
     ROOT / "data" / "LMFP_1_atten0-00031.tif",

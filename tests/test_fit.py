@@ -158,6 +158,22 @@ class TestFitRecovery(unittest.TestCase):
         self.assertGreaterEqual(res.params["scale"], 0.0)
 
 
+class TestOlivineComposition(unittest.TestCase):
+    def test_6_4_cif_has_expected_mn_fe_ratio(self):
+        st = core.load_structure(
+            STRUCT_DIR / "LiMn0.6Fe0.4PO4_olivine.cif")
+        comp = st.composition
+        self.assertAlmostEqual(comp["Mn"] / (comp["Mn"] + comp["Fe"]),
+                               0.6, places=3)
+
+    def test_5_5_cif_still_matches_cod_entry(self):
+        st = core.load_structure(
+            STRUCT_DIR / "LiMn0.5Fe0.5PO4_olivine.cif")
+        comp = st.composition
+        self.assertAlmostEqual(comp["Mn"] / (comp["Mn"] + comp["Fe"]),
+                               0.497, places=3)
+
+
 class TestFitModes(unittest.TestCase):
     """Le Bail 逐峰强度、分段线性背景修正、非负 X/Y 边界。"""
 

@@ -38,6 +38,8 @@ from xrd_toolkit.simulation import (  # noqa: E402
 
 STRUCT = ROOT / "data" / "structures"
 OLIVINE_LIB = [
+    # 样品 Mn:Fe = 6:4（2026-10-27）；5:5 保留作相近组分的候选
+    STRUCT / "LiMn0.6Fe0.4PO4_olivine.cif",
     STRUCT / "LiMn0.5Fe0.5PO4_olivine.cif",
     STRUCT / "LiFePO4_olivine.cif",
     STRUCT / "LiMnPO4_olivine.cif",
