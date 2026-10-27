@@ -37,6 +37,9 @@
 - **额外相晶胞精修**：`extra_phases` 支持 `refine_cell=True`，生成
   `label:a/b/c` 全局参数；`FitResult` 增加主相/额外相峰表归一化
   因子，供相分数使用。
+- **批量结果展示**（2026-10-28）：`scripts/plot_insitu_summary.py`
+  读 CSV 出 4-panel 图（相分数+状态、两相晶胞+esd、Rwp/Rp+异常、
+  充放电分区）；CSV 增加 `usable` 与晶胞 esd 列。
 
 ## [0.1.5] — 2026-10-24
 

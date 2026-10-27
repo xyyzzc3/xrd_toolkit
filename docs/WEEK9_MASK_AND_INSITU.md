@@ -104,10 +104,12 @@ Al 总和列 CSV 的 `al_ref`），不参与 LMFP 相分数。看趋势可以，
     c 4.780 → 4.792 → 4.769。
   - 注意：f_rich < ~5% 时 rich 相峰很弱，rich a 会贴到下限
     10.20 Å；这段的 rich 晶胞只能作趋势参考，不要当精确值。
-- CSV 额外给出 `usable`（Rwp≤20%、晶胞有限、无跳变）和两相晶胞
+- CSV 额外给出 `usable`（Rwp≤20%、晶胞/分数有限、非错误；跳变仍标在 status）和两相晶胞
   esd（`rich_a_esd` … `poor_c_esd`），可直接画误差棒/筛坏帧。
 - 图：`outputs/insitu/insitu_fit_frame_001.png`（首）、
   `_041.png`（中）、`_081.png`（末）、`insitu_trends.png`（趋势）。
+- 4-panel 展示图：`outputs/insitu/insitu_summary.png`（相分数+状态、
+  两相晶胞+esd、Rwp/Rp+异常、充放电分区）。
 
 ### 2.5 效率评估
 
@@ -130,6 +132,32 @@ Al 总和列 CSV 的 `al_ref`），不参与 LMFP 相分数。看趋势可以，
      Rwp 合格的 max_nfev 帧标成 `ok_soft`，收敛率数字会更贴近实际；
      同时不掩盖真正发散的帧。
 
+### 2.6 与市面标准对比
+
+典型能力（版本不同会有差异）：
+
+| 能力 | 本项目 | GSAS-II | FullProf | TOPAS | HighScore | pyFAI/DAWN |
+|---|---|---|---|---|---|---|
+| 2D→1D + mask | ✅ 独立 Mask 窗口 | 图像处理有 mask/limits | 不含 2D 积分 | 不含 | 主要吃 1D | ✅ pyFAI-drawmask/DAWN |
+| 顺序批量精修 | ✅ 自写 81 帧 | ✅ Sequential Refine | ✅ sequential | ✅ | ✅ 批处理 | ❌ |
+| 相分数 | **相对散射强度** | **重量分数** | **重量分数** | **重量分数** | **重量分数** | ❌ |
+| 不确定度 | 晶胞有 esd；分数无 | ✅ | ✅ | ✅ | ✅ | ❌ |
+| 标准导出 | CSV/PNG | `.gpx`/CSV | `.pcr/.sum` | Excel/CSV | 报告 | 1D/2D |
+| 脚本/开源 | Python 开源 | Python 开源 | 学术免费 | 商业 | 商业 | 开源 |
+| 本批速度 | 81 帧 11.6 min | 视模型 | 视模型 | 视模型 | 视模型 | 积分很快 |
+
+**定位**：本项目的强项是一体化（2D mask → 1D → 三相批量 →
+CSV/图）、脚本化、开源、快，适合快速筛趋势；不是 GSAS-II/FullProf/
+TOPAS/HighScore 那种定量 Rietveld 的替代品——我们的 f_rich 是相对
+散射强度，不是 wt%，没有分数 esd，且固定了 U/V/W/size/strain。
+报告里应写“relative scattering fraction”，不要写“wt%”。
+
+如果要做数值对照，下一步是用 GSAS-II **Sequential Refine** 跑 3 帧
+（第 1/45/81 帧），相同 CIF/仪器/背景，比较晶胞（应在 esd 内一致）
+和相分数趋势（GSAS-II 是 wt%，比较趋势/比值，不直接比绝对值）。
+仓库的 `scripts/gsas2_crosscheck.py` 目前只做模拟，顺序精修需要
+单独的 `gsas2` 环境。
+
 ## 3. 复现
 
 ```bash
@@ -146,6 +174,11 @@ python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
 python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
     --mask outputs/masks/lmfp1_lab6_mask.npy \
     --outdir outputs/insitu
+
+# 4-panel 展示图（读 CSV，不重拟合）
+python scripts/plot_insitu_summary.py \
+    --csv outputs/insitu/insitu_fit.csv \
+    --out outputs/insitu/insitu_summary.png
 ```
 
 ## 4. 交付物
@@ -156,4 +189,5 @@ python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
 - `outputs/insitu/insitu_fit.csv`
 - `outputs/insitu/insitu_fit_frame_*.png`（首/中/末）
 - `outputs/insitu/insitu_trends.png`
+- `outputs/insitu/insitu_summary.png`（4-panel 展示图）
 - `outputs/insitu/fit_summary.txt`
