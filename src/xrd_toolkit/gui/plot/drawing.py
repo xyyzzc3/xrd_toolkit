@@ -291,6 +291,18 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         im = ax.imshow(image, cmap=_panel_param(window, dock, "2D 色图", "magma"),
                        norm=LogNorm(vmin=vmin, vmax=vmax),
                        origin="lower")
+        # 已应用的窗口级 mask：半透明红叠在 2D 图上（2026-10-27）。
+        # 默认 None = 不画；编辑器里改 mask 后这里重画一次就能看到。
+        mask = getattr(window, "current_mask", None)
+        if mask is not None and np.shape(mask) == image.shape:
+            ds = 1 if mask.size <= 1_500_000 else 2
+            small = mask[::ds, ::ds]
+            rgba = np.zeros((*small.shape, 4), dtype=np.float32)
+            rgba[..., 0] = 1.0
+            rgba[..., 3] = 0.35 * small
+            h, w = image.shape
+            ax.imshow(rgba, extent=(-0.5, w - 0.5, -0.5, h - 0.5),
+                      origin="lower", interpolation="nearest", zorder=5)
         ax.set_aspect("equal")
         # 颜色条（作业规格"带颜色条"）：ax.clear() 不清 colorbar（它是
         # 图上的另一个坐标系）。只建一次、之后 update_normal 复用

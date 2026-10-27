@@ -64,17 +64,26 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
     # 它们的 mock 常常在点完按钮（with 块结束）就撤销了，现查会在那时
     # 变回真函数、拿假路径去积分（2026-09-24 踩过：9 条测试因此超时）。
     compute = _compute_integration
+    # 窗口级 mask 在派活时抓一份引用：编辑器之后改的是它自己的 mask，
+    # 再 [应用] 会换一个新副本，不会改到已派出去的任务。
+    mask = getattr(window, "current_mask", None)
 
     def worker(path_str, geom_, npt_, config):
-        """后台线程：算 1D，顺手把产物落盘。"""
-        tth, intensity = compute(path_str, geom_, npt_)
-        try:
-            stage_cache.store_1d(
-                path_str, tth, intensity, config=config, npt=npt_,
-                tth_min=geom_.get("tth_min_deg"),
-                tth_max=geom_.get("tth_max_deg"))
-        except Exception:                                # noqa: BLE001
-            pass      # 缓存写失败不影响这次计算（下次重算一遍而已）
+        """后台线程：算 1D，顺手把产物落盘（有 mask 时不落缓存）。"""
+        if mask is None:
+            tth, intensity = compute(path_str, geom_, npt_)
+        else:
+            tth, intensity = compute(path_str, geom_, npt_, mask)
+        # 有 mask 时**不写 1D 缓存**：缓存键不含 mask，写进去会把
+        # 未遮罩的曲线留给下一次读；宁可不缓存（掩膜版本来就该重算）。
+        if mask is None:
+            try:
+                stage_cache.store_1d(
+                    path_str, tth, intensity, config=config, npt=npt_,
+                    tth_min=geom_.get("tth_min_deg"),
+                    tth_max=geom_.get("tth_max_deg"))
+            except Exception:                            # noqa: BLE001
+                pass      # 缓存写失败不影响这次计算（下次重算一遍而已）
         return tth, intensity
 
     def done(window_, key_, task, result):

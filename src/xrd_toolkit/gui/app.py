@@ -421,12 +421,27 @@ def _build_menu(window: QMainWindow) -> None:
         # 挂到窗口这一级——实测"隐藏菜单栏"后它仍能触发
         window.addAction(act_manual)
 
-def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + 面板开关（文件/参数/日志）+ [帮助]。
+def _open_mask_editor(window: QMainWindow) -> None:
+    """打开/前置独立 Mask 编辑器（工具栏 [Mask]）。
 
-    分组与顺序（用户 2026-10-07 两轮讨论定稿）：`[校准] │ [原图] [1D]
-    [处理] [对比] │ [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性
-    设置"（校准），右边四个是每天干活的循环，按数据流排：**原图**（直接
+    窗口随主窗口存活；用户点 × 只是隐藏，下次再点复用同一实例
+    （mask/image 状态还在）。模块级延迟导入避开 app ↔ mask_editor 的环。
+    """
+    from xrd_toolkit.gui.mask_editor import MaskEditorWindow
+    if getattr(window, "mask_editor", None) is None:
+        window.mask_editor = MaskEditorWindow(window)
+    window.mask_editor.show()
+    window.mask_editor.raise_()
+    window.mask_editor.activateWindow()
+
+
+def _build_toolbar(window: QMainWindow) -> None:
+    """工具栏 = 五个入口 + [Mask] 独立编辑器 + 面板开关 + [帮助]。
+
+    分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask）：
+    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [文件][参数][日志] │
+    [帮助▾]`——左边一格是"一次性设置"（校准 / mask），右边四个是每天
+    干活的循环，按数据流排：**原图**（直接
     看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
     （链加工）→ **对比**（多文件汇总）。
 
@@ -457,6 +472,15 @@ def _build_toolbar(window: QMainWindow) -> None:
     tb.addWidget(btn_calib)
     window.entrance_buttons["校准"] = btn_calib
     btn_calib.clicked.connect(lambda checked=False: _switch_entrance(window, "校准"))
+    # [Mask] 与 [校准] 并列：都属"一次性设置"，但它打开的是独立窗口
+    # （不是参数坞的一页），所以不进 entrance_buttons / PARAM_PAGES。
+    btn_mask = QPushButton("Mask")
+    btn_mask.setToolTip(
+        "独立 Mask 编辑器：遮罩 beamstop/模块缝/坏点，保存/加载，"
+        "预览 mask 前后的 1D 曲线")
+    btn_mask.clicked.connect(lambda checked=False: _open_mask_editor(window))
+    tb.addWidget(btn_mask)
+    window.mask_btn = btn_mask
     tb.addSeparator()      # 设置 │ 干活的循环（见 docstring 的分组说明）
     for name in ("原图", "1D", "处理", "对比"):
         btn = QPushButton(name)
@@ -725,6 +749,12 @@ def create_window() -> QMainWindow:
     window._image_cache = {}
     # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
     window.focus_panel = None
+    # 窗口级 Mask（2026-10-27）：None = 不遮；否则是 bool 数组，
+    # True = 被遮掉。1D 积分前传给 integrate_1d；mask_path 只用于日志。
+    # mask_editor 持有独立编辑窗口（关闭只是隐藏，不重建）。
+    window.current_mask = None
+    window.mask_path = None
+    window.mask_editor = None
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：

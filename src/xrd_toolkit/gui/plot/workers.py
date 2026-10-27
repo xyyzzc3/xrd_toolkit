@@ -9,14 +9,15 @@ from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
 
 
 # ══ 文件 → 1D 闭环：选文件 → 后台积分 → 1D 面板出图 ══════════
-def _compute_integration(path_str: str, geom: dict, npt: int) -> tuple:
-    """后台线程里运行的纯计算：读图 → 全角度积分。
+def _compute_integration(path_str: str, geom: dict, npt: int,
+                         mask=None) -> tuple:
+    """后台线程里运行的纯计算：读图 →（按需遮罩）→ 全角度积分。
 
     不碰任何界面控件；异常由 tasks.BackgroundTask 转成 error 信号
-    送回主线程。
+    送回主线程。mask 为 None = 不遮；否则 True = 被遮掉。
     """
     image = load_diffraction_image(path_str)
-    tth, intensity = integrate_1d(image, npt=npt, **geom)
+    tth, intensity = integrate_1d(image, npt=npt, mask=mask, **geom)
     return tth, intensity
 
 def _compute_image(path_str: str):
@@ -36,16 +37,17 @@ def _compute_profile(path_str: str, center, angle_deg: float) -> tuple:
     image = load_diffraction_image(path_str)
     return line_profile(image, center, angle_deg)
 
-def _compute_waterfall(path_str: str, geom: dict, npt: int) -> tuple:
+def _compute_waterfall(path_str: str, geom: dict, npt: int,
+                       mask=None) -> tuple:
     """后台线程里运行的纯计算：读图 → 36 扇区分区积分。
 
     与 CLI sector_waterfall 同引擎（默认 36 扇区）。geom 只取
     integrate_sectors 认识的几何键（2θ 范围参数是 integrate_1d
-    的，扇区积分走全范围）。
+    的，扇区积分走全范围）。mask 为 None = 不遮；True = 被遮掉。
     """
     image = load_diffraction_image(path_str)
     return integrate_sectors(
-        image, n_sectors=36, npt=npt,
+        image, n_sectors=36, npt=npt, mask=mask,
         pixel_size_m=geom["pixel_size_m"],
         wavelength_m=geom["wavelength_m"],
         dist_m=geom["dist_m"],

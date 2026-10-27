@@ -137,6 +137,20 @@ python scripts/run_tests.py     # 990+ tests, behind a watchdog
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
 
+## Week 9: mask + in-situ three-phase batch
+
+The toolbar now has an independent **Mask** editor next to **Calibrate**:
+draw/erase beamstop, module gaps and hot pixels, auto-detect isolated hot
+pixels, save/load `.npy`/`.edf`, and preview the 1D pattern before/after
+masking. Masks are applied before azimuthal integration (both the pyFAI and
+the off-centre fallback paths); the 1D stage cache is bypassed while a mask is
+active.
+
+`scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases
+(Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly
+flags, a CSV summary and split timings. Mask strategy, fit parameters and the
+efficiency measurements: [docs/WEEK9_MASK_AND_INSITU.md](docs/WEEK9_MASK_AND_INSITU.md).
+
 ## Roadmap
 
 Peak finding, profile fitting and full-pattern (Le Bail/structural) fitting

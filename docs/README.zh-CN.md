@@ -130,6 +130,10 @@ python scripts/run_tests.py     # 990+ 条，带看门狗
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
 
+## 第九周：Mask + 原位三相批量
+
+工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；mask 在 2D→1D 积分前生效，1D/扇区两条积分路径都接受。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时。mask 策略、精修参数与效率评估见 [docs/WEEK9_MASK_AND_INSITU.md](WEEK9_MASK_AND_INSITU.md)。
+
 ## 路线图
 
 寻峰、峰形拟合与全谱（Le Bail/结构）拟合已在 v0.1.5 落地。剩下的：

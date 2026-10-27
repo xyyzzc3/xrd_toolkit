@@ -506,6 +506,28 @@ class TestExtraPhaseLebailAndBackgroundSmooth(unittest.TestCase):
                         0.3 * float(np.max(np.abs(corr_raw[m]))))
         self.assertLess(leb.rwp, raw.rwp)
 
+    def test_extra_phase_cell_refines_back_to_cif(self):
+        tth, y, true_bg, _sticks, _i = _synth_two_phase(
+            self.st, self.al, factor=1.0)
+        init = {"zero": 0.0, "u": 0.5, "v": -0.1, "w": 18.0,
+                "x": 1.0, "y": 0.3, "Al:a": self.al_a + 0.03}
+        res = fit_pattern(
+            self.st, tth, y, wavelength=CU_KA, background=true_bg,
+            weights="uniform",
+            extra_phases=[{
+                "structure": self.al, "label": "Al",
+                "a": self.al_a + 0.03, "b": self.al_a + 0.03,
+                "c": self.al_a + 0.03, "size_um": 1e5,
+                "mustrain": 0.0, "refine_cell": True,
+                "refine_intensities": True,
+            }],
+            free=("zero", "u", "v", "w", "x", "y"),
+            initial=init,
+            stages=[("zero", "w", "Al:a"), ("u", "v", "w"),
+                    ("x", "y")])
+        self.assertLess(res.rwp, 0.5)
+        self.assertAlmostEqual(res.params["Al:a"], self.al_a, delta=0.005)
+
     def test_background_smoothness_penalty(self):
         sticks, inten, _, _ = core.pattern_from_structure(
             self.st, wavelength=CU_KA, two_theta_range=(10.0, 80.0),

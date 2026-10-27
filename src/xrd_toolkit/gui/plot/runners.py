@@ -85,13 +85,19 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
     静默复用会让人以为重算了、或怀疑数字不对。
     """
     dock = window.plot_docks.get(key)
+    mask_on = getattr(window, "current_mask", None) is not None
     cached = None
-    try:
-        cached = stage_cache.load_1d(
-            path, config=window.config_name, npt=npt,
-            tth_min=geom.get("tth_min_deg"), tth_max=geom.get("tth_max_deg"))
-    except Exception:                                    # noqa: BLE001
-        cached = None    # 缓存读失败（文件被删/权限）：当作没缓存
+    if not mask_on:
+        try:
+            cached = stage_cache.load_1d(
+                path, config=window.config_name, npt=npt,
+                tth_min=geom.get("tth_min_deg"),
+                tth_max=geom.get("tth_max_deg"))
+        except Exception:                                # noqa: BLE001
+            cached = None    # 缓存读失败（文件被删/权限）：当作没缓存
+    else:
+        _log(window, f"Mask 生效：{path.name} 重算 1D"
+                     f"（不使用未遮罩的缓存）")
     if cached is not None and dock is not None:
         tth, intensity = cached
         suffix, quiet = _batch_step(window, key, path.name)
@@ -145,8 +151,12 @@ def _run_waterfall(window: QMainWindow, path: Path, key: str,
                    geom: dict, npt: int) -> None:
     """瀑布 = 36 扇区分区积分堆叠（对齐 CLI sector_waterfall）。"""
     window.status_text.setText(f"正在扇形积分 {path.name}…")
-    _log(window, f"开始扇形积分 {path.name}（后台运行，36 扇区）")
-    _spawn_task(window, key, _compute_waterfall, (str(path), geom, npt),
+    mask = getattr(window, "current_mask", None)
+    _log(window, f"开始扇形积分 {path.name}（后台运行，36 扇区）"
+                 + ("（使用当前 Mask）" if mask is not None else ""))
+    args = ((str(path), geom, npt) if mask is None
+            else (str(path), geom, npt, mask))
+    _spawn_task(window, key, _compute_waterfall, args,
                 _on_waterfall_done,
                 lambda msg: _on_view_error(window, path, key, "扇形积分", msg))
 

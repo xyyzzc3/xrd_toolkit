@@ -115,6 +115,12 @@ class FitResult:
     stages: tuple = ()
     peak_intensities: Optional[np.ndarray] = None
     peak_table_intensities: Optional[np.ndarray] = None
+    # 主相峰表的归一化因子（原始强度最大值）；相分数用
+    # Σ(I_fit) × norm / 100 还原绝对强度
+    peak_table_norm: Optional[float] = None
+    # 额外相峰表的 norm / 强度和：相分数用 scale × sum × norm/100
+    extra_phase_norm: Optional[dict] = None
+    extra_phase_table_sum: Optional[dict] = None
     peak_tth: Optional[np.ndarray] = None
     # 第二相（如 Al 基片）的峰位：{label: 2θ 数组}，给布拉格刻度用
     extra_peak_tth: Optional[dict] = None
@@ -352,7 +358,12 @@ class _PeakTable:
         self.tth = np.asarray(tth, dtype=float)
         if not self.dynamic:
             inten = np.asarray(inten, dtype=float)
-            self.inten = (inten / inten.max() * 100.0
+            # 记住归一化前的最大原始强度：逐反射强度的绝对和 =
+            # Σ(I_fit) × _inten_norm / 100，相分数要用它把不同相的
+            # "表内归一化"还原到同一把尺子上。
+            self._inten_norm = (float(inten.max())
+                                if inten.size and inten.max() > 0 else 1.0)
+            self.inten = (inten / self._inten_norm * 100.0
                           if inten.size and inten.max() > 0 else inten)
         theta = np.radians(self.tth / 2.0)
         self.s2 = (np.sin(theta) / float(wavelength)) ** 2
@@ -507,6 +518,16 @@ class _Model:
             em.fixed.update({k: p[k] for k in
                              ("zero", "u", "v", "w", "x", "y", "z",
                               "polariz", "size_mix", "strain_mix")})
+            # 额外相晶胞精修：label:a/b/c 在全局 free 里，写回 em.fixed
+            # 后 em._parts 才会用新晶胞重算峰位。立方相只认 a。
+            for key in ("a", "b", "c"):
+                name = f"{label}:{key}"
+                if name in p:
+                    em.fixed[key] = float(p[name])
+            if getattr(em.table, "cubic", False):
+                name = f"{label}:a"
+                if name in p:
+                    em.fixed["b"] = em.fixed["c"] = float(p[name])
             if getattr(em, "lebail", False):
                 mask = getattr(em, "lebail_mask", None)
                 cols = em.peak_columns(em.fixed)
@@ -1010,6 +1031,37 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     else:
         cell_refine = bool(cell_refine)
 
+    # ── 额外相晶胞精修：label:a/b/c 直接进全局 free（2026-10-27）──
+    # 三相批量的 rich 用主相 a/b/c；poor 是额外相，需要自己的一套
+    # 晶胞参数。Al 是立方参考相，只放开 a（或干脆不放开）。
+    extra_cell_names = []
+    extra_cell_init = {}
+    extra_cell_bounds = {}
+    if extra_phases:
+        seen_extra_labels = set()
+        for spec in extra_phases:
+            label = str(spec.get("label", "extra"))
+            if label in seen_extra_labels:
+                raise ValueError(f"extra_phases label 重复：{label}")
+            seen_extra_labels.add(label)
+            if not spec.get("refine_cell", False):
+                continue
+            st_extra = spec.get("structure")
+            if st_extra is None:
+                raise ValueError("extra_phases 每项必须给 structure")
+            abc = [float(spec.get(k, st_extra.lattice.abc[i]))
+                   for i, k in enumerate(("a", "b", "c"))]
+            cubic_extra = max(abc) - min(abc) < 1e-4
+            keys = ("a",) if cubic_extra else ("a", "b", "c")
+            for key, val in zip(keys, abc):
+                name = f"{label}:{key}"
+                if name in free:
+                    continue
+                free = free + (name,)
+                extra_cell_names.append(name)
+                extra_cell_init[name] = float(val)
+                extra_cell_bounds[name] = (val - 1.0, val + 1.0)
+
     # ── 分元素 B / 可精修织构（动态强度） ─────────────────────────
     elem_names = [n[2:] for n in free
                   if n.startswith("b_") and n != "b_iso"]
@@ -1091,7 +1143,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     # ── 初值 ────────────────────────────────────────────────────────
     dynamic_names = ([f"b_{e}" for e in elem_names]
                      + (["md_r"] if md_refine else [])
-                     + list(site_params) + list(occ_params))
+                     + list(site_params) + list(occ_params)
+                     + list(extra_cell_names))
     bad = [n for n in free if n not in _ALLOWED and n not in dynamic_names]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")
@@ -1148,6 +1201,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             table.b_iso_base = 0.0
         if b_iso is None or isinstance(b_iso, dict):
             init["b_iso"] = 0.0
+    init.update(extra_cell_init)
     if initial:
         init.update(initial)
     user_bounds = bounds or {}
@@ -1156,7 +1210,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         "b": (table.b0 - 1.0, table.b0 + 1.0),
         "c": (table.c0 - 1.0, table.c0 + 1.0),
     }
-    bounds = {**DEFAULT_BOUNDS, **cell_bounds, **user_bounds}
+    bounds = {**DEFAULT_BOUNDS, **cell_bounds, **extra_cell_bounds,
+              **user_bounds}
     if isinstance(b_iso, dict) and "b_iso" not in user_bounds:
         # 字典 B 时自由参数是 ΔB，允许为负（实验样品的 B 可能比 CIF 小）
         bounds["b_iso"] = (-50.0, 50.0)
@@ -1184,6 +1239,16 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                      and n not in occ_params)
         if rest:
             stages.append(rest)
+        if extra_cell_names:
+            # 额外相晶胞和 zero/峰宽一起**先**动：初始晶胞故意给错时，
+            # 如果把它们留到最后，优化器会先歪曲主相峰形去凑错的峰位，
+            # 再放开晶胞也拉不回来（2026-10-27 合成 Al 实测 Rwp 43%）。
+            first = tuple(stages[0]) if stages else ()
+            stages[0] = tuple(dict.fromkeys(
+                first + tuple(extra_cell_names)))
+            stages[1:] = [tuple(n for n in s if n not in extra_cell_names)
+                          for s in stages[1:]]
+            stages = [s for s in stages if s]
     else:
         stages = [tuple(s) for s in stages]
         bad = [n for s in stages for n in s if n not in free]
@@ -1332,6 +1397,11 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     # 第二相的位置从各自的 _Model 取（_extra_columns 已用 p_final 更新过）。
     extra_tth = {label: np.asarray(em._parts(em.fixed)[0], dtype=float)
                  for label, em in model.extra_models}
+    extra_phase_norm = {label: float(em.table._inten_norm)
+                        for label, em in model.extra_models}
+    extra_phase_table_sum = {
+        label: float(np.sum(em.table.inten))
+        for label, em in model.extra_models}
     extra_lebail = {}
     for label, em in model.extra_models:
         if not getattr(em, "lebail", False):
@@ -1344,6 +1414,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             "tth": extra_tth[label][mask],
             "i_fit": amps_extra * i_tab,
             "i_table": i_tab,
+            "norm": float(em.table._inten_norm),
         }
     if phase_label is None:
         try:
@@ -1363,7 +1434,12 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         background=bg, scale=float(scale), background_coeffs=coeffs,
         initial=init, stages=tuple(used_stages),
         peak_intensities=peak_intensities,
-        peak_table_intensities=(None if amps is None else table.inten.copy()),
+        # 峰表强度/norm 在结构模式也给出：相分数要用
+        # scale × Σ(table.inten) × norm/100 还原相对散射强度
+        peak_table_intensities=table.inten.copy(),
+        peak_table_norm=float(table._inten_norm),
+        extra_phase_norm=(extra_phase_norm or None),
+        extra_phase_table_sum=(extra_phase_table_sum or None),
         peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
         extra_peak_tth=(extra_tth or None),
         extra_lebail=(extra_lebail or None),

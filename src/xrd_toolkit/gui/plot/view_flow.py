@@ -71,12 +71,14 @@ def _pending_products(window: QMainWindow, name: str, rest: list,
     todo = []
     done = set(seen or ())    # 已在面板那批开算的路径（重复条目被防爆线
     #                           劈开时，后半截也不能再算一遍）；同批内同理
+    mask_on = getattr(window, "current_mask", None) is not None
     for source in rest:                       # rest = 来源对象（已按原始数据过滤）
         path = Path(source.path)
         if path in done:
             continue
         done.add(path)
-        if not stage_cache.has_1d(path, **kw):
+        # 有 mask 时缓存键不适用：全部重算（_spawn 也不会落缓存）
+        if mask_on or not stage_cache.has_1d(path, **kw):
             todo.append(path)
     return todo
 

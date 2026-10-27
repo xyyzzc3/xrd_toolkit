@@ -68,6 +68,17 @@ def _is_off_center(image_shape, poni1_m, poni2_m, pixel_size_m) -> bool:
     return float(np.hypot(dx, dy)) > OFF_CENTER_PX
 
 
+def _check_mask(image, mask):
+    """掩膜形状校验；None 原样返回。True = 被遮掉（坏像素）。"""
+    if mask is None:
+        return None
+    arr = np.asarray(mask, dtype=bool)
+    if arr.shape != np.asarray(image).shape:
+        raise ValueError(
+            f"mask 形状 {arr.shape} 与图像 {np.asarray(image).shape} 不一致")
+    return arr
+
+
 def lab6_theoretical_2theta(wavelength_m: float, n_rings: int = 16) -> np.ndarray:
     """【兼容包装】LaB₆ 理论 2θ；新代码用 calibrant_2theta(...)。
 
@@ -644,6 +655,7 @@ def integrate_1d(
     npt: int = 3000,
     tth_min_deg: float | None = None,
     tth_max_deg: float | None = None,
+    mask: np.ndarray | None = None,
 ) -> tuple:
     """
     方位角积分：把 2D 衍射图像变成 1D 图谱 I(2θ)。
@@ -666,6 +678,9 @@ def integrate_1d(
             CLI 脚本不传即走全范围）；传了就只积这个区间，npt 个
             采样点摊在区间内（区间越小分辨率越高）。两者都传时
             必须 tth_min_deg < tth_max_deg，否则 ValueError。
+        mask : np.ndarray 或 None（可选）
+            与图像同形的 bool 数组，True = 被遮掉；被遮像素完全不
+            参与方位角平均（pyFAI 与自研两条路径都生效）。
 
     备注：
         物理/几何参数全部必传、无默认值——由脚本从 config.py 的
@@ -696,12 +711,14 @@ def integrate_1d(
         raise ValueError(
             f"tth_min_deg ({tth_min_deg}) must be < tth_max_deg "
             f"({tth_max_deg})")
+    mask_arr = _check_mask(image, mask)
     if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
         _backend["name"] = "自研（偏置束心）"
         return _integrate_1d_diy(image, pixel_size_m, dist_m,
                                  poni1_m, poni2_m, npt,
                                  tth_min_deg=tth_min_deg,
-                                 tth_max_deg=tth_max_deg)
+                                 tth_max_deg=tth_max_deg,
+                                 mask=mask_arr)
     entry = _integrator_for(
         _integrator_key(pixel_size_m, wavelength_m, dist_m, poni1_m,
                         poni2_m, rot1_deg, rot2_deg),
@@ -719,10 +736,11 @@ def integrate_1d(
         try:
             if rng is None:
                 out = ai.integrate1d(image, npt, unit="2th_deg",
-                                     method=method)
+                                     method=method, mask=mask_arr)
             else:
                 out = ai.integrate1d(image, npt, unit="2th_deg",
-                                     method=method, radial_range=rng)
+                                     method=method, radial_range=rng,
+                                     mask=mask_arr)
         except Exception as err:            # noqa: BLE001
             last = err                        # 该算法不可用 → 回退下一个
             continue
@@ -744,6 +762,7 @@ def integrate_sectors(
     rot2_deg: float,
     n_sectors: int = 36,
     npt: int = 3000,
+    mask: np.ndarray | None = None,
 ) -> tuple:
     """
     扇形积分：把 0°~360° 方位角分成 n_sectors 个扇区，各自独立积分。
@@ -768,6 +787,9 @@ def integrate_sectors(
         统一由脚本从 config.CONFIGS 选中条目传入，无默认值）
         n_sectors : int
             扇区数（默认 36，每 10° 一个）
+        mask : np.ndarray 或 None（可选）
+            与图像同形的 bool 数组，True = 被遮掉；被遮像素不参与
+            任何扇区的平均。
 
     返回：
         (tth_deg, I2d, chi_centers_deg) : tuple
@@ -781,9 +803,11 @@ def integrate_sectors(
     _covered_azimuth_labels 给出图像实际覆盖的方位角跨度（部分环
     摆法下不是整圈 −180°~180°，瀑布图 y 轴如实标注）。
     """
+    mask_arr = _check_mask(image, mask)
     if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
         return _integrate_sectors_diy(image, pixel_size_m, dist_m,
-                                      poni1_m, poni2_m, n_sectors, npt)
+                                      poni1_m, poni2_m, n_sectors, npt,
+                                      mask=mask_arr)
     ai = AzimuthalIntegrator(
         dist=dist_m,
         poni1=poni1_m,
@@ -796,7 +820,8 @@ def integrate_sectors(
         wavelength=wavelength_m,
     )
     # integrate2d：第 1 维径向（2θ），第 2 维方位角（χ）
-    i2d, tth_deg, chi = ai.integrate2d(image, npt, n_sectors, unit="2th_deg")
+    i2d, tth_deg, chi = ai.integrate2d(
+        image, npt, n_sectors, unit="2th_deg", mask=mask_arr)
     i2d = np.asarray(i2d)
     # 不同版本返回的形状可能转置，统一成 (npt, n_sectors)
     if i2d.shape[0] != npt and i2d.shape[1] == npt:
@@ -843,7 +868,7 @@ def _polar_bins(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
 
 
 def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
-                      tth_min_deg=None, tth_max_deg=None):
+                      tth_min_deg=None, tth_max_deg=None, mask=None):
     """自研 numpy 方位角积分（1D），束心偏离探测器中心过大时使用。
 
     pyFAI 2026.x 在该条件下径向分箱错误（见 OFF_CENTER_PX 注释），
@@ -861,6 +886,8 @@ def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
                                    tth_max_deg=tth_max_deg)
     flat = idx.ravel()
     keep = flat >= 0   # 区间外像素（-1）不进任何箱：bincount 不收负数
+    if mask is not None:
+        keep &= ~np.asarray(mask, dtype=bool).ravel()
     flat = flat[keep]
     counts = np.bincount(flat, minlength=npt)
     sums = np.bincount(flat,
@@ -873,7 +900,7 @@ def _integrate_1d_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m, npt,
 
 
 def _integrate_sectors_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m,
-                           n_sectors, npt):
+                           n_sectors, npt, mask=None):
     """自研 numpy 扇形积分（2D），束心偏离探测器中心过大时使用。
 
     与 _integrate_1d_diy 相同的径向分箱（共享 2θ 网格与箱号），再按
@@ -890,6 +917,8 @@ def _integrate_sectors_diy(image, pixel_size_m, dist_m, poni1_m, poni2_m,
     for k in range(n_sectors):
         c0 = -180.0 + width * k
         sel = (chi_px >= c0) & (chi_px < c0 + width)
+        if mask is not None:
+            sel &= ~np.asarray(mask, dtype=bool)
         flat = idx[sel]
         counts = np.bincount(flat, minlength=npt)
         sums = np.bincount(flat, weights=img64[sel], minlength=npt)
