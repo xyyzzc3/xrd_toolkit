@@ -50,6 +50,8 @@ DEFAULT_IMAGES = [
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
 # 实验拟合用 pyFAI 默认 LaB6 的晶胞数值（等同 SRM 660c；证书未记录）
 LAB6_CIF = STRUCT / "LaB6_NIST660c.cif"
+# 背景曲率罚项（同 fit_lmfp.py：0.1 把 LMFP 7.5° 的背景塌陷压掉）
+BG_SMOOTH = 0.1
 # 默认输出到系统临时目录：脚本不许往仓库的 outputs/ 写东西（隔离护栏）
 DEFAULT_OOB = Path(tempfile.gettempdir()) / "xrd_toolkit_analysis"
 
@@ -176,6 +178,9 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
             # R 由 (200)/(220)/(311) 弱反射定出（0.72）；LiF 与 Al
             # 同为岩盐且晶胞几乎相同，位置上完全退化，不再另加 LiF。
             "md": ((1, 1, 1), 0.72),
+            # 单轴 MD 在 (331) 上失效（2026-10-27）：Al 峰强逐反射自由，
+            # 避免背景被峰模型误差拉出 7.5° 的坑。
+            "refine_intensities": True,
         })
     ip = {} if inst is None else {
         "zero": inst.params["zero"], "u": inst.params["u"],
@@ -188,7 +193,8 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
     label = Path(primary_name).stem.split("_")[0]
     struct = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, intensity_poly=2, weights=w_struct,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        intensity_poly=2, weights=w_struct,
         extra_phases=extras, phase_label=label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
@@ -198,7 +204,8 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
     leb_extras = extras if use_al else []
     lebail = fit_pattern(
         primary, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, weights=leb_weights, cell_refine=True,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        weights=leb_weights, cell_refine=True,
         refine_intensities=True, phase_label=label,
         extra_phases=leb_extras,
         free=("size_um", "mustrain"),
@@ -209,7 +216,7 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
     plot_src = lebail
-    phase_txt = " + ".join(["Al (111) textured"] if use_al else [])
+    phase_txt = " + ".join(["Al substrate (per-reflection)"] if use_al else [])
     plot_fit(plot_src, f"{path.name} — auto: {primary_name}"
                        + (f" + {phase_txt}" if phase_txt else "")
                        + " Le Bail fit, "
@@ -277,7 +284,7 @@ def main():
             obs_t, obs_h, lam, a.tmin, a.tmax, zero, top[1], scale)
         use_al = bool(exclude)
         if use_al:
-            print("  自动识别 Al 集流体峰，按 (111) 织构第二相建模："
+            print("  自动识别 Al 集流体峰，按 Al 基片（逐反射强度）建模："
                   + ", ".join(f"{lo:.2f}–{hi:.2f}°" for lo, hi in exclude))
         else:
             print("  未识别到 Al 集流体强峰")

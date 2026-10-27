@@ -16,7 +16,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit.simulation import core  # noqa: E402
-from xrd_toolkit.simulation.fit import FitResult, fit_pattern, rwp  # noqa: E402
+from xrd_toolkit.simulation.fit import (  # noqa: E402
+    FitResult,
+    _piecewise_linear_basis,
+    fit_pattern,
+    rwp,
+)
 from xrd_toolkit.simulation.gsas_profile import (  # noqa: E402
     pv_area_normalized,
     reflection_sig_gam,
@@ -53,6 +58,32 @@ def _synth_modified(structure, *, factors=None, w=18.0, step=0.01,
     for c, ii, fw, et, fac in zip(sticks, inten, fwhm, eta, factors):
         y += float(fac) * ii * pv_area_normalized(tth, c, fw, et)
     return tth, y + background, factors
+
+
+def _synth_two_phase(main, extra, *, factor=0.7, extra_scale=100.0,
+                     w=18.0, step=0.01, two_theta_range=(10.0, 80.0),
+                     peak_deg=44.72):
+    """主相 + 第二相；第二相在 peak_deg 的反射强度乘 factor。"""
+    tth, y_main, _, _ = simulate_pattern_gsas(
+        main, wavelength=CU_KA, two_theta_range=two_theta_range,
+        step_deg=step, scale=1000.0, size_um=1e5, mustrain=0.0,
+        zero_deg=0.0, u=0.5, v=-0.1, w=w, x=1.0, y=0.3)
+    sticks, inten, _, _ = core.pattern_from_structure(
+        extra, wavelength=CU_KA, two_theta_range=two_theta_range,
+        min_intensity=0.0)
+    sig, gam = reflection_sig_gam(
+        sticks, CU_KA, u=0.5, v=-0.1, w=w, x=1.0, y=0.3,
+        size_um=1e5, mustrain=0.0)
+    fwhm, eta = sig_gam_to_fwhm_eta(sig, gam)
+    factors = np.ones(len(sticks))
+    i_pert = int(np.argmin(np.abs(sticks - peak_deg)))
+    factors[i_pert] = factor
+    y_extra = np.zeros_like(tth)
+    for c, ii, fw, et, fac in zip(sticks, inten, fwhm, eta, factors):
+        y_extra += (extra_scale * float(fac) * ii
+                    * pv_area_normalized(tth, c, fw, et))
+    true_bg = 50.0 + 0.5 * (tth - two_theta_range[0])
+    return tth, y_main + y_extra + true_bg, true_bg, sticks, i_pert
 
 
 class TestFitRecovery(unittest.TestCase):
@@ -386,6 +417,108 @@ class TestFitReport(unittest.TestCase):
         text = self._result(peak_intensities=None,
                             peak_table_intensities=None).report()
         self.assertIn("Bragg 2theta: 1.5000 2.5000", text)
+
+    def test_report_lists_extra_phase_per_reflection(self):
+        text = self._result(extra_lebail={"Al": {
+            "tth": np.array([3.0, 4.0]),
+            "i_fit": np.array([5.0, 0.0]),
+            "i_table": np.array([10.0, 1e-31]),
+        }}).report()
+        self.assertIn("extra phase Al (Le Bail)", text)
+        self.assertIn("0.500", text)
+        self.assertNotIn("1e-31", text)   # 数值噪声反射不打印
+
+
+class TestExtraPhaseLebailAndBackgroundSmooth(unittest.TestCase):
+    """2026-10-27：Al 第二相逐反射强度 + 背景曲率罚项。
+
+    LMFP 的 Al (331) 被单轴 MD 高估 ~1.7×，旧代码让背景在 7.5° 塌
+    47 counts 去补偿。这两个机制一个去掉根因，一个防止背景再被拉走。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.st = core.load_structure(STRUCT_DIR / "LaB6_1000055.cif")
+        cls.al = core.load_structure(STRUCT_DIR / "Al_metal.cif")
+        cls.al_a = float(cls.al.lattice.abc[0])
+
+    def _fit(self, tth, y, true_bg, *, lebail, smooth=0.0):
+        return fit_pattern(
+            self.st, tth, y, wavelength=CU_KA, background=true_bg,
+            background_knots=0.25, background_smooth=smooth,
+            weights="uniform",
+            extra_phases=[{
+                "structure": self.al, "label": "Al",
+                "a": self.al_a, "b": self.al_a, "c": self.al_a,
+                "size_um": 1e5, "mustrain": 0.0,
+                "refine_intensities": lebail,
+            }],
+            free=("zero", "u", "v", "w"),
+            initial={"zero": 0.0, "u": 0.5, "v": -0.1, "w": 18.0},
+            stages=[("zero", "u", "v", "w")])
+
+    def test_al_per_reflection_recovers_perturbed_intensity(self):
+        tth, y, true_bg, _sticks, _i = _synth_two_phase(
+            self.st, self.al, factor=0.7)
+        res = self._fit(tth, y, true_bg, lebail=True)
+        data = res.extra_lebail["Al"]
+        i_tab = np.asarray(data["i_table"], dtype=float)
+        i_fit = np.asarray(data["i_fit"], dtype=float)
+        self.assertTrue(np.all(i_tab > 1e-6))   # 1e-31 噪声反射被剔除
+        amp = i_fit / i_tab
+
+        def amp_at(deg):
+            i = int(np.argmin(np.abs(np.asarray(data["tth"]) - deg)))
+            return float(amp[i])
+
+        # (200) 被乘 0.7，(220) 保持 1.0 → 振幅比 = 0.7
+        self.assertAlmostEqual(amp_at(44.72) / amp_at(65.11), 0.7,
+                               delta=0.05)
+        # 代表 scale 取最强反射，不能因为弱峰为 0 而被中位数拉成 0
+        self.assertGreater(res.params["Al:scale"], 1.0)
+
+    def test_al_per_reflection_keeps_background_from_compensating(self):
+        tth, y, true_bg, _sticks, _i = _synth_two_phase(
+            self.st, self.al, factor=0.7)
+        raw = self._fit(tth, y, true_bg, lebail=False)
+        leb = self._fit(tth, y, true_bg, lebail=True)
+        basis, _knots = _piecewise_linear_basis(tth, 0.25)
+        corr_raw = basis @ raw.background_coeffs
+        corr_leb = basis @ leb.background_coeffs
+        m = (tth >= 44.3) & (tth <= 45.1)
+        self.assertLess(float(np.max(np.abs(corr_leb[m]))),
+                        0.3 * float(np.max(np.abs(corr_raw[m]))))
+        self.assertLess(leb.rwp, raw.rwp)
+
+    def test_background_smoothness_penalty(self):
+        sticks, inten, _, _ = core.pattern_from_structure(
+            self.st, wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+            min_intensity=0.0)
+        factors = np.ones(len(sticks))
+        factors[int(np.argmax(inten))] = 1.5
+        tth, y, _ = _synth_modified(self.st, factors=factors, step=0.01)
+        true_bg = 50.0 + 0.5 * (tth - 10.0)
+        y = y + true_bg
+
+        def fit(smooth):
+            return fit_pattern(
+                self.st, tth, y, background=true_bg,
+                background_knots=0.25, background_smooth=smooth,
+                weights="uniform", free=("zero", "u", "v", "w"),
+                initial={"zero": 0.012, "u": 0.5, "v": -0.1, "w": 18.0},
+                stages=[("zero", "u", "v", "w")])
+
+        raw = fit(0.0)
+        smooth = fit(1.0)
+        basis, _knots = _piecewise_linear_basis(tth, 0.25)
+        corr_raw = basis @ raw.background_coeffs
+        corr_smooth = basis @ smooth.background_coeffs
+        self.assertLess(
+            np.linalg.norm(np.diff(smooth.background_coeffs, 2)),
+            0.7 * np.linalg.norm(np.diff(raw.background_coeffs, 2)))
+        self.assertLess(np.max(np.abs(corr_smooth)),
+                        np.max(np.abs(corr_raw)))
+        self.assertLess(smooth.rwp, raw.rwp + 0.6)
 
 
 class TestFitHelpers(unittest.TestCase):

@@ -12,7 +12,9 @@
 
     I_k       = m_k·|F_k|²·LP(θ_k)（来自 core 的峰表，面积口径）
     Γ_k, η_k  由 U/V/W/X/Y/Z + Size/Mustrain 按 GSAS-II 公式给出
-    B(x)      背景：Chebyshev 多项式（或外部固定数组）
+    B(x)      背景：Chebyshev 多项式、外部固定数组，或固定数组 +
+              0.25° 分段线性修正（可用 background_smooth 加曲率罚项，
+              防止背景去补偿峰模型误差）
     scale     比例因子
 
 **scale 与背景系数是线性参数**：每步非线性参数给定时，用加权线性
@@ -116,6 +118,8 @@ class FitResult:
     peak_tth: Optional[np.ndarray] = None
     # 第二相（如 Al 基片）的峰位：{label: 2θ 数组}，给布拉格刻度用
     extra_peak_tth: Optional[dict] = None
+    # 第二相逐反射强度（Le Bail 模式）：{label: {tth, i_fit, i_table}}
+    extra_lebail: Optional[dict] = None
     # 主相标签（化学式，如 LaB6），给布拉格刻度行命名
     phase_label: Optional[str] = None
     # 结构精修后的位点坐标：{标签: (wyckoff, x, y, z)}（分数坐标）
@@ -173,8 +177,12 @@ class FitResult:
         labels = sorted({n.split(":", 1)[0] for n in self.params if ":" in n})
         for label in labels:
             p = self.params
+            mode = (" (Le Bail per-reflection, scale=strongest)"
+                    if label in (self.extra_lebail or {}) else "")
             lines.append(
-                f"extra phase {label}: scale={p.get(f'{label}:scale', float('nan')):.4g} "
+                f"extra phase {label}: "
+                f"scale={p.get(f'{label}:scale', float('nan')):.4g}"
+                f"{mode} "
                 f"cell=({p.get(f'{label}:a', float('nan')):.4f}, "
                 f"{p.get(f'{label}:b', float('nan')):.4f}, "
                 f"{p.get(f'{label}:c', float('nan')):.4f}) "
@@ -186,6 +194,28 @@ class FitResult:
             if arr.size:
                 lines.append(f"extra phase {label} Bragg 2theta: "
                              + " ".join(f"{v:.4f}" for v in arr))
+        # 第二相逐反射强度（Le Bail 模式）：织构模型不可靠时，峰强交给数据
+        for label, data in (self.extra_lebail or {}).items():
+            i_fit = np.asarray(data["i_fit"], dtype=float)
+            i_tab = np.asarray(data["i_table"], dtype=float)
+            cut = 1e-9 * float(np.max(i_tab)) if i_tab.size else 0.0
+            good = i_tab > max(cut, 1e-9)
+            if not np.any(good):
+                continue
+            ratio = i_fit[good] / i_tab[good]
+            lines.append(
+                f"extra phase {label} (Le Bail): {int(np.count_nonzero(good))} "
+                f"per-reflection intensities; fit/table ratio median "
+                f"{np.median(ratio):.3f} range {ratio.min():.3f}–"
+                f"{ratio.max():.3f}")
+            lines.append(f"{'2theta':>10} {'I_fit':>12} "
+                         f"{'I_table':>12} {'fit/table':>10}")
+            for pos, f_val, t_val in zip(data["tth"], i_fit, i_tab):
+                if not (t_val > max(cut, 1e-9)):
+                    continue
+                r = f_val / t_val if t_val else float("nan")
+                lines.append(f"{float(pos):10.4f} {float(f_val):12.6g} "
+                             f"{float(t_val):12.6g} {r:10.3f}")
         # 主相峰位：Le Bail 时上面的逐峰表已含位置，这里只补结构拟合
         if self.peak_tth is not None and len(self.peak_tth) \
                 and self.peak_intensities is None:
@@ -446,7 +476,8 @@ class _Model:
 
     def __init__(self, table, tth, y_target, weights, wavelength, fixed,
                  background_basis, refine_intensities=False,
-                 intensity_poly=0, extra_models=None):
+                 intensity_poly=0, extra_models=None,
+                 background_smooth=0.0):
         self.table = table
         self.tth = np.asarray(tth, dtype=float)
         self.y = np.asarray(y_target, dtype=float)
@@ -459,16 +490,98 @@ class _Model:
         self.intensity_poly = int(intensity_poly)
         self.extra_models = list(extra_models or [])
         self.extra_scales = []
+        self.extra_peak_amps = {}
+        # 背景曲率罚项：0 = 关；越大背景越"硬"（见 _penalty_rows）。
+        self.background_smooth = float(background_smooth)
 
-    def _extra_curves(self, p):
-        """额外相（如 Al 基片）的峰形曲线；仪器参数跟随主相。"""
-        out = []
-        for _label, em in self.extra_models:
+    def _extra_columns(self, p):
+        """额外相（如 Al 基片）的线性列块；仪器参数跟随主相。
+
+        普通相 = 整条峰形一列（自由 scale）；Le Bail 相 = 每条
+        非零反射一列（自由强度，非负），用于织构模型不可靠的基底。
+        返回 (blocks, layout)，layout 项为 (label, kind, mask, ref)。
+        """
+        blocks = []
+        layout = []
+        for label, em in self.extra_models:
             em.fixed.update({k: p[k] for k in
                              ("zero", "u", "v", "w", "x", "y", "z",
                               "polariz", "size_mix", "strain_mix")})
-            out.append(em.peak_curve(em.fixed))
-        return out
+            if getattr(em, "lebail", False):
+                mask = getattr(em, "lebail_mask", None)
+                cols = em.peak_columns(em.fixed)
+                if mask is not None:
+                    cols = cols[:, mask]
+                ref = None
+                if mask is not None and np.any(mask):
+                    inten = np.asarray(em.table.inten, dtype=float)[mask]
+                    if inten.size:
+                        ref = int(np.argmax(inten))
+                blocks.append(cols)
+                layout.append((label, "peaks", mask, ref))
+            else:
+                blocks.append(em.peak_curve(em.fixed)[:, None])
+                layout.append((label, "scale", None, None))
+        return blocks, layout
+
+    def _split_extra(self, coef, start, layout):
+        """从线性系数里拆出额外相：代表 scale + 逐反射强度。"""
+        scales = []
+        peak_amps = {}
+        j = start
+        for label, kind, mask, ref in layout:
+            if kind == "scale":
+                scales.append(float(coef[j]))
+                j += 1
+            else:
+                n = int(np.count_nonzero(mask)) if mask is not None else 0
+                amps = np.asarray(coef[j:j + n], dtype=float)
+                peak_amps[label] = amps
+                # 代表 scale：最强反射的振幅（报告/脚本仍按单值读）；
+                # 用中位数会被大量零强度的弱反射拉成 0。
+                if ref is not None and ref < n:
+                    scales.append(float(amps[ref]))
+                else:
+                    scales.append(float(np.median(amps)) if n else 0.0)
+                j += n
+        return scales, peak_amps
+
+    def _penalty_rows(self, ncol):
+        """背景曲率罚项（二阶差分）；背景列必须在最后。"""
+        n_bg = (0 if self.background_basis is None
+                else self.background_basis.shape[1])
+        if self.background_smooth <= 0.0 or n_bg < 3 or ncol < n_bg:
+            return None
+        n_data = ncol - n_bg
+        D2 = np.zeros((n_bg - 2, n_bg))
+        for i in range(n_bg - 2):
+            D2[i, i] = 1.0
+            D2[i, i + 1] = -2.0
+            D2[i, i + 2] = 1.0
+        P = np.zeros((n_bg - 2, ncol))
+        P[:, n_data:] = math.sqrt(self.background_smooth) * D2
+        return P
+
+    def _lstsq(self, A):
+        """加权最小二乘 + 背景曲率罚项。"""
+        Aw = A * self.sqrt_w[:, None]
+        rhs = self.y * self.sqrt_w
+        P = self._penalty_rows(A.shape[1])
+        if P is not None:
+            Aw = np.vstack([Aw, P])
+            rhs = np.concatenate([rhs, np.zeros(P.shape[0])])
+        coef, *_ = np.linalg.lstsq(Aw, rhs, rcond=None)
+        return coef
+
+    def _lsq_linear(self, A, lb, ub):
+        """有界加权最小二乘 + 背景曲率罚项。"""
+        Aw = A * self.sqrt_w[:, None]
+        rhs = self.y * self.sqrt_w
+        P = self._penalty_rows(A.shape[1])
+        if P is not None:
+            Aw = np.vstack([Aw, P])
+            rhs = np.concatenate([rhs, np.zeros(P.shape[0])])
+        return lsq_linear(Aw, rhs, bounds=(lb, ub))
 
     def params(self, vec):
         p = dict(self.fixed)
@@ -603,15 +716,19 @@ class _Model:
 
     def solve_linear(self, p):
         """解线性参数：结构模式 = scale + 背景；Le Bail = 每峰强度 + 背景。"""
+        bg_basis = self.background_basis
+        extra_blocks, extra_layout = self._extra_columns(p)
+        extra_cols = (np.column_stack(extra_blocks) if extra_blocks
+                      else np.empty((len(self.y), 0)))
+        n_extra = extra_cols.shape[1]
+
         if self.refine_intensities:
             M = self.peak_columns(p)
             n_peaks = M.shape[1]
-            extras = self._extra_curves(p)
-            n_extra = len(extras)
-            cols_all = (np.column_stack([M] + extras) if n_extra else M)
+            cols_all = (np.column_stack([M, extra_cols])
+                        if n_extra else M)
             n_all = n_peaks + n_extra
-            bg_basis = self.background_basis
-            # 主相逐峰强度 + 额外相 scale 都必须非负：无约束 lstsq 后
+            # 主相逐峰强度 + 额外相强度都必须非负：无约束 lstsq 后
             # 把负列剔掉重解（active-set）；比 lsq_linear 快且稳。
             active = np.ones(n_all, dtype=bool)
             coef = np.zeros(0)
@@ -622,8 +739,7 @@ class _Model:
                     cols.append(bg_basis)
                 A = np.column_stack(cols) if cols[0].shape[1] or len(cols) > 1 \
                     else np.empty((len(self.y), 0))
-                coef, *_ = np.linalg.lstsq(
-                    A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
+                coef = self._lstsq(A)
                 n_act = int(active.sum())
                 a_active = np.asarray(coef[:n_act], dtype=float)
                 if not active.any() or np.all(a_active >= 0.0):
@@ -634,9 +750,7 @@ class _Model:
                     active = new_active
                     a_active = np.zeros(0)
                     if bg_basis is not None:
-                        coef, *_ = np.linalg.lstsq(
-                            bg_basis * self.sqrt_w[:, None],
-                            self.y * self.sqrt_w, rcond=None)
+                        coef = self._lstsq(bg_basis)
                     else:
                         coef = np.zeros(0)
                     break
@@ -650,14 +764,14 @@ class _Model:
             A = (np.column_stack(cols)
                  if (n_act or bg_basis is not None)
                  else np.empty((len(self.y), 0)))
-            coef, *_ = np.linalg.lstsq(
-                A * self.sqrt_w[:, None], self.y * self.sqrt_w, rcond=None)
+            coef = self._lstsq(A)
             a_active = np.asarray(coef[:n_act], dtype=float)
             coef_all = np.zeros(n_all, dtype=float)
             if n_act:
-                coef_all[active] = a_active[:n_act]
+                coef_all[active] = a_active
             amps = coef_all[:n_peaks]
-            self.extra_scales = [float(x) for x in coef_all[n_peaks:]]
+            self.extra_scales, self.extra_peak_amps = self._split_extra(
+                coef_all, n_peaks, extra_layout)
             if bg_basis is None:
                 bg = np.zeros_like(self.y)
                 coeffs = np.array([])
@@ -669,56 +783,53 @@ class _Model:
 
         if self.intensity_poly:
             M = self.intensity_columns(p)
-            extras = self._extra_curves(p)
-            n_extra = len(extras)
             n_main = M.shape[1]
-            cols = [M] + extras
-            if self.background_basis is not None:
-                cols.append(self.background_basis)
+            cols = [M]
+            if n_extra:
+                cols.append(extra_cols)
+            if bg_basis is not None:
+                cols.append(bg_basis)
             A = np.column_stack(cols)
             ncol = A.shape[1]
             lb = np.full(ncol, -np.inf)
             ub = np.full(ncol, np.inf)
             lb[0] = 0.0                       # 主相 scale 非负
-            lb[n_main:n_main + n_extra] = 0.0  # 额外相 scale 非负
-            sol = lsq_linear(A * self.sqrt_w[:, None],
-                             self.y * self.sqrt_w, bounds=(lb, ub))
-            coef = sol.x
+            lb[n_main:n_main + n_extra] = 0.0  # 额外相列非负
+            coef = self._lsq_linear(A, lb, ub).x
             scale = float(coef[0])
             a = (np.asarray(coef[1:n_main], dtype=float) / scale
                  if scale > 0 else np.zeros(self.intensity_poly))
-            self.extra_scales = [float(x)
-                                 for x in coef[n_main:n_main + n_extra]]
-            if self.background_basis is None:
+            self.extra_scales, self.extra_peak_amps = self._split_extra(
+                coef, n_main, extra_layout)
+            if bg_basis is None:
                 bg = np.zeros_like(self.y)
                 coeffs = np.array([])
             else:
-                bg = self.background_basis @ coef[n_main + n_extra:]
+                bg = bg_basis @ coef[n_main + n_extra:]
                 coeffs = np.asarray(coef[n_main + n_extra:], dtype=float)
             return A @ coef, scale, bg, coeffs, None, a
 
         y_model = self.peak_curve(p)
-        extras = self._extra_curves(p)
-        n_extra = len(extras)
-        cols = [y_model] + extras
-        if self.background_basis is not None:
-            cols.append(self.background_basis)
+        cols = [y_model]
+        if n_extra:
+            cols.append(extra_cols)
+        if bg_basis is not None:
+            cols.append(bg_basis)
         A = np.column_stack(cols)
         ncol = A.shape[1]
         lb = np.full(ncol, -np.inf)
         ub = np.full(ncol, np.inf)
         lb[0] = 0.0                            # 主相 scale 非负
-        lb[1:1 + n_extra] = 0.0                # 额外相 scale 非负
-        sol = lsq_linear(A * self.sqrt_w[:, None], self.y * self.sqrt_w,
-                         bounds=(lb, ub))
-        coef = sol.x
+        lb[1:1 + n_extra] = 0.0                # 额外相列非负
+        coef = self._lsq_linear(A, lb, ub).x
         scale = float(coef[0])
-        self.extra_scales = [float(x) for x in coef[1:1 + n_extra]]
-        if self.background_basis is None:
+        self.extra_scales, self.extra_peak_amps = self._split_extra(
+            coef, 1, extra_layout)
+        if bg_basis is None:
             bg = np.zeros_like(self.y)
             coeffs = np.array([])
         else:
-            bg = self.background_basis @ coef[1 + n_extra:]
+            bg = bg_basis @ coef[1 + n_extra:]
             coeffs = np.asarray(coef[1 + n_extra:], dtype=float)
         return A @ coef, scale, bg, coeffs, None, None
 
@@ -774,6 +885,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 polariz=0.5, b_iso=None, md=None,
                 two_theta_range=None, nmax=10,
                 background=4, background_poly=0, background_knots=0.0,
+                background_smooth=0.0,
                 weights="poisson", refine_intensities=False,
                 intensity_poly=0, cell_refine=None, extra_phases=None,
                 free=("zero", "u", "v", "w"),
@@ -799,6 +911,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            一个 n 阶 Chebyshev **修正**（n=0 只修常数偏移）。
         background_knots   分段线性背景修正的节点间距（度，建议 0.25–0.5）。
                            与 background_poly 互斥；局部支撑，不会吃掉窄峰。
+        background_smooth  背景曲率罚项强度（0 = 关）。>0 时在加权最小
+                           二乘里加 λ·Σ(二阶差分)²，让背景不能为了迁就
+                           峰模型误差而局部塌陷（如 LMFP 7.5° 的 Al (331)）；
+                           代价是背景的局部自由度变小。
         weights            "poisson"（默认）、"uniform" 或与数据同长的数组
         refine_intensities True = Le Bail 式：每条峰的积分强度单独作为
                            线性参数解出（不再受结构因子/B/LP 约束）。
@@ -818,8 +934,11 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                            需要显示原始配方时显式传字符串。
         extra_phases       额外相列表（如 Al 基片）：每项 dict 支持
                            structure（必填）、label、a/b/c、size_um、
-                           mustrain、b_iso、md。额外相的晶胞/微结构固定，
-                           只有 scale 是自由线性参数；仪器峰形跟随主相。
+                           mustrain、b_iso、md、refine_intensities。
+                           默认只有 scale 是自由线性参数；refine_intensities
+                           = True 时该相改成 Le Bail 逐反射强度（织构模型
+                           不可靠的基底用这个，峰强交给数据）。仪器峰形
+                           始终跟随主相。
         free               要精修的参数名（zero/U/V/W/X/Y/Z/size_um/
                            mustrain/b_iso/polariz；正交晶胞可加 a/b/c；
                            分元素 B 用 b_<元素>；织构强度用 md_r，需同时
@@ -1116,11 +1235,23 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                     extra_fixed, None, refine_intensities=False,
                     intensity_poly=0)
         em.free_names = []
+        # 额外相也可以走 Le Bail：织构/强度模型不可靠的基底（Al 箔）
+        # 把峰强交给数据，避免背景被峰模型误差拉出坑。
+        em.lebail = bool(spec.get("refine_intensities", False))
+        if em.lebail:
+            inten_extra = np.asarray(extra_table.inten, dtype=float)
+            # 表内强度归一化到 100；1e-31 这类是数值噪声，不是真反射
+            cut = (1e-9 * float(np.max(inten_extra))
+                   if inten_extra.size else 0.0)
+            em.lebail_mask = inten_extra > max(cut, 1e-9)
+        else:
+            em.lebail_mask = None
         extra_models.append((label, em))
 
     model = _Model(table, tth, y_target, w, wavelength, init, basis,
                    refine_intensities=refine_intensities,
                    intensity_poly=intensity_poly,
+                   background_smooth=background_smooth,
                    extra_models=extra_models)
     values = dict(init)
     result = None
@@ -1176,7 +1307,10 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     n_params = (len(free) + n_peaks
                 if refine_intensities else len(free) + 1 + int(intensity_poly))
     n_params += basis.shape[1] if basis is not None else 0
-    n_params += len(extra_models)          # 每相一个自由 scale
+    n_params += sum(
+        int(np.count_nonzero(em.lebail_mask))
+        if getattr(em, "lebail", False) else 1
+        for _label, em in extra_models)
     reduced = chi2 / max(1, len(y_raw) - n_params)
     stderr = _numerical_stderr(model, vec, list(free), reduced) \
         if len(free) else {}
@@ -1195,9 +1329,22 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     peak_intensities = (None if amps is None
                         else np.asarray(amps, dtype=float) * table.inten)
     # 峰位（含 zero/晶胞精修后的位置）总是给出：布拉格刻度/报告都要用。
-    # 第二相的位置从各自的 _Model 取（_extra_curves 已用 p_final 更新过）。
+    # 第二相的位置从各自的 _Model 取（_extra_columns 已用 p_final 更新过）。
     extra_tth = {label: np.asarray(em._parts(em.fixed)[0], dtype=float)
                  for label, em in model.extra_models}
+    extra_lebail = {}
+    for label, em in model.extra_models:
+        if not getattr(em, "lebail", False):
+            continue
+        mask = np.asarray(em.lebail_mask, dtype=bool)
+        i_tab = np.asarray(em.table.inten, dtype=float)[mask]
+        amps_extra = np.asarray(
+            model.extra_peak_amps.get(label, np.zeros(0)), dtype=float)
+        extra_lebail[label] = {
+            "tth": extra_tth[label][mask],
+            "i_fit": amps_extra * i_tab,
+            "i_table": i_tab,
+        }
     if phase_label is None:
         try:
             phase_label = structure.composition.reduced_formula
@@ -1219,6 +1366,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         peak_table_intensities=(None if amps is None else table.inten.copy()),
         peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
         extra_peak_tth=(extra_tth or None),
+        extra_lebail=(extra_lebail or None),
         phase_label=phase_label, site_coords=site_coords)
 
 

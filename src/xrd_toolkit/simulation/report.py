@@ -85,6 +85,8 @@ def fit_entries(sample, phase, result, *, lebail=None, al_scale=None,
         if b_iso > 2.0:
             notes.append(f"B = {b_iso:.2f} Å² 偏大，"
                          "峰强度以 Le Bail 结果为准")
+        elif b_iso <= 0.01:
+            notes.append("ΔB 停在下限 0（未定）；峰强度以 Le Bail 为准")
 
     quality = f"Rwp {result.rwp:.2f}%"
     if lebail is not None:
@@ -93,7 +95,10 @@ def fit_entries(sample, phase, result, *, lebail=None, al_scale=None,
     entries.append(("拟合质量", quality))
 
     if al_scale is not None:
-        entries.append(("第二相", f"Al 基片（相对强度 {al_scale:.2f}）"))
+        if getattr(result, "extra_lebail", None):
+            entries.append(("第二相", "Al 基片（逐峰强度）"))
+        else:
+            entries.append(("第二相", f"Al 基片（相对强度 {al_scale:.2f}）"))
     if not result.success:
         notes.append("优化器未收敛，结果仅供参考")
     return entries, notes

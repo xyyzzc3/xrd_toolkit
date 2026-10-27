@@ -3,6 +3,20 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
 版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
 
+## [Unreleased]
+
+### 拟合（模拟/精修）
+
+- **Al 基片逐反射强度 + 背景曲率罚项**（2026-10-27）：LMFP 的 Al (331)
+  被单轴 March–Dollase（R=0.72）高估约 1.7×（峰高；面积约 2×），旧实现
+  只能让 0.25° 背景修正去补偿，结果在 7.5° 附近塌出 ~47 counts 的坑——
+  背景在替峰模型背锅，不物理。现在 `extra_phases` 支持
+  `refine_intensities=True`，Al 峰强逐反射自由；`fit_pattern` 新增
+  `background_smooth`，对背景系数加二阶差分罚项，限制局部塌陷。
+  LMFP 脚本用 0.1：7.5° 凹陷 -47 → -7（平滑的整体偏移），结构 Rwp
+  3.02→2.75%、Le Bail 1.73→1.71%。LaB6 仪器拟合不启用罚项（Rwp
+  4.52% 不变）。报告新增 Al 逐反射强度表，摘要写「逐峰强度」。
+
 ## [0.1.5] — 2026-10-24
 
 ### 文档

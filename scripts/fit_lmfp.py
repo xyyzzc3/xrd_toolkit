@@ -7,14 +7,15 @@
 流程：
   1. 用 LaB₆ 标样（`data/lab6-00024.tif`）拟合仪器峰形
      zero/U/V/W/X/Y，之后固定给样品；
-  2. 样品 1D 积分（先掩固定坏点团）+ 自动基线；**排除 2.90–3.08° 的 Al (111) 基片峰**
-     （LMFP 电极的铝集流体，d≈2.34 Å；不排除会把强度模型带偏）；
-  3. 结构拟合：晶胞 a/b/c + Size/应变 + 全局 B + 0.25° 背景修正，
-     用来定晶胞；
+  2. 样品 1D 积分（先掩固定坏点团）+ 自动基线；Al 集流体作为第二相，
+     **逐反射强度自由**（单轴 March–Dollase 在 (331) 上高估 ~1.7×，
+     会让背景在 7.5° 塌坑；2026-10-27）；
+  3. 结构拟合：晶胞 a/b/c + Size/应变 + 全局 B + 0.25° 背景修正
+     （曲率罚项 0.1，防止背景替峰模型背锅），用来定晶胞；
   4. Le Bail 拟合：固定上一步的晶胞，逐峰强度自由，给出峰形/背景的
      质量上限（结构强度模型受织构/占位影响时看这个）；
-  5. 存图 `sim_xrd_fit_LMFP_<帧号>.png`（Al 区画灰带）与同名完整
-     参数报告 `.txt`（仪器 / 结构 / Le Bail 三段，数字全在里面）。
+  5. 存图 `sim_xrd_fit_LMFP_<帧号>.png` 与同名完整参数报告 `.txt`
+     （仪器 / 结构 / Le Bail 三段，数字全在里面）。
 
 CIF 默认 `LiMn0.5Fe0.5PO4_olivine.cif`（由 LiFePO4 结构把 Fe 位换成
 Fe0.5/Mn0.5 得到，作为起始模型；样品实际 Mn/Fe 比未知）。
@@ -52,6 +53,9 @@ LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
 # 样品晶胞初值：由低角峰 (200)/(101)/(111)/(020) 粗估（Å）
 SAMPLE_CELL = (10.376, 6.040, 4.708)
 AL_CIF = ROOT / "data" / "structures" / "Al_metal.cif"
+# 背景曲率罚项（0 = 关）：0.1 实测 LMFP 7.5° 凹陷 -15→-7 counts、
+# Rwp +0.04%；LaB6 仪器拟合不启用（低角陡降，罚项会动 U/V）。
+BG_SMOOTH = 0.1
 
 
 def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000, hot_mask=False):
@@ -105,15 +109,17 @@ def write_report(out, *, image, cif_name, phase_label, geom_name, lam,
         f"wavelength: {lam:.6f} A",
         "integration: 1D, 3000 points, 1.0-8.0 deg",
         "background: auto sliding baseline, 0.2 deg window; "
-        "0.25 deg piecewise-linear correction",
+        "0.25 deg piecewise-linear correction; "
+        f"curvature penalty {BG_SMOOTH:g}",
         f"hot-pixel mask: {'on' if hot_mask else 'off'}",
         "weights: poisson",
     ]
     if use_al:
         lines.append(
-            "second phase: Al (111) textured, a=4.061 A, size=0.1 um, "
-            "B=0.5 A^2, March-Dollase R=0.72; structural-fit weights "
-            "exclude the Al region")
+            "second phase: Al substrate, a=4.061 A, size=0.1 um, "
+            "B=0.5 A^2; March-Dollase R=0.72 only as the reference table "
+            "(single-axis texture fails at Al (331), so Al intensities are "
+            "refined per reflection)")
     else:
         lines.append("structural fit excludes: "
                      + ", ".join(f"{lo:.2f}-{hi:.2f} deg"
@@ -158,7 +164,10 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
             # 弱反射定出（0.72；早期用 0.5 会把这三根压得过低，
             # 误加了 LiF 相——LiF 与 Al 同为岩盐、晶胞几乎相同，
             # 2θ 上完全退化）。
+            # 但单轴 MD 在 (331) 上失效（模型比实测强 ~1.7×，2026-10-27）：
+            # 峰强改成逐反射自由，背景不必再替它背锅。
             "md": ((1, 1, 1), 0.72),
+            "refine_intensities": True,
         })
     init = {
         "zero": inst.params["zero"],
@@ -169,7 +178,8 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     }
     struct = fit_pattern(
         structure, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, intensity_poly=2, weights=w_struct,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        intensity_poly=2, weights=w_struct,
         extra_phases=extras, phase_label=phase_label,
         free=("a", "b", "c", "size_um", "mustrain", "b_iso"),
         initial=init, max_nfev=300)
@@ -180,7 +190,8 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     leb_extras = extras
     lebail = fit_pattern(
         structure, t, y, wavelength=lam, b_iso=0.5, background=bg,
-        background_knots=0.25, weights=leb_weights, cell_refine=True,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        weights=leb_weights, cell_refine=True,
         refine_intensities=True, phase_label=phase_label,
         extra_phases=leb_extras,
         free=("size_um", "mustrain"),
@@ -191,7 +202,7 @@ def fit_one(path, structure, geom, lam, inst, outdir, exclude, cif_cell,
     tag = path.stem.rsplit("-", 1)[-1]
     out = outdir / f"sim_xrd_fit_LMFP_{tag}.png"
     plot_src = lebail
-    phases = ["Al (111) textured"] if use_al else []
+    phases = ["Al substrate (per-reflection)"] if use_al else []
     phase_txt = f" ({' + '.join(phases)})" if phases else ""
     plot_fit(
         plot_src,
@@ -244,7 +255,7 @@ def main():
           f"Y={inst.params['y']:.3f}  (Rwp {inst.rwp:.3f}%)")
     print(f"CIF: {cif.name}；"
           + (f"Al 排除区 {exclude[0][0]:.2f}–{exclude[0][1]:.2f}°"
-             if not use_al and exclude else "Al (111) 织构第二相"))
+             if not use_al and exclude else "Al 基片（逐反射强度）"))
     print(f"{'image':>28} {'Rwp结构':>8} {'RwpLeBail':>10} "
           f"{'a':>7} {'b':>7} {'c':>7} {'size/µm':>8} {'ε/1e-3':>7} "
           f"{'B':>6} {'Al(LeB)':>8}")

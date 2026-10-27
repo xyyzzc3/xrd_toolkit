@@ -67,6 +67,17 @@ class TestFitEntries(unittest.TestCase):
                          "结构 Rwp 3.02% / Le Bail 1.73%")
         self.assertIn("0.63", by_label["第二相"])
 
+    def test_al_per_reflection_summary(self):
+        result = _result()
+        result.extra_lebail = {"Al": {"tth": [3.0]}}
+        entries, _notes = fit_entries(
+            "x.tif", "LMFP", result, al_scale=0.5)
+        self.assertIn("逐峰强度", dict(entries)["第二相"])
+
+    def test_zero_b_at_lower_bound_is_flagged(self):
+        _entries, notes = fit_entries("x.tif", "LMFP", _result(b_iso=0.0))
+        self.assertTrue(any("停在下限 0" in note for note in notes))
+
     def test_fixed_cell_and_unrefined_strain(self):
         result = SimpleNamespace(
             params={"size_um": 1.0437, "b_iso": 0.0943},
