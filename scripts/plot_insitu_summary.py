@@ -2,7 +2,8 @@
 """把原位三相批量 CSV 画成一张 4-panel 展示图（2026-10-28）。
 
 读 `fit_insitu.py` 输出的 CSV，不重拟合：
-  (a) 富锂/贫锂相对相分数 vs 帧号，标出 ok / ok_soft / cell_jump；
+  (a) 富锂/贫锂相对相分数 vs 帧号（f_rich 带线性参数 esd 阴影），
+      标出 ok / ok_soft / cell_jump；
   (b) rich 相 a/b/c（带 esd 误差棒）；
   (c) poor 相 a/b/c（带 esd 误差棒）；
   (d) Rwp / Rp vs 帧号，标异常帧。
@@ -51,6 +52,7 @@ def _read_rows(path):
             "group": group,
             "usable": str(r.get("usable", "")).lower() == "true",
             "f_rich": f("f_rich"), "f_poor": f("f_poor"),
+            "f_rich_esd": f("f_rich_esd"),
             "rwp": f("rwp"), "rp": f("rp"),
             "rich_a": f("rich_a"), "rich_b": f("rich_b"),
             "rich_c": f("rich_c"),
@@ -127,6 +129,10 @@ def plot_summary(csv_path, out_path, *, title=None, dpi=160):
             "-", lw=1.0, color="tab:blue", label="f_rich")
     ax.plot([r["frame"] for r in rows], [r["f_poor"] for r in rows],
             "-", lw=1.0, color="tab:orange", label="f_poor")
+    fx, fy, fe = _finite_pairs(rows, "f_rich", esd="f_rich_esd")
+    if len(fx) and np.any(fe > 0):
+        ax.fill_between(fx, fy - fe, fy + fe, color="tab:blue",
+                        alpha=0.18, lw=0)
     _status_markers(ax, rows, "f_rich")
     ax.set_xlim(lo, hi)
     ax.set_ylim(-0.02, 1.02)

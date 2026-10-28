@@ -107,6 +107,22 @@ class TestFitRecovery(unittest.TestCase):
                                    delta=max(0.02 * abs(expected), 0.01))
         self.assertTrue(np.isfinite(res.stderr["w"]))
 
+    def test_linear_covariance_gives_scale_esd(self):
+        """最终线性块要给出 name→cov，scale/背景的方差非负。"""
+        tth, y = _synth(self.st, zero_deg=0.012, u=20.0, v=-5.0,
+                        w=18.0, x=5.0, y=1.0)
+        res = fit_pattern(
+            self.st, tth, y, background=2, weights="uniform",
+            free=("zero",), initial={"zero": 0.01})
+        self.assertIsNotNone(res.linear_names)
+        self.assertIn("scale", res.linear_names)
+        self.assertEqual(res.linear_cov.shape,
+                         (len(res.linear_names), len(res.linear_names)))
+        i = res.linear_names.index("scale")
+        self.assertGreater(res.linear_cov[i, i], 0.0)
+        self.assertTrue(any(n.startswith("bg") for n in res.linear_names))
+        self.assertTrue(np.all(np.diag(res.linear_cov) >= -1e-12))
+
     def test_auto_initial_gaussian_profile(self):
         """纯 Gaussian 合成谱：不喂真值也应收敛到 Rwp < 1%。"""
         tth, y = _synth(self.st, zero_deg=0.01, u=0.5, v=-0.1, w=18.0,

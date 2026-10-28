@@ -130,6 +130,10 @@ class FitResult:
     phase_label: Optional[str] = None
     # 结构精修后的位点坐标：{标签: (wyckoff, x, y, z)}（分数坐标）
     site_coords: dict = field(default_factory=dict)
+    # 线性参数（scale/强度修正/背景）的协方差：给相分数 esd 用。
+    # 只含线性块；非线性参数（晶胞/峰形）的协方差不在内。
+    linear_names: Optional[list] = None
+    linear_cov: Optional[np.ndarray] = None
 
     def report(self) -> str:
         """人读的参数表 + 拟合优度（英文，便于直接贴报告）。"""
@@ -567,6 +571,23 @@ class _Model:
                 j += n
         return scales, peak_amps
 
+    @staticmethod
+    def _extra_names(layout):
+        """额外相线性列的名字，与 _extra_columns 的列顺序一一对应。"""
+        names = []
+        for label, kind, mask, _ref in layout:
+            if kind == "scale":
+                names.append(f"{label}:scale")
+            else:
+                n = int(np.count_nonzero(mask)) if mask is not None else 0
+                names.extend(f"{label}:i{j}" for j in range(n))
+        return names
+
+    def _bg_names(self):
+        n_bg = 0 if self.background_basis is None \
+            else int(self.background_basis.shape[1])
+        return [f"bg{i}" for i in range(n_bg)]
+
     def _penalty_rows(self, ncol):
         """背景曲率罚项（二阶差分）；背景列必须在最后。"""
         n_bg = (0 if self.background_basis is None
@@ -603,6 +624,22 @@ class _Model:
             Aw = np.vstack([Aw, P])
             rhs = np.concatenate([rhs, np.zeros(P.shape[0])])
         return lsq_linear(Aw, rhs, bounds=(lb, ub))
+
+    def linear_covariance(self, reduced_chi2):
+        """最终线性块的协方差 = pinv(AᵀWA)·约化卡方（含背景罚项行）。
+
+        只在线性参数处于内部（非边界）时严格成立；Al 逐反射若顶到 0，
+        对应 esd 只是近似。非线性参数（晶胞/峰形）的协方差不在内。
+        """
+        A = getattr(self, "_linear_A", None)
+        if A is None or A.shape[1] == 0:
+            return None
+        Aw = A * self.sqrt_w[:, None]
+        P = self._penalty_rows(A.shape[1])
+        if P is not None:
+            Aw = np.vstack([Aw, P])
+        cov = np.linalg.pinv(Aw.T @ Aw, rcond=1e-12)
+        return cov * max(float(reduced_chi2), 1e-30)
 
     def params(self, vec):
         p = dict(self.fixed)
@@ -735,8 +772,12 @@ class _Model:
                 cols[d][lo:hi] += ii * (zz ** d) * pv
         return np.column_stack(cols)
 
-    def solve_linear(self, p):
-        """解线性参数：结构模式 = scale + 背景；Le Bail = 每峰强度 + 背景。"""
+    def solve_linear(self, p, store_linear=False):
+        """解线性参数：结构模式 = scale + 背景；Le Bail = 每峰强度 + 背景。
+
+        store_linear=True 时把最终设计矩阵与列名存到 `_linear_A/_linear_names`
+        （只给 `fit_pattern` 末尾算一次协方差用；优化过程中不存）。
+        """
         bg_basis = self.background_basis
         extra_blocks, extra_layout = self._extra_columns(p)
         extra_cols = (np.column_stack(extra_blocks) if extra_blocks
@@ -800,6 +841,13 @@ class _Model:
                 bcoef = np.asarray(coef[n_act:], dtype=float)
                 bg = bg_basis @ bcoef
                 coeffs = bcoef
+            if store_linear:
+                all_names = ([f"peak{i}" for i in range(n_peaks)]
+                             + self._extra_names(extra_layout))
+                self._linear_A = A
+                self._linear_names = ([all_names[i]
+                                       for i in np.flatnonzero(active)]
+                                      + self._bg_names())
             return A @ coef, 1.0, bg, coeffs, amps, None
 
         if self.intensity_poly:
@@ -828,6 +876,12 @@ class _Model:
             else:
                 bg = bg_basis @ coef[n_main + n_extra:]
                 coeffs = np.asarray(coef[n_main + n_extra:], dtype=float)
+            if store_linear:
+                self._linear_A = A
+                self._linear_names = (
+                    ["scale"]
+                    + [f"intensity_a{i}" for i in range(1, n_main)]
+                    + self._extra_names(extra_layout) + self._bg_names())
             return A @ coef, scale, bg, coeffs, None, a
 
         y_model = self.peak_curve(p)
@@ -852,6 +906,10 @@ class _Model:
         else:
             bg = bg_basis @ coef[1 + n_extra:]
             coeffs = np.asarray(coef[1 + n_extra:], dtype=float)
+        if store_linear:
+            self._linear_A = A
+            self._linear_names = (["scale"] + self._extra_names(extra_layout)
+                                  + self._bg_names())
         return A @ coef, scale, bg, coeffs, None, None
 
     def residual(self, vec):
@@ -1355,7 +1413,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     vec = np.array([values[n] for n in free], dtype=float)
     p_final = model.params(vec)
     y_calc_target, scale, bg, coeffs, amps, inten_coeffs = \
-        model.solve_linear(p_final)
+        model.solve_linear(p_final, store_linear=True)
     if fixed_bg is not None:
         y_calc_total = y_calc_target + fixed_bg
         # solve_linear 返回的是固定背景之上的修正项；报告里给总背景
@@ -1379,6 +1437,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     reduced = chi2 / max(1, len(y_raw) - n_params)
     stderr = _numerical_stderr(model, vec, list(free), reduced) \
         if len(free) else {}
+    linear_cov = model.linear_covariance(reduced)
+    linear_names = (list(getattr(model, "_linear_names", []))
+                    if linear_cov is not None else None)
 
     params = {n: float(values[n]) for n in free}
     params["scale"] = float(scale)
@@ -1443,7 +1504,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         peak_tth=np.asarray(model._parts(p_final)[0], dtype=float),
         extra_peak_tth=(extra_tth or None),
         extra_lebail=(extra_lebail or None),
-        phase_label=phase_label, site_coords=site_coords)
+        phase_label=phase_label, site_coords=site_coords,
+        linear_names=linear_names, linear_cov=linear_cov)
 
 
 def rwp(y_obs, y_calc, weights="poisson"):

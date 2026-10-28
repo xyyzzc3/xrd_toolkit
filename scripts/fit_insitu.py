@@ -153,6 +153,37 @@ def _fractions(result):
     return A_rich, A_poor, A_al, f_rich
 
 
+def _fraction_esd(result, A_rich, A_poor):
+    """f_rich 的线性参数 esd（scale 协方差传播）。
+
+    只含线性块（scale/强度修正/背景）的协方差；非线性参数（晶胞/峰形）
+    的不确定度不在内，所以是**下限**。Al 的逐反射强度不进 f_rich。
+    """
+    try:
+        names = list(result.linear_names)
+        cov = np.asarray(result.linear_cov, dtype=float)
+        if not names or cov.ndim != 2:
+            return float("nan")
+        i_r = names.index("scale")
+        i_p = names.index("LMFP_poor:scale")
+        k_r = (float(np.sum(result.peak_table_intensities))
+               * float(result.peak_table_norm) / 100.0)
+        k_p = (float(result.extra_phase_table_sum["LMFP_poor"])
+               * float(result.extra_phase_norm["LMFP_poor"]) / 100.0)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return float("nan")
+    total = A_rich + A_poor
+    if not (math.isfinite(total) and total > 0
+            and math.isfinite(k_r) and math.isfinite(k_p)
+            and k_r != 0 and k_p != 0):
+        return float("nan")
+    Jr = k_r * A_poor / total ** 2
+    Jp = -k_p * A_rich / total ** 2
+    sub = cov[np.ix_([i_r, i_p], [i_r, i_p])]
+    var = float(np.array([Jr, Jp]) @ sub @ np.array([Jr, Jp]))
+    return math.sqrt(var) if math.isfinite(var) and var >= 0 else float("nan")
+
+
 def _cell(result, label=None):
     keys = ("a", "b", "c") if label is None else (
         f"{label}:a", f"{label}:b", f"{label}:c")
@@ -235,8 +266,11 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
         float("nan"),) * 3
     al_a = (float(res.params.get("Al:a", float("nan")))
             if res is not None else float("nan"))
-    _, _, A_al, _ = _fractions(res) if res is not None else (
-        float("nan"),) * 4
+    if res is not None:
+        A_rich, A_poor, A_al, _ = _fractions(res)
+        f_esd = _fraction_esd(res, A_rich, A_poor)
+    else:
+        A_al = f_esd = float("nan")
     esd = res.stderr if res is not None else {}
 
     def _e(name):
@@ -257,6 +291,7 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
         "f_rich": f_rich,
         "f_poor": (1.0 - f_rich if math.isfinite(f_rich)
                    else float("nan")),
+        "f_rich_esd": f_esd,
         "rich_a": rich_cell[0], "rich_b": rich_cell[1],
         "rich_c": rich_cell[2],
         "rich_a_esd": _e("a"), "rich_b_esd": _e("b"),

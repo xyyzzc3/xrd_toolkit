@@ -72,6 +72,21 @@ class TestFractions(unittest.TestCase):
         _a, _b, _al, f_rich = fi._fractions(res)
         self.assertTrue(np.isnan(f_rich))
 
+    def test_fraction_esd_from_linear_covariance(self):
+        # A_r = 0.1*20 = 2, A_p = 0.05*20 = 1, f = 2/3
+        res = SimpleNamespace(
+            peak_table_intensities=np.array([10.0, 10.0]),
+            peak_table_norm=100.0,
+            extra_phase_table_sum={"LMFP_poor": 20.0},
+            extra_phase_norm={"LMFP_poor": 100.0},
+            linear_names=["scale", "LMFP_poor:scale"],
+            linear_cov=np.array([[4e-6, 0.0], [0.0, 1e-6]]))
+        sd = fi._fraction_esd(res, 2.0, 1.0)
+        self.assertAlmostEqual(sd, 0.006287, places=5)
+
+    def test_fraction_esd_without_covariance_is_nan(self):
+        self.assertTrue(np.isnan(fi._fraction_esd(_result(), 2.0, 1.0)))
+
 
 class TestRowAndSummary(unittest.TestCase):
     def test_row_has_esd_and_usable(self):
@@ -82,6 +97,7 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertAlmostEqual(r["rich_a_esd"], 0.001)
         self.assertAlmostEqual(r["poor_a_esd"], 0.01)
         self.assertAlmostEqual(r["rich_a"], 10.35)
+        self.assertTrue(np.isnan(r["f_rich_esd"]))  # 没有线性协方差时给 nan
 
     def test_summary_counts_usable(self):
         rows = [
