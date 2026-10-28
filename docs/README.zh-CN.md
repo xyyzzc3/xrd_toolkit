@@ -130,9 +130,9 @@ python scripts/run_tests.py     # 990+ 条，带看门狗
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
 
-## 第九周：Mask + 原位三相批量
+## Mask + 原位三相批量
 
-工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；应用 mask 会生成一条 **Mask 后的 2D** 产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的独立快速上手见 [docs/MASK.zh-CN.md](MASK.zh-CN.md)；mask 策略、精修参数、对照结果与效率评估见 [docs/WEEK9_MASK_AND_INSITU.md](WEEK9_MASK_AND_INSITU.md)。
+工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；应用 mask 会生成一条 **Mask 后的 2D** 产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的独立快速上手见 [docs/MASK.zh-CN.md](MASK.zh-CN.md)；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
 
 ## 路线图
 

@@ -66,6 +66,10 @@
   raw+mask 重复生成只更新显示标签（旁路 `labels.json`），不重写
   manifest、1D 缓存不失效。右键 Mask 2D 可导出独立 `.npz`
   （image + mask + meta），坏点仍是 mask，不填 0/NaN。
+- **Week 9 技术章节移出仓库**（2026-10-29）：完整技术细节并入桌面
+  《XRD Toolkit 技术文档》第 8 章（中英双份，v0.1.6 开发版，附录顺延为
+  第 9 章）；仓库 `docs/` 只保留 `MASK.zh-CN.md` 快速上手与 `NOTES` 摘要，
+  删除 `docs/WEEK9_MASK_AND_INSITU.md`。
 - **Mask 快速上手（临时文档）**（2026-10-29）：新增
   `docs/MASK.zh-CN.md` 与 `showcase/gui/gui_mask.png` / `gui_mask2d.png`；
   《使用说明》仍锁 v0.1.5，v0.1.6 正式发版时并入并删除独立文件。

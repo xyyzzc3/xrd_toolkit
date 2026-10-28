@@ -265,6 +265,36 @@ image. The radial n-sigma detector remains experimental (it flags real rings).
 Quick start: `docs/MASK.zh-CN.md`. Tests: `tests/test_mask.py`,
 `tests/test_mask_editor.py`, `tests/test_masked2d.py`.
 
+## LMFP in-situ three-phase batch
+
+`scripts/fit_insitu.py` refines an 81-frame in-situ LMFP sequence
+(`00029`–`00189`, step 2, λ=0.1223 Å) with three phases: `LMFP_rich`
+(LiMn₀.₆Fe₀.₄PO₄, free a/b/c), `LMFP_poor` (heterosite, free a/b/c) and
+`Al` (a=4.061 Å fixed, per-reflection intensities). The instrument is fixed
+from a LaB₆ Le Bail fit; the background is a sliding baseline + 0.25°
+piecewise correction + curvature penalty. max_nfev is 120 for the first
+frame and 40 afterwards; each frame inherits the previous usable seed.
+
+- Fraction: `A_p = scale_p × ΣI_p × norm_p / 100`, `f_rich = A_r/(A_r+A_p)`;
+  this is a **relative scattering intensity**, not wt%.
+- Results: 81/81 usable; Rwp 2.10–2.62%; f_rich 0.917 (first) → 0.042
+  (frame 45) → 0.707 (last); strict ok 32, `ok_soft` 45, `cell_jump` 4.
+- Fraction esd (linear block): ±0.008/±0.036/±0.015 at frames 1/45/81; at
+  frame 45 the rich phase sits on its cell lower bound, so only a ~4–13%
+  interval is quoted.
+- Model-independent check: the low-angle (200) doublet centroid moves
+  1.352→1.419→1.359°, R²=0.967 against f_poor
+  (`scripts/check_insitu_peaks.py`).
+- GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`): wt% trend
+  agrees (0.900/0.178/0.818 vs 0.917/0.042/0.707); majority-phase a/c within
+  ~2 esd; minority-phase cells can stay near the seed. Refining cells on the
+  shipped P1-expanded CIFs crashes GSAS-II's profile code, so the script
+  restores Pnma with pymatgen and verifies peaks first.
+- Efficiency: 685.5 s (11.4 min) for 81 frames; fit 8.34 s (98.6%); ~2.4 h
+  for 1000 frames.
+- Plot: the 4-panel from `scripts/plot_insitu_summary.py`
+  (`outputs/insitu/`).
+
 ## Batches, products and the file bar
 
 **Batching.** [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window), and any view button processes all checked files at once, with a live progress counter in the log and in a status-bar progress bar (completion lines end in （k/n）; opening the panels themselves reports progress every 8 panels and keeps the window responsive). Check more than **25** files and the batch draws **none** of them (the user's rule, 2026-09-26, "防爆图"; the line itself was 24 plot / 25 refuse until the user moved it to **25 / 26** on 2026-10-09): opening a panel is the one cost that grows with the count (136 ms for the first, 287 ms for the hundredth) and each costs ≈ 15 MB, so instead the whole batch is integrated in the background and stored, and the results land in the file bar's 1D 产物 group — **double-click an entry to open that one, or right-click the group for [打开整组]** (which asks first when the group is larger than the cap). Batches of 25 or fewer draw every panel as before. Large batches merge their log lines (one line for the openings, a progress line every 8, one summary with the elapsed time and how many came from the cache) — 81 files used to print 162 lines. [导出数据] saves each file's 1D product as a two-column txt / `.chi`: **a single dataset = one flat file**, **two or more = one folder**; the export name defaults to `<data type>-<sample>-<timestamp>` (e.g. `处理产物-LMFP_1-2026-10-23_235500`; the standard stays in the file header) and can be typed in the dialog (2026-10-23). The folder holds `<name>_全部数据.csv` plus a `txt/` subfolder with one file per curve (user, 2026-10-02). The collection is optional (checked by default; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch, and the log gets a start line and a completion line carrying the elapsed time and the full path.

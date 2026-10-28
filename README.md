@@ -137,7 +137,7 @@ python scripts/run_tests.py     # 990+ tests, behind a watchdog
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
 
-## Week 9: mask + in-situ three-phase batch
+## Mask and in-situ three-phase batch
 
 The toolbar now has an independent **Mask** editor next to **Calibrate**:
 draw/erase beamstop, module gaps and hot pixels, auto-detect isolated hot
@@ -152,9 +152,9 @@ compared side by side.
 flags, a CSV summary and split timings. A three-frame GSAS-II cross-check
 (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
 trends against our fit. **Mask quick start (Chinese):**
-[docs/MASK.zh-CN.md](docs/MASK.zh-CN.md). Mask strategy, fit parameters,
-the cross-check and the efficiency measurements:
-[docs/WEEK9_MASK_AND_INSITU.md](docs/WEEK9_MASK_AND_INSITU.md).
+[docs/MASK.zh-CN.md](docs/MASK.zh-CN.md). Fit parameters, the in-situ
+results and the cross-check: [docs/NOTES.md](docs/NOTES.md)
+(`#mask-and-mask-2d-products`, `#lmfp-in-situ-three-phase-batch`).
 
 ## Roadmap
 
