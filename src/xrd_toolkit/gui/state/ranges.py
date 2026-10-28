@@ -36,6 +36,8 @@ def _auto_contrast_values(image) -> tuple:
     与 CLI view_diffraction 的默认 vmin/vmax 语义一致。返回 (lo, hi)；
     图像没有有效数值时报 ValueError。
     """
+    if np.ma.isMaskedArray(image):
+        image = np.ma.filled(image.astype(float), np.nan)
     arr = np.asarray(image, dtype=float)
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:

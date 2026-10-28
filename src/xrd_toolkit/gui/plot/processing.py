@@ -18,7 +18,7 @@ from xrd_toolkit.gui.plot.curves import (
     _retarget_product_panel_to_source, note_proc_recipe)
 from xrd_toolkit.gui.plot.drawing import _bg_path_of
 from xrd_toolkit.gui.plot.spawn import _progress_hide, _progress_show, _spawn
-from xrd_toolkit.services import process, stage_cache
+from xrd_toolkit.services import masked2d, process, stage_cache
 
 
 def _mask_signature(mask) -> str:
@@ -42,14 +42,14 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
     """
     path = Path(source.path)
     if (getattr(window, "current_mask", None) is not None
-            and source.kind != gui_sources.RAW):
+            and not gui_sources.is_rawlike(source.kind)):
         # 产物是遮罩前算的：底下的 1D 可能没遮过，不能拿来重做
         return {"ok": False,
                 "why": "已应用 Mask：这是遮罩前算的产物，先重新点 [1D] 再处理",
                 "path": path}
     # 落产物时挂在哪把键下面：RAW 按当前设置算，产物条目挂在它自己那份上
     base_key = None
-    if source.kind == gui_sources.RAW:
+    if gui_sources.is_rawlike(source.kind):
         tth, intensity, why = _curve_source(window, path, kw)
         if why is not None:
             return {"ok": False, "why": why, "path": path}
@@ -79,7 +79,14 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
                 "why": "背景拟合没成功（锚点太少 / 全落在数据范围外？）"}
     proc_settings = {**settings, "anchors": per_file}
     mask_on = getattr(window, "current_mask", None) is not None
-    stored_source = path.name + ("（mask）" if mask_on else "")
+    if masked2d.is_manifest(path):
+        try:
+            raw_name = Path(masked2d.meta_of(path).get("raw_path", "")).name
+        except Exception:                              # noqa: BLE001
+            raw_name = path.name
+        stored_source = f"{raw_name}（mask）"
+    else:
+        stored_source = path.name + ("（mask）" if mask_on else "")
     if mask_on:
         # 遮罩生效时产物是另一份数据：键里带 mask 哈希，绝不覆盖
         # 未遮罩的同设置产物（load 时没有 mask_hash 也就找不到它）。
@@ -316,7 +323,7 @@ def _proc_batch_apply(window: QMainWindow) -> None:
     # 算完自动接着处理——用户 2026-09-30："改完 2θ 范围后 [批量处理]
     # 不会自动按新范围重积分，只逐条跳过并写明原因"。
     missing = [s for s in targets
-               if s.kind == gui_sources.RAW
+               if gui_sources.is_rawlike(s.kind)
                and _curve_source(window, Path(s.path), kw)[2] is not None]
     if missing:
         _proc_ensure_curves(

@@ -36,25 +36,27 @@ beamstop 阴影压低低角强度。事后再在 1D 上扣背景已经晚了—�
   （实验性）、保存/加载、mask 前后 1D 预览。
 - 文件格式 `.npy` / `.edf`（`fabio`）。默认路径
   `outputs/masks/<geometry>_mask.npy`，同一批原位数据共用。
-- `integrate_1d` 和 `integrate_sectors` 都接受 `mask=`：pyFAI 路径直接
-  传 `mask`，自研偏置束心路径在 `bincount` 前剔除。**有 mask 时 1D
-  缓存读写都跳过**（缓存键不含 mask，不能把未遮罩曲线当遮罩结果）。
-- 主窗口 2D 图会把已应用的 mask 画成半透明红色叠加。
-- `scripts/check_gui.py` 新增 I 节（2026-10-28）：真工具栏按钮打开编辑器 →
-  载入真图 → 画布矩形拖拽 → 应用并预览 1D → 核对 `current_mask` → 清空
-  复位，真数据 exit 0。
-- **[清空] 同步清除窗口级 mask**；空 mask 等价于不遮，不会让 1D 缓存
-  失效。[Mask] 按钮的勾选状态 = 当前是否有生效 mask。
-- **加载只接受 `.npy/.edf`**（选错 `.tif` 会被服务层拒绝，不会把整张图
-  当 mask）；自动坏点/径向 nσ 移到后台线程（2048² 实测 2.3 s / 0.7 s，
-  不再卡界面）。
-- **应用/清除只影响之后的积分**：已打开的 2D 面板会立刻重画（只叠图，
-  不重积分）；1D 面板和缓存产物不会自动重算。对比/热图/导出/批量处理
-  在 mask 生效时会拒绝旧一代曲线，并提示“先重新点 [1D] 出图”。
-  （`window.mask_epoch` 每次 mask 变化 +1，1D 面板记下自己那一代。）
-- Mask 只作用于 1D/扇区积分；**校准的环检测仍用原图**（不套 mask）。
-- Mask 生效时写的处理产物：settings 里带 mask 哈希、文件名标「（mask）」，
-  不会覆盖未遮罩的同设置产物；清除 mask 后也不会被当成普通产物自动取用。
+- **Mask 后的 2D 产物**（2026-10-28 定稿）：[生成 Mask 2D] 在 stage cache
+  的 `masked2d/` 下写一个 `.mask2d.npz` manifest = 原始图路径 + bool mask
+  （packbits）+ 形状/遮罩像素数/标签/mask 哈希。**不复制 16 MB 像素**，
+  原始图也不改写；masked 像素只是“不参与积分”，不是填 0/NaN。
+- 文件栏新增「Mask 后的 2D」组：每张原图 × 每个 mask 一条。双击 = 2D
+  面板（原图 + 红色 mask 叠加）；右键/[打开 1D 图] = 按这份 mask 积分；
+  1D 产物挂在该条目下，`masked` 与未遮罩的 1D 可以并存、并排对比。
+- `load_diffraction_image(manifest)` 返回 `np.ma.MaskedArray`；
+  `integrate_1d` / `integrate_sectors` 自动取出它的 mask（与显式传入的
+  mask 取并集），pyFAI 与自研偏置束心两条路径都排除被遮像素。
+- manifest 是**真实文件**，所以 1D 缓存键、面板键、对比/热图/导出/批量
+  处理都把它当“一个源”走：masked 与 unmasked 的结果天然是两条不同来源，
+  不需要窗口级 mask/epoch 栅栏。
+- [应用到勾选文件]：给文件栏里勾选的每个原始图各生成一条（同形状/同
+  探测器）。[清空] 只清编辑器里的当前 mask，已生成的 Mask 2D 产物保留；
+  右键可删单条/整组（原图与 mask 文件都不动）。
+- 加载只接受 `.npy/.edf`（选错 `.tif` 会被拒绝）；自动坏点/径向 nσ 在
+  后台线程跑；**标定的环检测仍用原图**（不套 mask）。
+- `scripts/check_gui.py` I 节：真工具栏打开编辑器 → 画矩形 → 生成 manifest
+  → 文件栏条目 → 双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器，真数据
+  exit 0。
 
 ### 1.4 前后对比
 
@@ -305,6 +307,8 @@ python scripts/gsas2_insitu_crosscheck.py compare \
 ## 4. 交付物
 
 - `outputs/masks/lmfp1_lab6_mask.npy` / `.edf`
+- Mask 后的 2D manifest：`<stage cache>/masked2d/*.mask2d.npz`（本地缓存；
+  原始图 + mask，不复制像素）
 - `outputs/masks/mask_before_after_00029.png`
 - `outputs/masks/mask_editor.png`
 - `outputs/insitu/insitu_fit.csv`

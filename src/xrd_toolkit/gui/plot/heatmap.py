@@ -219,7 +219,7 @@ def _heat_data(window: QMainWindow, dock):
             continue
         stem, tth, intensity = r
         src = files[i] if i < len(files) else None
-        if src is not None and src.kind != gui_sources.RAW:
+        if src is not None and not gui_sources.is_rawlike(src.kind):
             if getattr(window, "current_mask", None) is not None:
                 continue      # 遮罩生效：产物可能是遮罩前算的，别拼进去
             rows.append((stem, tth, intensity))   # 产物本身就是扣完的
@@ -276,7 +276,7 @@ def _run_heatmap(window: QMainWindow, key: str) -> None:
                  "（只拼已经算好的曲线）")
     for i, source in enumerate(dock.heat_files):
         path, display = source.path, source.display
-        if source.kind != gui_sources.RAW:
+        if not gui_sources.is_rawlike(source.kind):
             if getattr(window, "current_mask", None) is not None:
                 _log(window, f"热图：{display} 是遮罩前算的产物——跳过，"
                              "先重新点 [1D] 再出热图")

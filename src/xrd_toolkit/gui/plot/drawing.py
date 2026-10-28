@@ -263,6 +263,11 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
     纵轴的只读展示语义，只填焦点面板）；手动模式手填上下限。
     """
     ax = _content(dock).axes_2d
+    # masked 2D 产物：数据是 MaskedArray（原始像素 + 它自己的 mask）。
+    # 显示原始像素 + 红色叠加；mask 不参与自动对比度。
+    panel_mask = (np.ma.getmaskarray(image)
+                  if np.ma.isMaskedArray(image) else None)
+    data = np.ma.getdata(image) if np.ma.isMaskedArray(image) else image
     keep_title, keep_xlabel, keep_ylabel, keep_scale, old_lines = \
         _snapshot_canvas(ax)
     # 旗标 save/restore：重入本函数时内层恢复外层取值，不许踩灭外层保护
@@ -273,7 +278,9 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         ax.clear()
         auto = _panel_param(window, dock, "自动对比度", True)
         if auto:
-            lo, hi = _auto_contrast_values(image)
+            contrast = (np.where(panel_mask, np.nan, data)
+                        if panel_mask is not None else data)
+            lo, hi = _auto_contrast_values(contrast)
             vmin = max(1.0, lo)
             vmax = max(hi, vmin * 10.0)
             if window.plot_docks.get(window.focus_panel) is dock:
@@ -288,19 +295,21 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
             if vmax <= vmin:
                 vmax = vmin * 10.0   # 手填区间不合法时兜底（防 LogNorm 报错）
         # 色图按面板快照（Customize 里改；缺省 magma——与 CLI 一致）
-        im = ax.imshow(image, cmap=_panel_param(window, dock, "2D 色图", "magma"),
+        im = ax.imshow(data, cmap=_panel_param(window, dock, "2D 色图", "magma"),
                        norm=LogNorm(vmin=vmin, vmax=vmax),
                        origin="lower")
         # 已应用的窗口级 mask：半透明红叠在 2D 图上（2026-10-27）。
         # 默认 None = 不画；编辑器里改 mask 后这里重画一次就能看到。
-        mask = getattr(window, "current_mask", None)
-        if mask is not None and np.shape(mask) == image.shape:
+        mask = panel_mask
+        if mask is None:
+            mask = getattr(window, "current_mask", None)
+        if mask is not None and np.shape(mask) == data.shape:
             ds = 1 if mask.size <= 1_500_000 else 2
             small = mask[::ds, ::ds]
             rgba = np.zeros((*small.shape, 4), dtype=np.float32)
             rgba[..., 0] = 1.0
             rgba[..., 3] = 0.35 * small
-            h, w = image.shape
+            h, w = data.shape
             ax.imshow(rgba, extent=(-0.5, w - 0.5, -0.5, h - 0.5),
                       origin="lower", interpolation="nearest", zorder=5)
         ax.set_aspect("equal")

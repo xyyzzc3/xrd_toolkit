@@ -15,6 +15,7 @@ GROUP_ROLE = Qt.UserRole + 3        # 组节点标记（条目没有这个槽）
 GROUP_BATCH_ROLE = GROUP_ROLE + 1   # 处理组的台账批次号（右键"删除这一组"用）
 GROUP_TITLE_ROLE = GROUP_ROLE + 2   # 组的**纯名字**（不含折叠时才显示的
                                     # "（n/m 选中）"后缀，见 _group_title）
+GROUP_MASKED2D_ROLE = GROUP_ROLE + 4   # 「Mask 后的 2D」组标记
 PANEL_KEY_ROLE = GROUP_ROLE + 3     # 「打开的图」那一组的行：存面板键
                                     # （"<视图>|<身份>"）。这些行**不给勾**
                                     # （它们不是数据，是"屏幕上正开着的东西"），

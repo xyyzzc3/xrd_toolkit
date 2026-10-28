@@ -77,8 +77,10 @@ def _pending_products(window: QMainWindow, name: str, rest: list,
         if path in done:
             continue
         done.add(path)
-        # 有 mask 时缓存键不适用：全部重算（_spawn 也不会落缓存）
-        if mask_on or not stage_cache.has_1d(path, **kw):
+        is_m2d = str(path).lower().endswith(".mask2d.npz")
+        # 有全局 mask 时缓存键不适用（masked 2D 自己的 mask 在路径里，
+        # 缓存照常可用）
+        if (mask_on and not is_m2d) or not stage_cache.has_1d(path, **kw):
             todo.append(path)
     return todo
 
@@ -107,8 +109,8 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
     不碰勾选状态（双击的第一次单击可能顺手改了勾选，但不影响这里）；已有
     面板就前置，没有就建；数据走同一条 _run_view（1D 命中缓存即秒开）。
     """
-    if source.kind != gui_sources.RAW:
-        return _open_product_panel(window, source)   # 产物：直接读盘画线
+    if not gui_sources.is_rawlike(source.kind):
+        return _open_product_panel(window, source)   # 曲线产物：直接读盘画线
     path = Path(source.path)
     key, dock = _resolve_dock(window, name, source.item)
     if dock is None:
@@ -227,8 +229,8 @@ def _plot_view(window: QMainWindow, name: str) -> None:
         return
     # 产物条目（"1D"/"扣背景"）是现成的 1D 曲线，没有"从原始图算"这一步：
     # 只有 1D 视图能出，其余视图点名跳过（不静默少画）
-    raw = [s for s in checked if s.kind == gui_sources.RAW]
-    products = [s for s in checked if s.kind != gui_sources.RAW]
+    raw = [s for s in checked if gui_sources.is_rawlike(s.kind)]
+    products = [s for s in checked if not gui_sources.is_rawlike(s.kind)]
     n_dupe = 0            # 同一路径的重复条目数（批完成时还要再提一句）
     if name == "1D" and raw:
         # 重复条目（同一条数据以 xxx.tif / xxx (1).tif 加了两次）：本批

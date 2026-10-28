@@ -805,19 +805,44 @@ def check_mask_editor(window, lmfp: str) -> None:
 
     editor.btn_preview.click()
     ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
-    report(ok, "应用并预览 1D（mask 前/后两条曲线）")
-    report(getattr(window, "current_mask", None) is not None
-           and window.current_mask.shape == editor.mask.shape,
-           "mask 已挂到主窗口（后续 1D 积分生效）")
+    report(ok, "生成 Mask 2D 并预览 1D（mask 前/后两条曲线）")
     if ok:
         y0 = np.asarray(editor.ax_prev.lines[0].get_ydata())
         y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())
         report(not np.allclose(y0, y1, equal_nan=True),
                "mask 前后 1D 曲线有差异")
+
+    from xrd_toolkit.gui import sources as gui_sources
+    from xrd_toolkit.services import masked2d
+    prods = masked2d.list_products()
+    report(len(prods) >= 1
+           and int(prods[0].get("masked_pixels") or 0) == n_masked,
+           "生成 Mask 后的 2D 产物（manifest）",
+           f"{len(prods)} 条")
+    m2d = [s for s in gui_sources.all_sources(window)
+           if s.kind == gui_sources.MASKED2D]
+    report(len(m2d) >= 1, "文件栏出现「Mask 后的 2D」条目")
+    if m2d:
+        window.open_view_source(m2d[0], "2D")
+        key2 = "2D|" + str(m2d[0].path)
+        ok2 = wait_until(
+            lambda: key2 in window.plot_docks
+            and getattr(window.plot_docks[key2], "last_image", None)
+            is not None, timeout_s=180)
+        img = (window.plot_docks[key2].last_image
+               if key2 in window.plot_docks else None)
+        report(ok2 and np.ma.isMaskedArray(img),
+               "Mask 2D 双击 → 2D 面板（MaskedArray，mask 随数据走）")
+        window.open_view_source(m2d[0], "1D")
+        key1 = "1D|" + str(m2d[0].path)
+        ok1 = wait_until(
+            lambda: key1 in window.plot_docks
+            and getattr(window.plot_docks[key1], "last_tth", None)
+            is not None, timeout_s=180)
+        report(ok1, "Mask 2D → 1D 积分")
     editor.btn_clear.click()
     QApplication.processEvents()
-    report(window.current_mask is None and not window.mask_btn.isChecked(),
-           "清空后窗口级 mask 解除、按钮复位")
+    report(int(editor.mask.sum()) == 0, "清空编辑器（已生成的产物保留）")
     editor.hide()
 
 

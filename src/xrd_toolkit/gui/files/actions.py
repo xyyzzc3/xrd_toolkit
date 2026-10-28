@@ -37,7 +37,7 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     src = gui_sources.source_of(item)
     if src is None:
         return
-    if src.kind == gui_sources.RAW and not explicit:
+    if gui_sources.is_rawlike(src.kind) and not explicit:
         opener(src, "2D")
         return
     opener(src, "1D")

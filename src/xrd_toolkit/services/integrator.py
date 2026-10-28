@@ -68,6 +68,22 @@ def _is_off_center(image_shape, poni1_m, poni2_m, pixel_size_m) -> bool:
     return float(np.hypot(dx, dy)) > OFF_CENTER_PX
 
 
+def _split_masked(image, mask):
+    """masked array → (普通像素数组, mask 并集)。
+
+    `load_diffraction_image` 读 masked 2D 产物时返回 `np.ma.MaskedArray`
+    （原始像素 + 它自己的 mask）；积分前把 mask 取出来，与显式传入的
+    mask 取并集，像素本身保持原值（不填 0/NaN）。
+    """
+    if not np.ma.isMaskedArray(image):
+        return image, mask
+    base = np.ma.getmaskarray(image)
+    data = np.asarray(image.data)
+    if mask is None:
+        return data, base
+    return data, (base | np.asarray(mask, dtype=bool))
+
+
 def _check_mask(image, mask):
     """掩膜形状校验；None 原样返回。True = 被遮掉（坏像素）。"""
     if mask is None:
@@ -713,6 +729,7 @@ def integrate_1d(
         raise ValueError(
             f"tth_min_deg ({tth_min_deg}) must be < tth_max_deg "
             f"({tth_max_deg})")
+    image, mask = _split_masked(image, mask)
     mask_arr = _check_mask(image, mask)
     if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
         _backend["name"] = "自研（偏置束心）"
@@ -805,6 +822,7 @@ def integrate_sectors(
     _covered_azimuth_labels 给出图像实际覆盖的方位角跨度（部分环
     摆法下不是整圈 −180°~180°，瀑布图 y 轴如实标注）。
     """
+    image, mask = _split_masked(image, mask)
     mask_arr = _check_mask(image, mask)
     if _is_off_center(image.shape, poni1_m, poni2_m, pixel_size_m):
         return _integrate_sectors_diy(image, pixel_size_m, dist_m,

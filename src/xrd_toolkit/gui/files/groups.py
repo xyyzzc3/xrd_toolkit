@@ -11,8 +11,9 @@ from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.files.model import (
-    GROUP_BATCH_ROLE, PANEL_KEY_ROLE, FileItem, _group_title, _make_group,
-    _refresh_group_badges, _set_group_title, is_group)
+    GROUP_BATCH_ROLE, GROUP_MASKED2D_ROLE, PANEL_KEY_ROLE, FileItem,
+    _group_title, _make_group, _refresh_group_badges, _set_group_title,
+    is_group)
 from xrd_toolkit.gui.files.selection import (
     _refresh_file_label, _sync_current_to_checks, _sync_group_states,
     _sync_select_label)
@@ -22,7 +23,16 @@ from xrd_toolkit.gui.files.open_figures import (
     OPEN_FIGURES_TITLE, _OPEN_ROW_BG, _open_dot, _open_dot_icon,
     _sync_open_figures, _top_groups, refresh_open_marks)
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
-from xrd_toolkit.services import stage_cache
+from xrd_toolkit.services import masked2d, stage_cache
+
+def _walk_items(tree):
+    """文件栏全部条目（含组内叶子）；映射产物路径时不能只看顶层。"""
+    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    while stack:
+        item = stack.pop()
+        yield item
+        stack.extend(item.child(i) for i in range(item.childCount()))
+
 
 def _oned_sig(meta, lo, hi) -> tuple:
     """一套积分设置的指纹 = 1D 产物分组的身份。
@@ -96,6 +106,8 @@ def _group_key(item, tree):
     """
     if item is tree.raw_group:
         return ("raw",)
+    if item.data(0, GROUP_MASKED2D_ROLE):
+        return ("masked2d",)
     batch = item.data(0, GROUP_BATCH_ROLE)
     return ("bg", str(batch)) if batch else ("1d",)
 
@@ -265,9 +277,50 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         tree.clear_groups()
         _set_group_title(tree.raw_group, "原始数据")
         by_path = {}
-        for i in range(tree.count()):
-            it = tree.item(i)
-            by_path[str(Path(it.data(0, Qt.UserRole)).resolve())] = it
+        for it in _walk_items(tree):
+            raw = it.data(0, Qt.UserRole)
+            if not raw:
+                continue
+            by_path[str(Path(raw).resolve())] = it
+
+        # ① Mask 后的 2D：manifest（原图 + mask）当**源数据**条目
+        #    （2026-10-28）。它们和原始数据一样能出 2D/1D；1D 产物会按
+        #    manifest 路径挂回这一条（见下面 by_path_name）。
+        masked_rows = []
+        for meta in masked2d.list_products():
+            raw_item = by_path.get(
+                str(Path(meta.get("raw_path") or "").resolve()))
+            masked_rows.append((raw_item, meta))
+        if masked_rows:
+            order = {id(it): i for i, it in enumerate(_walk_items(tree))}
+            masked_rows.sort(key=lambda kv: order.get(id(kv[0]), 10 ** 9))
+            mgroup = _make_group(
+                "Mask 后的 2D",
+                "Mask 后的 2D 数据（原始像素 + mask manifest）。"
+                "双击看 2D；右键可开 1D。")
+            mgroup.setData(0, GROUP_MASKED2D_ROLE, True)
+            for raw_item, meta in masked_rows:
+                label = str(meta.get("label") or "").strip()
+                tag = f"（{label}）" if label else ""
+                raw_name = Path(meta.get("raw_path") or "").name
+                base_text = (raw_item.text(0) if raw_item is not None
+                             else f"{raw_name}（不在文件栏）")
+                leaf = FileItem([f"{base_text} · Mask2D{tag}"])
+                leaf.setFlags(leaf.flags() | Qt.ItemIsUserCheckable)
+                leaf.setCheckState(0, Qt.Unchecked)
+                gui_sources.set_item_source(
+                    leaf, meta.get("path"), gui_sources.MASKED2D,
+                    meta.get("key"))
+                px = int(meta.get("masked_pixels") or 0)
+                tot = int(meta.get("total_pixels") or 0)
+                pct = 100.0 * px / tot if tot else 0.0
+                tip = (raw_item.toolTip(0) if raw_item is not None else "")
+                leaf.setToolTip(
+                    0, f"{tip}\nMask 后的 2D：{px} px"
+                       f"（{pct:.2f}%），原始图 {meta.get('raw_path')}")
+                mgroup.addChild(leaf)
+                by_path[str(Path(meta["path"]).resolve())] = leaf
+            tree.addTopLevelItem(mgroup)
 
         # ① 1D 产物：**扫盘**列出（磁盘上有什么就显示什么），**按积分设置分组**
         #
@@ -290,9 +343,11 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         # 认人：**全路径优先**（元数据里有 path），老产物只有文件名 →
         # 退回按名字；两个目录里同名的文件因此不会挂错（2026-09-28 踩到）
         by_path_name, by_name = {}, {}
-        for i in range(tree.count()):
-            it = tree.item(i)
-            p = Path(it.data(0, Qt.UserRole))
+        for it in _walk_items(tree):
+            raw = it.data(0, Qt.UserRole)
+            if not raw:
+                continue
+            p = Path(raw)
             by_path_name.setdefault(str(p), it)
             by_name.setdefault(p.name, it)
         groups_1d = {}          # 设置指纹 → [(条目, 键, 元数据, lo, hi), ...]

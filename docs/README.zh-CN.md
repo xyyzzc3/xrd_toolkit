@@ -132,7 +132,7 @@ python scripts/run_tests.py     # 990+ 条，带看门狗
 
 ## 第九周：Mask + 原位三相批量
 
-工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；mask 在 2D→1D 积分前生效，1D/扇区两条积分路径都接受。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。mask 策略、精修参数、对照结果与效率评估见 [docs/WEEK9_MASK_AND_INSITU.md](WEEK9_MASK_AND_INSITU.md)。
+工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；应用 mask 会生成一条 **Mask 后的 2D** 产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。mask 策略、精修参数、对照结果与效率评估见 [docs/WEEK9_MASK_AND_INSITU.md](WEEK9_MASK_AND_INSITU.md)。
 
 ## 路线图
 

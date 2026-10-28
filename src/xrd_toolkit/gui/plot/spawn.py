@@ -69,6 +69,8 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
     # 窗口级 mask 在派活时抓一份引用：编辑器之后改的是它自己的 mask，
     # 再 [应用] 会换一个新副本，不会改到已派出去的任务。
     mask = getattr(window, "current_mask", None)
+    if str(path).lower().endswith(".mask2d.npz"):
+        mask = None       # masked 2D 的 mask 跟着图像走，不再套全局 mask
     mask_epoch = int(getattr(window, "mask_epoch", 0))
 
     def worker(path_str, geom_, npt_, config):

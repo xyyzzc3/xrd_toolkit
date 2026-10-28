@@ -85,7 +85,8 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
     静默复用会让人以为重算了、或怀疑数字不对。
     """
     dock = window.plot_docks.get(key)
-    mask_on = getattr(window, "current_mask", None) is not None
+    mask_on = (not str(path).lower().endswith(".mask2d.npz")
+               and getattr(window, "current_mask", None) is not None)
     cached = None
     if not mask_on:
         try:
@@ -153,7 +154,8 @@ def _run_waterfall(window: QMainWindow, path: Path, key: str,
                    geom: dict, npt: int) -> None:
     """瀑布 = 36 扇区分区积分堆叠（对齐 CLI sector_waterfall）。"""
     window.status_text.setText(f"正在扇形积分 {path.name}…")
-    mask = getattr(window, "current_mask", None)
+    mask = (None if str(path).lower().endswith(".mask2d.npz")
+            else getattr(window, "current_mask", None))
     _log(window, f"开始扇形积分 {path.name}（后台运行，36 扇区）"
                  + ("（使用当前 Mask）" if mask is not None else ""))
     args = ((str(path), geom, npt) if mask is None

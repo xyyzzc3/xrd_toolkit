@@ -400,7 +400,7 @@ def _run_compare(window: QMainWindow, key: str) -> None:
                  "（只叠已经算好的曲线）")
     for source in dock.compare_files:
         path, display = source.path, source.display
-        if source.kind != gui_sources.RAW:
+        if not gui_sources.is_rawlike(source.kind):
             if getattr(window, "current_mask", None) is not None:
                 fail_one(path, display,
                          "已应用 Mask：产物是遮罩前算的，先重新点 [1D] 再对比")

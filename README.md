@@ -142,9 +142,10 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 The toolbar now has an independent **Mask** editor next to **Calibrate**:
 draw/erase beamstop, module gaps and hot pixels, auto-detect isolated hot
 pixels, save/load `.npy`/`.edf`, and preview the 1D pattern before/after
-masking. Masks are applied before azimuthal integration (both the pyFAI and
-the off-centre fallback paths); the 1D stage cache is bypassed while a mask is
-active.
+masking. Applying a mask writes a small **Mask 2D** product (raw image + mask
+manifest) into the file dock; double-click it for a 2D view, or integrate it
+to 1D. Masked and unmasked 1D results are distinct sources that can be
+compared side by side.
 
 `scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases
 (Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly

@@ -430,10 +430,6 @@ def _open_mask_editor(window: QMainWindow) -> None:
     from xrd_toolkit.gui.mask_editor import MaskEditorWindow
     if getattr(window, "mask_editor", None) is None:
         window.mask_editor = MaskEditorWindow(window)
-    # 按钮是 checkable：点一下会先翻转。这里按真实状态校正，
-    # 避免"只是打开编辑器"就显示成 Mask 已生效。
-    window.mask_btn.setChecked(
-        getattr(window, "current_mask", None) is not None)
     window.mask_editor.show()
     window.mask_editor.raise_()
     window.mask_editor.activateWindow()
@@ -479,10 +475,9 @@ def _build_toolbar(window: QMainWindow) -> None:
     # [Mask] 与 [校准] 并列：都属"一次性设置"，但它打开的是独立窗口
     # （不是参数坞的一页），所以不进 entrance_buttons / PARAM_PAGES。
     btn_mask = QPushButton("Mask")
-    btn_mask.setCheckable(True)     # 勾上 = 当前有生效的窗口级 mask
     btn_mask.setToolTip(
-        "独立 Mask 编辑器：遮罩 beamstop/模块缝/坏点，保存/加载，"
-        "预览 mask 前后的 1D 曲线（只作用于积分；标定仍用原图）")
+        "独立 Mask 编辑器：画/自动遮罩 beamstop/模块缝/坏点，"
+        "生成 Mask 后的 2D 数据（原图 + mask），再去做 1D")
     btn_mask.clicked.connect(lambda checked=False: _open_mask_editor(window))
     tb.addWidget(btn_mask)
     window.mask_btn = btn_mask

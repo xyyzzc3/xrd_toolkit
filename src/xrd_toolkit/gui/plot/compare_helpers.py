@@ -246,6 +246,6 @@ def _raw_not_ready(window, files) -> list:
     回事，走各自的"产物不存在"跳过）。
     """
     return [s for s in files
-            if s.kind == gui_sources.RAW
+            if gui_sources.is_rawlike(s.kind)
             and _ready_curve(window, s.path, s.display) is None]
 

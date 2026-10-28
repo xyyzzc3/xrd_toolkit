@@ -53,17 +53,18 @@
   失败、但 Rwp/相分数合格的帧标成 `ok_soft`（本批 45 帧），严格 ok
   与「可用」分开报；4-panel 增加 ok_soft 标记，summary 同时给
   strict ok/ok_soft/others。
-- **Mask 交互与数据新鲜度修正**（2026-10-28）：[清空] 同步清除窗口级
-  mask；空 mask 不再让 1D 缓存失效；`load_mask` 只接受 `.npy/.edf`
-  （选错 `.tif` 直接拒绝）；自动坏点/径向 nσ 移到后台线程；`[Mask]`
-  按钮勾选状态显示是否生效。应用/清除只影响之后的积分——对比/热图/
-  导出/批量处理会拒绝遮罩前算的曲线（`mask_epoch` 栅栏）并提示先重新
-  点 [1D]；标定明确不套 mask。Mask 生效时写的处理产物带 mask 哈希与
-  「（mask）」标记，不会覆盖未遮罩的同设置产物。
-- **GUI 探针覆盖 Mask 编辑器**（2026-10-28）：`scripts/check_gui.py`
-  新增 I 节，走真工具栏按钮 + 真画布事件（打开编辑器 → 载入真图 →
-  矩形拖拽 → 应用并预览 1D），核对 `current_mask` 与 mask 前后曲线；
-  真数据 exit 0。
+- **Mask 后的 2D 产物**（2026-10-28）：mask 从“窗口级开关”改为
+  2D→1D 之间的**可选阶段产物**。[生成 Mask 2D] 在 stage cache 写一条
+  `.mask2d.npz` manifest（原始图路径 + bool mask，不复制像素、不改写
+  原图），文件栏新增「Mask 后的 2D」组；双击看 2D（原图 + 红叠加），
+  右键开 1D。`load_diffraction_image` 读到 manifest 返回 MaskedArray，
+  积分器自动排除被遮像素；masked/unmasked 的 1D 是不同的源，可并存/
+  对比。[应用到勾选文件] 给整批各生成一条；[清空] 只清编辑器，产物保留。
+  `load_mask` 仍只接受 `.npy/.edf`；自动坏点/径向 nσ 在后台线程；
+  标定不套 mask。
+- **GUI 探针覆盖 Mask 2D 产物**（2026-10-28）：`scripts/check_gui.py`
+  I 节走真工具栏 + 真画布事件：画矩形 → 生成 manifest → 文件栏条目 →
+  双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器；真数据 exit 0。
 - **GSAS-II 独立对照**（2026-10-28）：`scripts/gsas2_insitu_crosscheck.py`
   分 prepare/refine/compare 三步（refine 在单独的 `gsas2` 环境），对
   第 1/45/81 帧做三相精修。相分数趋势一致（GSAS-II wt% =

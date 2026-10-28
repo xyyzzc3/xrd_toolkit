@@ -13,9 +13,10 @@ from xrd_toolkit.gui.files.actions import (
     _remove_from_list, ask_clear_cache, export_sources)
 from xrd_toolkit.gui.files.groups import refresh_product_groups
 from xrd_toolkit.gui.files.model import (
-    GROUP_BATCH_ROLE, _group_title, _raise_panel, is_group, panel_key_of)
+    GROUP_BATCH_ROLE, GROUP_MASKED2D_ROLE, _group_title, _raise_panel,
+    is_group, panel_key_of)
 from xrd_toolkit.gui.panel_state import _log
-from xrd_toolkit.services import stage_cache
+from xrd_toolkit.services import masked2d, stage_cache
 
 
 # 右键批量打开可选的视图（2026-10-09）：菜单顺序就是这里的顺序。产物条目
@@ -70,6 +71,16 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
             sub = menu.addMenu(f"打开整组图（{item.childCount()} 张）")
             for name in OPEN_BULK_VIEWS:
                 actions[sub.addAction(name)] = ("open_group", name)
+    elif item.data(0, GROUP_MASKED2D_ROLE):
+        # Mask 后的 2D 组：和原始数据一样能出 2D/1D/剖面/瀑布
+        if item.childCount():
+            sub = menu.addMenu(f"打开整组图（{item.childCount()} 张）")
+            for name in OPEN_BULK_VIEWS:
+                actions[sub.addAction(name)] = ("open_group", name)
+            menu.addSeparator()
+            actions[menu.addAction(
+                f"删除这一组 Mask 2D（{item.childCount()} 条）")] = \
+                "drop_masked2d_group"
     elif is_group(item):
         # 产物组：产物是 1D 曲线，只有 1D 能出——不给视图子菜单
         if item.childCount():
@@ -80,6 +91,12 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
                 f"删除这一组产物（{item.childCount()} 条）")] = "drop_group"
             actions[menu.addAction("导出这一组（txt / chi / CSV）")] = \
                 "export_group"
+    elif src is not None and src.kind == gui_sources.MASKED2D:
+        actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
+        menu.addSeparator()
+        actions[menu.addAction(
+            f"删除这条 Mask 2D（{src.display}；原图与 mask 不动）")] = \
+            "drop_masked2d"
     elif src is None or src.kind == gui_sources.RAW:
         shown = f"（{src.display}）" if src is not None else ""
         tag = f" {src.display}" if src is not None else ""
@@ -136,6 +153,17 @@ def _entry_menu(window: QMainWindow, item) -> None:
         _open_group_views(window, item, arg or "1D")
     elif what == "drop_group":
         drop_product_group(window, item)
+    elif what in ("drop_masked2d", "drop_masked2d_group"):
+        items = ([item.child(i) for i in range(item.childCount())]
+                 if what.endswith("_group") else [item])
+        removed = 0
+        for leaf in items:
+            src = gui_sources.source_of(leaf)
+            if src is not None and src.kind == gui_sources.MASKED2D:
+                if masked2d.delete(src.path):
+                    removed += 1
+        refresh_product_groups(window)
+        _log(window, f"已删除 {removed} 条 Mask 后的 2D（原始图与 mask 文件不动）")
     elif what == "drop_item":
         drop_product_item(window, item)
     elif what == "remove_raw":

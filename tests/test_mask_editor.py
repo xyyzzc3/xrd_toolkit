@@ -1,8 +1,11 @@
-"""独立 Mask 编辑器 GUI 测试（2026-10-27）。
+"""独立 Mask 编辑器 GUI 测试（2026-10-27；2026-10-28 改为 Mask 2D 产物模型）。
 
-只测窗口级行为：工具栏 [Mask] 能开/复用独立窗口；载入图像后画笔/矩形/
-撤销改的是同一张 bool mask；[应用到当前窗口] 把 mask 挂到 window。
-不测文件对话框（那是 Qt 自己的事），`.npy/.edf` 读写由 test_mask 覆盖。
+窗口级行为：工具栏 [Mask] 能开/复用；画笔/矩形/撤销改同一张 bool mask；
+[生成 Mask 2D] 在 stage cache 里写一条 manifest（原始图 + mask），文件栏
+出现「Mask 后的 2D」条目；[清空] 只清编辑器，不删已生成的产物。
+
+不测文件对话框；`.npy/.edf` 读写由 test_mask 覆盖，manifest 本身由
+test_masked2d 覆盖。
 """
 import os
 import sys
@@ -21,7 +24,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from xrd_toolkit.gui.app import create_window  # noqa: E402
 from xrd_toolkit.gui import mask_editor as gui_mask_editor  # noqa: E402
+from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
 from xrd_toolkit.gui.plot import runners as gui_runners  # noqa: E402
+from xrd_toolkit.services import masked2d, stage_cache  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
 
@@ -35,6 +40,8 @@ def _write_image(path):
 class TestMaskEditor(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
+        self._old_root = stage_cache.CACHE_ROOT
+        stage_cache.point_root(Path(self._td.name) / "cache")
         self.img_path = Path(self._td.name) / "frame.edf"
         _write_image(self.img_path)
         self.w = create_window()
@@ -47,6 +54,7 @@ class TestMaskEditor(unittest.TestCase):
             self.ed.close()
         self.w.close()
         QApplication.processEvents()
+        stage_cache.point_root(self._old_root)
         self._td.cleanup()
 
     def _open(self):
@@ -55,11 +63,13 @@ class TestMaskEditor(unittest.TestCase):
         self.ed = self.w.mask_editor
         self.assertIsNotNone(self.ed)
 
+    def _products(self):
+        return masked2d.list_products()
+
     def test_toolbar_button_opens_and_reuses_window(self):
         self.assertIsNone(self.w.mask_editor)
         self._open()
         self.assertTrue(self.ed.isVisible())
-        self.assertFalse(self.w.mask_btn.isChecked())  # 只是打开，不算生效
         self.assertNotIn("Mask", self.w.entrance_buttons)
         self.ed.close()
         QApplication.processEvents()
@@ -67,7 +77,7 @@ class TestMaskEditor(unittest.TestCase):
         QApplication.processEvents()
         self.assertIs(self.w.mask_editor, self.ed)
 
-    def test_brush_rect_undo_and_apply(self):
+    def test_brush_rect_undo_and_apply_creates_masked2d(self):
         self._open()
         self.ed.load_image(self.img_path)
         QApplication.processEvents()
@@ -85,8 +95,58 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(int(self.ed.mask.sum()), n_brush)
 
         self.ed._apply_to_main()
-        self.assertIsNotNone(self.w.current_mask)
-        self.assertEqual(int(self.w.current_mask.sum()), n_brush)
+        products = self._products()
+        self.assertEqual(len(products), 1)
+        self.assertEqual(int(products[0]["masked_pixels"]), n_brush)
+        self.assertEqual(Path(products[0]["raw_path"]),
+                         self.img_path.resolve())
+
+    def test_apply_twice_dedupes(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._apply_to_main()
+        self.ed._apply_to_main()
+        self.assertEqual(len(self._products()), 1)
+
+    def test_apply_adds_masked2d_entry_to_file_dock(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._apply_to_main()
+        QApplication.processEvents()
+        srcs = [s for s in gui_sources.all_sources(self.w)
+                if s.kind == gui_sources.MASKED2D]
+        self.assertEqual(len(srcs), 1)
+        self.assertTrue(Path(srcs[0].path).is_file())
+
+    def test_empty_mask_creates_no_product(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._apply_to_main()
+        self.assertEqual(self._products(), [])
+
+    def test_clear_keeps_existing_products(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._apply_to_main()
+        self.assertEqual(len(self._products()), 1)
+        self.ed._clear()
+        QApplication.processEvents()
+        self.assertEqual(int(self.ed.mask.sum()), 0)
+        self.assertEqual(len(self._products()), 1)
+
+    def test_apply_to_checked_files(self):
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=True)
+        QApplication.processEvents()
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._apply_to_checked()
+        self.assertEqual(len(self._products()), 2)
 
     def test_preview_draws_before_and_after(self):
         self._open()
@@ -95,50 +155,7 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._apply_and_preview()
         QApplication.processEvents()
         self.assertEqual(len(self.ed.ax_prev.lines), 2)
-
-    def test_clear_unapplies_mask_and_releases_button(self):
-        self._open()
-        self.ed.load_image(self.img_path)
-        self.ed._fill_rect((10, 10), (20, 20), True)
-        self.ed._apply_to_main()
-        self.assertIsNotNone(self.w.current_mask)
-        self.assertTrue(self.w.mask_btn.isChecked())
-        self.ed._clear()
-        QApplication.processEvents()
-        self.assertIsNone(self.w.current_mask)
-        self.assertIsNone(self.w.mask_path)
-        self.assertFalse(self.w.mask_btn.isChecked())
-        self.assertEqual(int(self.ed.mask.sum()), 0)
-
-    def test_apply_bumps_epoch_and_clears_session_curves(self):
-        self._open()
-        self.ed.load_image(self.img_path)
-        self.ed._fill_rect((10, 10), (20, 20), True)
-        self.w._masked_curves["x"] = (np.arange(2.0), np.arange(2.0))
-        before = self.w.mask_epoch
-        self.ed._apply_to_main()
-        self.assertEqual(self.w.mask_epoch, before + 1)
-        self.assertEqual(self.w._masked_curves, {})
-
-    def test_apply_refreshes_open_2d_panels(self):
-        self._open()
-        self.ed.load_image(self.img_path)
-        self.ed._fill_rect((10, 10), (20, 20), True)
-        self.w.plot_docks["2D|dummy"] = object()
-        try:
-            with mock.patch(
-                    "xrd_toolkit.gui.plot.refresh._redraw_panel") as redraw:
-                self.ed._apply_to_main()
-            self.assertTrue(redraw.called)
-        finally:
-            self.w.plot_docks.pop("2D|dummy", None)
-
-    def test_empty_mask_apply_clears_window_mask(self):
-        self._open()
-        self.ed.load_image(self.img_path)
-        self.ed._apply_to_main()
-        self.assertIsNone(self.w.current_mask)
-        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertEqual(len(self._products()), 1)
 
     def test_preview_uses_current_2theta_range(self):
         self._open()
@@ -173,21 +190,15 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(self.ed.btn_hot.isEnabled())
         self.assertGreater(int(self.ed.mask.sum()), 0)
 
-    def test_run_1d_skips_cache_when_mask_active(self):
-        path = Path("/tmp/mask_editor_x.tif")
+    def test_run_1d_uses_cache_for_masked2d(self):
+        path = Path("/tmp/x.mask2d.npz")
         key = f"1D|{path}"
-        with mock.patch.object(gui_runners.stage_cache, "load_1d") as load, \
-                mock.patch.object(gui_runners, "_spawn") as spawn:
-            self.w.current_mask = np.zeros((4, 4), bool)
-            gui_runners._run_1d(self.w, path, key, {}, 100)
-            load.assert_not_called()
-            spawn.assert_called_once()
         with mock.patch.object(gui_runners.stage_cache, "load_1d",
                                return_value=None) as load, \
                 mock.patch.object(gui_runners, "_spawn") as spawn:
             self.w.current_mask = None
             gui_runners._run_1d(self.w, path, key, {}, 100)
-            load.assert_called_once()
+            load.assert_called_once()       # manifest 的 1D 缓存照常可用
             spawn.assert_called_once()
 
 

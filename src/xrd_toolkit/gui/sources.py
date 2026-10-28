@@ -27,16 +27,18 @@ from xrd_toolkit.services import stage_cache
 RAW = "raw"        # 原始数据
 ONED = "1d"        # 1D 产物
 BG = "bg"          # 扣背景产物
+MASKED2D = "masked2d"   # Mask 后的 2D（manifest：原始图 + mask）
 
 SOURCE_KIND_ROLE = Qt.UserRole + 1     # 条目属于哪个阶段
 SOURCE_KEY_ROLE = Qt.UserRole + 2      # 产物键（raw 条目为 None）
 
-KIND_TAIL = {ONED: "1D", BG: "处理产物"}   # 条目名后缀 = 导出文件名尾缀
+KIND_TAIL = {ONED: "1D", BG: "处理产物", MASKED2D: "Mask2D"}   # 条目名后缀 = 导出文件名尾缀
                                         # （2026-10-02 起与界面叫法一致；
                                         # 旧文件仍叫 *_处理后.txt，不追改）
 
 # 日志里"这一条是从哪儿来的"的说法（与名字后缀分开：后缀要短，说明要清楚）
-KIND_TEXT = {ONED: "1D 产物", BG: "处理产物"}
+KIND_TEXT = {ONED: "1D 产物", BG: "处理产物",
+             MASKED2D: "Mask 后的 2D"}
 
 
 def set_item_source(item, path, kind: str = RAW, key: str = None) -> None:
@@ -102,14 +104,22 @@ def checked_sources(window) -> list:
             if s.item.checkState(0) == Qt.Checked]
 
 
+def is_rawlike(kind) -> bool:
+    """这个来源是否像“一张会算 1D 的图”（原始图 / Mask 后的 2D）。
+
+    产物（1D / 处理产物）是现成曲线，不能再积分；masked 2D 是 2D 数据，
+    可以出 2D、1D、剖面、瀑布。
+    """
+    return kind in (RAW, MASKED2D)
+
+
 def source_id(source) -> str:
     """条目的稳定身份 = 面板键的后半段。
 
-    原始文件用路径（老约定：面板 "1D|<路径>" 全世界都认）；
-    产物用 "阶段#键"——同一张图的原始曲线与扣背景曲线是两个面板，
-    互不覆盖（这正是要能并排看的原因）。
+    原始图与 Mask 后的 2D 都用**自己的路径**（manifest 是真实文件，
+    1D 缓存/面板键天然区分）；其余产物用 "阶段#键"。
     """
-    if source.kind == RAW:
+    if is_rawlike(source.kind):
         return str(source.path)
     return f"{source.kind}#{source.key}"
 
@@ -125,7 +135,7 @@ def load_product(source):
     raw 条目没有"现成的一份"——它要走各自的老路（积分 / 当前设置的
     扣背景产物），这里只负责产物条目。
     """
-    if source.kind == RAW:
+    if is_rawlike(source.kind):
         return None
     return stage_cache.load_by_key(source.kind, source.key)
 

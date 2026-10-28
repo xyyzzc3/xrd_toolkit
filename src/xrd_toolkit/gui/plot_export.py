@@ -186,7 +186,7 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
     for src in checked:
         path = str(src.path)
         display = src.display
-        if src.kind != gui_sources.RAW:
+        if not gui_sources.is_rawlike(src.kind):
             if mask_on:
                 if not quiet:
                     _log(window, f"跳过 {display}：当前已应用 Mask，产物是"

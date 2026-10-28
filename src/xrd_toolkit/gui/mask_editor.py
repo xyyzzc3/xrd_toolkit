@@ -8,8 +8,9 @@
   2. 手动画：画笔遮、橡皮擦、矩形遮；或点 [自动坏点（局部）]；
      径向 nσ 是实验性按钮（真实环可能被误标，见 services/mask.py）；
   3. [保存 Mask…] 写 .npy/.edf；[加载 Mask…] 读回来；
-  4. [应用并预览 1D]：把当前 mask 设为窗口级 mask（后续 1D 积分生效），
-     并在下方画 mask 前/后的 1D 对比。
+  4. [生成 Mask 2D 并预览 1D]：在 stage cache 写一条 mask manifest
+     （原始图 + mask），文件栏出现「Mask 后的 2D」条目；下方画 mask
+     前/后的 1D 对比。[应用到勾选文件] 给整批各生成一条。
 
 像素约定：mask[y, x] = True 表示该像素被遮掉；与
 `services.mask`、`services.integrator` 一致。mask 必须与图像同形。
@@ -34,6 +35,7 @@ from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels
 from xrd_toolkit.services.integrator import integrate_1d
+from xrd_toolkit.services import masked2d
 from xrd_toolkit.services.mask import (
     combine_masks, load_mask, mask_stats, radial_outlier_mask, save_mask)
 
@@ -93,8 +95,8 @@ class MaskEditorWindow(QDialog):
         self.btn_save.clicked.connect(self._save_mask)
         row1.addWidget(self.btn_save)
         self.btn_clear = QPushButton("清空")
-        self.btn_clear.setToolTip("清空当前 mask，并解除窗口级 mask"
-                                  "（后续 1D 按不遮运行）")
+        self.btn_clear.setToolTip("清空编辑器里的当前 mask（已生成的 "
+                                  "Mask 2D 产物不受影响）")
         self.btn_clear.clicked.connect(self._clear)
         row1.addWidget(self.btn_clear)
         self.btn_undo = QPushButton("撤销")
@@ -164,14 +166,23 @@ class MaskEditorWindow(QDialog):
         self.lbl_status = QLabel("未载入图像")
         self.lbl_status.setWordWrap(True)
         row3.addWidget(self.lbl_status, stretch=1)
-        self.btn_preview = QPushButton("应用并预览 1D")
-        self.btn_preview.setToolTip("把当前 mask 应用到后续 1D 积分，"
-                                    "并在这里画 mask 前后的曲线")
+        self.btn_preview = QPushButton("生成 Mask 2D 并预览 1D")
+        self.btn_preview.setToolTip(
+            "把当前 mask 生成一条 Mask 后的 2D 数据（文件栏里可选），"
+            "并在这里画 mask 前后的曲线")
         self.btn_preview.clicked.connect(self._apply_and_preview)
         row3.addWidget(self.btn_preview)
-        self.btn_apply = QPushButton("应用到当前窗口")
+        self.btn_apply = QPushButton("生成 Mask 2D")
+        self.btn_apply.setToolTip(
+            "为当前图像生成一条 Mask 后的 2D 数据（原始像素 + mask）")
         self.btn_apply.clicked.connect(self._apply_to_main)
         row3.addWidget(self.btn_apply)
+        self.btn_apply_checked = QPushButton("应用到勾选文件")
+        self.btn_apply_checked.setToolTip(
+            "把这张 mask 生成到文件栏里勾选的每个原始数据上"
+            "（同一探测器、同形状）")
+        self.btn_apply_checked.clicked.connect(self._apply_to_checked)
+        row3.addWidget(self.btn_apply_checked)
         root.addLayout(row3)
 
     # ── 工具/状态 ───────────────────────────────────────────────────
@@ -216,7 +227,7 @@ class MaskEditorWindow(QDialog):
 
     def _use_checked(self):
         raw = [s for s in gui_sources.checked_sources(self.main)
-               if s.kind == gui_sources.RAW]
+               if gui_sources.is_rawlike(s.kind)]
         if not raw:
             _log(self.main, "Mask：文件栏没有勾选的原始数据")
             return
@@ -231,12 +242,20 @@ class MaskEditorWindow(QDialog):
         if img.ndim != 2:
             QMessageBox.critical(self, "读取失败", "不是 2D 图像")
             return
-        self.image = img
-        self.image_path = Path(path)
-        self._last_dir = str(self.image_path.parent)
-        if self.mask is None or self.mask.shape != img.shape:
-            self.mask = np.zeros(img.shape, dtype=bool)
+        if np.ma.isMaskedArray(img):
+            # 从 Mask 2D 产物打开：解析到原始图，并把它的 mask 载入编辑器
+            raw_path, mask0, _meta = masked2d.load_manifest(path)
+            self.image = np.asarray(np.ma.getdata(img))
+            self.image_path = Path(raw_path)
+            self.mask = np.array(mask0, dtype=bool, copy=True)
             self.mask_path = None
+        else:
+            self.image = img
+            self.image_path = Path(path)
+            if self.mask is None or self.mask.shape != img.shape:
+                self.mask = np.zeros(img.shape, dtype=bool)
+                self.mask_path = None
+        self._last_dir = str(self.image_path.parent)
         self._undo.clear()
         self._draw_image()
         self._update_status()
@@ -264,7 +283,7 @@ class MaskEditorWindow(QDialog):
         self.ax_prev.set_ylabel("counts", fontsize=8)
         self.ax_prev.tick_params(labelsize=7)
         self.ax_prev.grid(alpha=0.25, linestyle=":")
-        self.ax_prev.text(0.5, 0.5, "点 [应用并预览 1D] 看 mask 前后",
+        self.ax_prev.text(0.5, 0.5, "点 [生成 Mask 2D 并预览 1D] 看 mask 前后",
                           transform=self.ax_prev.transAxes, ha="center",
                           va="center", color="0.45", fontsize=9)
         self.canvas.draw_idle()
@@ -497,8 +516,8 @@ class MaskEditorWindow(QDialog):
             QMessageBox.critical(self, "保存失败", str(err))
             return
         self.mask_path = p
-        self._apply_to_main()
-        _log(self.main, f"Mask 已保存：{p}")
+        self._update_status()
+        _log(self.main, f"Mask 已保存：{p}（点 [生成 Mask 2D] 才会建产物）")
 
     def _load_mask(self):
         if self.image is None:
@@ -526,58 +545,67 @@ class MaskEditorWindow(QDialog):
         self._undo.clear()
         self._update_overlay()
         self._update_status()
-        self._apply_to_main()
-        _log(self.main, f"Mask 已加载：{path}")
+        _log(self.main, f"Mask 已加载：{path}（点 [生成 Mask 2D] 才会建产物）")
 
-    def _refresh_2d_overlays(self) -> None:
-        """应用/清除 mask 后，已打开的 2D 面板立刻重画（只叠图，不重积分）。"""
-        try:
-            from xrd_toolkit.gui.plot.refresh import _redraw_panel
-        except Exception:                              # noqa: BLE001
-            return
-        for key in list(getattr(self.main, "plot_docks", {}) or {}):
-            if key.startswith("2D|"):
-                try:
-                    _redraw_panel(self.main, key)
-                except Exception:                      # noqa: BLE001
-                    pass       # 面板已半关闭/没数据：下次重画自然会带上
+    def _refresh_groups(self) -> None:
+        cb = getattr(self.main, "refresh_groups", None)
+        if callable(cb):
+            cb()
+
+    def _create_masked2d(self, paths, *, label):
+        made = []
+        for p in paths:
+            made.append(masked2d.create(p, self.mask, label=label,
+                                        mask_path=self.mask_path))
+        return made
 
     def _apply_to_main(self):
-        if self.mask is None:
+        """为当前图像生成一条 Mask 后的 2D（原图 + mask manifest）。"""
+        if self.mask is None or self.image_path is None:
             return
-        # 每次 mask 变化都换一代：compare/heatmap 只认这一代算出来的 1D。
-        # 同时丢掉本会话里为批量处理临时留的遮罩曲线。
-        self.main.mask_epoch = int(getattr(self.main, "mask_epoch", 0)) + 1
-        getattr(self.main, "_masked_curves", {}).clear()
-        btn = getattr(self.main, "mask_btn", None)
         if not np.any(self.mask):
-            # 空 mask = 不遮：清掉窗口级 mask（否则每次 1D 都被当成
-            # "有 mask"、缓存读写全跳过）
-            self.main.current_mask = None
-            self.main.mask_path = None
-            self.main.status_text.setText("Mask 已清除：后续 1D 不遮罩")
-            if btn is not None:
-                btn.setChecked(False)
-                btn.setToolTip("打开 Mask 编辑器……")
-            _log(self.main, "Mask 已清除：后续 1D 积分按不遮运行；"
-                           "已算好的曲线/产物不会自动重算")
-            self._refresh_2d_overlays()
+            _log(self.main, "Mask 为空：没有生成 Mask 后的 2D")
+            self.main.status_text.setText("Mask 为空：未生成产物")
             return
-        self.main.current_mask = self.mask.copy()
-        self.main.mask_path = self.mask_path
+        label = self.mask_path.name if self.mask_path else "未保存"
+        self._create_masked2d([self.image_path], label=label)
         st = mask_stats(self.mask)
-        src = self.mask_path.name if self.mask_path else "未保存"
         self.main.status_text.setText(
-            f"Mask 已应用：{st['masked_pixels']} px")
-        if btn is not None:
-            btn.setChecked(True)
-            btn.setToolTip(f"Mask 生效：{st['masked_pixels']} px"
-                           f"（{st['fraction'] * 100:.2f}%），点击编辑")
-        _log(self.main, f"Mask 已应用：{st['masked_pixels']} px"
-                       f"（{st['fraction'] * 100:.2f}%），{src}；"
-                       "只影响之后的 1D/扇区积分，已算好的曲线/产物"
-                       "不会自动重算")
-        self._refresh_2d_overlays()
+            f"Mask 后的 2D 已生成：{st['masked_pixels']} px")
+        _log(self.main, f"Mask 后的 2D 已生成：{Path(self.image_path).name}"
+                       f"（{st['masked_pixels']} px，"
+                       f"{st['fraction'] * 100:.2f}%，mask {label}）"
+                       "——在文件栏「Mask 后的 2D」里选它，再点 [1D]")
+        self._refresh_groups()
+
+    def _apply_to_checked(self):
+        """把当前 mask 生成到文件栏里勾选的每个原始数据上。"""
+        if self.mask is None or self.image_path is None:
+            return
+        if not np.any(self.mask):
+            _log(self.main, "Mask 为空：没有生成 Mask 后的 2D")
+            return
+        raw = [s for s in gui_sources.checked_sources(self.main)
+               if s.kind == gui_sources.RAW]
+        if not raw:
+            _log(self.main, "没有勾选的原始数据：先在文件栏勾上要应用 mask 的文件")
+            return
+        label = self.mask_path.name if self.mask_path else "未保存"
+        made = 0
+        for source in raw:
+            try:
+                masked2d.create(source.path, self.mask, label=label,
+                                mask_path=self.mask_path)
+                made += 1
+            except Exception as err:                   # noqa: BLE001
+                _log(self.main, f"Mask 2D 生成失败：{source.display}——{err}")
+        st = mask_stats(self.mask)
+        self.main.status_text.setText(
+            f"Mask 后的 2D 已生成 {made} 条")
+        _log(self.main, f"Mask 后的 2D：{made}/{len(raw)} 个文件"
+                       f"（{st['masked_pixels']} px，mask {label}）"
+                       "——在文件栏「Mask 后的 2D」里选它们再点 [1D]")
+        self._refresh_groups()
 
     def _clear(self):
         if self.mask is None:
@@ -587,9 +615,6 @@ class MaskEditorWindow(QDialog):
         self.mask_path = None
         self._update_overlay()
         self._update_status()
-        # 清空 = 不遮：同步清掉窗口级 mask（否则界面显示已清空，
-        # 后续 1D 却还在用旧 mask）
-        self._apply_to_main()
 
     def _apply_and_preview(self):
         if self.image is None or self.mask is None:
