@@ -88,7 +88,7 @@ class TestRowAndSummary(unittest.TestCase):
             {"status": "ok", "usable": True, "t_total_s": 1.0,
              "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
              "t_fit_s": 0.8},
-            {"status": "not_converged", "usable": True, "t_total_s": 2.0,
+            {"status": "ok_soft", "usable": True, "t_total_s": 2.0,
              "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
              "t_fit_s": 1.8},
         ]
@@ -97,7 +97,8 @@ class TestRowAndSummary(unittest.TestCase):
                 Path(td), rows, True)
             text = path.read_text(encoding="utf-8")
         self.assertIn("usable: 2/2", text)
-        self.assertIn("convergence: 50.0%", text)
+        self.assertIn("strict ok: 1  ok_soft: 1", text)
+        self.assertIn("strict convergence: 50.0%", text)
 
 
 class TestStatus(unittest.TestCase):
@@ -116,10 +117,12 @@ class TestStatus(unittest.TestCase):
     def test_ok(self):
         self.assertEqual(self._status(_result()), "ok")
 
-    def test_not_converged_and_high_rwp(self):
-        self.assertEqual(self._status(_result(success=False)),
-                         "not_converged")
+    def test_soft_convergence_and_high_rwp(self):
+        # success=False 但 Rwp 合格 → ok_soft（可用）；高 Rwp 优先标异常
+        self.assertEqual(self._status(_result(success=False)), "ok_soft")
         self.assertIn("high_rwp", self._status(_result(rwp=25.0)))
+        self.assertIn("high_rwp",
+                      self._status(_result(success=False, rwp=25.0)))
 
     def test_no_phase_signal(self):
         self.assertEqual(self._status(_result(), f_rich=float("nan")),

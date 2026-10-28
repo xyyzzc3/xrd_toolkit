@@ -43,6 +43,10 @@
 - **模型无关校验**（2026-10-28）：`scripts/check_insitu_peaks.py`
   用低角 (200) 双峰质心（不依赖三相 Rietveld）对照 f_poor，
   本批 R²=0.967；双峰总面积是相依赖量，不作守恒量。
+- **`ok_soft` 收敛标签**（2026-10-28）：`fit_insitu` 把优化器退出标志
+  失败、但 Rwp/相分数合格的帧标成 `ok_soft`（本批 45 帧），严格 ok
+  与「可用」分开报；4-panel 增加 ok_soft 标记，summary 同时给
+  strict ok/ok_soft/others。
 - **GUI 探针覆盖 Mask 编辑器**（2026-10-28）：`scripts/check_gui.py`
   新增 I 节，走真工具栏按钮 + 真画布事件（打开编辑器 → 载入真图 →
   矩形拖拽 → 应用并预览 1D），核对 `current_mask` 与 mask 前后曲线；

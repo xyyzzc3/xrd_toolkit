@@ -2,7 +2,7 @@
 """把原位三相批量 CSV 画成一张 4-panel 展示图（2026-10-28）。
 
 读 `fit_insitu.py` 输出的 CSV，不重拟合：
-  (a) 富锂/贫锂相对相分数 vs 帧号，标出 ok / not_converged / cell_jump；
+  (a) 富锂/贫锂相对相分数 vs 帧号，标出 ok / ok_soft / cell_jump；
   (b) rich 相 a/b/c（带 esd 误差棒）；
   (c) poor 相 a/b/c（带 esd 误差棒）；
   (d) Rwp / Rp vs 帧号，标异常帧。
@@ -25,6 +25,7 @@ import numpy as np
 
 MARKERS = {
     "ok": dict(marker="o", mfc="tab:blue", mec="tab:blue", ms=3.2),
+    "ok_soft": dict(marker="o", mfc="none", mec="tab:blue", ms=3.6),
     "not_converged": dict(marker="o", mfc="none", mec="tab:orange", ms=4.2),
     "cell_jump": dict(marker="x", mfc="none", mec="tab:red", ms=4.2),
 }

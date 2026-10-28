@@ -27,9 +27,10 @@ class TestInsituSummary(unittest.TestCase):
         rows = []
         for i, (status, usable, fr) in enumerate((
                 ("ok", "True", 0.90),
-                ("ok", "True", 0.50),
+                ("ok_soft", "True", 0.50),
                 ("not_converged", "True", 0.10),
                 ("cell_jump", "True", 0.20),
+                ("ok_soft", "True", 0.30),
                 ("ok", "True", 0.70)), start=1):
             rows.append({
                 "frame": i, "status": status, "usable": usable,

@@ -206,15 +206,21 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask,
 
 def _status(res, f_rich, rich_cell, poor_cell, seed, max_rwp,
             *, check_cells=True):
-    """异常判据：不收敛/高 Rwp/晶胞跳变/无相信号。"""
+    """异常判据：高 Rwp/无相信号/晶胞跳变；不收敛但 Rwp 合格 = ok_soft。
+
+    2026-10-28：`least_squares` 的 success=False 只说明优化器退出标志
+    （相变/放电段 max_nfev 撞上限），不等于结果不可用。Rwp 和相分数
+    都合格时改标 `ok_soft`，把「严格收敛」和「可用」分开报；真正发散
+    （高 Rwp/无相信号）仍标异常。
+    """
     if res is None:
         return "error"
-    if not res.success:
-        return "not_converged"
     if not math.isfinite(res.rwp) or res.rwp > max_rwp:
         return f"high_rwp({res.rwp:.1f}%)"
     if not math.isfinite(f_rich):
         return "no_phase_signal"
+    if not res.success:
+        return "ok_soft"
     if check_cells:
         for got, want, lim in ((rich_cell, seed["rich"], CELL_JUMP_RICH),
                                 (poor_cell, seed["poor"], CELL_JUMP_POOR)):
@@ -271,7 +277,8 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
 
 
 def _write_summary(outdir, rows, rigged_mask):
-    ok = [r for r in rows if r["status"] == "ok"]
+    strict = [r for r in rows if r["status"] == "ok"]
+    soft = [r for r in rows if r["status"] == "ok_soft"]
     usable = [r for r in rows if r.get("usable")]
     n = len(rows)
     total = float(np.nansum([r["t_total_s"] for r in rows]))
@@ -284,15 +291,17 @@ def _write_summary(outdir, rows, rigged_mask):
     lines = [
         "=== LMFP in-situ three-phase batch ===",
         f"frames: {n}",
-        f"ok: {len(ok)}  anomalies: {n - len(ok)}",
-        f"usable: {len(usable)}/{n} (Rwp<=max, finite cells, no cell jump)",
+        f"strict ok: {len(strict)}  ok_soft: {len(soft)}  "
+        f"others: {n - len(strict) - len(soft)}",
+        f"usable: {len(usable)}/{n} (Rwp<=max, finite cells, non-error)",
         "status: " + ", ".join(f"{k}={v}" for k, v in sorted(status.items())),
         f"mask: {'on' if rigged_mask else 'off'}",
         f"total: {total:.1f} s  ({total / 60.0:.1f} min)",
         f"mean per frame: {means['total']:.1f} s",
         "mean split: load {load:.2f} s + integrate {integrate:.2f} s"
         " + bg {bg:.2f} s + fit {fit:.2f} s".format(**means),
-        f"convergence: {100.0 * len(ok) / max(n, 1):.1f}%",
+        f"strict convergence: {100.0 * len(strict) / max(n, 1):.1f}%"
+        "  (ok_soft = optimizer exit flag, Rwp/phase fractions still good)",
         f"2x frames estimate: {2 * total / 60.0:.1f} min"
         " (linear; integration and fit both scale with N)",
         "phase fractions: relative scattering intensity, not wt%.",
@@ -429,17 +438,17 @@ def main():
                 float("nan"),) * 3
             finite_cells = all(math.isfinite(x)
                                for x in rich_cell + poor_cell)
-            # not_converged 的帧也要检查晶胞跳变（_status 在不收敛时
-            # 提前返回，没做这一步）；首帧允许从 CIF 大步收敛。
+            # ok_soft 的帧也要检查晶胞跳变（_status 在优化器退出标志
+            # 失败时提前返回，没做这一步）；首帧允许从 CIF 大步收敛。
             cell_ok = (i == 1) or (
                 all(abs(a - b) <= CELL_JUMP_RICH
                     for a, b in zip(rich_cell, seed["rich"]))
                 and all(abs(a - b) <= CELL_JUMP_POOR
                         for a, b in zip(poor_cell, seed["poor"])))
             # 种子/usable 口径：Rwp 合格、晶胞有限且没有跳变、不是高
-            # Rwp/错误就继承——`not_converged` 只是优化器退出标志，
+            # Rwp/错误就继承——`ok_soft` 只是优化器退出标志失败，
             # Rwp 仍好时它的晶胞对下一帧比旧种子更有用（2026-10-27
-            # 实测：只看 ok 会在相变段一直用旧种子）。
+            # 实测：只看严格 ok 会在相变段一直用旧种子）。
             # usable = 可用于趋势（Rwp 合格、晶胞/分数有限、非错误）；
             # cell_jump 仍标在 status 里，但不影响这一帧进趋势图。
             # seed_ok 才要求不跳变——它决定下一帧初值。
@@ -474,7 +483,7 @@ def main():
 
     # 首/中/末三帧拟合图（只取成功帧）
     if fitted:
-        # 首/中/末取**所有有限结果**（含 not_converged）：相变段
+        # 首/中/末取**所有有限结果**（含 ok_soft）：相变段
         # 往往是不收敛帧，只看 ok 会漏掉序列末端。
         fig_frames = fitted
         picks = [fig_frames[0], fig_frames[len(fig_frames) // 2],
