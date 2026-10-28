@@ -814,6 +814,10 @@ def check_mask_editor(window, lmfp: str) -> None:
         y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())
         report(not np.allclose(y0, y1, equal_nan=True),
                "mask 前后 1D 曲线有差异")
+    editor.btn_clear.click()
+    QApplication.processEvents()
+    report(window.current_mask is None and not window.mask_btn.isChecked(),
+           "清空后窗口级 mask 解除、按钮复位")
     editor.hide()
 
 

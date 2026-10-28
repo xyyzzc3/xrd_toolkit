@@ -220,6 +220,8 @@ def _heat_data(window: QMainWindow, dock):
         stem, tth, intensity = r
         src = files[i] if i < len(files) else None
         if src is not None and src.kind != gui_sources.RAW:
+            if getattr(window, "current_mask", None) is not None:
+                continue      # 遮罩生效：产物可能是遮罩前算的，别拼进去
             rows.append((stem, tth, intensity))   # 产物本身就是扣完的
             continue
         _, sub, _ = _proc_curve(window, dock, src.path, tth, intensity)
@@ -275,6 +277,10 @@ def _run_heatmap(window: QMainWindow, key: str) -> None:
     for i, source in enumerate(dock.heat_files):
         path, display = source.path, source.display
         if source.kind != gui_sources.RAW:
+            if getattr(window, "current_mask", None) is not None:
+                _log(window, f"热图：{display} 是遮罩前算的产物——跳过，"
+                             "先重新点 [1D] 再出热图")
+                continue
             # 产物条目：直接读盘（不重算、不再扣背景），读不到当失败
             got = gui_sources.load_product(source)
             if got is None:
@@ -432,9 +438,13 @@ def _plot_heatmap(window: QMainWindow) -> None:
     # 开/重绑面板**之前**，旧图才原样留着
     missing = _raw_not_ready(window, files)
     if missing:
+        hint = ("已应用 Mask——先重新点 [1D] 出图（要用遮罩后的曲线），"
+                "再来出热图"
+                if getattr(window, "current_mask", None) is not None
+                else "先点 [1D] 出图，再来出热图")
         _log(window, f"热图只拼已经算好的曲线：勾选里 {len(missing)} 个原始"
                      f"数据还没有 1D 曲线（{_preview_names(missing)}）"
-                     "——先点 [1D] 出图，再来出热图")
+                     f"——{hint}")
         return
     key = "热图"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)

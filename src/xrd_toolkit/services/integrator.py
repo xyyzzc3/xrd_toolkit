@@ -75,7 +75,9 @@ def _check_mask(image, mask):
     arr = np.asarray(mask, dtype=bool)
     if arr.shape != np.asarray(image).shape:
         raise ValueError(
-            f"mask 形状 {arr.shape} 与图像 {np.asarray(image).shape} 不一致")
+            f"Mask 尺寸与这张图不一致（mask {arr.shape}，图像 "
+            f"{np.asarray(image).shape}）。请打开 Mask 编辑器，对这张图"
+            f"重新应用或清除 mask")
     return arr
 
 

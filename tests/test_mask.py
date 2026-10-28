@@ -61,6 +61,16 @@ class TestMaskIO(unittest.TestCase):
         with self.assertRaises(ValueError):
             combine_masks(np.zeros((4, 4), bool), np.zeros((5, 4), bool))
 
+    def test_load_rejects_non_mask_image(self):
+        """选错 .tif 不能把整张图当 mask（2026-10-28）。"""
+        import fabio
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "image.tif"
+            fabio.tifimage.TifImage(
+                data=(np.ones((6, 6)) * 5).astype(np.float32)).write(str(path))
+            with self.assertRaises(ValueError):
+                load_mask(path)
+
     def test_combine_is_union(self):
         a = np.zeros((4, 4), bool)
         b = np.zeros((4, 4), bool)

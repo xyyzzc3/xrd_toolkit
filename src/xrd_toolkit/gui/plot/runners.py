@@ -111,6 +111,8 @@ def _run_1d(window: QMainWindow, path: Path, key: str,
         window.status_text.setText(f"复用缓存：{path.name}"
                                    f"（{len(tth)} 点）")
         dock.last_tth, dock.last_intensity = tth, intensity
+        dock.mask_epoch = int(getattr(window, "mask_epoch", 0))
+        dock.mask_on = False          # 缓存只在不遮罩时才会命中
         dock._new_data = True        # 这份是新数据 → 面板 [Home] 的家跟着走
         _draw_1d(window, dock, tth, intensity)
         _set_focus(window, key, dock.windowTitle())

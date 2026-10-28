@@ -430,6 +430,10 @@ def _open_mask_editor(window: QMainWindow) -> None:
     from xrd_toolkit.gui.mask_editor import MaskEditorWindow
     if getattr(window, "mask_editor", None) is None:
         window.mask_editor = MaskEditorWindow(window)
+    # 按钮是 checkable：点一下会先翻转。这里按真实状态校正，
+    # 避免"只是打开编辑器"就显示成 Mask 已生效。
+    window.mask_btn.setChecked(
+        getattr(window, "current_mask", None) is not None)
     window.mask_editor.show()
     window.mask_editor.raise_()
     window.mask_editor.activateWindow()
@@ -475,9 +479,10 @@ def _build_toolbar(window: QMainWindow) -> None:
     # [Mask] 与 [校准] 并列：都属"一次性设置"，但它打开的是独立窗口
     # （不是参数坞的一页），所以不进 entrance_buttons / PARAM_PAGES。
     btn_mask = QPushButton("Mask")
+    btn_mask.setCheckable(True)     # 勾上 = 当前有生效的窗口级 mask
     btn_mask.setToolTip(
         "独立 Mask 编辑器：遮罩 beamstop/模块缝/坏点，保存/加载，"
-        "预览 mask 前后的 1D 曲线")
+        "预览 mask 前后的 1D 曲线（只作用于积分；标定仍用原图）")
     btn_mask.clicked.connect(lambda checked=False: _open_mask_editor(window))
     tb.addWidget(btn_mask)
     window.mask_btn = btn_mask
@@ -755,6 +760,11 @@ def create_window() -> QMainWindow:
     window.current_mask = None
     window.mask_path = None
     window.mask_editor = None
+    # mask 每变一次 +1；compare/heatmap 只认这一代算出来的 1D
+    # （缓存里的 1D/产物没有 mask 标记，不能当遮罩后的结果）。
+    window.mask_epoch = 0
+    # 本会话里为批量处理临时算出的遮罩 1D：{源文件路径: (tth, intensity)}
+    window._masked_curves = {}
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：

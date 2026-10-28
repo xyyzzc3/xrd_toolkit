@@ -18,7 +18,7 @@ from xrd_toolkit.services import stage_cache
 
 
 def _spawn_task(window: QMainWindow, key: str, worker, args: tuple,
-                on_done, on_error) -> None:
+                on_done, on_error, task_attrs=None) -> None:
     """启动后台任务：worker(*args) 在线程里跑，done/error 回调回主线程。
 
     _spawn（1D 积分）的本体抽出来通用化：新视图（2D/剖面/瀑布）
@@ -44,6 +44,8 @@ def _spawn_task(window: QMainWindow, key: str, worker, args: tuple,
             del window._latest_task[key]
 
     task = BackgroundTask(worker, *args, on_done=done, on_error=error)
+    for name, value in (task_attrs or {}).items():
+        setattr(task, name, value)
     window._latest_task[key] = task   # 每面板只认最新任务（防旧结果覆盖）
     window._tasks.append(task)
     task.start()
@@ -67,6 +69,7 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
     # 窗口级 mask 在派活时抓一份引用：编辑器之后改的是它自己的 mask，
     # 再 [应用] 会换一个新副本，不会改到已派出去的任务。
     mask = getattr(window, "current_mask", None)
+    mask_epoch = int(getattr(window, "mask_epoch", 0))
 
     def worker(path_str, geom_, npt_, config):
         """后台线程：算 1D，顺手把产物落盘（有 mask 时不落缓存）。"""
@@ -98,7 +101,10 @@ def _spawn(window: QMainWindow, path: Path, geom: dict, npt: int,
     # 派活了：坞顶那组数据参数**被用掉**（见 _consume_data_params）
     _consume_data_params(window)
     _spawn_task(window, key, worker,
-                (str(path), geom, npt, window.config_name), done, error)
+                (str(path), geom, npt, window.config_name), done, error,
+                task_attrs={"mask_epoch": mask_epoch,
+                            "mask_on": mask is not None,
+                            "source_path": str(path)})
 
 def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     """面板的计算完成（主线程）：画进它自己的面板。
@@ -133,6 +139,8 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
     # 不用重新积分
     dock.last_tth = tth
     dock.last_intensity = intensity
+    dock.mask_epoch = int(getattr(task, "mask_epoch", -1))
+    dock.mask_on = bool(getattr(task, "mask_on", False))
     _set_focus(window, key, dock.windowTitle())   # 最新出的图成为编辑对象
     _draw_1d(window, dock, tth, intensity)
     if quiet:

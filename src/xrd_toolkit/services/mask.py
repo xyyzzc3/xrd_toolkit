@@ -52,9 +52,17 @@ def save_mask(path, mask) -> Path:
 
 
 def load_mask(path) -> np.ndarray:
-    """读取 `.npy` / `.edf` 掩膜，返回 bool 数组（True = 被遮掉）。"""
+    """读取 `.npy` / `.edf` 掩膜，返回 bool 数组（True = 被遮掉）。
+
+    只接受掩膜后缀：任意 fabio 能读的图片（比如选错了 .tif）会被当成
+    "非零像素 = 遮掉"，几乎整张图变 mask——必须在这里拦住。
+    """
     p = Path(path)
-    if p.suffix.lower() == ".npy":
+    suffix = p.suffix.lower()
+    if suffix not in MASK_SUFFIXES:
+        raise ValueError(
+            f"掩膜只支持 {MASK_SUFFIXES}，收到 {p.suffix!r}（不是图像文件）")
+    if suffix == ".npy":
         arr = np.load(str(p), allow_pickle=False)
     else:
         import fabio

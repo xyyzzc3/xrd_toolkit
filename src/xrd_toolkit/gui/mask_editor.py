@@ -29,12 +29,18 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
+from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services.mask import (
     combine_masks, load_mask, mask_stats, radial_outlier_mask, save_mask)
+
+
+def _radial_worker(image, center, n_sigma):
+    """后台线程跑径向 nσ；放在模块级，避免闭包在 QThread 里的生命周期坑。"""
+    return radial_outlier_mask(image, center, n_sigma=n_sigma)
 
 
 class MaskEditorWindow(QDialog):
@@ -64,6 +70,7 @@ class MaskEditorWindow(QDialog):
         self._overlay_artist = None
         self._overlay_ds = None
         self._last_dir = str(Path.home())
+        self._auto_task = None
 
         self._build()
         self._update_status()
@@ -86,6 +93,8 @@ class MaskEditorWindow(QDialog):
         self.btn_save.clicked.connect(self._save_mask)
         row1.addWidget(self.btn_save)
         self.btn_clear = QPushButton("清空")
+        self.btn_clear.setToolTip("清空当前 mask，并解除窗口级 mask"
+                                  "（后续 1D 按不遮运行）")
         self.btn_clear.clicked.connect(self._clear)
         row1.addWidget(self.btn_clear)
         self.btn_undo = QPushButton("撤销")
@@ -385,23 +394,53 @@ class MaskEditorWindow(QDialog):
         self._rect_start = None
 
     # ── 自动检测 ────────────────────────────────────────────────────
+    def _auto_busy(self, busy: bool) -> None:
+        self.btn_hot.setEnabled(not busy)
+        self.btn_radial.setEnabled(not busy)
+
+    def _start_auto(self, label, fn, args, on_ok) -> None:
+        """自动检测放后台（2048² 上实测 0.7–2.3 s，不能卡界面）。"""
+        if self._auto_task is not None or self.image is None:
+            return
+        self._auto_busy(True)
+        self.lbl_status.setText(f"{label}检测中…")
+
+        def done(result):
+            self._auto_task = None
+            self._auto_busy(False)
+            self._update_status()
+            on_ok(result)
+
+        def error(msg):
+            self._auto_task = None
+            self._auto_busy(False)
+            self._update_status()
+            QMessageBox.critical(self, f"{label}失败", msg)
+            _log(self.main, f"Mask {label}失败：{msg}")
+
+        self._auto_task = BackgroundTask(
+            fn, *args, on_done=done, on_error=error)
+        self._auto_task.start()
+
     def _auto_hot(self):
         if self.image is None:
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            _clean, hot, info = mask_hot_pixels(self.image)
-        except Exception as err:                       # noqa: BLE001
-            QMessageBox.critical(self, "自动坏点失败", str(err))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-        self._push_undo()
-        self.mask = combine_masks(self.mask, hot)
-        self._update_overlay()
-        self._update_status()
-        _log(self.main, f"Mask 自动坏点：{info.get('masked_components', '?')} 团 / "
-                       f"{info.get('masked_pixels', int(hot.sum()))} px")
+        image = self.image.copy()      # 后台只读快照，避免边跑边改
+
+        def apply(result):
+            _clean, hot, info = result
+            if hot.shape != self.mask.shape:
+                _log(self.main, "Mask 自动坏点：图像已换，结果丢弃")
+                return
+            self._push_undo()
+            self.mask = combine_masks(self.mask, hot)
+            self._update_overlay()
+            self._update_status()
+            _log(self.main, f"Mask 自动坏点："
+                           f"{info.get('masked_components', '?')} 团 / "
+                           f"{info.get('masked_pixels', int(hot.sum()))} px")
+
+        self._start_auto("自动坏点", mask_hot_pixels, (image,), apply)
 
     def _auto_radial(self):
         if self.image is None:
@@ -417,21 +456,22 @@ class MaskEditorWindow(QDialog):
         center = tuple(getattr(self.main, "config", {}).get(
             "beam_center", (self.image.shape[0] / 2.0,
                             self.image.shape[1] / 2.0)))
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            radial = radial_outlier_mask(
-                self.image, center, n_sigma=float(self.n_sigma.value()))
-        except Exception as err:                       # noqa: BLE001
-            QMessageBox.critical(self, "径向 nσ 失败", str(err))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-        self._push_undo()
-        self.mask = combine_masks(self.mask, radial)
-        self._update_overlay()
-        self._update_status()
-        _log(self.main, f"Mask 径向 nσ（实验性）：{int(radial.sum())} px"
-                       f"（n_sigma={self.n_sigma.value():g}）")
+        image = self.image.copy()
+        nsig = float(self.n_sigma.value())
+
+        def apply(radial):
+            if radial.shape != self.mask.shape:
+                _log(self.main, "Mask 径向 nσ：图像已换，结果丢弃")
+                return
+            self._push_undo()
+            self.mask = combine_masks(self.mask, radial)
+            self._update_overlay()
+            self._update_status()
+            _log(self.main, f"Mask 径向 nσ（实验性）：{int(radial.sum())} px"
+                           f"（n_sigma={nsig:g}）")
+
+        self._start_auto("径向 nσ", _radial_worker, (image, center, nsig),
+                         apply)
 
     # ── 保存/加载/应用 ──────────────────────────────────────────────
     def _default_mask_path(self):
@@ -468,7 +508,7 @@ class MaskEditorWindow(QDialog):
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "加载 Mask", str(self._default_mask_path().parent),
-            "Mask (*.npy *.edf);;所有文件 (*)")
+            "Mask (*.npy *.edf)")
         if not path:
             return
         try:
@@ -489,8 +529,39 @@ class MaskEditorWindow(QDialog):
         self._apply_to_main()
         _log(self.main, f"Mask 已加载：{path}")
 
+    def _refresh_2d_overlays(self) -> None:
+        """应用/清除 mask 后，已打开的 2D 面板立刻重画（只叠图，不重积分）。"""
+        try:
+            from xrd_toolkit.gui.plot.refresh import _redraw_panel
+        except Exception:                              # noqa: BLE001
+            return
+        for key in list(getattr(self.main, "plot_docks", {}) or {}):
+            if key.startswith("2D|"):
+                try:
+                    _redraw_panel(self.main, key)
+                except Exception:                      # noqa: BLE001
+                    pass       # 面板已半关闭/没数据：下次重画自然会带上
+
     def _apply_to_main(self):
         if self.mask is None:
+            return
+        # 每次 mask 变化都换一代：compare/heatmap 只认这一代算出来的 1D。
+        # 同时丢掉本会话里为批量处理临时留的遮罩曲线。
+        self.main.mask_epoch = int(getattr(self.main, "mask_epoch", 0)) + 1
+        getattr(self.main, "_masked_curves", {}).clear()
+        btn = getattr(self.main, "mask_btn", None)
+        if not np.any(self.mask):
+            # 空 mask = 不遮：清掉窗口级 mask（否则每次 1D 都被当成
+            # "有 mask"、缓存读写全跳过）
+            self.main.current_mask = None
+            self.main.mask_path = None
+            self.main.status_text.setText("Mask 已清除：后续 1D 不遮罩")
+            if btn is not None:
+                btn.setChecked(False)
+                btn.setToolTip("打开 Mask 编辑器……")
+            _log(self.main, "Mask 已清除：后续 1D 积分按不遮运行；"
+                           "已算好的曲线/产物不会自动重算")
+            self._refresh_2d_overlays()
             return
         self.main.current_mask = self.mask.copy()
         self.main.mask_path = self.mask_path
@@ -498,8 +569,15 @@ class MaskEditorWindow(QDialog):
         src = self.mask_path.name if self.mask_path else "未保存"
         self.main.status_text.setText(
             f"Mask 已应用：{st['masked_pixels']} px")
+        if btn is not None:
+            btn.setChecked(True)
+            btn.setToolTip(f"Mask 生效：{st['masked_pixels']} px"
+                           f"（{st['fraction'] * 100:.2f}%），点击编辑")
         _log(self.main, f"Mask 已应用：{st['masked_pixels']} px"
-                       f"（{st['fraction'] * 100:.2f}%），{src}")
+                       f"（{st['fraction'] * 100:.2f}%），{src}；"
+                       "只影响之后的 1D/扇区积分，已算好的曲线/产物"
+                       "不会自动重算")
+        self._refresh_2d_overlays()
 
     def _clear(self):
         if self.mask is None:
@@ -509,6 +587,9 @@ class MaskEditorWindow(QDialog):
         self.mask_path = None
         self._update_overlay()
         self._update_status()
+        # 清空 = 不遮：同步清掉窗口级 mask（否则界面显示已清空，
+        # 后续 1D 却还在用旧 mask）
+        self._apply_to_main()
 
     def _apply_and_preview(self):
         if self.image is None or self.mask is None:
@@ -519,7 +600,8 @@ class MaskEditorWindow(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             t0, y0 = integrate_1d(self.image, npt=npt, **geom)
-            _t1, y1 = integrate_1d(self.image, npt=npt, mask=self.mask, **geom)
+            _t1, y1 = integrate_1d(self.image, npt=npt, mask=self.mask,
+                                   **geom)
         except Exception as err:                       # noqa: BLE001
             QMessageBox.critical(self, "预览失败", str(err))
             return

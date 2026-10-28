@@ -3,9 +3,11 @@
 2026-10-22 从 plot_views.py 原样搬出（只改结构，不动逻辑）。
 plot_views 再导出。
 """
+import hashlib
 import time
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui import sources as gui_sources
@@ -17,6 +19,12 @@ from xrd_toolkit.gui.plot.curves import (
 from xrd_toolkit.gui.plot.drawing import _bg_path_of
 from xrd_toolkit.gui.plot.spawn import _progress_hide, _progress_show, _spawn
 from xrd_toolkit.services import process, stage_cache
+
+
+def _mask_signature(mask) -> str:
+    """当前 mask 的短哈希：写产物时并进 settings，避免覆盖未遮罩产物。"""
+    arr = np.ascontiguousarray(np.asarray(mask, dtype=bool))
+    return hashlib.sha1(arr.tobytes()).hexdigest()[:12]
 
 
 def _process_source(window, source, kw, settings, params0, blank_curve,
@@ -33,6 +41,12 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
     _proc_batch_apply）。
     """
     path = Path(source.path)
+    if (getattr(window, "current_mask", None) is not None
+            and source.kind != gui_sources.RAW):
+        # 产物是遮罩前算的：底下的 1D 可能没遮过，不能拿来重做
+        return {"ok": False,
+                "why": "已应用 Mask：这是遮罩前算的产物，先重新点 [1D] 再处理",
+                "path": path}
     # 落产物时挂在哪把键下面：RAW 按当前设置算，产物条目挂在它自己那份上
     base_key = None
     if source.kind == gui_sources.RAW:
@@ -64,19 +78,27 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
         return {"ok": False, "path": path,
                 "why": "背景拟合没成功（锚点太少 / 全落在数据范围外？）"}
     proc_settings = {**settings, "anchors": per_file}
+    mask_on = getattr(window, "current_mask", None) is not None
+    stored_source = path.name + ("（mask）" if mask_on else "")
+    if mask_on:
+        # 遮罩生效时产物是另一份数据：键里带 mask 哈希，绝不覆盖
+        # 未遮罩的同设置产物（load 时没有 mask_hash 也就找不到它）。
+        proc_settings = {**proc_settings,
+                         "mask_hash": _mask_signature(window.current_mask)}
     if source.kind == gui_sources.ONED:
         # 挂在**那份 1D 产物**的键下面：勾的是哪一条，处理的就是哪一条
         produced = stage_cache.store_proc_by_key(source.key, tth, processed,
                                                  settings=proc_settings,
-                                                 source=path.name)
+                                                 source=stored_source)
     elif base_key:
         # 处理产物重做：挂回它血缘上那把 1D 键（查得到的话）
         produced = stage_cache.store_proc_by_key(base_key, tth, processed,
                                                  settings=proc_settings,
-                                                 source=path.name)
+                                                 source=stored_source)
     else:
         produced = stage_cache.store_proc(path, tth, processed, **kw,
-                                          settings=proc_settings)
+                                          settings=proc_settings,
+                                          source=stored_source)
     if getattr(window, "bg_anchors", None) is None:
         window.bg_anchors = {}
     window.bg_anchors[str(path)] = per_file   # 面板跟着用同一套锚点
@@ -205,6 +227,13 @@ def _proc_ensure_curves(window: QMainWindow, missing: list, kw: dict,
         then()
 
     def on_done(window_, key_, task, result) -> None:
+        if getattr(window_, "current_mask", None) is not None:
+            # 遮罩生效时 1D 不落 stage_cache；把这一趟算出的曲线留到
+            # _masked_curves，processing 的第二次 _curve_source 才拿得到。
+            epoch = int(getattr(task, "mask_epoch", -1))
+            if epoch == int(getattr(window_, "mask_epoch", 0)):
+                path = key_.split("|", 1)[1]
+                window_._masked_curves[path] = (result[0], result[1])
         one_finished()
 
     def on_error(msg) -> None:
