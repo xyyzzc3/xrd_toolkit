@@ -71,16 +71,12 @@ def _pending_products(window: QMainWindow, name: str, rest: list,
     todo = []
     done = set(seen or ())    # 已在面板那批开算的路径（重复条目被防爆线
     #                           劈开时，后半截也不能再算一遍）；同批内同理
-    mask_on = getattr(window, "current_mask", None) is not None
     for source in rest:                       # rest = 来源对象（已按原始数据过滤）
         path = Path(source.path)
         if path in done:
             continue
         done.add(path)
-        is_m2d = str(path).lower().endswith(".mask2d.npz")
-        # 有全局 mask 时缓存键不适用（masked 2D 自己的 mask 在路径里，
-        # 缓存照常可用）
-        if (mask_on and not is_m2d) or not stage_cache.has_1d(path, **kw):
+        if not stage_cache.has_1d(path, **kw):
             todo.append(path)
     return todo
 

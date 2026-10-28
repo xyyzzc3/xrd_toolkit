@@ -344,12 +344,9 @@ def _on_choose_blank(window: QMainWindow) -> None:
     def error(msg):
         _log(window, f"空扫积分失败：{Path(path_str).name}——{msg}")
 
-    mask = getattr(window, "current_mask", None)
-    args = ((path_str, geom, npt) if mask is None
-            else (path_str, geom, npt, mask))
-    _spawn_task(window, key, _compute_integration, args, done, error)
-    _log(window, f"开始积分空扫图：{Path(path_str).name}"
-                 + ("（使用当前 Mask）" if mask is not None else ""))
+    _spawn_task(window, key, _compute_integration,
+                (path_str, geom, npt), done, error)
+    _log(window, f"开始积分空扫图：{Path(path_str).name}")
 
 
 def _connect_pending_hooks(window: QMainWindow) -> None:

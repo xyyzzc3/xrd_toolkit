@@ -53,23 +53,6 @@ def _curve_source(window, path, kw: dict):
     而且以后按 2–7° 查还会"命中"它（文件栏的行尾是从曲线自己读的，于是
     界面上露馅成"明明选了 2–7° 却列着 1–8°"）。
     """
-    if getattr(window, "current_mask", None) is not None:
-        # 遮罩生效时，stage_cache 里的 1D/产物都没有 mask 标记，可能是
-        # 遮罩前算的，不能拿来凑数。只认这一代 mask 算出的曲线：
-        #   1) 批量处理临时留的遮罩曲线（_proc_ensure_curves 写入）；
-        #   2) 当前 1D 面板，且它是这一代 mask 算出来的。
-        saved = (getattr(window, "_masked_curves", {}) or {}).get(str(path))
-        if saved is not None:
-            return saved[0], saved[1], None
-        panel = window.plot_docks.get("1D|" + str(path))
-        epoch = int(getattr(window, "mask_epoch", 0))
-        if (panel is not None
-                and getattr(panel, "last_tth", None) is not None
-                and getattr(panel, "mask_epoch", -1) == epoch
-                and getattr(panel, "mask_on", False)):
-            return panel.last_tth, panel.last_intensity, None
-        return None, None, ("已应用 Mask：这条曲线还没按当前 mask 重算"
-                            "（先点 [1D] 出图）")
     try:
         want = stage_cache.key_of_1d(str(path),
                                      config=str(kw.get("config") or ""),
@@ -137,9 +120,6 @@ def _curve_for(window, path):
     甲）：对比是"看已经算好的东西"，不该为看一眼把整批按坞顶那行重算
     （2026-10-03 用户定；坞顶那行在对比页也藏起来了）。
     """
-    if getattr(window, "current_mask", None) is not None:
-        # 遮罩生效：落盘的 1D/处理产物可能没遮过，不能当"已算好"
-        return None
     lo, hi, npt = _file_data_params(path)
     kw = dict(config=window.config_name, npt=npt, tth_min=lo, tth_max=hi)
     dock = window.plot_docks.get(window.focus_panel)
@@ -176,28 +156,12 @@ def _ready_curve(window, path, display):
     面板优先，这里统一到产物优先，与对比的老口径 2026-09-24 同源）。
     返回 (tth, intensity, 来源说明)，来源说明进日志；取不到 → None。
     """
-    mask_on = getattr(window, "current_mask", None) is not None
-    if mask_on:
-        # 落盘产物可能没遮过：遮罩生效时只认这一代 mask 的曲线
-        saved = (getattr(window, "_masked_curves", {}) or {}).get(str(path))
-        if saved is not None:
-            return saved[0], saved[1], "遮罩后的 1D"
-        epoch = int(getattr(window, "mask_epoch", 0))
-        for k in (f"1D|{path}", f"1D|{path}|{display}"):
-            d = window.plot_docks.get(k)
-            if (d is not None
-                    and getattr(d, "last_tth", None) is not None
-                    and getattr(d, "mask_epoch", -1) == epoch
-                    and getattr(d, "mask_on", False)):
-                return d.last_tth, d.last_intensity, "1D 面板（mask）"
-        return None
     got = _curve_for(window, path)
     if got is not None:
         return got
     for k in (f"1D|{path}", f"1D|{path}|{display}"):
         d = window.plot_docks.get(k)
-        if (d is not None and getattr(d, "last_tth", None) is not None
-                and not getattr(d, "mask_on", False)):
+        if d is not None and getattr(d, "last_tth", None) is not None:
             return d.last_tth, d.last_intensity, "1D 面板"
     return None
 

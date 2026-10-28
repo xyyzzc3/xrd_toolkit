@@ -749,17 +749,9 @@ def create_window() -> QMainWindow:
     window._image_cache = {}
     # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
     window.focus_panel = None
-    # 窗口级 Mask（2026-10-27）：None = 不遮；否则是 bool 数组，
-    # True = 被遮掉。1D 积分前传给 integrate_1d；mask_path 只用于日志。
-    # mask_editor 持有独立编辑窗口（关闭只是隐藏，不重建）。
-    window.current_mask = None
-    window.mask_path = None
+    # Mask 编辑器持有独立窗口（关闭只是隐藏，不重建）。Mask 本身是
+    # Mask 后的 2D 产物（services/masked2d），不是窗口级开关。
     window.mask_editor = None
-    # mask 每变一次 +1；compare/heatmap 只认这一代算出来的 1D
-    # （缓存里的 1D/产物没有 mask 标记，不能当遮罩后的结果）。
-    window.mask_epoch = 0
-    # 本会话里为批量处理临时算出的遮罩 1D：{源文件路径: (tth, intensity)}
-    window._masked_curves = {}
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：

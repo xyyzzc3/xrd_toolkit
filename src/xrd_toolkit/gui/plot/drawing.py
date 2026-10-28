@@ -301,8 +301,6 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         # 已应用的窗口级 mask：半透明红叠在 2D 图上（2026-10-27）。
         # 默认 None = 不画；编辑器里改 mask 后这里重画一次就能看到。
         mask = panel_mask
-        if mask is None:
-            mask = getattr(window, "current_mask", None)
         if mask is not None and np.shape(mask) == data.shape:
             ds = 1 if mask.size <= 1_500_000 else 2
             small = mask[::ds, ::ds]

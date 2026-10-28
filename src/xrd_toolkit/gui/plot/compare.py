@@ -401,10 +401,6 @@ def _run_compare(window: QMainWindow, key: str) -> None:
     for source in dock.compare_files:
         path, display = source.path, source.display
         if not gui_sources.is_rawlike(source.kind):
-            if getattr(window, "current_mask", None) is not None:
-                fail_one(path, display,
-                         "已应用 Mask：产物是遮罩前算的，先重新点 [1D] 再对比")
-                continue
             got = gui_sources.load_product(source)
             if got is None:
                 fail_one(path, display, "产物不存在（可能已被删除），请重新计算")
@@ -446,13 +442,9 @@ def _plot_compare(window: QMainWindow) -> None:
     # 发生在开/重绑面板**之前**，旧图才原样留着
     missing = _raw_not_ready(window, files)
     if missing:
-        hint = ("已应用 Mask——先重新点 [1D] 出图（要用遮罩后的曲线），"
-                "再来对比"
-                if getattr(window, "current_mask", None) is not None
-                else "先点 [1D] 出图，再来对比")
         _log(window, f"对比只叠已经算好的曲线：勾选里 {len(missing)} 个原始"
                      f"数据还没有 1D 曲线（{_preview_names(missing)}）"
-                     f"——{hint}")
+                     "——先点 [1D] 出图，再来对比")
         return
     key = "对比"            # 单槽（见 docstring）：不随勾选集合变
     dock = window.plot_docks.get(key)

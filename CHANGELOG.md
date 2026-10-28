@@ -63,6 +63,9 @@
   `load_mask` 仍只接受 `.npy/.edf`；自动坏点/径向 nσ 在后台线程；
   标定不套 mask。删除 Mask 2D（单条/整组）会同时清掉它名下的 1D/处理
   产物缓存；导出 1D 的文件头写 `mask: sha <hash8>, N px` 溯源。
+- **移除窗口级 mask 旧模型**（2026-10-29）：`current_mask`/`mask_epoch`/
+  `_masked_curves` 及所有旧的“旧一代曲线”栅栏删除，GUI 只保留 Mask 2D
+  产物一条路；空扫积分/瀑布/1D 不再接受全局 mask。
 - **GUI 探针覆盖 Mask 2D 产物**（2026-10-28）：`scripts/check_gui.py`
   I 节走真工具栏 + 真画布事件：画矩形 → 生成 manifest → 文件栏条目 →
   双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器；真数据 exit 0。

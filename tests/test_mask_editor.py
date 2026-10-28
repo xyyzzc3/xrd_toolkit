@@ -196,7 +196,6 @@ class TestMaskEditor(unittest.TestCase):
         with mock.patch.object(gui_runners.stage_cache, "load_1d",
                                return_value=None) as load, \
                 mock.patch.object(gui_runners, "_spawn") as spawn:
-            self.w.current_mask = None
             gui_runners._run_1d(self.w, path, key, {}, 100)
             load.assert_called_once()       # manifest 的 1D 缓存照常可用
             spawn.assert_called_once()

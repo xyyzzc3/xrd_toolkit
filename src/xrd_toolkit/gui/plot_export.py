@@ -192,18 +192,11 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
         if not quiet:
             _log(window, "未勾选任何项")
         return []
-    mask_on = getattr(window, "current_mask", None) is not None
-    mask_epoch = int(getattr(window, "mask_epoch", 0))
     out = []
     for src in checked:
         path = str(src.path)
         display = src.display
         if not gui_sources.is_rawlike(src.kind):
-            if mask_on:
-                if not quiet:
-                    _log(window, f"跳过 {display}：当前已应用 Mask，产物是"
-                                 "遮罩前算的；先重新点 [1D] 出图/重新处理")
-                continue
             # 产物条目：直接导出那一份产物（已经是算好/扣好的曲线）
             got = gui_sources.load_product(src)
             if got is None:
@@ -224,10 +217,7 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
             if (dock is not None
-                    and getattr(dock, "last_tth", None) is not None
-                    and (not mask_on
-                         or (getattr(dock, "mask_epoch", -1) == mask_epoch
-                             and getattr(dock, "mask_on", False)))):
+                    and getattr(dock, "last_tth", None) is not None):
                 tth, intensity = dock.last_tth, dock.last_intensity
                 chain = ""
                 category = data_export.CATEGORY_RAW
@@ -274,10 +264,8 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                 break
         else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
             if not quiet:
-                why = ("已应用 Mask：这条 1D 还没按当前 mask 重算"
-                       "（先重新点 [1D] 出图）" if mask_on
-                       else "还没有 1D 曲线（先点 [1D] 出图）")
-                _log(window, f"跳过 {display}：{why}")
+                _log(window, f"跳过 {display}：还没有 1D 曲线"
+                             f"（先点 [1D] 出图）")
     if not out and not quiet:
         _log(window, "没有可导出的 1D 曲线")
     return out
