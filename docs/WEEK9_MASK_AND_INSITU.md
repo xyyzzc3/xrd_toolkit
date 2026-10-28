@@ -58,6 +58,9 @@ beamstop 阴影压低低角强度。事后再在 1D 上扣背景已经晚了—�
   原始图与 mask 文件不动。
 - 同一 raw+mask 重复生成时，只更新显示标签（旁路 `labels.json`），
   **不重写 manifest**，已有 1D 缓存不失效。
+- 右键 Mask 2D →「导出 Mask 2D 数据（.npz）」：写 `image`（原始像素）+
+  `mask`（bool）+ `meta`（原始图路径/哈希/像素数），换机器也能用；
+  坏点仍是 mask，不填 0/NaN。
 - 导出 1D 的文件头写 mask 溯源：`# mask: sha <哈希前 8 位>, N px`。
 - `scripts/check_gui.py` I 节：真工具栏打开编辑器 → 画矩形 → 生成 manifest
   → 文件栏条目 → 双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器，真数据

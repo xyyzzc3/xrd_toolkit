@@ -118,6 +118,18 @@ class TestManifest(unittest.TestCase):
         self.assertFalse(stage_cache.has_1d(meta["path"], config="c", npt=10,
                                             tth_min=1.0, tth_max=8.0))
 
+    def test_export_npz_roundtrip(self):
+        meta = masked2d.create(self.raw, self.mask, label="a")
+        out = Path(self._td.name) / "masked2d_export"
+        target, shape, npx = masked2d.export_npz(meta["path"], out)
+        self.assertEqual(target.suffix, ".npz")
+        self.assertEqual(shape, self.mask.shape)
+        self.assertEqual(npx, int(self.mask.sum()))
+        z = np.load(target, allow_pickle=False)
+        np.testing.assert_array_equal(z["image"], self.img)
+        np.testing.assert_array_equal(z["mask"], self.mask)
+        self.assertIn("raw_path", str(z["meta"].item()))
+
     def test_integration_matches_explicit_mask(self):
         meta = masked2d.create(self.raw, self.mask)
         got = load_diffraction_image(meta["path"])
@@ -165,6 +177,14 @@ class TestMasked2DGui(unittest.TestCase):
                 return True
             time.sleep(0.02)
         return False
+
+    def test_context_menu_offers_npz_export(self):
+        from PySide6.QtWidgets import QMenu
+        from xrd_toolkit.gui.files import menus
+        menu = QMenu(self.w)
+        actions = menus._entry_menu_actions(menu, self.w, self.src.item)
+        texts = [a.text() for a in actions]
+        self.assertTrue(any("导出 Mask 2D 数据" in t for t in texts))
 
     def test_double_click_opens_masked_2d(self):
         _open_entry_view(self.w, self.src.item)      # 双击 = 2D

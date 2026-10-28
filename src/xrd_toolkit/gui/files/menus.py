@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import (
-    QInputDialog, QMainWindow, QMenu, QMessageBox)
+    QFileDialog, QInputDialog, QMainWindow, QMenu, QMessageBox)
 
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.files.actions import (
@@ -18,6 +18,7 @@ from xrd_toolkit.gui.files.model import (
     GROUP_BATCH_ROLE, GROUP_MASKED2D_ROLE, _group_title, _raise_panel,
     is_group, panel_key_of)
 from xrd_toolkit.gui.panel_state import _log
+from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services import masked2d, stage_cache
 
 
@@ -95,6 +96,8 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
                 "export_group"
     elif src is not None and src.kind == gui_sources.MASKED2D:
         actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
+        actions[menu.addAction(
+            "导出 Mask 2D 数据（.npz：image + mask）…")] = "export_masked2d"
         menu.addSeparator()
         actions[menu.addAction(
             f"删除这条 Mask 2D（{src.display}；原图与 mask 不动）")] = \
@@ -116,6 +119,30 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
         menu.addSeparator()
     actions[menu.addAction("删除所有缓存…")] = "clear_cache"
     return actions
+
+def _export_masked2d(window, src) -> None:
+    """右键 Mask 2D 条目 → 导出独立 .npz（image + mask + meta）。"""
+    try:
+        meta = masked2d.meta_of(src.path)
+    except Exception as err:                           # noqa: BLE001
+        _log(window, f"导出 Mask 2D 失败：{err}")
+        return
+    raw = Path(meta.get("raw_path") or "image")
+    default = str(Path(OUTPUTS_DIR) / f"{raw.stem}_mask2d.npz")
+    target, _ = QFileDialog.getSaveFileName(
+        window, "导出 Mask 2D 数据", default,
+        "Numpy 数据 (*.npz)")
+    if not target:
+        return
+    try:
+        out, shape, npx = masked2d.export_npz(src.path, target)
+    except Exception as err:                           # noqa: BLE001
+        _log(window, f"导出 Mask 2D 失败：{err}")
+        return
+    _log(window, f"已导出 Mask 2D 数据：{out}"
+                 f"（{shape[0]}×{shape[1]} px，mask {npx} px）")
+    window.status_text.setText(f"已导出 Mask 2D 数据：{Path(out).name}")
+
 
 def _drop_masked2d(window, paths) -> tuple:
     """删 Mask 2D manifest，并清掉它名下的 1D / 处理产物缓存。
@@ -177,6 +204,8 @@ def _entry_menu(window: QMainWindow, item) -> None:
         _open_group_views(window, item, arg or "1D")
     elif what == "drop_group":
         drop_product_group(window, item)
+    elif what == "export_masked2d":
+        _export_masked2d(window, src)
     elif what in ("drop_masked2d", "drop_masked2d_group"):
         items = ([item.child(i) for i in range(item.childCount())]
                  if what.endswith("_group") else [item])

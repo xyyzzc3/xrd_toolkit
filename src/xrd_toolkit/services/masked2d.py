@@ -185,6 +185,30 @@ def list_products() -> list:
     return out
 
 
+def export_npz(path, target) -> tuple:
+    """把 Mask 2D 导出成独立的 `.npz`：image + mask + meta。
+
+    与内部 manifest 不同，这个文件**自带像素**，换机器/不给原始图也能用；
+    坏点仍是 mask（不填 0/NaN），读法：
+        z = np.load("x.npz"); image = z["image"]; mask = z["mask"]
+    返回 (target, shape, masked_pixels)。
+    """
+    from xrd_toolkit.services.data_loader import load_diffraction_image
+    raw_path, mask, meta = load_manifest(path)
+    image = np.asarray(load_diffraction_image(raw_path), dtype=float)
+    if image.shape != mask.shape:
+        raise ValueError(
+            f"mask 形状 {mask.shape} 与原始图 {image.shape} 不一致")
+    target = Path(target)
+    if target.suffix.lower() != ".npz":
+        target = target.with_suffix(".npz")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        target, image=image, mask=np.asarray(mask, dtype=bool),
+        meta=np.array(json.dumps(meta, ensure_ascii=False)))
+    return target, image.shape, int(mask.sum())
+
+
 def delete(path) -> bool:
     """删掉一条 masked 2D manifest（原始图/ mask 文件都不动）。"""
     p = Path(path)
