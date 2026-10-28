@@ -80,6 +80,16 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(m1["path"], m2["path"])
         self.assertEqual(stamp, Path(m2["path"]).stat().st_mtime_ns)
 
+    def test_label_update_does_not_rewrite_manifest(self):
+        m1 = masked2d.create(self.raw, self.mask, label="a")
+        stamp = Path(m1["path"]).stat().st_mtime_ns
+        m2 = masked2d.create(self.raw, self.mask, label="saved.npy")
+        self.assertEqual(m2["path"], m1["path"])
+        self.assertEqual(m2["label"], "saved.npy")
+        self.assertEqual(stamp, Path(m2["path"]).stat().st_mtime_ns)
+        self.assertEqual(masked2d.list_products()[0]["label"], "saved.npy")
+        self.assertEqual(masked2d.meta_of(m2["path"])["label"], "saved.npy")
+
     def test_different_mask_creates_new_product(self):
         m1 = masked2d.create(self.raw, self.mask)
         self.mask[10, 10] = True

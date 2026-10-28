@@ -137,6 +137,18 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(int(self.ed.mask.sum()), 0)
         self.assertEqual(len(self._products()), 1)
 
+    def test_save_then_regenerate_updates_label(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        saved = Path(self._td.name) / "my_mask.npy"
+        with mock.patch.object(gui_mask_editor.QFileDialog,
+                               "getSaveFileName",
+                               return_value=(str(saved), "")):
+            self.ed._save_mask()
+        self.ed._apply_to_main()
+        self.assertEqual(self._products()[0]["label"], "my_mask.npy")
+
     def test_apply_to_checked_files(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)

@@ -56,6 +56,8 @@ beamstop 阴影压低低角强度。事后再在 1D 上扣背景已经晚了—�
   后台线程跑；**标定的环检测仍用原图**（不套 mask）。
 - 删除 Mask 2D（右键单条/整组）会同时清掉它名下的 1D 与处理产物缓存；
   原始图与 mask 文件不动。
+- 同一 raw+mask 重复生成时，只更新显示标签（旁路 `labels.json`），
+  **不重写 manifest**，已有 1D 缓存不失效。
 - 导出 1D 的文件头写 mask 溯源：`# mask: sha <哈希前 8 位>, N px`。
 - `scripts/check_gui.py` I 节：真工具栏打开编辑器 → 画矩形 → 生成 manifest
   → 文件栏条目 → 双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器，真数据

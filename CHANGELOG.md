@@ -62,7 +62,9 @@
   对比。[应用到勾选文件] 给整批各生成一条；[清空] 只清编辑器，产物保留。
   `load_mask` 仍只接受 `.npy/.edf`；自动坏点/径向 nσ 在后台线程；
   标定不套 mask。删除 Mask 2D（单条/整组）会同时清掉它名下的 1D/处理
-  产物缓存；导出 1D 的文件头写 `mask: sha <hash8>, N px` 溯源。
+  产物缓存；导出 1D 的文件头写 `mask: sha <hash8>, N px` 溯源。同一
+  raw+mask 重复生成只更新显示标签（旁路 `labels.json`），不重写
+  manifest、1D 缓存不失效。
 - **移除窗口级 mask 旧模型**（2026-10-29）：`current_mask`/`mask_epoch`/
   `_masked_curves` 及所有旧的“旧一代曲线”栅栏删除，GUI 只保留 Mask 2D
   产物一条路；空扫积分/瀑布/1D 不再接受全局 mask。
