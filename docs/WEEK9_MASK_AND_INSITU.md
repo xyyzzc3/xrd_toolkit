@@ -31,6 +31,9 @@ beamstop 阴影压低低角强度。事后再在 1D 上扣背景已经晚了—�
 
 ### 1.3 界面与文件
 
+> 独立快速上手（临时文档，正式发版并入《使用说明》）：
+> [`docs/MASK.zh-CN.md`](MASK.zh-CN.md)。
+
 - 工具栏 `[校准]` 旁边新增 `[Mask]`，打开**独立**编辑器（不塞进参数坞）：
   打开代表性图像、画笔/橡皮/矩形、清空/撤销、自动坏点、径向 nσ
   （实验性）、保存/加载、mask 前后 1D 预览。
@@ -317,6 +320,8 @@ python scripts/gsas2_insitu_crosscheck.py compare \
 - `outputs/masks/lmfp1_lab6_mask.npy` / `.edf`
 - Mask 后的 2D manifest：`<stage cache>/masked2d/*.mask2d.npz`（本地缓存；
   原始图 + mask，不复制像素）
+- Mask 快速上手（临时）：`docs/MASK.zh-CN.md`；截图
+  `showcase/gui/gui_mask.png`、`gui_mask2d.png`（v0.1.6 发版时并入说明书）
 - `outputs/masks/mask_before_after_00029.png`
 - `outputs/masks/mask_editor.png`
 - `outputs/insitu/insitu_fit.csv`

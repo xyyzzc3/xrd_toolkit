@@ -151,8 +151,10 @@ compared side by side.
 (Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly
 flags, a CSV summary and split timings. A three-frame GSAS-II cross-check
 (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
-trends against our fit. Mask strategy, fit parameters, the cross-check and
-the efficiency measurements: [docs/WEEK9_MASK_AND_INSITU.md](docs/WEEK9_MASK_AND_INSITU.md).
+trends against our fit. **Mask quick start (Chinese):**
+[docs/MASK.zh-CN.md](docs/MASK.zh-CN.md). Mask strategy, fit parameters,
+the cross-check and the efficiency measurements:
+[docs/WEEK9_MASK_AND_INSITU.md](docs/WEEK9_MASK_AND_INSITU.md).
 
 ## Roadmap
 

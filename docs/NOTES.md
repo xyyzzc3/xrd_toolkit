@@ -239,6 +239,32 @@ SNIP was implemented and measured as well, but it over-subtracts by 43–98 % on
 
 ![Background subtraction on a real LMFP pattern](../showcase/gui/gui_background.png)
 
+## Mask and Mask 2D products
+
+Masks must be applied **before** 2D→1D integration: azimuthal averaging would
+otherwise fold beamstop shadows, module gaps and fixed hot pixels into the 1D
+curve, where no background fit can undo them.
+
+The mask is a **Mask 2D product**, not a window-wide switch. The Mask editor
+writes a small `.mask2d.npz` manifest under the stage cache (`masked2d/`):
+raw image path + packed bool mask + shape/pixel count/label/hash. Pixels are
+never copied or rewritten; masked pixels are simply excluded from integration.
+The file bar gets a "Mask 后的 2D" group whose entries behave like raw data:
+double-click = 2D (raw + red overlay), right-click = 1D. Masked and unmasked
+1D curves are distinct sources and can coexist in compare/heatmap/processing.
+
+`load_diffraction_image()` returns a `np.ma.MaskedArray` for manifests;
+`integrate_1d`/`integrate_sectors` union that mask with an explicit `mask=`.
+Supported extras: save/load `.npy`/`.edf` masks; label updates via a sidecar
+`labels.json` (no manifest rewrite, 1D cache stays valid); 1D export headers
+carry `mask: sha <hash8>, N px`; right-click "导出 Mask 2D 数据（.npz）" writes
+a self-contained image + mask + meta file; deleting a Mask 2D removes its 1D
+and processed-product caches. Calibration ring detection still uses the raw
+image. The radial n-sigma detector remains experimental (it flags real rings).
+
+Quick start: `docs/MASK.zh-CN.md`. Tests: `tests/test_mask.py`,
+`tests/test_mask_editor.py`, `tests/test_masked2d.py`.
+
 ## Batches, products and the file bar
 
 **Batching.** [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window), and any view button processes all checked files at once, with a live progress counter in the log and in a status-bar progress bar (completion lines end in （k/n）; opening the panels themselves reports progress every 8 panels and keeps the window responsive). Check more than **25** files and the batch draws **none** of them (the user's rule, 2026-09-26, "防爆图"; the line itself was 24 plot / 25 refuse until the user moved it to **25 / 26** on 2026-10-09): opening a panel is the one cost that grows with the count (136 ms for the first, 287 ms for the hundredth) and each costs ≈ 15 MB, so instead the whole batch is integrated in the background and stored, and the results land in the file bar's 1D 产物 group — **double-click an entry to open that one, or right-click the group for [打开整组]** (which asks first when the group is larger than the cap). Batches of 25 or fewer draw every panel as before. Large batches merge their log lines (one line for the openings, a progress line every 8, one summary with the elapsed time and how many came from the cache) — 81 files used to print 162 lines. [导出数据] saves each file's 1D product as a two-column txt / `.chi`: **a single dataset = one flat file**, **two or more = one folder**; the export name defaults to `<data type>-<sample>-<timestamp>` (e.g. `处理产物-LMFP_1-2026-10-23_235500`; the standard stays in the file header) and can be typed in the dialog (2026-10-23). The folder holds `<name>_全部数据.csv` plus a `txt/` subfolder with one file per curve (user, 2026-10-02). The collection is optional (checked by default; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch, and the log gets a start line and a completion line carrying the elapsed time and the full path.

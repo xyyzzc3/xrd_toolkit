@@ -66,6 +66,9 @@
   raw+mask 重复生成只更新显示标签（旁路 `labels.json`），不重写
   manifest、1D 缓存不失效。右键 Mask 2D 可导出独立 `.npz`
   （image + mask + meta），坏点仍是 mask，不填 0/NaN。
+- **Mask 快速上手（临时文档）**（2026-10-29）：新增
+  `docs/MASK.zh-CN.md` 与 `showcase/gui/gui_mask.png` / `gui_mask2d.png`；
+  《使用说明》仍锁 v0.1.5，v0.1.6 正式发版时并入并删除独立文件。
 - **移除窗口级 mask 旧模型**（2026-10-29）：`current_mask`/`mask_epoch`/
   `_masked_curves` 及所有旧的“旧一代曲线”栅栏删除，GUI 只保留 Mask 2D
   产物一条路；空扫积分/瀑布/1D 不再接受全局 mask。
