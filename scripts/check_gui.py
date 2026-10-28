@@ -766,6 +766,57 @@ def check_processing_chain(window, lab6: str) -> None:
            "换了参数再点：多一组、并存", proc_group_titles())
 
 
+def check_mask_editor(window, lmfp: str) -> None:
+    """Mask 编辑器：工具栏 [Mask] → 载入真图 → 矩形遮 → 应用并预览。
+
+    走用户路径：按钮 click + 画布真鼠标事件；不直接改 `editor.mask`。
+    """
+    print("\nI. Mask 编辑器（真图 + 真画布事件）")
+    window.mask_btn.click()
+    ok = wait_until(lambda: getattr(window, "mask_editor", None) is not None)
+    report(ok, "工具栏 [Mask] 打开独立编辑器")
+    if not ok:
+        return
+    editor = window.mask_editor
+    editor.show()
+    editor.load_image(Path(lmfp))
+    report(editor.image is not None and editor.mask is not None
+           and editor.mask.shape == editor.image.shape,
+           "载入真实 2D 图像并分配同形 mask",
+           f"{editor.image.shape if editor.image is not None else None}")
+    if editor.image is None:
+        editor.hide()
+        return
+
+    editor.tool_buttons[editor.TOOL_RECT].click()
+    editor.canvas.draw()
+    ax = editor.ax_img
+    h, w = editor.image.shape
+    r0, c0 = h // 3, w // 3
+    r1, c1 = r0 + 80, c0 + 80
+    px0, py0 = ax.transData.transform((c0, r0))
+    px1, py1 = ax.transData.transform((c1, r1))
+    fire(editor.canvas, "button_press_event", px0, py0, button=1)
+    fire(editor.canvas, "motion_notify_event", px1, py1,
+         buttons=frozenset({1}))
+    fire(editor.canvas, "button_release_event", px1, py1, button=1)
+    n_masked = int(editor.mask.sum())
+    report(n_masked >= 80 * 80, "矩形拖拽写入 mask", f"{n_masked} px")
+
+    editor.btn_preview.click()
+    ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
+    report(ok, "应用并预览 1D（mask 前/后两条曲线）")
+    report(getattr(window, "current_mask", None) is not None
+           and window.current_mask.shape == editor.mask.shape,
+           "mask 已挂到主窗口（后续 1D 积分生效）")
+    if ok:
+        y0 = np.asarray(editor.ax_prev.lines[0].get_ydata())
+        y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())
+        report(not np.allclose(y0, y1, equal_nan=True),
+               "mask 前后 1D 曲线有差异")
+    editor.hide()
+
+
 def check_file_bar_sort(window, lab6: str, lmfp: str) -> None:
     """文件栏排序（2026-10-08）：名称（自然序）重排 → 「导入顺序」原样还原。"""
     print("F. 文件栏排序（真数据）")
@@ -827,6 +878,7 @@ def main() -> int:
         check_product_delete(window)
         check_processing_chain(window, lab6_key)
         check_file_bar_sort(window, lab6_key, lmfp_key)
+        check_mask_editor(window, lmfp_key)
         print("\n日志末行：" + window.log_text.toPlainText().strip()
               .splitlines()[-1])
     finally:

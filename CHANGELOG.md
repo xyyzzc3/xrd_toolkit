@@ -43,6 +43,10 @@
 - **模型无关校验**（2026-10-28）：`scripts/check_insitu_peaks.py`
   用低角 (200) 双峰质心（不依赖三相 Rietveld）对照 f_poor，
   本批 R²=0.967；双峰总面积是相依赖量，不作守恒量。
+- **GUI 探针覆盖 Mask 编辑器**（2026-10-28）：`scripts/check_gui.py`
+  新增 I 节，走真工具栏按钮 + 真画布事件（打开编辑器 → 载入真图 →
+  矩形拖拽 → 应用并预览 1D），核对 `current_mask` 与 mask 前后曲线；
+  真数据 exit 0。
 - **GSAS-II 独立对照**（2026-10-28）：`scripts/gsas2_insitu_crosscheck.py`
   分 prepare/refine/compare 三步（refine 在单独的 `gsas2` 环境），对
   第 1/45/81 帧做三相精修。相分数趋势一致（GSAS-II wt% =
