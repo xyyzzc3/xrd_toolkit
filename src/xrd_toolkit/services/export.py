@@ -184,11 +184,11 @@ def unique_path(target: Path) -> Path:
 
 
 def normalize_row(row) -> tuple:
-    """一条导出结果统一成 6 元组 (名, tth, 强度, 链, 类别, 配置)。
+    """一条导出结果统一成 7 元组 (名, tth, 强度, 链, 类别, 配置, mask)。
 
-    3/4/5 元的旧形状（老调用方与测试）缺啥补啥：链缺省 none、类别按链
-    推断（none → Raw，否则 Processed）、配置缺省空。补出来的默认值就是
-    "没做处理"的诚实表示，不会把老调用方的意图猜歪。
+    3/4/5/6 元的旧形状（老调用方与测试）缺啥补啥：链缺省 none、类别按链
+    推断（none → Raw，否则 Processed）、配置缺省空、mask 缺省空。补出来
+    的默认值就是"没做处理"的诚实表示，不会把老调用方的意图猜歪。
     """
     row = tuple(row)
     chain = row[3] if len(row) > 3 and row[3] else "none"
@@ -196,12 +196,13 @@ def normalize_row(row) -> tuple:
                 else (CATEGORY_RAW if str(chain).strip() in ("", "none")
                       else CATEGORY_PROCESSED))
     config = row[5] if len(row) > 5 and row[5] else None
-    return (row[0], row[1], row[2], chain, category, config)
+    mask = row[6] if len(row) > 6 and row[6] else ""
+    return (row[0], row[1], row[2], chain, category, config, mask)
 
 
 def _curve_header(*, category: str, chain: str, n_points: int, tth_min: float,
                   tth_max: float, cut_points: int, config: str,
-                  exported: str, extra_lines=None) -> str:
+                  exported: str, mask: str = "", extra_lines=None) -> str:
     """曲线文件的表头（不含 "# " 前缀——np.savetxt 会给每行加）。
 
     全 ASCII：Excel 打开不认 BOM 之外的编码，° – → 、 这些字符就是乱码
@@ -217,13 +218,16 @@ def _curve_header(*, category: str, chain: str, n_points: int, tth_min: float,
               f"points: {n_points}  range: {tth_min:.3f}-{tth_max:.3f} deg"]
     if config and str(config).isascii():
         lines.append(f"config: {config}")
+    if mask and str(mask).isascii():
+        lines.append(f"mask: {mask}")
     lines.append(f"exported: {exported}")
     return "\n".join(lines)
 
 
 def write_curve(target: Path, tth, intensity, *, category: str,
                 chain: str = "none", config: str = None,
-                now: datetime = None, extra_lines=None) -> int:
+                now: datetime = None, mask: str = "",
+                extra_lines=None) -> int:
     """写一条两列曲线（txt / chi），返回写入的数据行数。
 
     裁剪过的点（非有限值）**不写行**：写出去就是字面 "nan"，别的软件读
@@ -240,7 +244,7 @@ def write_curve(target: Path, tth, intensity, *, category: str,
         tth_min=float(kept.min()) if kept.size else 0.0,
         tth_max=float(kept.max()) if kept.size else 0.0,
         cut_points=int((~keep).sum()), config=config, exported=stamp(now),
-        extra_lines=extra_lines)
+        mask=mask, extra_lines=extra_lines)
     np.savetxt(str(target), np.c_[kept, intensity[keep]], fmt="%.6g",
                header=header, encoding="utf-8")
     return int(keep.sum())
@@ -273,8 +277,8 @@ def write_csv(target: Path, results, *, now: datetime = None) -> None:
         return "" if not np.isfinite(v) else f"{v:.6g}"
 
     meta = [f"# exported: {stamp(now)}"]
-    for i, (name, tth, intensity, chain, category, config) in enumerate(
-            results, start=2):
+    for i, (name, tth, intensity, chain, category, config,
+            mask) in enumerate(results, start=2):
         tth = np.asarray(tth, dtype=float)
         cut_points = int((~np.isfinite(np.asarray(intensity, dtype=float)))
                          .sum())
@@ -285,6 +289,8 @@ def write_csv(target: Path, results, *, now: datetime = None) -> None:
                   f" | 2theta={tth.min():.3f}-{tth.max():.3f} deg")
         if config and str(config).isascii():
             detail += f" | config={config}"
+        if mask and str(mask).isascii():
+            detail += f" | mask={mask}"
         meta.append(detail)
     if any(not np.isfinite(c).all() for c in columns):
         meta.append("# blank cells = 2theta points inside a cut range"

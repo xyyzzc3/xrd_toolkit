@@ -3,6 +3,8 @@
 2026-10-21 从 file_dock.py 原样搬出（只改结构，不动逻辑）。
 file_dock 再导出，tests/scripts 照旧经 gui_file_dock 取用。
 """
+from pathlib import Path
+
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import (
     QInputDialog, QMainWindow, QMenu, QMessageBox)
@@ -115,6 +117,28 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
     actions[menu.addAction("删除所有缓存…")] = "clear_cache"
     return actions
 
+def _drop_masked2d(window, paths) -> tuple:
+    """删 Mask 2D manifest，并清掉它名下的 1D / 处理产物缓存。
+
+    Mask 2D 是源，1D/处理产物都按 manifest 路径取数；manifest 没了，
+    这些产物就再也挂不回文件栏，留着只占磁盘。返回 (manifest 数,
+    相关产物数)。
+    """
+    wanted = {str(Path(p).resolve()) for p in paths if p}
+    keys_1d = [
+        key for key, meta, _lo, _hi in stage_cache.list_products("1d")
+        if str(Path(meta.get("path") or "").resolve()) in wanted]
+    keys_bg = []
+    for node in stage_cache.list_batches("bg"):
+        for path, meta in (node.get("items") or {}).items():
+            if str(Path(path).resolve()) in wanted:
+                keys_bg.append(meta.get("key"))
+    related = stage_cache.drop_keys("1d", keys_1d) + \
+        stage_cache.drop_keys("bg", keys_bg)
+    masks = sum(1 for p in paths if masked2d.delete(p))
+    return masks, related
+
+
 def _entry_menu(window: QMainWindow, item) -> None:
     """右键文件栏：**删除与导出**，一套手势、不区分原始与处理后。
 
@@ -156,14 +180,15 @@ def _entry_menu(window: QMainWindow, item) -> None:
     elif what in ("drop_masked2d", "drop_masked2d_group"):
         items = ([item.child(i) for i in range(item.childCount())]
                  if what.endswith("_group") else [item])
-        removed = 0
+        paths = []
         for leaf in items:
             src = gui_sources.source_of(leaf)
             if src is not None and src.kind == gui_sources.MASKED2D:
-                if masked2d.delete(src.path):
-                    removed += 1
+                paths.append(src.path)
+        removed, related = _drop_masked2d(window, paths)
         refresh_product_groups(window)
-        _log(window, f"已删除 {removed} 条 Mask 后的 2D（原始图与 mask 文件不动）")
+        _log(window, f"已删除 {removed} 条 Mask 后的 2D + {related} 条相关 "
+                     f"1D/处理产物（原始图与 mask 文件不动）")
     elif what == "drop_item":
         drop_product_item(window, item)
     elif what == "remove_raw":

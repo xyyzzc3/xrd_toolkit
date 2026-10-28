@@ -61,7 +61,8 @@
   积分器自动排除被遮像素；masked/unmasked 的 1D 是不同的源，可并存/
   对比。[应用到勾选文件] 给整批各生成一条；[清空] 只清编辑器，产物保留。
   `load_mask` 仍只接受 `.npy/.edf`；自动坏点/径向 nσ 在后台线程；
-  标定不套 mask。
+  标定不套 mask。删除 Mask 2D（单条/整组）会同时清掉它名下的 1D/处理
+  产物缓存；导出 1D 的文件头写 `mask: sha <hash8>, N px` 溯源。
 - **GUI 探针覆盖 Mask 2D 产物**（2026-10-28）：`scripts/check_gui.py`
   I 节走真工具栏 + 真画布事件：画矩形 → 生成 manifest → 文件栏条目 →
   双击 2D（MaskedArray）→ 1D 积分 → 清空编辑器；真数据 exit 0。

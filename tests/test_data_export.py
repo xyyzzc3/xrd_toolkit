@@ -65,6 +65,15 @@ class TestWriteCurve(unittest.TestCase):
         data = np.loadtxt(str(target))
         np.testing.assert_allclose(data[:, 1], [10.0, 30.0, 40.0])
 
+    def test_mask_header_line(self):
+        target = _tmpdir() / "a.txt"
+        data_export.write_curve(
+            target, np.array([1.0]), np.array([2.0]),
+            category=data_export.CATEGORY_RAW, mask="sha 1a2b3c4d, 10 px",
+            now=NOW)
+        lines = target.read_text(encoding="utf-8").splitlines()
+        self.assertIn("# mask: sha 1a2b3c4d, 10 px", lines)
+
     def test_raw_header_states_nothing_was_done(self):
         """原始数据也写明类别与链：不用猜"是原始还是处理过没写"。"""
         target = _tmpdir() / "a.txt"
@@ -278,10 +287,14 @@ class TestWriteCsv(unittest.TestCase):
         """3 元组（老调用方/测试的形状）→ 补成没做处理的诚实默认值。"""
         tth = np.array([1.0])
         row = data_export.normalize_row(("a", tth, np.array([1.0])))
-        self.assertEqual(row[3:], ("none", data_export.CATEGORY_RAW, None))
+        self.assertEqual(row[3:], ("none", data_export.CATEGORY_RAW, None, ""))
         row = data_export.normalize_row(
             ("a", tth, np.array([1.0]), "bg=auto/win=0.2"))
         self.assertEqual(row[4], data_export.CATEGORY_PROCESSED)
+        row = data_export.normalize_row(
+            ("a", tth, np.array([1.0]), "none", "Raw", None,
+             "sha 1a2b3c4d, 10 px"))
+        self.assertEqual(row[6], "sha 1a2b3c4d, 10 px")
 
 
 if __name__ == "__main__":

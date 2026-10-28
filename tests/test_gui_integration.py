@@ -16703,7 +16703,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             self._set_mode(w, "anchor")
             got = gui_export._checked_1d_results(w, want_bg=True)
             self.assertEqual(len(got), 1)
-            stem, _, intensity, chain, category, _ = got[0]
+            stem, _, intensity, chain, category, _, _mask = got[0]
             np.testing.assert_allclose(np.asarray(intensity, dtype=float),
                                        _fake_bg_compute("", {}, 0)[1])
             self.assertEqual(chain, "none", "没做事就不许写 bg=")
@@ -16719,7 +16719,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
         try:
             self._open_1d(w)
             got = gui_export._checked_1d_results(w, want_bg=True)
-            stem, _, _, chain, category, _ = got[0]
+            stem, _, _, chain, category, _, _mask = got[0]
             self.assertEqual(chain, "none")
             self.assertEqual(category, "Raw")
             self.assertNotIn("_处理产物", stem)
@@ -16736,7 +16736,7 @@ class TestBackgroundSubtraction(unittest.TestCase):
             w.params["平滑曲线"].setChecked(True)
             w.params["平滑窗口 (°)"].setValue(0.5)
             got = gui_export._checked_1d_results(w, want_bg=True)
-            stem, _, intensity, chain, category, _ = got[0]
+            stem, _, intensity, chain, category, _, _mask = got[0]
             self.assertIn("smooth=", chain)
             self.assertNotIn("bg=", chain, "背景没发生，不许写进链描述")
             self.assertEqual(category, "Processed")

@@ -31,7 +31,7 @@ from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (_content, _log, _proc_curve,
                                             _proc_settings)
 from xrd_toolkit.services import export as data_export
-from xrd_toolkit.services import process, stage_cache
+from xrd_toolkit.services import masked2d, process, stage_cache
 
 
 def _ask_save_options(window: QMainWindow):
@@ -151,11 +151,23 @@ def _choose_panels(window: QMainWindow, panels) -> list:
             if lst.item(i).checkState() == Qt.Checked]
 
 
+def _mask_desc(path) -> str:
+    """Mask 2D 源的文件头溯源：ASCII，例如 `sha 1a2b3c4d, 6561 px`。"""
+    if not masked2d.is_manifest(path):
+        return ""
+    try:
+        meta = masked2d.meta_of(path)
+    except Exception:                                  # noqa: BLE001
+        return ""
+    return (f"sha {str(meta.get('mask_hash') or '')[:8]}, "
+            f"{int(meta.get('masked_pixels') or 0)} px")
+
+
 def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                         quiet: bool = False, sources=None) -> list:
-    """收集勾选文件的 1D 积分结果，每条 6 元：
+    """收集勾选文件的 1D 积分结果，每条 7 元：
 
-        (曲线名, tth, intensity, 处理链, 数据类别, 几何配置, )
+        (曲线名, tth, intensity, 处理链, 数据类别, 几何配置, mask 溯源)
 
     只认已经算好的 1D 面板缓存（last_tth / last_intensity），按文件
     列表顺序返回；勾选里没算过的文件跳过并记日志（提示先点 [1D]
@@ -206,7 +218,8 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                         if src.kind == gui_sources.ONED
                         else data_export.CATEGORY_PROCESSED)
             out.append((f"{Path(path).stem}_{tail}", got[0], got[1],
-                        meta.get("chain", ""), category, meta.get("config")))
+                        meta.get("chain", ""), category, meta.get("config"),
+                        _mask_desc(path)))
             continue
         for key in (f"1D|{path}", f"1D|{path}|{display}"):
             dock = window.plot_docks.get(key)
@@ -256,7 +269,8 @@ def _checked_1d_results(window: QMainWindow, want_bg: bool = False,
                         category = data_export.CATEGORY_PROCESSED
                         stem = (f"{stem}_"
                                 f"{gui_sources.KIND_TAIL[gui_sources.BG]}")
-                out.append((stem, tth, intensity, chain, category, config))
+                out.append((stem, tth, intensity, chain, category,
+                            config, _mask_desc(path)))
                 break
         else:   # for-else：两个键都没命中 = 这个文件还没有 1D 结果
             if not quiet:
@@ -406,7 +420,7 @@ def _build_export_dialog(window: QMainWindow, n_results: int, results=None):
 
 def _write_export(target: Path, tth, intensity, chain: str = "", *,
                   category: str = None, config: str = None,
-                  now=None) -> int:
+                  now=None, mask: str = "") -> int:
     """写一条两列 1D 曲线（窄口；格式与写法全在 services/export）。
 
     保留这个名字：GUI 内部、测试与探针都从这条口走。类别没给就按链
@@ -420,7 +434,7 @@ def _write_export(target: Path, tth, intensity, chain: str = "", *,
                     else data_export.CATEGORY_PROCESSED)
     return data_export.write_curve(target, tth, intensity, category=category,
                                    chain=chain or "none", config=config,
-                                   now=now)
+                                   now=now, mask=mask)
 
 
 def _ask_csv_range(window: QMainWindow) -> str:
@@ -460,7 +474,7 @@ def _write_csv_summary(window: QMainWindow, results,
     当成真实强度参与后面的计算，空白才是"这里没有数据"的诚实表示）。
     """
     results = [data_export.normalize_row(r) for r in results]
-    grids = [tth for _, tth, _, _, _, _ in results]
+    grids = [r[1] for r in results]
     ref = grids[0]
     same_grid = all(len(g) == len(ref) and np.allclose(g, ref, atol=1e-9)
                     for g in grids[1:])
@@ -475,9 +489,9 @@ def _write_csv_summary(window: QMainWindow, results,
             npt = max(len(g) for g in grids)
             common = np.linspace(lo, hi, npt)
             results = [(stem, common, np.interp(common, tth, intensity),
-                        chain, category, config)
-                       for stem, tth, intensity, chain, category, config
-                       in results]
+                        chain, category, config, mask)
+                       for stem, tth, intensity, chain, category, config,
+                       mask in results]
             _log(window, f"全部数据总表取公共交集 2θ {lo:.3f}–{hi:.3f}°"
                          f"（重插值到 {npt} 点）")
         else:   # "skip"：只保留与第一个文件同网格的
@@ -496,8 +510,8 @@ def _write_csv_summary(window: QMainWindow, results,
     except OSError as err:
         _log(window, f"全部数据总表写入失败（{err}）")
         return
-    cut_cols = [stem for stem, _, intensity, _, _, _ in results
-                if not np.isfinite(np.asarray(intensity, dtype=float)).all()]
+    cut_cols = [r[0] for r in results if not np.isfinite(
+        np.asarray(r[2], dtype=float)).all()]
     _log(window, f"已生成全部数据总表（{len(results)} 列） → {target}"
                  + (f"（{len(cut_cols)} 列有裁剪区，空单元格表示无数据）"
                     if cut_cols else ""))
@@ -554,7 +568,7 @@ def _run_export(window: QMainWindow, sources=None) -> None:
         landing = target_dir
     _log(window, f"开始导出：{len(results)} 个文件 → {landing}")
     ok = dropped = 0
-    for stem, tth, intensity, chain, category, config in results:
+    for stem, tth, intensity, chain, category, config, mask in results:
         # 单条导出用导出名；批量里每条保留自己的曲线名（否则同名相撞）
         name = base_name if len(results) == 1 else stem
         target = data_export.unique_path(txt_dir / f"{name}{suffix}")
@@ -565,7 +579,7 @@ def _run_export(window: QMainWindow, sources=None) -> None:
             dropped += 1
         try:
             _write_export(target, tth, intensity, chain, category=category,
-                          config=config)
+                          config=config, mask=mask)
         except OSError as err:
             _log(window, f"导出失败 {stem}（{err}）")
             continue

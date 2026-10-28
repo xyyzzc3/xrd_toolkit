@@ -25,6 +25,7 @@ from xrd_toolkit.gui.app import create_window  # noqa: E402
 from xrd_toolkit.gui.files.actions import _open_entry_view  # noqa: E402
 from xrd_toolkit.gui import plot_export as gui_export  # noqa: E402
 from xrd_toolkit.gui.plot import curves as gui_curves  # noqa: E402
+from xrd_toolkit.gui.files.menus import _drop_masked2d  # noqa: E402
 from xrd_toolkit.services import masked2d, stage_cache  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
@@ -92,6 +93,20 @@ class TestManifest(unittest.TestCase):
         self.assertTrue(np.ma.isMaskedArray(got))
         np.testing.assert_array_equal(np.ma.getmaskarray(got), self.mask)
         np.testing.assert_array_equal(np.ma.getdata(got), self.img)
+
+    def test_drop_masked2d_removes_related_1d_cache(self):
+        meta = masked2d.create(self.raw, self.mask)
+        t = np.arange(10.0)
+        y = np.arange(10.0)
+        stage_cache.store_1d(meta["path"], t, y, config="c", npt=10,
+                             tth_min=1.0, tth_max=8.0)
+        self.assertTrue(stage_cache.has_1d(meta["path"], config="c", npt=10,
+                                           tth_min=1.0, tth_max=8.0))
+        n_masks, n_related = _drop_masked2d(None, [meta["path"]])
+        self.assertEqual((n_masks, n_related), (1, 1))
+        self.assertEqual(masked2d.list_products(), [])
+        self.assertFalse(stage_cache.has_1d(meta["path"], config="c", npt=10,
+                                            tth_min=1.0, tth_max=8.0))
 
     def test_integration_matches_explicit_mask(self):
         meta = masked2d.create(self.raw, self.mask)
@@ -171,8 +186,14 @@ class TestMasked2DGui(unittest.TestCase):
             self.w, Path(self.src.path), kw)
         self.assertIsNotNone(tth)
         self.assertIsNone(why)
-        self.assertTrue(gui_export._checked_1d_results(
-            self.w, sources=[self.src]))
+        exp = gui_export._checked_1d_results(self.w, sources=[self.src])
+        self.assertTrue(exp)
+        self.assertIn("px", exp[0][6])      # 文件头 mask 溯源
+        out = Path(self._td.name) / "out.txt"
+        gui_export._write_export(out, exp[0][1], exp[0][2], exp[0][3],
+                                 category=exp[0][4], config=exp[0][5],
+                                 mask=exp[0][6])
+        self.assertIn("# mask:", out.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
