@@ -152,11 +152,8 @@ TOPAS/HighScore 那种定量 Rietveld 的替代品——我们的 f_rich 是相�
 散射强度，不是 wt%，没有分数 esd，且固定了 U/V/W/size/strain。
 报告里应写“relative scattering fraction”，不要写“wt%”。
 
-如果要做数值对照，下一步是用 GSAS-II **Sequential Refine** 跑 3 帧
-（第 1/45/81 帧），相同 CIF/仪器/背景，比较晶胞（应在 esd 内一致）
-和相分数趋势（GSAS-II 是 wt%，比较趋势/比值，不直接比绝对值）。
-仓库的 `scripts/gsas2_crosscheck.py` 目前只做模拟，顺序精修需要
-单独的 `gsas2` 环境。
+数值对照已经做了（2026-10-28），见 §2.8：用 GSAS-II 跑第 1/45/81 帧，
+比较晶胞和相分数趋势。`scripts/gsas2_crosscheck.py` 仍只做模拟。
 
 ### 2.7 模型无关校验（(200) 双峰质心）
 
@@ -173,6 +170,62 @@ TOPAS/HighScore 那种定量 Rietveld 的替代品——我们的 f_rich 是相�
 - (200) 双峰总面积随相变在 ~0.8–1.5× 变化——poor (200) 的结构因子
   本来比 rich 强，**不是守恒量**；图上只作数据质量参考，不当相分数。
 - 产物：`outputs/insitu/model_independent.csv` / `.png`。
+
+### 2.8 GSAS-II 独立对照（3 帧）
+
+用 GSAS-II 对第 1/45/81 帧做独立精修，核对本批的晶胞与相分数趋势。
+脚本 `scripts/gsas2_insitu_crosscheck.py` 分三步：`prepare`（本项目环境）、
+`refine`（单独的 `gsas2` conda 环境）、`compare`（本项目环境）。
+
+**共同输入**：同一 1D 数据（同一 mask/几何、3000 点、1–8°）、同一仪器
+参数（LaB6 Le Bail 定出的 zero/U/V/W/X/Y，全部固定）、同一结构、Al 晶胞
+固定 4.061 Å 且只作参考相。GSAS-II 背景是 Chebyshev-1 六项逐帧精修，
+本项目是滑动基线 + 0.25° 分段 + 曲率罚项——**两边 Rwp 不可直接比较**
+（GSAS-II wR 10.1–10.2%，本批 Rwp 2.10–2.62%），只看晶胞和趋势。
+
+**必须记录的坑**：仓库里的模型 CIF 是 P1 展开（给手写结构因子用）。
+GSAS-II 对这批 P1 展开 CIF 做晶胞精修（6 个参数）时，profile 的 Fortran
+代码会零除（`divide by zero encountered in scalar divide`）；Le Bail、
+参数边界、缩小 shift factor 都试过，均失败。Pm-3m 的 LaB6 和 Pnma 的
+橄榄石正常。所以 `prepare` 用 pymatgen 的 `SpacegroupAnalyzer` 把
+rich/poor 还原成 Pnma，并核对还原前后的峰位与强度逐峰一致
+（相对差 < 1e-4，模式完全一样），保证 GSAS-II 吃的是同一个结构。
+
+**精修顺序**：以多数相帧为锚，45 → 1 → 81（45 帧 poor 占 96%、
+1 帧 rich 占 92%）。每帧两段：先固定晶胞修背景 + 三相 scale（4 轮），
+再放开 rich/poor 晶胞（8 轮）；直方图总标度固定，相分数由三相 scale
+承担。Biso 按本批设置（rich 0、poor/Al 0.5 Å²）。
+
+**相分数（rich/(rich+poor)）**
+
+| 帧 | 本项目（相对散射强度） | GSAS-II（wt%） | rich wt | poor wt | Al wt |
+|---|---|---|---|---|---|
+| 1 | 0.917 | 0.900 | 0.469 | 0.052 | 0.479 |
+| 45 | 0.042 | 0.178 | 0.092 | 0.428 | 0.479 |
+| 81 | 0.707 | 0.818 | 0.392 | 0.087 | 0.521 |
+
+V 形趋势一致（45 帧最低、81 帧回升）。45 帧差得最多（4.2% vs 17.8%）：
+这一帧 rich 是少数相，本项目里 rich a 已贴到 10.20 Å 下限，4.2% 应读成
+“接近零的下限”，不是精确分数。Al 的 wt% 稳定在 48–52%（Al 基片很强），
+两边都不把 Al 计入 LMFP 分数。
+
+**晶胞**：多数相的 a/c 在 ~2 esd 内；rich 的 b 系统性偏 +0.006–0.009 Å
+（3–4 esd），poor 在 45 帧的 b 只差 0.0002 Å。少数相更差：第 1/81 帧的
+poor，GSAS-II 卡在种子上（poor a = 9.815–9.845 Å，本项目
+10.118–10.168 Å）；第 45 帧的 rich b 也偏了 0.097 Å（11.8 esd）。
+GSAS-II 的 poor (200) 会落在 ~1.43°，但第 81 帧的 1D 曲线在 1.43° 处是
+平背景（poor 峰只可能在 1.36–1.40°，与 §2.7 质心 1.359° 一致）——
+所以少数相的偏差是“弱相没收敛”，不是两套方法互相否定。表里的
+sigma = Δ / GSAS-II 的 esd。
+
+**结论**：趋势层面两套独立实现一致；绝对值层面，多数相晶胞在几 esd 内，
+少数相的晶胞与分数是模型相关的，报告里应给区间/趋势而不是单点。
+rich b 的 3–4 esd 系统偏差很可能来自峰形/背景模型差异（GSAS-II wR
+10.1–10.2% vs 本批 Rwp 2.1–2.6%），不影响趋势结论。本批的 f_rich
+继续按 §2.3 的相对散射强度口径使用，不改成 wt%。
+
+产物：`outputs/insitu/gsas2/`（`comparison.txt`、`comparison.png`、
+`gsas2_insitu.csv`、`summary.txt`、`meta.json`、`ours.json`、对称化 CIF）。
 
 ## 3. 复现
 
@@ -202,6 +255,17 @@ python scripts/check_insitu_peaks.py \
     --mask outputs/masks/lmfp1_lab6_mask.npy \
     --batch-csv outputs/insitu/insitu_fit.csv \
     --outdir outputs/insitu
+
+# GSAS-II 独立对照（3 帧；refine 必须用装了 gsas2pkg 的环境）
+python scripts/gsas2_insitu_crosscheck.py prepare \
+    --data ~/Desktop/lmfpdata \
+    --mask outputs/masks/lmfp1_lab6_mask.npy \
+    --batch-csv outputs/insitu/insitu_fit.csv \
+    --outdir outputs/insitu/gsas2
+conda run -n gsas2 python scripts/gsas2_insitu_crosscheck.py refine \
+    --workdir outputs/insitu/gsas2
+python scripts/gsas2_insitu_crosscheck.py compare \
+    --workdir outputs/insitu/gsas2
 ```
 
 ## 4. 交付物
@@ -214,4 +278,6 @@ python scripts/check_insitu_peaks.py \
 - `outputs/insitu/insitu_trends.png`
 - `outputs/insitu/insitu_summary.png`（4-panel 展示图）
 - `outputs/insitu/model_independent.csv` / `.png`（(200) 双峰质心校验）
+- `outputs/insitu/gsas2/`（`comparison.txt` / `.png`、`gsas2_insitu.csv`、
+  `summary.txt`、对称化 CIF 与输入 xye）
 - `outputs/insitu/fit_summary.txt`

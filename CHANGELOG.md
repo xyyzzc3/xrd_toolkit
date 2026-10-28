@@ -43,6 +43,17 @@
 - **模型无关校验**（2026-10-28）：`scripts/check_insitu_peaks.py`
   用低角 (200) 双峰质心（不依赖三相 Rietveld）对照 f_poor，
   本批 R²=0.967；双峰总面积是相依赖量，不作守恒量。
+- **GSAS-II 独立对照**（2026-10-28）：`scripts/gsas2_insitu_crosscheck.py`
+  分 prepare/refine/compare 三步（refine 在单独的 `gsas2` 环境），对
+  第 1/45/81 帧做三相精修。相分数趋势一致（GSAS-II wt% =
+  0.900/0.178/0.818，本批相对散射强度 = 0.917/0.042/0.707）；多数相
+  晶胞的 a/c 在 ~2 esd 内，rich 的 b 偏 +0.006–0.009 Å；少数相晶胞
+  GSAS-II 会卡在种子上。另发现 GSAS-II 对这批 P1 展开 CIF 的晶胞精修
+  会零除（Le Bail/边界/步长都无效），脚本用 pymatgen 还原 Pnma 并逐峰
+  核对峰位与强度后再交给 GSAS-II。
+- **CIF 语法修复**（2026-10-28）：`Mn0.6Fe0.4PO4_heterosite.cif` 的
+  `_chemical_name_mineral` 含空格却未加引号，PyCifRW（GSAS-II 的 CIF
+  解析器）判语法错误；改为 `'Heterosite (Mn-enriched)'`。
 
 ## [0.1.5] — 2026-10-24
 

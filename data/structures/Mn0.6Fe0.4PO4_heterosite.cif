@@ -39,7 +39,7 @@ _journal_year                    1972
 _chemical_compound_source
 'Fletcher Quarry, North Groton, New Hampshire, USA'
 _chemical_formula_sum            'Fe0.4 Mn0.6 O4 P'
-_chemical_name_mineral           Heterosite (Mn-enriched)
+_chemical_name_mineral           'Heterosite (Mn-enriched)'
 _space_group_IT_number           62
 _symmetry_space_group_name_Hall  '-P 2bc 2a'
 _symmetry_space_group_name_H-M   'P m n b'

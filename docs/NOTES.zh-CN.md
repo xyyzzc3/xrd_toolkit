@@ -309,6 +309,7 @@ pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只�
 | `scripts/analyze_pattern.py` | 只给 TIFF + 配置的自动相筛选 + 全谱拟合/报告 |
 | `scripts/simulate_study.py` | 教学/模拟图：basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II 对拍模拟（在单独的 `gsas2` 环境里跑） |
+| `scripts/gsas2_insitu_crosscheck.py` | 原位三相批量的 3 帧 GSAS-II 独立对照（prepare → 在 `gsas2` 环境 refine → compare） |
 | `scripts/fit_peaks.py` | 自动寻峰（`services/peak_finding.py`）+ 单峰四线型拟合（Gaussian/Lorentzian/pseudo-Voigt/split-Pearson VII）+ Scherrer/W-H（标样扣仪器宽度） |
 | `scripts/check_env.py` | 环境自检——"跑不起来"时先跑它 |
 | `scripts/check_gui.py` | 界面链路探针——真数据 + 真画布事件把界面走一遍 |
