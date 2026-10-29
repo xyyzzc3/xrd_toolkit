@@ -421,18 +421,101 @@ def _build_menu(window: QMainWindow) -> None:
         # 挂到窗口这一级——实测"隐藏菜单栏"后它仍能触发
         window.addAction(act_manual)
 
-def _open_mask_editor(window: QMainWindow) -> None:
-    """打开/前置独立 Mask 编辑器（工具栏 [Mask]）。
+_MASK_TIP = ("Mask 工作台：画/自动遮罩 beamstop/模块缝/坏点，"
+             "生成 Mask 后的 2D 数据（原图 + mask），再去做 1D")
 
-    窗口随主窗口存活；用户点 × 只是隐藏，下次再点复用同一实例
-    （mask/image 状态还在）。模块级延迟导入避开 app ↔ mask_editor 的环。
+
+def _open_mask_workbench(window: QMainWindow) -> None:
+    """打开/前置中央 Mask 工作台（工具栏 [Mask]）。
+
+    内容（MaskWorkbench）常驻主窗口；子窗口只是显示容器。× 关闭 =
+    退出 Mask 模式（参数坞/日志坞恢复），内容不销毁，下次原样继续。
+    模块级延迟导入避开 app ↔ mask_editor 的环。
     """
-    from xrd_toolkit.gui.mask_editor import MaskEditorWindow
+    from xrd_toolkit.gui.mask_editor import MaskWorkbench, _MaskSubWindow
     if getattr(window, "mask_editor", None) is None:
-        window.mask_editor = MaskEditorWindow(window)
-    window.mask_editor.show()
-    window.mask_editor.raise_()
-    window.mask_editor.activateWindow()
+        window.mask_editor = MaskWorkbench(window)
+    dock = getattr(window, "mask_dock", None)
+    if dock is None:
+        dock = _MaskSubWindow(window)
+        dock.setObjectName("mask_workbench")
+        dock.setWidget(window.mask_editor)
+        window.mdi.addSubWindow(dock)
+        window.mask_dock = dock
+        dock.setWindowTitle("Mask 工作台")
+        area = window.mdi.viewport().size()
+        dock.resize(max(640, area.width() - 40),
+                    max(480, area.height() - 40))
+        dock.move(12, 12)
+    dock.show()
+    dock.raise_()
+
+
+def _enter_mask_mode(window: QMainWindow) -> None:
+    """进入 Mask 工作台：收起参数/日志坞，中央换成 Mask 工作台。"""
+    if getattr(window, "_mask_active", False):
+        return
+    # 校准与 Mask 互斥：从校准进来先把校准退掉（它会恢复分析态）
+    calib = getattr(window, "calib_btn", None)
+    if calib is not None and calib.isChecked():
+        calib.setChecked(False)
+    window._mask_active = True
+    window._mask_prev_entrance = getattr(window, "_last_entrance", None)
+    window._mask_dock_saved = {
+        name: window._dock_intent.get(name, False)
+        for name in ("参数", "日志")}
+    window._dock_intent["参数"] = False
+    window._dock_intent["日志"] = False
+    _resync_docks(window)
+    # 五个分析入口熄灯（参数页不动，退出时按 _mask_prev_entrance 复原）
+    _highlight_entrance(window, None)
+    window.mode_label.setText("Mask 模式")
+    _open_mask_workbench(window)
+    # Home 键：工作台自己的 [复位视图] 接管；主窗口那条先让开，
+    # 否则两个 WindowShortcut 同键 = Qt 判定歧义、两条都不触发
+    main_home = getattr(window, "home_shortcut", None)
+    if main_home is not None:
+        main_home.setEnabled(False)
+    window.mask_editor.home_sc.setEnabled(True)
+    window.mask_btn.setText("退出 Mask")
+    window.mask_btn.setToolTip("退出 Mask 工作台，回到分析模式")
+    _log(window, "进入 Mask 模式")
+
+
+def _exit_mask_mode(window: QMainWindow) -> None:
+    """退出 Mask 工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
+    if not getattr(window, "_mask_active", False):
+        return
+    window._mask_active = False
+    dock = getattr(window, "mask_dock", None)
+    if dock is not None:
+        dock.hide()
+    # Home 键还给主窗口（工作台隐藏后它的快捷键不该再抢）
+    editor = getattr(window, "mask_editor", None)
+    if editor is not None:
+        editor.home_sc.setEnabled(False)
+    main_home = getattr(window, "home_shortcut", None)
+    if main_home is not None:
+        main_home.setEnabled(True)
+    saved = getattr(window, "_mask_dock_saved", None) or {}
+    for name, want in saved.items():
+        window._dock_intent[name] = want
+    window._mask_dock_saved = None
+    _resync_docks(window)
+    prev = getattr(window, "_mask_prev_entrance", None)
+    if prev is not None:
+        _highlight_entrance(window, prev)
+    window.mode_label.setText("分析模式")
+    window.mask_btn.setText("Mask")
+    window.mask_btn.setToolTip(_MASK_TIP)
+    _log(window, "退出 Mask 模式")
+
+
+def _on_mask_mode(window: QMainWindow, on: bool) -> None:
+    if on:
+        _enter_mask_mode(window)
+    else:
+        _exit_mask_mode(window)
 
 
 def _build_toolbar(window: QMainWindow) -> None:
@@ -472,13 +555,16 @@ def _build_toolbar(window: QMainWindow) -> None:
     tb.addWidget(btn_calib)
     window.entrance_buttons["校准"] = btn_calib
     btn_calib.clicked.connect(lambda checked=False: _switch_entrance(window, "校准"))
-    # [Mask] 与 [校准] 并列：都属"一次性设置"，但它打开的是独立窗口
-    # （不是参数坞的一页），所以不进 entrance_buttons / PARAM_PAGES。
+    # [Mask] 与 [校准] 并列：都属"一次性设置"，但它开的是中央工作台
+    # （不进 entrance_buttons / PARAM_PAGES）。可勾选：点亮 = Mask 模式，
+    # 再点一次 = 退出（参数坞/日志坞恢复原样）。
+    window._mask_active = False
+    window._mask_prev_entrance = None
+    window._mask_dock_saved = None
     btn_mask = QPushButton("Mask")
-    btn_mask.setToolTip(
-        "独立 Mask 编辑器：画/自动遮罩 beamstop/模块缝/坏点，"
-        "生成 Mask 后的 2D 数据（原图 + mask），再去做 1D")
-    btn_mask.clicked.connect(lambda checked=False: _open_mask_editor(window))
+    btn_mask.setCheckable(True)
+    btn_mask.setToolTip(_MASK_TIP)
+    btn_mask.toggled.connect(lambda on: _on_mask_mode(window, on))
     tb.addWidget(btn_mask)
     window.mask_btn = btn_mask
     tb.addSeparator()      # 设置 │ 干活的循环（见 docstring 的分组说明）
@@ -580,6 +666,9 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
+    # 点分析入口 = 离开 Mask 工作台（先退出，再翻页）
+    if getattr(window, "_mask_active", False) and name != "校准":
+        window.mask_btn.setChecked(False)
     if name == "校准" and not window.calib_btn.isChecked():
         return                      # 这一次点击是"退出"，已由 toggled 处理
     if name != "校准" and not window.entrance_buttons[name].isChecked():
@@ -656,6 +745,8 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     「退出校准」——用户 2026-10-01 要的"两副面孔"，五个入口一致）。
     """
     if calibrating:
+        if getattr(window, "_mask_active", False):
+            window.mask_btn.setChecked(False)   # 校准与 Mask 互斥
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
         window.param_stack.setCurrentIndex(window.PARAM_PAGES["校准"])
@@ -749,9 +840,11 @@ def create_window() -> QMainWindow:
     window._image_cache = {}
     # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
     window.focus_panel = None
-    # Mask 编辑器持有独立窗口（关闭只是隐藏，不重建）。Mask 本身是
+    # Mask 工作台内容与中央子窗口（2026-10-30 起不再是独立窗口）：
+    # 子窗口关闭只隐藏，内容不销毁，下次点 [Mask] 原样继续。Mask 本身是
     # Mask 后的 2D 产物（services/masked2d），不是窗口级开关。
     window.mask_editor = None
+    window.mask_dock = None
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：
@@ -821,15 +914,18 @@ def create_window() -> QMainWindow:
     # 关窗口：有未保存的图先询问（保存 / 不保存 / 取消），再等后台
     # 任务收尾——直接销毁运行中的线程 Qt 会 abort
     def on_close(event):
+        window._closing = True
         unsaved = [d for d in window.plot_docks.values()
                    if getattr(_content(d), "figure", None) is not None
                    and not getattr(d, "figure_saved", False)]
         if unsaved:
             choice = _confirm_close(window, len(unsaved))
             if choice == "cancel":
+                window._closing = False
                 event.ignore()   # 取消 → 留在程序里
                 return
             if choice == "save" and not _save_figures(window):
+                window._closing = False
                 event.ignore()   # 保存流程被取消 → 留在程序里
                 return
         for task in window._tasks:

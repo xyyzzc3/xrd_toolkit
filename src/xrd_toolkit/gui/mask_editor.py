@@ -1,7 +1,9 @@
-"""独立 Mask 编辑器（2026-10-27；2026-10-30 重排界面）。
+"""Mask 中央工作台（2026-10-27；2026-10-30 改为嵌入主窗口）。
 
-从工具栏 [校准] 旁边的 [Mask] 打开，**不是**参数坞的一页：它要同时看
-2D 图、画遮罩、跑自动检测、预览 mask 前后的 1D，塞进参数页会太挤。
+从工具栏 [校准] 旁边的 [Mask] 打开：内容装进中央 MDI 子窗口（不是
+独立窗口，也不是参数坞的一页）。它要同时看 2D 图、画遮罩、跑自动
+检测、预览 mask 前后的 1D，塞进参数页会太挤；进入时参数坞和日志坞
+收起，工作台自带消息行/状态行。
 
 流程（对应 Week 9 任务一）：
   1. 先在文件栏勾选原始数据，再打开编辑器：自动载入勾选的第一张，
@@ -37,8 +39,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox,
-    QVBoxLayout)
+    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QMdiSubWindow, QSpinBox, QVBoxLayout, QWidget)
 
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
@@ -80,8 +82,13 @@ def _radial_worker(image, center, n_sigma):
     return radial_outlier_mask(image, center, n_sigma=n_sigma)
 
 
-class MaskEditorWindow(QDialog):
-    """独立 Mask 编辑器；主窗口持有一个实例，关闭只是隐藏。"""
+class MaskWorkbench(QWidget):
+    """Mask 中央工作台的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
+
+    不再是独立窗口：工具栏 [Mask] 把它开在中央绘图区，参数坞和日志坞
+    收起（工作台自带状态行/消息行）；退出/关闭只隐藏子窗口，mask 状态
+    留着，下次再点 [Mask] 继续。
+    """
 
     TOOL_BRUSH = "brush"
     TOOL_ERASER = "eraser"
@@ -89,13 +96,9 @@ class MaskEditorWindow(QDialog):
     TOOL_NAMES = {TOOL_BRUSH: "画笔", TOOL_ERASER: "橡皮", TOOL_RECT: "矩形"}
 
     def __init__(self, main_window):
-        super().__init__(main_window)
+        super().__init__()
         self.main = main_window
-        self.setWindowTitle("Mask 编辑器：2D → 1D 积分前遮罩")
-        self.setModal(False)
-        self.setWindowFlag(Qt.Tool, True)   # macOS：浮在父窗口之上，不抢主界面
-        self.setWindowModality(Qt.NonModal)
-        self.resize(1180, 860)
+        self.setObjectName("mask_workbench")
 
         self.image = None
         self.image_path = None
@@ -152,6 +155,9 @@ class MaskEditorWindow(QDialog):
         self.home_sc = QShortcut(QKeySequence(Qt.Key_Home), self)
         self.home_sc.setContext(Qt.WindowShortcut)
         self.home_sc.activated.connect(self._reset_view)
+        # 只有进入 Mask 模式时由主窗口打开：平时它和主窗口的 Home 同键，
+        # 两个 WindowShortcut 同时启用会被 Qt 判成歧义、两条都不触发
+        self.home_sc.setEnabled(False)
         self._update_status()
 
     def showEvent(self, event):
@@ -294,7 +300,11 @@ class MaskEditorWindow(QDialog):
         self.canvas.mpl_connect("key_press_event", self._on_canvas_key)
         root.addWidget(self.canvas, stretch=1)
 
-        # ── 底部：状态 + 预览 + 生成（范围二选一，不再两个按钮）───
+        # ── 底部：消息行 + 状态 + 预览 + 生成（范围二选一）────────
+        self.lbl_hint = QLabel("")
+        self.lbl_hint.setStyleSheet("color: #5a6068;")
+        self.lbl_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(self.lbl_hint)
         row4 = QHBoxLayout()
         self.lbl_status = QLabel("未载入图像：先在文件栏勾选一张原始图")
         self.lbl_status.setWordWrap(True)
@@ -344,9 +354,18 @@ class MaskEditorWindow(QDialog):
             btn.setEnabled(not on)
         self.brush.setEnabled(not on)
         self.canvas.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
-        _log(self.main, "Mask 放大镜：开（滚轮缩放、左键框选放大）"
+        self._say("Mask 放大镜：开（滚轮缩放、左键框选放大）"
              if on else "Mask 放大镜：关（左键画 mask）")
         self._update_status()
+
+    def _say(self, text):
+        """工作台消息：显示在底部消息行，同时写主日志留档。
+
+        日志坞在 Mask 模式里是收起的，工作台必须自己看得见结果
+        （自动检测抓了多少、配方存到哪、生成失败为什么）。
+        """
+        _log(self.main, text)
+        self.lbl_hint.setText(text)
 
     def _update_status(self):
         self._status_timer.stop()
@@ -405,7 +424,7 @@ class MaskEditorWindow(QDialog):
     def _locate_changes(self):
         """缩放到上一次自动检测新增的像素；重复点按依次看各处。"""
         if self._last_added is None:
-            _log(self.main, "Mask：没有可定位的自动检测改动")
+            self._say("Mask：没有可定位的自动检测改动")
             return
         if not self._locate_order:
             labels, n = ndimage.label(self._last_added,
@@ -428,7 +447,7 @@ class MaskEditorWindow(QDialog):
         c0, c1 = int(xs.min()), int(xs.max())
         pad = max(4, int(0.25 * max(r1 - r0 + 1, c1 - c0 + 1)))
         self._zoom_to_box(r0 - pad, r1 + pad, c0 - pad, c1 + pad)
-        _log(self.main, f"Mask 改动：第 {k + 1}/{n} 处"
+        self._say(f"Mask 改动：第 {k + 1}/{n} 处"
                        f"（{int(ys.size)} px）")
 
     def _zoom_factor(self):
@@ -463,7 +482,7 @@ class MaskEditorWindow(QDialog):
 
     def _undo_last(self):
         if not self._undo:
-            _log(self.main, "Mask：没有可撤销的操作")
+            self._say("Mask：没有可撤销的操作")
             return
         self.mask, self._source = self._undo.pop()
         self._update_overlay()
@@ -521,7 +540,7 @@ class MaskEditorWindow(QDialog):
     def _use_checked(self):
         path = self._first_checked_raw()
         if path is None:
-            _log(self.main, "Mask：文件栏没有勾选的原始数据")
+            self._say("Mask：文件栏没有勾选的原始数据")
             return
         if (self.image_path is not None
                 and Path(path) == Path(self.image_path)):
@@ -559,7 +578,7 @@ class MaskEditorWindow(QDialog):
         self._refresh_image_combo()
         self._draw_image()
         self._update_status()
-        _log(self.main, f"Mask 编辑器：载入 {self.image_path.name}"
+        self._say(f"Mask 编辑器：载入 {self.image_path.name}"
                        f"（{img.shape[0]}×{img.shape[1]} px）")
 
     def _display_ds(self):
@@ -881,17 +900,28 @@ class MaskEditorWindow(QDialog):
             self._view_timer.start()
 
     def keyPressEvent(self, event):
-        """Esc：先取消正在拖的笔画/矩形，再按才隐藏窗口。
+        """Esc：先取消正在拖的笔画/矩形，再按才退出 Mask 模式。
 
-        QDialog 默认 Esc = reject（窗口藏起来）——用户 2026-10-28 报的
-        "画着画着弹回主界面"就有它：拖矩形时按 Esc 想取消，整个编辑器
-        直接藏了。焦点在画布上时 mpl 会把 Esc 吃掉、这里收不到，所以
-        画布另接一条（_on_canvas_key）。
+        用户 2026-10-28 报的"画着画着弹回主界面"：拖矩形时按 Esc 想取消，
+        整个编辑器直接藏了。现在第一下只取消当前笔画；第二下才退出
+        Mask 模式（回到分析工作台，mask 状态保留）。焦点在画布上时
+        mpl 会把 Esc 吃掉、这里收不到，所以画布另接一条
+        （_on_canvas_key）。
         """
-        if event.key() == Qt.Key_Escape and self._cancel_current():
+        if event.key() == Qt.Key_Escape:
+            if not self._cancel_current():
+                self._exit_to_analysis()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def _exit_to_analysis(self):
+        """退出 Mask 模式（由主窗口的 [Mask] 开关统一收尾）。"""
+        btn = getattr(self.main, "mask_btn", None)
+        if btn is not None:
+            btn.setChecked(False)
+        else:                           # 单测里没有主窗口按钮时兜底
+            self.hide()
 
     def _on_canvas_key(self, event):
         # Home 走 QShortcut（见 __init__）：mpl 的 SPECIAL_KEYS 里没有它，
@@ -899,7 +929,7 @@ class MaskEditorWindow(QDialog):
         if getattr(event, "key", None) != "escape":
             return
         if not self._cancel_current():
-            self.hide()      # 画布吞掉键盘、QDialog 收不到 → 这里代它藏
+            self._exit_to_analysis()
 
     def _cancel_current(self):
         """取消正在进行的笔画/矩形/框选/平移；没有进行中的操作返回 False。"""
@@ -1136,7 +1166,7 @@ class MaskEditorWindow(QDialog):
             self._auto_busy(False)
             self._update_status()
             QMessageBox.critical(self, f"{label}失败", msg)
-            _log(self.main, f"Mask {label}失败：{msg}")
+            self._say(f"Mask {label}失败：{msg}")
 
         self._auto_task = BackgroundTask(
             fn, *args, on_done=done, on_error=error)
@@ -1150,7 +1180,7 @@ class MaskEditorWindow(QDialog):
         def apply(result):
             _clean, hot, info = result
             if hot.shape != self.mask.shape:
-                _log(self.main, "Mask 孤立坏点：图像已换，结果丢弃")
+                self._say("Mask 孤立坏点：图像已换，结果丢弃")
                 return
             self._push_undo()
             new = hot & ~self.mask          # 只给新标出的上色，别覆盖手动
@@ -1161,7 +1191,7 @@ class MaskEditorWindow(QDialog):
             self._update_status()
             hint = ("（青色；点 [查看改动] 定位）" if new.any()
                     else "（没有新增像素）")
-            _log(self.main, f"Mask 孤立坏点："
+            self._say(f"Mask 孤立坏点："
                            f"{info.get('masked_components', '?')} 团 / "
                            f"{info.get('masked_pixels', int(hot.sum()))} px"
                            f"{hint}")
@@ -1188,7 +1218,7 @@ class MaskEditorWindow(QDialog):
 
         def apply(radial):
             if radial.shape != self.mask.shape:
-                _log(self.main, "Mask 整环离群：图像已换，结果丢弃")
+                self._say("Mask 整环离群：图像已换，结果丢弃")
                 return
             self._push_undo()
             new = radial & ~self.mask
@@ -1200,9 +1230,8 @@ class MaskEditorWindow(QDialog):
             hint = ("（nσ={:g}；绿色；点 [查看改动] 定位）".format(nsig)
                     if new.any()
                     else "（没有新增像素）")
-            _log(self.main,
-                 f"Mask 整环离群（实验性）：{int(radial.sum())} px"
-                 f"{hint}")
+            self._say(f"Mask 整环离群（实验性）：{int(radial.sum())} px"
+                      f"{hint}")
 
         self._start_auto("整环离群", _radial_worker, (image, center, nsig),
                          apply)
@@ -1233,7 +1262,7 @@ class MaskEditorWindow(QDialog):
 
     def _save_recipe(self):
         if self.mask is None or not self.mask.any():
-            _log(self.main, "Mask 为空：没有可导出的配方")
+            self._say("Mask 为空：没有可导出的配方")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "导出 Mask 配方", str(self._default_mask_path()),
@@ -1249,12 +1278,12 @@ class MaskEditorWindow(QDialog):
             return
         self.mask_path = p
         self._update_status()
-        _log(self.main, f"Mask 配方已导出：{p}"
+        self._say(f"Mask 配方已导出：{p}"
                        "（含来源分层；点 [生成 Mask 2D] 才会建产物）")
 
     def _export_generic(self):
         if self.mask is None or not self.mask.any():
-            _log(self.main, "Mask 为空：没有可导出的掩膜")
+            self._say("Mask 为空：没有可导出的掩膜")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "导出通用掩膜", str(self._default_generic_path()),
@@ -1269,7 +1298,7 @@ class MaskEditorWindow(QDialog):
         except Exception as err:                       # noqa: BLE001
             QMessageBox.critical(self, "导出失败", str(err))
             return
-        _log(self.main, f"通用掩膜已导出：{p}"
+        self._say(f"通用掩膜已导出：{p}"
                        "（只有 mask，没有来源分层）")
 
     def _import_mask(self):
@@ -1312,10 +1341,10 @@ class MaskEditorWindow(QDialog):
         self._update_overlay()
         self._update_status()
         if is_recipe(p):
-            _log(self.main, f"Mask 配方已导入：{p}"
+            self._say(f"Mask 配方已导入：{p}"
                            "（来源分层已恢复；点 [生成 Mask 2D] 才会建产物）")
         else:
-            _log(self.main, f"通用掩膜已导入：{p}"
+            self._say(f"通用掩膜已导入：{p}"
                            "（没有来源信息，统一按手动显示）")
 
     def _refresh_groups(self) -> None:
@@ -1357,7 +1386,7 @@ class MaskEditorWindow(QDialog):
         if self.mask is None or self.image_path is None:
             return
         if not np.any(self.mask):
-            _log(self.main, "Mask 为空：没有生成 Mask 后的 2D")
+            self._say("Mask 为空：没有生成 Mask 后的 2D")
             self.main.status_text.setText("Mask 为空：未生成产物")
             return
         label = self.mask_path.name if self.mask_path else "未保存"
@@ -1365,12 +1394,12 @@ class MaskEditorWindow(QDialog):
             self._create_masked2d([self.image_path], label=label)
         except Exception as err:                       # noqa: BLE001
             QMessageBox.critical(self, "生成失败", str(err))
-            _log(self.main, f"Mask 2D 生成失败：{err}")
+            self._say(f"Mask 2D 生成失败：{err}")
             return
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"Mask 后的 2D 已生成：{st['masked_pixels']} px")
-        _log(self.main, f"Mask 后的 2D 已生成：{Path(self.image_path).name}"
+        self._say(f"Mask 后的 2D 已生成：{Path(self.image_path).name}"
                        f"（{st['masked_pixels']} px，"
                        f"{st['fraction'] * 100:.2f}%，mask {label}）"
                        "——在文件栏「Mask 后的 2D」里选它，再点 [1D]")
@@ -1382,12 +1411,12 @@ class MaskEditorWindow(QDialog):
         if self.mask is None or self.image_path is None:
             return
         if not np.any(self.mask):
-            _log(self.main, "Mask 为空：没有生成 Mask 后的 2D")
+            self._say("Mask 为空：没有生成 Mask 后的 2D")
             return
         raw = [s for s in gui_sources.checked_sources(self.main)
                if s.kind == gui_sources.RAW]
         if not raw:
-            _log(self.main, "没有勾选的原始数据：先在文件栏勾上要应用 mask 的文件")
+            self._say("没有勾选的原始数据：先在文件栏勾上要应用 mask 的文件")
             return
         label = self.mask_path.name if self.mask_path else "未保存"
         made = 0
@@ -1396,11 +1425,11 @@ class MaskEditorWindow(QDialog):
                 self._create_masked2d([source.path], label=label)
                 made += 1
             except Exception as err:                   # noqa: BLE001
-                _log(self.main, f"Mask 2D 生成失败：{source.display}——{err}")
+                self._say(f"Mask 2D 生成失败：{source.display}——{err}")
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"Mask 后的 2D 已生成 {made} 条")
-        _log(self.main, f"Mask 后的 2D：{made}/{len(raw)} 个文件"
+        self._say(f"Mask 后的 2D：{made}/{len(raw)} 个文件"
                        f"（{st['masked_pixels']} px，mask {label}）"
                        "——在文件栏「Mask 后的 2D」里选它们再点 [1D]")
         self._update_status()
@@ -1420,10 +1449,10 @@ class MaskEditorWindow(QDialog):
     def _generate_current(self):
         """[生成 Mask 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""
         if self.image is None or self.mask is None:
-            _log(self.main, "Mask：先载入一张图像")
+            self._say("Mask：先载入一张图像")
             return
         if not np.any(self.mask):
-            _log(self.main, "Mask 为空：没有生成 Mask 后的 2D")
+            self._say("Mask 为空：没有生成 Mask 后的 2D")
             if hasattr(self.main, "status_text"):
                 self.main.status_text.setText("Mask 为空：未生成产物")
             return
@@ -1438,7 +1467,7 @@ class MaskEditorWindow(QDialog):
         if self.image is None or self.mask is None:
             return
         if not np.any(self.mask):
-            _log(self.main, "Mask 为空：没有可预览的变化")
+            self._say("Mask 为空：没有可预览的变化")
             return
         self._preview_1d()
 
@@ -1470,3 +1499,26 @@ class MaskEditorWindow(QDialog):
         ax.grid(alpha=0.25, linestyle=":")
         ax.legend(fontsize=8, loc="best")
         self.canvas.draw_idle()
+
+
+class _MaskSubWindow(QMdiSubWindow):
+    """Mask 工作台的中央子窗口（2026-10-30）。
+
+    × 关闭 = 退出 Mask 模式（参数坞/日志坞恢复），但**不销毁内容**：
+    mask、撤销栈和配方路径都留着，下次点 [Mask] 原样继续。子窗口
+    只是 hide，真正的销毁随主窗口一起走。
+    """
+
+    def __init__(self, window):
+        super().__init__()
+        self._window = window
+        self.panel_key = "Mask|workbench"
+
+    def closeEvent(self, event):
+        window = self._window
+        if (not getattr(window, "_closing", False)
+                and getattr(window, "mask_btn", None) is not None
+                and window.mask_btn.isChecked()):
+            window.mask_btn.setChecked(False)   # toggled → 退出 Mask 模式
+        event.ignore()
+        self.hide()

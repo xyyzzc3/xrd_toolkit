@@ -690,6 +690,9 @@ def _mask_editor_setup(window, *, zoom=0.45):
     if not any(Path(s.path) == img for s in gui_sources.all_sources(window)):
         window.add_files([str(img)], select=True)
         settle(300)
+    window.show()          # 工作台在 MDI 区里：主窗口不 show 它没尺寸
+    window.resize(1600, 1000)
+    settle(400)
     window.mask_btn.click()
     settle(400)
     editor = window.mask_editor
@@ -710,7 +713,7 @@ def _mask_editor_setup(window, *, zoom=0.45):
         _SCRATCH / "lmfp_mask.mask.npz", editor.mask,
         source=editor._ensure_source(), meta=editor._recipe_meta())
     editor._update_status()
-    editor.resize(1400, 1000)
+    window.mask_dock.resize(1400, 1000)
     settle(600)
     if zoom:
         editor._zoom_about(c, r, zoom)           # 放大到能看清 mask
@@ -739,7 +742,8 @@ def shot_mask2d(window) -> None:
                          for s in gui_sources.all_sources(window)),
              timeout_s=180)
     settle(400)
-    editor.hide()
+    window.mask_btn.setChecked(False)
+    settle(300)
     m2d = [s for s in gui_sources.all_sources(window)
            if s.kind == gui_sources.MASKED2D]
     if not m2d:

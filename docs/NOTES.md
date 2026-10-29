@@ -266,7 +266,12 @@ detection still uses the raw image. The radial n-sigma detector is now
 [整环离群（实验性）] and remains experimental (it flags real rings; GSAS-II's
 auto spot mask uses the same radial-band idea).
 
-The editor opens on the first checked raw image (image drop-down to switch;
+Since 2026-10-30 [Mask] is a **central workbench**: it opens as an MDI
+subwindow in the drawing area, not as a separate OS window. Entering it
+collapses the parameter and log docks (they come back on exit); the
+workbench has its own message line, and closing it only hides the subwindow
+— the mask, undo stack and recipe path survive until the next [Mask].
+It opens on the first checked raw image (image drop-down to switch;
 there is no separate file dialog), draws masks with brush/eraser/rectangle
 plus undo/clear next to the tools, and offers [查看改动] to zoom to newly
 detected pixels. [预览效果] draws the before/after 1D without creating a

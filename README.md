@@ -141,10 +141,11 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 
 ## Mask and in-situ three-phase batch
 
-The toolbar now has an independent **Mask** editor next to **Calibrate**:
-it opens on the first checked raw image (switch images from a drop-down),
-draw/erase beamstop, module gaps and hot pixels, auto-detect isolated hot
-pixels with a locate-changes view, preview the 1D pattern before/after
+The toolbar now has a central **Mask** workbench next to **Calibrate**
+(the parameter and log docks collapse while it is open, and come back on
+exit): it opens on the first checked raw image (switch images from a
+drop-down), draws/erases beamstop, module gaps and hot pixels, auto-detects
+isolated hot pixels with a locate-changes view, previews the 1D pattern before/after
 masking, and export a `.mask.npz` *recipe* (mask + provenance layers +
 metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask
 writes a small **Mask 2D** product (raw image + mask manifest) into the file

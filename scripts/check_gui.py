@@ -772,8 +772,12 @@ def check_mask_editor(window, lmfp: str) -> None:
 
     走用户路径：按钮 click + 画布真鼠标事件；不直接改 `editor.mask`。
     """
-    print("\nI. Mask 编辑器（真图 + 真画布事件）")
-    # 用户路径：先在文件栏勾选原始图，再开编辑器（会提示"先勾选"）
+    print("\nI. Mask 工作台（真图 + 真画布事件）")
+    # 工作台住在主窗口的 MDI 区：主窗口没 show 时子窗口不可见、
+    # showEvent（自动载入勾选图）也不会发——探针必须走真实的显示路径
+    window.show()
+    QApplication.processEvents()
+    # 用户路径：先在文件栏勾选原始图，再开工作台（会提示"先勾选"）
     from xrd_toolkit.gui import sources as gui_sources
     for src in gui_sources.all_sources(window):
         if src.kind == gui_sources.RAW and Path(src.path) == Path(lmfp):
@@ -782,13 +786,19 @@ def check_mask_editor(window, lmfp: str) -> None:
     QApplication.processEvents()
     window.mask_btn.click()
     ok = wait_until(lambda: getattr(window, "mask_editor", None) is not None)
-    report(ok, "工具栏 [Mask] 打开独立编辑器")
+    report(ok, "工具栏 [Mask] 打开中央工作台")
     if not ok:
         return
     editor = window.mask_editor
-    editor.show()
+    report(window.mask_dock is not None
+           and window.mask_dock.isVisible()
+           and window.mask_dock.mdiArea() is window.mdi,
+           "工作台住在中央 MDI 区（不是独立窗口）")
+    report(not window.param_dock.isVisible()
+           and not window.log_dock.isVisible(),
+           "进入 Mask 模式收起参数坞和日志坞")
     ok = wait_until(lambda: editor.image is not None, timeout_s=60)
-    report(ok, "打开编辑器自动载入勾选的第一张原始图",
+    report(ok, "打开工作台自动载入勾选的第一张原始图",
            f"{Path(editor.image_path).name if editor.image_path else None}")
     editor.load_image(Path(lmfp))
     report(editor.image is not None and editor.mask is not None
@@ -796,7 +806,7 @@ def check_mask_editor(window, lmfp: str) -> None:
            "载入真实 2D 图像并分配同形 mask",
            f"{editor.image.shape if editor.image is not None else None}")
     if editor.image is None:
-        editor.hide()
+        window.mask_btn.setChecked(False)
         return
 
     editor.tool_buttons[editor.TOOL_RECT].click()
@@ -890,8 +900,10 @@ def check_mask_editor(window, lmfp: str) -> None:
         report(ok1, "Mask 2D → 1D 积分")
     editor.btn_clear.click()
     QApplication.processEvents()
-    report(int(editor.mask.sum()) == 0, "清空编辑器（已生成的产物保留）")
-    editor.hide()
+    report(int(editor.mask.sum()) == 0, "清空工作台（已生成的产物保留）")
+    window.mask_btn.setChecked(False)
+    QApplication.processEvents()
+    report(not window.mask_dock.isVisible(), "[退出 Mask] 关闭工作台")
 
 
 def check_file_bar_sort(window, lab6: str, lmfp: str) -> None:

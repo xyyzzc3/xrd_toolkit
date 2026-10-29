@@ -68,8 +68,6 @@ class TestMaskEditor(unittest.TestCase):
         self.ed = None
 
     def tearDown(self):
-        if self.ed is not None:
-            self.ed.close()
         self.w.close()
         QApplication.processEvents()
         stage_cache.point_root(self._old_root)
@@ -87,13 +85,17 @@ class TestMaskEditor(unittest.TestCase):
     def test_toolbar_button_opens_and_reuses_window(self):
         self.assertIsNone(self.w.mask_editor)
         self._open()
-        self.assertTrue(self.ed.isVisible())
+        self.assertTrue(self.w.mask_btn.isChecked())
+        self.assertTrue(self.w.mask_dock.isVisible())
         self.assertNotIn("Mask", self.w.entrance_buttons)
-        self.ed.close()
+        self.w.mask_btn.click()                  # 退出 Mask 模式
         QApplication.processEvents()
-        self.w.mask_btn.click()
+        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.w.mask_btn.click()                  # 再进：复用同一内容
         QApplication.processEvents()
         self.assertIs(self.w.mask_editor, self.ed)
+        self.assertTrue(self.w.mask_dock.isVisible())
 
     def test_brush_rect_undo_and_apply_creates_masked2d(self):
         self._open()
@@ -390,9 +392,86 @@ class TestMaskEditor(unittest.TestCase):
         self.assertIsNone(self.ed._rect_patch)
         self.assertEqual(int(self.ed.mask.sum()), before)
 
-        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 第二次：才隐藏
+        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 第二次：退出 Mask
         QApplication.processEvents()
         self.assertFalse(self.ed.isVisible())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.assertFalse(self.w.mask_btn.isChecked())
+
+    def test_workbench_collapses_and_restores_docks(self):
+        self.w.param_dock.setVisible(True)
+        self.w.log_dock.setVisible(True)
+        self.w._dock_intent["参数"] = True
+        self.w._dock_intent["日志"] = True
+        self._open()
+        self.assertFalse(self.w.param_dock.isVisible())
+        self.assertFalse(self.w.log_dock.isVisible())
+        self.assertTrue(self.w.file_dock.isVisible())
+        self.assertEqual(self.w.mode_label.text(), "Mask 模式")
+        self.assertEqual(self.w.mask_btn.text(), "退出 Mask")
+        self.w.mask_btn.click()
+        QApplication.processEvents()
+        self.assertTrue(self.w.param_dock.isVisible())
+        self.assertTrue(self.w.log_dock.isVisible())
+        self.assertEqual(self.w.mode_label.text(), "分析模式")
+        self.assertEqual(self.w.mask_btn.text(), "Mask")
+
+    def test_mask_and_calibration_are_mutually_exclusive(self):
+        self.w.calib_btn.setChecked(True)
+        QApplication.processEvents()
+        self.assertEqual(self.w.mode_label.text(), "校准模式")
+        self._open()
+        self.assertFalse(self.w.calib_btn.isChecked())
+        self.assertEqual(self.w.mode_label.text(), "Mask 模式")
+        self.w.calib_btn.setChecked(True)
+        QApplication.processEvents()
+        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.assertEqual(self.w.mode_label.text(), "校准模式")
+
+    def test_switch_to_entrance_exits_mask(self):
+        self._open()
+        self.w.entrance_buttons["1D"].click()
+        QApplication.processEvents()
+        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.assertTrue(self.w.entrance_buttons["1D"].isChecked())
+
+    def test_close_subwindow_exits_mask(self):
+        self.w.param_dock.setVisible(True)
+        self.w.log_dock.setVisible(True)
+        self.w._dock_intent["参数"] = True
+        self.w._dock_intent["日志"] = True
+        self._open()
+        self.w.mask_dock.close()
+        QApplication.processEvents()
+        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.assertTrue(self.w.param_dock.isVisible())
+        self.assertTrue(self.w.log_dock.isVisible())
+        self.assertEqual(self.w.mode_label.text(), "分析模式")
+
+    def test_workbench_keeps_mask_state_across_exit(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        n = int(self.ed.mask.sum())
+        self.assertGreater(n, 0)
+        self.w.mask_btn.click()                  # 退出
+        QApplication.processEvents()
+        self.w.mask_btn.click()                  # 再进
+        QApplication.processEvents()
+        self.assertTrue(self.w.mask_dock.isVisible())
+        self.assertEqual(int(self.ed.mask.sum()), n)
+
+    def test_home_shortcut_moves_to_the_workbench(self):
+        self._open()
+        self.assertTrue(self.ed.home_sc.isEnabled())
+        self.assertFalse(self.w.home_shortcut.isEnabled())
+        self.w.mask_btn.click()
+        QApplication.processEvents()
+        self.assertFalse(self.ed.home_sc.isEnabled())
+        self.assertTrue(self.w.home_shortcut.isEnabled())
 
     def test_home_shortcut_resets_the_view(self):
         """Home = 复位视野（与主窗口同一套 QShortcut）。
