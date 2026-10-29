@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import fabio  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.backend_bases import MouseEvent  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from xrd_toolkit.gui.app import create_window  # noqa: E402
@@ -352,6 +354,49 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._clear()
         self.ed._flush_overlay()
         self.assertEqual(int(self.ed.mask.sum()), 0)
+
+    def test_escape_cancels_the_stroke_before_hiding(self):
+        """用户 2026-10-28：拖矩形时按 Esc 想取消，整个编辑器藏了。"""
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        before = int(self.ed.mask.sum())
+
+        self.ed.tool_buttons[self.ed.TOOL_RECT].click()
+        px, py = self.ed.ax_img.transData.transform((40.0, 40.0))
+        _fire(self.ed.canvas, "button_press_event", px, py, button=1)
+        mx, my = self.ed.ax_img.transData.transform((80.0, 80.0))
+        _fire(self.ed.canvas, "motion_notify_event", mx, my,
+              buttons=frozenset({1}))
+        self.assertTrue(self.ed._drawing)
+
+        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 焦点在画布上
+        QApplication.processEvents()
+        self.assertTrue(self.ed.isVisible())            # 第一次：只取消
+        self.assertFalse(self.ed._drawing)
+        self.assertIsNone(self.ed._rect_patch)
+        self.assertEqual(int(self.ed.mask.sum()), before)
+
+        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 第二次：才隐藏
+        QApplication.processEvents()
+        self.assertFalse(self.ed.isVisible())
+
+    def test_status_shows_zoom_factor(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.assertNotIn("缩放", self.ed.lbl_status.text())
+        self.ed._zoom_about(100.0, 100.0, 0.5)
+        for _ in range(80):
+            QApplication.processEvents()
+            time.sleep(0.01)
+            if "缩放" in self.ed.lbl_status.text():
+                break
+        self.assertIn("缩放", self.ed.lbl_status.text())
+        self.ed.btn_home.click()
+        QApplication.processEvents()
+        self.assertNotIn("缩放", self.ed.lbl_status.text())
 
     def test_erase_clears_overlay_pixels(self):
         """blit 背景必须不含 overlay，否则橡皮擦不掉旧色块。"""

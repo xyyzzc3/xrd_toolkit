@@ -120,6 +120,10 @@ class MaskEditorWindow(QDialog):
         self._view_timer.setSingleShot(True)
         self._view_timer.setInterval(33)
         self._view_timer.timeout.connect(self._redraw_all)
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.setInterval(200)
+        self._status_timer.timeout.connect(self._update_status)
 
         self._build()
         self._wire_checked_count()
@@ -217,6 +221,7 @@ class MaskEditorWindow(QDialog):
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
         self.canvas.mpl_connect("resize_event", self._on_resize)
         self.canvas.mpl_connect("draw_event", self._on_draw)
+        self.canvas.mpl_connect("key_press_event", self._on_canvas_key)
         root.addWidget(self.canvas, stretch=1)
 
         row3 = QHBoxLayout()
@@ -256,6 +261,7 @@ class MaskEditorWindow(QDialog):
         self._update_status()
 
     def _update_status(self):
+        self._status_timer.stop()
         if self.image is None or self.mask is None:
             text = "未载入图像：先 [打开图像…] 或 [用勾选第一张]"
         else:
@@ -265,9 +271,27 @@ class MaskEditorWindow(QDialog):
                     f"mask {st['masked_pixels']} px "
                     f"({st['fraction'] * 100:.2f}%)  |  "
                     f"{self.TOOL_NAMES.get(self._tool, self._tool)}")
+            zoom = self._zoom_factor()
+            if zoom > 1.05:
+                text += f"  |  缩放 {zoom:.1f}×"
             if self.mask_path is not None:
                 text += f"  |  {Path(self.mask_path).name}"
         self.lbl_status.setText(text)
+
+    def _zoom_factor(self):
+        """当前视图相对"全图"的放大倍数（1.0 = 全图）。"""
+        if self.image is None:
+            return 1.0
+        x0, x1 = self.ax_img.get_xlim()
+        span = abs(float(x1) - float(x0))
+        if span <= 0:
+            return 1.0
+        return float(self.image.shape[1]) / span
+
+    def _update_status_later(self):
+        """拖动画笔/平移时用：最多 ~5 次/秒刷状态行（mask_stats 不必每个
+        鼠标事件都数一遍）。"""
+        self._status_timer.start()
 
     def _ensure_source(self):
         """保证来源数组和 mask 同形；老状态/外部直接写 mask 时兜底成"手动"。"""
@@ -569,6 +593,7 @@ class MaskEditorWindow(QDialog):
         self.ax_img.set_ylim(y0, y1)
         self._bg = None
         self._view_timer.start()
+        self._update_status_later()        # 状态行带缩放倍数
 
     def _reset_view(self):
         if self.image is None:
@@ -578,6 +603,7 @@ class MaskEditorWindow(QDialog):
         self.ax_img.set_ylim(-0.5, h - 0.5)
         self._bg = None
         self._redraw_all()
+        self._update_status()
 
     def _on_scroll(self, event):
         if (self.image is None or event.inaxes is not self.ax_img
@@ -628,11 +654,62 @@ class MaskEditorWindow(QDialog):
         self.ax_img.set_ylim(y0, y1)
         self._bg = None
         self._view_timer.start()
+        self._update_status_later()
 
     def _on_resize(self, event):
         self._bg = None
         if self.image is not None:
             self._view_timer.start()
+
+    def keyPressEvent(self, event):
+        """Esc：先取消正在拖的笔画/矩形，再按才隐藏窗口。
+
+        QDialog 默认 Esc = reject（窗口藏起来）——用户 2026-10-28 报的
+        "画着画着弹回主界面"就有它：拖矩形时按 Esc 想取消，整个编辑器
+        直接藏了。焦点在画布上时 mpl 会把 Esc 吃掉、这里收不到，所以
+        画布另接一条（_on_canvas_key）。
+        """
+        if event.key() == Qt.Key_Escape and self._cancel_current():
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _on_canvas_key(self, event):
+        if getattr(event, "key", None) != "escape":
+            return
+        if not self._cancel_current():
+            self.hide()      # 画布吞掉键盘、QDialog 收不到 → 这里代它藏
+
+    def _cancel_current(self):
+        """取消正在进行的笔画/矩形/平移；没有任何进行中的操作返回 False。"""
+        if self._cancel_stroke():
+            return True
+        if self._panning:
+            self._panning = False
+            self._pan_start = None
+            self.canvas.setCursor(Qt.ArrowCursor)
+            self._redraw_all()
+            return True
+        return False
+
+    def _cancel_stroke(self):
+        """丢掉正在拖的笔画/矩形（回到按下前的状态）；没在拖返回 False。"""
+        if not self._drawing:
+            return False
+        if self._undo:                 # 按下时压的那一快照
+            self.mask, self._source = self._undo.pop()
+        if self._rect_patch is not None:
+            try:
+                self._rect_patch.remove()
+            except Exception:                      # noqa: BLE001
+                pass
+            self._rect_patch = None
+        self._drawing = False
+        self._last = None
+        self._rect_start = None
+        self._update_overlay()
+        self._update_status()
+        return True
 
     # ── 鼠标绘制 ────────────────────────────────────────────────────
     def _pixel(self, event):
@@ -718,7 +795,7 @@ class MaskEditorWindow(QDialog):
                                 self._tool == self.TOOL_BRUSH)
             self._last = rc
             self._update_overlay()
-            self._update_status()
+            self._update_status_later()
         elif self._rect_patch is not None and self._rect_start is not None:
             r0, r1 = sorted((self._rect_start[0], rc[0]))
             c0, c1 = sorted((self._rect_start[1], rc[1]))
@@ -746,10 +823,10 @@ class MaskEditorWindow(QDialog):
                     pass
                 self._rect_patch = None
             self._update_overlay()
-            self._update_status()
         self._drawing = False
         self._last = None
         self._rect_start = None
+        self._update_status()          # 收笔/松手：状态行立刻对齐（不等节流）
 
     # ── 自动检测 ────────────────────────────────────────────────────
     def _auto_busy(self, busy: bool) -> None:

@@ -52,6 +52,7 @@ os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
 import numpy as np                                       # noqa: E402
 from matplotlib.backend_bases import MouseEvent          # noqa: E402
 from PySide6.QtCore import Qt                            # noqa: E402
+from PySide6.QtTest import QTest                         # noqa: E402
 from PySide6.QtWidgets import QApplication               # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state     # noqa: E402
@@ -802,6 +803,18 @@ def check_mask_editor(window, lmfp: str) -> None:
     fire(editor.canvas, "button_release_event", px1, py1, button=1)
     n_masked = int(editor.mask.sum())
     report(n_masked >= 80 * 80, "矩形拖拽写入 mask", f"{n_masked} px")
+
+    # Esc：拖矩形途中按一次只取消这一笔（2026-10-28 报"弹回主界面"）
+    nx0, ny0 = ax.transData.transform((c0 - 200, r0 - 200))
+    nx1, ny1 = ax.transData.transform((c0 - 120, r0 - 120))
+    fire(editor.canvas, "button_press_event", nx0, ny0, button=1)
+    fire(editor.canvas, "motion_notify_event", nx1, ny1,
+         buttons=frozenset({1}))
+    QTest.keyClick(editor.canvas, Qt.Key_Escape)
+    editor.canvas.draw()
+    QApplication.processEvents()
+    report(editor.isVisible() and int(editor.mask.sum()) == n_masked,
+           "Esc 取消当前笔画、不关窗口", f"{int(editor.mask.sum())} px")
 
     # 2D 视图：滚轮缩放 → [全图] 复位（大图靠它定位坏点团）
     xspan0 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
