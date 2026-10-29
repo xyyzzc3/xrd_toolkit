@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.paths import OUTPUTS_DIR
@@ -68,31 +69,6 @@ _MASK_LUT[SRC_RADIAL] = (*COLOR_RADIAL, MASK_ALPHA)
 def _radial_worker(image, center, n_sigma):
     """后台线程跑径向 nσ；放在模块级，避免闭包在 QThread 里的生命周期坑。"""
     return radial_outlier_mask(image, center, n_sigma=n_sigma)
-
-
-def _downsample_max(img, ds):
-    """显示用降采样：块内取最大值。
-
-    对底图是保住孤立亮斑/坏点；对来源数组是「同一块里取优先级最高的
-    来源」；对 bool 掩膜就是「块里有任一像素被遮」（max = any）。
-
-    实现按 ds×ds 个错位切片取 maximum：2048² 上约 2 ms；
-    reshape 后 max(axis=(1, 3)) 要 60 ms（跨步归约的坑），别换回去。
-    """
-    if ds <= 1:
-        return img
-    h, w = img.shape
-    ph, pw = (-h) % ds, (-w) % ds
-    a = np.pad(img, ((0, ph), (0, pw)), mode="edge") if (ph or pw) else img
-    out = None
-    for r in range(ds):
-        for c in range(ds):
-            blk = a[r::ds, c::ds]
-            if out is None:
-                out = blk.copy()
-            else:
-                np.fmax(out, blk, out=out)   # fmax：NaN 不扩散到整块
-    return out
 
 
 class MaskEditorWindow(QDialog):
@@ -412,7 +388,7 @@ class MaskEditorWindow(QDialog):
                 and box == self._disp_box):
             return
         r0, r1, c0, c1 = box
-        disp = _downsample_max(self.image[r0:r1, c0:c1], ds)
+        disp = downsample_max(self.image[r0:r1, c0:c1], ds)
         hh, ww = disp.shape
         # 显示块 != 图像像素：extent 要乘回 ds，块心才落在原像素中心
         extent = (-0.5 + c0, -0.5 + c0 + ww * ds,
@@ -474,7 +450,7 @@ class MaskEditorWindow(QDialog):
         if bad.any():                         # 外部直接写 mask 的兜底：按手动算
             sub = sub.copy()
             sub[bad] = SRC_MANUAL
-        small = _downsample_max(sub, ds)
+        small = downsample_max(sub, ds)
         # np.take 比 LUT[small] 快一倍（2048²：10 ms vs 22 ms）
         rgba = np.take(_MASK_LUT, small, axis=0)
         hh, ww = rgba.shape[:2]

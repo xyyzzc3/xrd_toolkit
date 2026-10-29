@@ -20,6 +20,7 @@ import fabio  # noqa: E402
 import numpy as np  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from xrd_toolkit.gui import panel_state as gui_state  # noqa: E402
 from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
 from xrd_toolkit.gui.app import create_window  # noqa: E402
 from xrd_toolkit.gui.files.actions import _open_entry_view  # noqa: E402
@@ -196,6 +197,37 @@ class TestMasked2DGui(unittest.TestCase):
         img = self.w.plot_docks[key].last_image
         self.assertTrue(np.ma.isMaskedArray(img))
         self.assertGreater(int(np.ma.getmaskarray(img).sum()), 0)
+
+    def test_2d_overlay_keeps_lone_hot_pixel_at_odd_coords(self):
+        """>1.5M 像素按 ds=2 显示：奇坐标上的单个 mask 像素也要显示。
+
+        旧写法是 `mask[::2, ::2]` 隔点取样，odd/odd 位置的孤立坏点会整个
+        消失；现在块内取任一，且 extent 乘回 ds（块心落在原像素中心）。
+        """
+        big = Path(self._td.name) / "big.edf"
+        _write(big, np.full((1300, 1300), 500.0, dtype=np.float32))
+        lone = np.zeros((1300, 1300), bool)
+        lone[1001, 1001] = True
+        masked2d.create(big, lone, label="odd")
+        self.w.add_files([str(big)], select=True)
+        QApplication.processEvents()
+        src = next(s for s in gui_sources.all_sources(self.w)
+                   if s.kind == gui_sources.MASKED2D
+                   and Path(masked2d.load_manifest(s.path)[0])
+                   == big.resolve())
+        _open_entry_view(self.w, src.item)
+        key = "2D|" + str(src.path)
+        self.assertTrue(self._wait(
+            lambda: key in self.w.plot_docks
+            and getattr(self.w.plot_docks[key], "last_image", None) is not None))
+        ax = gui_state._content(self.w.plot_docks[key]).axes_2d
+        overlay = ax.images[-1]
+        rgba = overlay.get_array()
+        self.assertEqual(rgba.shape[:2], (650, 650))     # ceil(1300 / 2)
+        self.assertEqual(int(rgba[500, 500, 3]), 89)     # 1001 // 2
+        self.assertEqual(int(rgba[0, 0, 3]), 0)          # 别的一处没遮
+        self.assertEqual(tuple(overlay.get_extent()),
+                         (-0.5, 1299.5, -0.5, 1299.5))   # 650 × 2
 
     def test_explicit_opens_1d(self):
         _open_entry_view(self.w, self.src.item, explicit=True)

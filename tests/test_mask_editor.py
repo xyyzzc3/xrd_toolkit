@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from xrd_toolkit.gui.app import create_window  # noqa: E402
 from xrd_toolkit.gui import mask_editor as gui_mask_editor  # noqa: E402
+from xrd_toolkit.gui.image_utils import downsample_max  # noqa: E402
 from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
 from xrd_toolkit.gui.plot import runners as gui_runners  # noqa: E402
 from xrd_toolkit.services import masked2d, stage_cache  # noqa: E402
@@ -220,13 +221,13 @@ class TestMaskEditor(unittest.TestCase):
     def test_downsample_helpers_keep_hot_pixels(self):
         img = np.zeros((5, 6), dtype=float)
         img[3, 4] = 9.0
-        small = gui_mask_editor._downsample_max(img, 2)
+        small = downsample_max(img, 2)
         self.assertEqual(small.shape, (3, 3))       # 边缘补齐到 ds 的倍数
         self.assertEqual(float(small.max()), 9.0)   # 孤立亮斑不被平均掉
 
         mask = np.zeros((5, 6), dtype=bool)
         mask[3, 4] = True
-        small_mask = gui_mask_editor._downsample_max(mask, 2)
+        small_mask = downsample_max(mask, 2)
         self.assertTrue(small_mask[1, 2])            # 块里有任一像素被遮就算
         self.assertEqual(int(small_mask.sum()), 1)
 

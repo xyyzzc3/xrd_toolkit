@@ -8,6 +8,7 @@ from matplotlib import cm
 from matplotlib.colors import LogNorm
 from PySide6.QtWidgets import QMainWindow
 
+from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import (
     _AUX_GID_PREFIX, _auto_contrast_values, _auto_y_range, _content,
     _gradient_color, _panel_param, _param_box_set, _proc_curve, _proc_params,
@@ -298,17 +299,19 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         im = ax.imshow(data, cmap=_panel_param(window, dock, "2D 色图", "magma"),
                        norm=LogNorm(vmin=vmin, vmax=vmax),
                        origin="lower")
-        # 已应用的窗口级 mask：半透明红叠在 2D 图上（2026-10-27）。
-        # 默认 None = 不画；编辑器里改 mask 后这里重画一次就能看到。
+        # Mask 2D 产物自带的 mask：半透明红叠在原图上（2026-10-27）。
+        # 大图先做「块内有任一被遮」降采样——隔点取样会漏掉奇坐标上的
+        # 孤立坏点；extent 要乘回 ds，块心才对得上原像素中心。
         mask = panel_mask
         if mask is not None and np.shape(mask) == data.shape:
             ds = 1 if mask.size <= 1_500_000 else 2
-            small = mask[::ds, ::ds]
-            rgba = np.zeros((*small.shape, 4), dtype=np.float32)
-            rgba[..., 0] = 1.0
-            rgba[..., 3] = 0.35 * small
-            h, w = data.shape
-            ax.imshow(rgba, extent=(-0.5, w - 0.5, -0.5, h - 0.5),
+            small = downsample_max(mask, ds)
+            rgba = np.zeros((*small.shape, 4), dtype=np.uint8)
+            rgba[..., 0] = 255
+            rgba[..., 3] = 89 * small          # 0.35 × 255
+            hh, ww = small.shape
+            ax.imshow(rgba, extent=(-0.5, ww * ds - 0.5,
+                                    -0.5, hh * ds - 0.5),
                       origin="lower", interpolation="nearest", zorder=5)
         ax.set_aspect("equal")
         # 颜色条（作业规格"带颜色条"）：ax.clear() 不清 colorbar（它是
