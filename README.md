@@ -132,7 +132,9 @@ Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geomet
 ## Tests
 
 ```bash
-python scripts/run_tests.py     # 990+ tests, behind a watchdog
+python scripts/run_tests.py            # full suite, behind a watchdog
+python scripts/run_tests.py --fast     # unit tests + static guards only (~3 min)
+python scripts/run_tests.py --jobs 8   # split GUI suite, 8 worker processes
 ```
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
@@ -140,12 +142,15 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 ## Mask and in-situ three-phase batch
 
 The toolbar now has an independent **Mask** editor next to **Calibrate**:
+it opens on the first checked raw image (switch images from a drop-down),
 draw/erase beamstop, module gaps and hot pixels, auto-detect isolated hot
-pixels, save/load `.npy`/`.edf`, and preview the 1D pattern before/after
-masking. Applying a mask writes a small **Mask 2D** product (raw image + mask
-manifest) into the file dock; double-click it for a 2D view, or integrate it
-to 1D. Masked and unmasked 1D results are distinct sources that can be
-compared side by side.
+pixels with a locate-changes view, preview the 1D pattern before/after
+masking, and export a `.mask.npz` *recipe* (mask + provenance layers +
+metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask
+writes a small **Mask 2D** product (raw image + mask manifest) into the file
+dock, for the current image or every checked file; double-click it for a 2D
+view, or integrate it to 1D. Masked and unmasked 1D results are distinct
+sources that can be compared side by side.
 
 `scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases
 (Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly

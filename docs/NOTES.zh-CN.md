@@ -222,21 +222,30 @@ masked 与未遮罩的 1D 是两个不同的源，可并存/并排对比。
 （pyFAI 与自研两条路径）。manifest 是真实文件，所以 1D 缓存键、面板键、
 对比/热图/导出/批量处理都按“一个源”走，不再需要 epoch/旧一代栅栏。
 
-- 保存/加载 mask：`.npy/.edf`；保存不自动生成 Mask 2D。
+- 配方/通用掩膜：`[导出配方…]` 写 `.mask.npz`（mask + 来源分层 +
+  元数据），`[导入配方…]` 往返后配色恢复；`[导出通用掩膜…]` 继续写
+  `.npy/.edf`（只有 bool，给 pyFAI-drawmask 等外部工具）。导出不自动
+  生成 Mask 2D。
 - 同一 raw+mask 重复生成：只更新旁路 `labels.json` 的显示标签，不重写
   manifest，已有 1D 缓存不失效。
 - 导出 1D：文件头写 `# mask: sha <hash8>, N px`；CSV 每列明细也带。
 - 右键 Mask 2D → 导出独立 `.npz`（`image` + `mask` + `meta`），自包含。
 - 删除 Mask 2D（单条/整组）连带清它名下的 1D/处理产物缓存。
 - 标定的环检测仍用原图；mask 只作用于积分。
-- 编辑器 2D 视图：滚轮缩放、中键（或 ⌥/Shift + 左键）拖动平移、[全图]
-  复位。底图和 overlay 按视图降采样并裁到可视窗口，绘制走 blit（只重画
-  overlay）；mask 与产物仍是全分辨率。
-- overlay 按来源上色：红 = 画笔/矩形，青 = 自动坏点，绿 = 径向 nσ。颜色
-  只影响显示，mask 本身仍是一张 bool 数组。
-- 原 [生成 Mask 2D 并预览 1D] 已并入 [生成 Mask 2D] + 勾选「同时预览 1D」。
-- 径向 nσ 自动检测是实验性：真实 LMFP 帧上会沿真实环误标 ~18k px，
-  生产用手动画 + 局部坏点。
+- 图像来源只剩文件栏：打开编辑器自动载入勾选的第一张，顶部下拉换图；
+  没有 [打开图像…] 这条独立入口。
+- 编辑器 2D 视图：点亮 [放大镜] 后滚轮缩放、左键框选放大（与主面板
+  同语义）；中键（或 ⌥/Shift + 左键）拖动平移；[复位视图]（Home 键
+  同效）复位。底图和 overlay 按视图降采样并裁到可视窗口，绘制走 blit
+  （只重画 overlay）；mask 与产物仍是全分辨率。
+- overlay 按来源上色：红 = 画笔/矩形，青 = 孤立坏点，绿 = 整环离群。
+  颜色只影响显示，mask 本身仍是一张 bool 数组。
+- [预览效果] 只画 mask 前后 1D、不建产物；[生成 Mask 2D] 的范围是
+  当前图像或勾选的 N 个文件，空 mask 时禁用，生成后同一 mask 显示
+  「已生成（无改动）」。
+- 整环离群（原“径向 nσ”）自动检测是实验性：真实 LMFP 帧上会沿真实环
+  误标 ~18k px，生产用手动画 + 孤立坏点。GSAS-II 的自动 spot mask 也是
+  同一思路（按 2θ 环带统计），不是另一类算法。
 
 操作步骤/截图：`docs/MASK.zh-CN.md`（临时独立文档，正式发版并入
 《使用说明》后删除）；测试：`tests/test_mask.py`、`tests/test_mask_editor.py`、
@@ -376,7 +385,7 @@ pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只�
 | `scripts/check_env.py` | 环境自检——"跑不起来"时先跑它 |
 | `scripts/check_gui.py` | 界面链路探针——真数据 + 真画布事件把界面走一遍 |
 | `scripts/show_gui.py` | 真窗口看一眼——真数据走三步，窗口留给你自己点 |
-| `scripts/run_tests.py` | 带看门狗的全量测试 |
+| `scripts/run_tests.py` | 带看门狗的全量测试；`--fast` 跳过 GUI 集成，`--jobs N` 按文件并行 |
 | `scripts/stress_panels.py` | 面板压力探针——两处 offscreen 死锁的回归检查 |
 
 ## 界面（详版）

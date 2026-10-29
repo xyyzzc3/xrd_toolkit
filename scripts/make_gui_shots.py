@@ -24,7 +24,7 @@ docs/使用说明.md）：
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
     gui_background  自动基线（不加锚点，原始/基线/结果三线）  → README / 使用说明 §6
-    gui_mask        Mask 编辑器：束心方块 + 自动坏点 + mask 前后 1D → Mask 快速上手
+    gui_mask        Mask 编辑器：束心方块 + 孤立坏点 + mask 前后 1D → Mask 快速上手
     gui_mask2d      「Mask 后的 2D」条目 + 2D 面板（原图 + mask）→ Mask 快速上手
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
@@ -680,23 +680,36 @@ def _mask_image_path():
 
 
 def _mask_editor_setup(window, *, zoom=0.45):
-    """打开 Mask 编辑器、画一份代表性 mask（束心方块 + 自动坏点）。
+    """打开 Mask 编辑器、画一份代表性 mask（束心方块 + 孤立坏点）。
 
-    走真按钮：[Mask] → [打开图像…] 的那张图直接 load_image 给（不弹
-    文件对话框），矩形用 _fill_rect，自动坏点走 [自动坏点（局部）]。
+    走用户路径：原始图先进文件栏并勾选 → [Mask] 自动载入 → 矩形用
+    _fill_rect → [孤立坏点（局部）]。
     """
+    from xrd_toolkit.gui import sources as gui_sources
+    img = _mask_image_path()
+    if not any(Path(s.path) == img for s in gui_sources.all_sources(window)):
+        window.add_files([str(img)], select=True)
+        settle(300)
     window.mask_btn.click()
     settle(400)
     editor = window.mask_editor
-    editor.load_image(_mask_image_path())
-    settle(400)
+    if (editor.image_path is None
+            or Path(editor.image_path) != img):
+        editor.load_image(img)
+        settle(400)
     editor.tool_buttons[editor.TOOL_RECT].click()
     h, w = editor.image.shape
     r, c = h // 2, w // 2
     editor._fill_rect((r - 84, c - 100), (r + 100, c + 100), True)  # 束心
-    editor.btn_hot.click()                       # 自动坏点（后台）
+    editor.btn_hot.click()                       # 孤立坏点（后台）
     wait_for(lambda: editor._auto_task is None, timeout_s=120)
     settle(300)
+    # 存一份临时配方（不进 outputs/）：图上的 Mask 2D 标签才像用户流程
+    from xrd_toolkit.services.mask import save_recipe
+    editor.mask_path = save_recipe(
+        _SCRATCH / "lmfp_mask.mask.npz", editor.mask,
+        source=editor._ensure_source(), meta=editor._recipe_meta())
+    editor._update_status()
     editor.resize(1400, 1000)
     settle(600)
     if zoom:
@@ -707,9 +720,9 @@ def _mask_editor_setup(window, *, zoom=0.45):
 
 
 def shot_mask(window) -> None:
-    """Mask 编辑器：束心方块（红）+ 自动坏点（青）+ mask 前后 1D 预览。"""
+    """Mask 编辑器：束心方块（红）+ 孤立坏点（青）+ mask 前后 1D 预览。"""
     editor = _mask_editor_setup(window)
-    editor.btn_apply.click()                     # 生成 + 预览（复选框默认勾）
+    editor.btn_preview.click()                   # 预览是独立按钮
     wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
     settle(500)
     path = OUT / "gui_mask.png"
@@ -720,13 +733,11 @@ def shot_mask(window) -> None:
 def shot_mask2d(window) -> None:
     """主窗口：文件栏「Mask 后的 2D」条目 + 2D 面板（原图 + mask 叠加）。"""
     from xrd_toolkit.gui import sources as gui_sources
-    # 原始图先进文件栏：否则 2D 面板标题会带「（不在文件栏）」，
-    # 那是编辑器直接 load_image 的副作用，不是用户路径
-    window.add_files([str(_mask_image_path())], select=True)
-    settle(300)
     editor = _mask_editor_setup(window, zoom=None)
     editor.btn_apply.click()
-    wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
+    wait_for(lambda: any(s.kind == gui_sources.MASKED2D
+                         for s in gui_sources.all_sources(window)),
+             timeout_s=180)
     settle(400)
     editor.hide()
     m2d = [s for s in gui_sources.all_sources(window)

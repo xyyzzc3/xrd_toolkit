@@ -10,13 +10,15 @@
 - 明显的寄生散射斑点/固定环（固定环也可能是真实环，需人工判断）。
 
 约定：**True = 被遮掉（坏像素）**。多个来源合并用**并集**（`|`）：
-手动遮掉的、局部坏点检测抓到的、径向 nσ 抓到的，任何一方认定坏就
+手动遮掉的、局部坏点检测抓到的、整环离群抓到的，任何一方认定坏就
 不进积分。若误用交集（`&`），只被一边标出的坏点会漏掉。
 
 自动检测只是补充，不能替代手动 mask：beamstop/模块缝不是"异常亮
 像素"，径向统计抓不到；而真实衍射环（尤其强织构/大晶粒）可能被
-径向 nσ 误判，需要人工擦除。
+整环离群误判，需要人工擦除。
 """
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +26,13 @@ import numpy as np
 # 支持的掩膜文件后缀。`.npy` 简单、无损；`.edf` 是衍射领域通用格式，
 # pyFAI-drawmask 等工具也能直接读写。
 MASK_SUFFIXES = (".npy", ".edf")
+
+# Mask 配方：mask + 来源分层 + 元数据（2026-10-30）。通用掩膜（.npy/.edf）
+# 只存 bool 数组，读回来分不清哪块是手动画的、哪块是自动检测的；配方把
+# 这些一起存下，和「处理」页的配方是同一个概念。
+RECIPE_SUFFIX = ".mask.npz"
+RECIPE_FORMAT = "xrd-toolkit-mask-recipe"
+RECIPE_VERSION = 1
 
 
 def _as_bool_mask(mask, *, name="mask"):
@@ -68,6 +77,83 @@ def load_mask(path) -> np.ndarray:
         import fabio
         arr = fabio.open(str(p)).data
     return _as_bool_mask(arr, name=str(p))
+
+
+def is_recipe(path) -> bool:
+    """这个路径是不是 Mask 配方（按后缀判断）。"""
+    return str(path).lower().endswith(RECIPE_SUFFIX)
+
+
+def recipe_path(path) -> Path:
+    """补上配方后缀：`x.npy` → `x.mask.npz`（已经是配方就不动）。"""
+    p = Path(path)
+    if is_recipe(p):
+        return p
+    return p.parent / (p.stem + RECIPE_SUFFIX)
+
+
+def save_recipe(path, mask, *, source=None, meta=None) -> Path:
+    """保存 Mask 配方：bool 数组 + 来源分层 + 元数据。
+
+    参数：
+        path    目标路径；不以 `.mask.npz` 结尾时自动补上
+        mask    2D bool 数组（True = 被遮掉）
+        source  可选的 uint8 数组，与 mask 同形；数值由调用方定义
+                （GUI 里 1=整环离群、2=孤立坏点、3=手动），0 = 未遮
+        meta    dict，写进配方的元数据（来源图、自动参数等）
+    """
+    p = recipe_path(path)
+    arr = _as_bool_mask(mask)
+    src = None
+    if source is not None:
+        src = np.asarray(source)
+        if src.shape != arr.shape:
+            raise ValueError(
+                f"来源分层 {src.shape} 与 mask {arr.shape} 不一致")
+        src = src.astype(np.uint8, copy=False)
+    info = {"format": RECIPE_FORMAT, "version": RECIPE_VERSION,
+            "shape": [int(x) for x in arr.shape], "created": time.time()}
+    if meta:
+        # 允许调用方补充字段，但不许改写格式/形状/版本
+        info.update({k: v for k, v in dict(meta).items()
+                     if k not in ("format", "version", "shape")})
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"mask": np.packbits(arr),
+               "meta": np.array(json.dumps(info, ensure_ascii=False))}
+    if src is not None:
+        payload["source"] = src
+    np.savez_compressed(p, **payload)
+    return p
+
+
+def load_recipe(path) -> tuple:
+    """读 Mask 配方 → (mask, source 或 None, meta dict)。
+
+    旧配方/手工做的 npz 没有 `source` 时返回 None，由调用方按"全手动"
+    处理；形状以元数据里的 `shape` 为准（packbits 本身不带形状）。
+    """
+    p = Path(path)
+    if not is_recipe(p):
+        raise ValueError(f"不是 Mask 配方：{p}")
+    with np.load(p, allow_pickle=False) as z:
+        if "mask" not in z or "meta" not in z:
+            raise ValueError(f"Mask 配方缺少 mask/meta：{p}")
+        packed = np.asarray(z["mask"], dtype=np.uint8)
+        meta = json.loads(str(z["meta"].item()))
+        src = np.asarray(z["source"]) if "source" in z else None
+    shape = tuple(int(x) for x in meta.get("shape") or ())
+    if len(shape) != 2 or min(shape) <= 0:
+        raise ValueError(f"Mask 配方缺少有效形状：{p}")
+    mask = np.unpackbits(packed)[:shape[0] * shape[1]].astype(bool)
+    if mask.size != shape[0] * shape[1]:
+        raise ValueError(f"Mask 配方内容不完整：{p}")
+    mask = mask.reshape(shape)
+    if src is not None:
+        if src.shape != mask.shape:
+            raise ValueError(
+                f"Mask 配方的来源分层 {src.shape} 与 mask {mask.shape} 不一致")
+        src = src.astype(np.uint8, copy=False)
+    return mask, src, meta
 
 
 def combine_masks(*masks) -> np.ndarray:
@@ -157,14 +243,14 @@ def auto_mask(image, center, *, n_sigma=5.0, bin_px=4.0,
               hot_kwargs=None) -> dict:
     """自动 mask：默认只跑**局部坏点检测**（生产路径）。
 
-    径向 nσ 默认关闭：2026-10-27 在真实 LMFP 帧上实测，它会把真实
-    衍射环的强弧段当离群点（18k px，红色沿环分布），直接用于生产会
-    削掉真实信号。需要时显式 `include_radial=True`，并在 GUI 里预览
-    后再决定。
+    整环离群（原“径向 nσ”）默认关闭：2026-10-27 在真实 LMFP 帧上实测，
+    它会把真实衍射环的强弧段当离群点（18k px，红色沿环分布），直接用于
+    生产会削掉真实信号。需要时显式 `include_radial=True`，并在 GUI 里
+    预览后再决定。
 
     返回 dict，便于 GUI 分别勾选/查看：
         {"mask": 并集 bool 数组,
-         "radial": 径向 nσ 结果（未启用时全 False）,
+         "radial": 整环离群结果（未启用时全 False）,
          "hot": 局部坏点结果（未启用时全 False）}
     """
     img = np.asarray(image)

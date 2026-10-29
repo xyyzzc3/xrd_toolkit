@@ -20,12 +20,16 @@ from xrd_toolkit.services.integrator import (  # noqa: E402
     integrate_sectors,
 )
 from xrd_toolkit.services.mask import (  # noqa: E402
+    RECIPE_SUFFIX,
     auto_mask,
     combine_masks,
+    is_recipe,
     load_mask,
+    load_recipe,
     mask_stats,
     radial_outlier_mask,
     save_mask,
+    save_recipe,
 )
 
 
@@ -79,6 +83,45 @@ class TestMaskIO(unittest.TestCase):
         out = combine_masks(a, b)
         self.assertTrue(out[0, 0] and out[1, 1])
         self.assertEqual(int(out.sum()), 2)
+
+
+class TestMaskRecipe(unittest.TestCase):
+    def test_roundtrip_keeps_sources_and_meta(self):
+        mask = np.zeros((6, 8), dtype=bool)
+        mask[1, 2] = True
+        mask[4, 5] = True
+        src = np.zeros((6, 8), dtype=np.uint8)
+        src[1, 2] = 2
+        src[4, 5] = 3
+        with tempfile.TemporaryDirectory() as td:
+            p = save_recipe(Path(td) / "m", mask, source=src,
+                            meta={"source_image": "a.tif"})
+            self.assertTrue(str(p).endswith(RECIPE_SUFFIX))
+            self.assertTrue(is_recipe(p))
+            back, src2, meta = load_recipe(p)
+            np.testing.assert_array_equal(back, mask)
+            np.testing.assert_array_equal(src2, src)
+            self.assertEqual(meta["source_image"], "a.tif")
+            self.assertEqual(meta["shape"], [6, 8])
+
+    def test_recipe_without_sources_returns_none(self):
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[2, 2] = True
+        with tempfile.TemporaryDirectory() as td:
+            p = save_recipe(Path(td) / "m.mask.npz", mask)
+            back, src, meta = load_recipe(p)
+            np.testing.assert_array_equal(back, mask)
+            self.assertIsNone(src)
+            self.assertEqual(meta["version"], 1)
+
+    def test_recipe_rejects_shape_mismatch_and_bad_suffix(self):
+        mask = np.zeros((4, 4), dtype=bool)
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError):
+                save_recipe(Path(td) / "m.mask.npz", mask,
+                            source=np.zeros((3, 3), dtype=np.uint8))
+            with self.assertRaises(ValueError):
+                load_recipe(Path(td) / "m.npy")
 
 
 class TestAutoMask(unittest.TestCase):

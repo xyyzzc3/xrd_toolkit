@@ -773,6 +773,13 @@ def check_mask_editor(window, lmfp: str) -> None:
     走用户路径：按钮 click + 画布真鼠标事件；不直接改 `editor.mask`。
     """
     print("\nI. Mask 编辑器（真图 + 真画布事件）")
+    # 用户路径：先在文件栏勾选原始图，再开编辑器（会提示"先勾选"）
+    from xrd_toolkit.gui import sources as gui_sources
+    for src in gui_sources.all_sources(window):
+        if src.kind == gui_sources.RAW and Path(src.path) == Path(lmfp):
+            src.item.setCheckState(0, Qt.Checked)
+            break
+    QApplication.processEvents()
     window.mask_btn.click()
     ok = wait_until(lambda: getattr(window, "mask_editor", None) is not None)
     report(ok, "工具栏 [Mask] 打开独立编辑器")
@@ -780,6 +787,9 @@ def check_mask_editor(window, lmfp: str) -> None:
         return
     editor = window.mask_editor
     editor.show()
+    ok = wait_until(lambda: editor.image is not None, timeout_s=60)
+    report(ok, "打开编辑器自动载入勾选的第一张原始图",
+           f"{Path(editor.image_path).name if editor.image_path else None}")
     editor.load_image(Path(lmfp))
     report(editor.image is not None and editor.mask is not None
            and editor.mask.shape == editor.image.shape,
@@ -816,35 +826,42 @@ def check_mask_editor(window, lmfp: str) -> None:
     report(editor.isVisible() and int(editor.mask.sum()) == n_masked,
            "Esc 取消当前笔画、不关窗口", f"{int(editor.mask.sum())} px")
 
-    # 2D 视图：滚轮缩放 → [全图] 复位（大图靠它定位坏点团）
+    # 2D 视图：放大镜点亮 → 滚轮缩放 → [复位视图] 复位
+    # （与主面板同语义：放大镜熄灭时滚轮不缩放）
+    editor.btn_zoom.click()
     xspan0 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
     zx, zy = editor.ax_img.transData.transform((w / 2.0, h / 2.0))
     fire(editor.canvas, "scroll_event", zx, zy, button="up", step=1)
     xspan1 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
-    report(xspan1 < xspan0 * 0.95, "滚轮放大 2D 视图（每格 10%）",
+    report(xspan1 < xspan0 * 0.95, "放大镜点亮后滚轮缩放 2D 视图（每格 10%）",
            f"{xspan0:.0f} → {xspan1:.0f} px")
     editor.btn_home.click()
     xspan2 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
-    report(abs(xspan2 - w) < 1.0, "[全图] 复位 2D 视图", f"{xspan2:.0f} px")
+    report(abs(xspan2 - w) < 1.0, "[复位视图] 复位 2D 视图", f"{xspan2:.0f} px")
 
     # Home 键：与主窗口同一套 QShortcut（离屏 QTest 不驱动快捷键，emit
-    # activated 与 test_gui_integration 的 Home 用例同一条路）
+    # activated 与 test_gui_integration_panels_a 的 Home 用例同一条路）
     fire(editor.canvas, "scroll_event", zx, zy, button="up", step=1)
     editor.home_sc.activated.emit()
     xspan3 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
     report(abs(xspan3 - w) < 1.0, "Home 键复位 2D 视图", f"{xspan3:.0f} px")
+    editor.btn_zoom.click()          # 熄灭放大镜，后面不再缩放
 
-    editor.btn_apply.click()
+    editor.btn_preview.click()
     ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
-    report(ok, "生成 Mask 2D + 同时预览 1D（mask 前/后两条曲线）")
+    report(ok, "[预览效果] 画出 mask 前/后两条 1D 曲线")
     if ok:
         y0 = np.asarray(editor.ax_prev.lines[0].get_ydata())
         y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())
         report(not np.allclose(y0, y1, equal_nan=True),
                "mask 前后 1D 曲线有差异")
 
-    from xrd_toolkit.gui import sources as gui_sources
     from xrd_toolkit.services import masked2d
+    prods_before = len(masked2d.list_products())
+    editor.btn_apply.click()
+    ok = wait_until(
+        lambda: len(masked2d.list_products()) > prods_before, timeout_s=180)
+    report(ok, "[生成 Mask 2D] 建立产物（预览是独立按钮）")
     prods = masked2d.list_products()
     report(len(prods) >= 1
            and int(prods[0].get("masked_pixels") or 0) == n_masked,

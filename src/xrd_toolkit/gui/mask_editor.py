@@ -1,18 +1,23 @@
-"""独立 Mask 编辑器（2026-10-27）。
+"""独立 Mask 编辑器（2026-10-27；2026-10-30 重排界面）。
 
 从工具栏 [校准] 旁边的 [Mask] 打开，**不是**参数坞的一页：它要同时看
 2D 图、画遮罩、跑自动检测、预览 mask 前后的 1D，塞进参数页会太挤。
 
 流程（对应 Week 9 任务一）：
-  1. 打开一张代表性图像（也可以直接用文件栏勾选的第一张）；
-  2. 手动画：画笔遮、橡皮擦、矩形遮；或点 [自动坏点（局部）]；
-     径向 nσ 是实验性按钮（真实环可能被误标，见 services/mask.py）；
-  3. [保存 Mask…] 写 .npy/.edf；[加载 Mask…] 读回来；
-  4. [生成 Mask 2D]：在 stage cache 写一条 mask manifest（原始图 +
-     mask），文件栏出现「Mask 后的 2D」条目；勾着「同时预览 1D」时
-     下方再画 mask 前/后的 1D 对比。[应用到勾选文件] 给整批各生成一条。
+  1. 先在文件栏勾选原始数据，再打开编辑器：自动载入勾选的第一张，
+     顶部下拉可以换图（Mask 只认文件栏里的原始数据）；
+  2. 手动画：画笔、橡皮、矩形；或点 [孤立坏点（局部）]。
+     [整环离群（实验性）] 与 GSAS-II 的自动 spot mask 同一思路，
+     真实环可能被误标，只作参考（见 services/mask.py）；
+  3. [导出配方…] 写 .mask.npz（mask + 来源分层 + 元数据）；
+     [导入配方…] 读回来；[导出通用掩膜…] 另存 .npy/.edf 给外部工具；
+  4. [预览效果]：只画 mask 前/后的 1D，不建产物；
+     [生成 Mask 2D]：按范围（当前图像 / 勾选的 N 个文件）在 stage cache
+     写 manifest（原始图 + mask），文件栏出现「Mask 后的 2D」条目。
 
-视图：滚轮缩放；中键（或 ⌥/Shift + 左键）拖动平移；[全图] 复位。
+视图：点亮 [放大镜] = 滚轮以光标为中心缩放 + 左键拖 = 框选放大；
+熄灭 = 左键画 mask；中键（或 ⌥/Shift + 左键）拖动平移；
+[复位视图]（Home 键同效）回全图。
 mask 永远是全分辨率；只有**显示**按视图降采样（块内取最大，来源数组按
 优先级取），所以缩到全图时孤立坏点也不会被平均掉。底图与 overlay 只画
 视野内的那块，overlay 每 16 ms 合并一次并 blit，绘制时不会整屏重画。
@@ -23,6 +28,7 @@ mask 永远是全分辨率；只有**显示**按视图降采样（块内取最�
 from pathlib import Path
 
 import numpy as np
+from scipy import ndimage
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
@@ -30,10 +36,11 @@ from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QDialog, QDoubleSpinBox,
+    QApplication, QButtonGroup, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox,
-    QVBoxLayout, QWidget)
+    QVBoxLayout)
 
+from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
@@ -44,7 +51,8 @@ from xrd_toolkit.services.hot_pixels import mask_hot_pixels
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services import masked2d
 from xrd_toolkit.services.mask import (
-    combine_masks, load_mask, mask_stats, radial_outlier_mask, save_mask)
+    RECIPE_SUFFIX, combine_masks, is_recipe, load_mask, load_recipe,
+    mask_stats, radial_outlier_mask, save_mask, save_recipe)
 
 
 # overlay 三种来源的配色：都避开 magma 的橙黄主色带，叠在亮斑上也能分辨。
@@ -104,8 +112,18 @@ class MaskEditorWindow(QDialog):
         self._overlay_artist = None
         self._overlay_ds = None
         self._norm = None
-        self._last_dir = str(Path.home())
         self._auto_task = None
+        # 自动检测新增的像素（[查看改动] 用它定位；重复点按依次看各处）
+        self._last_added = None
+        self._locate_labels = None
+        self._locate_order = []
+        self._locate_idx = 0
+        # 已经生成过产物的 (原图路径, mask 哈希)：用来把按钮标成"已生成"
+        self._generated = set()
+        self._image_combo_sig = None
+        # 放大镜点亮时的框选放大
+        self._zooming = False
+        self._zoom_start = None
         # 显示缓存：底图/overlay 降采样 + blitting；mask 仍是全分辨率
         self._disp_ds = 0
         self._disp_box = None        # 显示窗口 (r0, r1, c0, c1)，按 ds 对齐
@@ -136,35 +154,65 @@ class MaskEditorWindow(QDialog):
         self.home_sc.activated.connect(self._reset_view)
         self._update_status()
 
+    def showEvent(self, event):
+        """每次显示：刷新图像下拉；勾选了新图就自动切过去（2026-10-30）。"""
+        super().showEvent(event)
+        self._refresh_image_combo()
+        first = self._first_checked_raw()
+        if first is not None and (
+                self.image_path is None
+                or Path(first) != Path(self.image_path)):
+            self.load_image(Path(first))
+
     # ── 界面 ────────────────────────────────────────────────────────
     def _build(self):
         root = QVBoxLayout(self)
+
+        # ── 图像行：Mask 只认文件栏里的原始数据（2026-10-30 用户定）──
         row1 = QHBoxLayout()
-        self.btn_open = QPushButton("打开图像…")
-        self.btn_open.clicked.connect(self._open_image)
-        row1.addWidget(self.btn_open)
-        self.btn_checked = QPushButton("用勾选第一张")
-        self.btn_checked.setToolTip("用文件栏里当前勾选的第一张原始数据当底图")
+        row1.addWidget(QLabel("图像"))
+        self.image_combo = QComboBox()
+        self.image_combo.setMinimumWidth(260)
+        self.image_combo.setToolTip("文件栏里的原始数据；换图不用关窗口")
+        self.image_combo.activated.connect(self._on_image_combo)
+        row1.addWidget(self.image_combo)
+        self.btn_checked = QPushButton("载入勾选图像")
+        self.btn_checked.setToolTip("载入文件栏里当前勾选的第一张原始数据")
         self.btn_checked.clicked.connect(self._use_checked)
         row1.addWidget(self.btn_checked)
-        self.btn_load = QPushButton("加载 Mask…")
-        self.btn_load.clicked.connect(self._load_mask)
-        row1.addWidget(self.btn_load)
-        self.btn_save = QPushButton("保存 Mask…")
-        self.btn_save.clicked.connect(self._save_mask)
-        row1.addWidget(self.btn_save)
-        self.btn_clear = QPushButton("清空")
-        self.btn_clear.setToolTip("清空编辑器里的当前 mask（已生成的 "
-                                  "Mask 2D 产物不受影响）")
-        self.btn_clear.clicked.connect(self._clear)
-        row1.addWidget(self.btn_clear)
-        self.btn_undo = QPushButton("撤销")
-        self.btn_undo.clicked.connect(self._undo_last)
-        row1.addWidget(self.btn_undo)
         row1.addStretch(1)
+        self.btn_load = QPushButton("导入配方…")
+        self.btn_load.setToolTip(
+            "读回 Mask 配方（.mask.npz，含来源分层）"
+            "或通用掩膜（.npy/.edf）")
+        self.btn_load.clicked.connect(self._import_mask)
+        row1.addWidget(self.btn_load)
+        self.btn_save = QPushButton("导出配方…")
+        self.btn_save.setToolTip("保存 .mask.npz：mask、来源分层和参数一起存")
+        self.btn_save.clicked.connect(self._save_recipe)
+        row1.addWidget(self.btn_save)
+        self.btn_save_generic = QPushButton("导出通用掩膜…")
+        self.btn_save_generic.setToolTip(
+            "另存 .npy/.edf，给 pyFAI-drawmask 等外部工具用"
+            "（不含来源分层）")
+        self.btn_save_generic.clicked.connect(self._export_generic)
+        row1.addWidget(self.btn_save_generic)
         root.addLayout(row1)
 
+        # ── 第二行：视图 + 绘制工具（撤销/清空紧挨画笔）────────────
         row2 = QHBoxLayout()
+        self.btn_home = QPushButton("复位视图")
+        self.btn_home.setToolTip("复位 2D 视图（Home 键同效）")
+        self.btn_home.clicked.connect(self._reset_view)
+        row2.addWidget(self.btn_home)
+        self.btn_zoom = QPushButton("放大镜")
+        self.btn_zoom.setCheckable(True)
+        self.btn_zoom.setToolTip(
+            "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大；"
+            "熄灭 = 左键画 mask；中键或 ⌥/Shift + 左键平移")
+        self.btn_zoom.toggled.connect(self._on_zoom_toggled)
+        row2.addWidget(self.btn_zoom)
+        row2.addSpacing(16)
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
         self.tool_buttons = {}
@@ -185,30 +233,45 @@ class MaskEditorWindow(QDialog):
         self.brush.setValue(11)
         self.brush.setSuffix(" px")
         row2.addWidget(self.brush)
-        self.btn_hot = QPushButton("自动坏点（局部）")
-        self.btn_hot.setToolTip("现有 hot_pixels 检测：孤立亮团/坏点簇，"
-                                "不碰真实衍射环（生产路径）")
+        self.btn_undo = QPushButton("撤销")
+        self.btn_undo.clicked.connect(self._undo_last)
+        row2.addWidget(self.btn_undo)
+        self.btn_clear = QPushButton("清空")
+        self.btn_clear.setToolTip("清空编辑器里的当前 mask（已生成的 "
+                                  "Mask 2D 产物不受影响）")
+        self.btn_clear.clicked.connect(self._clear)
+        row2.addWidget(self.btn_clear)
+        row2.addStretch(1)
+        root.addLayout(row2)
+
+        # ── 第三行：自动检测 ───────────────────────────────────────
+        row3 = QHBoxLayout()
+        self.btn_hot = QPushButton("孤立坏点（局部）")
+        self.btn_hot.setToolTip(
+            "局部中值 + 小连通域：只抓孤立亮团/坏点簇，"
+            "不碰真实衍射环（生产路径）")
         self.btn_hot.clicked.connect(self._auto_hot)
-        row2.addWidget(self.btn_hot)
-        self.btn_radial = QPushButton("径向 nσ（实验性）")
-        self.btn_radial.setToolTip("按径向环带的中位数/MAD 找离群像素。"
-                                   "真实环可能被误标，跑完看绿色区域，"
-                                   "不对就用橡皮/撤销修")
+        row3.addWidget(self.btn_hot)
+        self.btn_radial = QPushButton("整环离群（实验性）")
+        self.btn_radial.setToolTip(
+            "按径向环带找离群像素（与 GSAS-II 的自动 spot mask 同一思路）；"
+            "真实衍射环的强弧段可能被误标，只作参考")
         self.btn_radial.clicked.connect(self._auto_radial)
-        row2.addWidget(self.btn_radial)
-        row2.addWidget(QLabel("nσ"))
+        row3.addWidget(self.btn_radial)
+        row3.addWidget(QLabel("nσ"))
         self.n_sigma = QDoubleSpinBox()
         self.n_sigma.setRange(1.0, 20.0)
         self.n_sigma.setSingleStep(0.5)
         self.n_sigma.setValue(5.0)
-        row2.addWidget(self.n_sigma)
-        self.btn_home = QPushButton("全图")
-        self.btn_home.setToolTip("复位 2D 视图（Home 键同效；滚轮缩放；中键 "
-                                 "或 ⌥/Shift + 左键拖动平移）")
-        self.btn_home.clicked.connect(self._reset_view)
-        row2.addWidget(self.btn_home)
-        row2.addStretch(1)
-        root.addLayout(row2)
+        row3.addWidget(self.n_sigma)
+        self.btn_locate = QPushButton("查看改动")
+        self.btn_locate.setToolTip(
+            "缩放到上一次自动检测新增的像素；重复点按依次看各处")
+        self.btn_locate.setEnabled(False)
+        self.btn_locate.clicked.connect(self._locate_changes)
+        row3.addWidget(self.btn_locate)
+        row3.addStretch(1)
+        root.addLayout(row3)
 
         self.fig = Figure(figsize=(10, 7.4))
         gs = self.fig.add_gridspec(2, 1, height_ratios=[3.4, 1.25],
@@ -231,46 +294,64 @@ class MaskEditorWindow(QDialog):
         self.canvas.mpl_connect("key_press_event", self._on_canvas_key)
         root.addWidget(self.canvas, stretch=1)
 
-        row3 = QHBoxLayout()
-        self.lbl_status = QLabel("未载入图像")
+        # ── 底部：状态 + 预览 + 生成（范围二选一，不再两个按钮）───
+        row4 = QHBoxLayout()
+        self.lbl_status = QLabel("未载入图像：先在文件栏勾选一张原始图")
         self.lbl_status.setWordWrap(True)
-        row3.addWidget(self.lbl_status, stretch=1)
+        row4.addWidget(self.lbl_status, stretch=1)
         self.lbl_legend = QLabel(
             '<span style="color:#e53935">■</span> 手动 '
-            '<span style="color:#00e5ff">■</span> 坏点 '
-            '<span style="color:#76ff03">■</span> 径向')
+            '<span style="color:#00e5ff">■</span> 孤立坏点 '
+            '<span style="color:#76ff03">■</span> 整环离群')
         self.lbl_legend.setToolTip(
-            "红色 = 画笔/矩形；青色 = 自动坏点（局部）；"
-            "绿色 = 径向 nσ（实验性）。橡皮擦掉的就是没遮。")
-        row3.addWidget(self.lbl_legend)
+            "红色 = 画笔/矩形；青色 = 孤立坏点（局部）；"
+            "绿色 = 整环离群（实验性）。橡皮擦掉的就是没遮。")
+        row4.addWidget(self.lbl_legend)
+        self.btn_preview = QPushButton("预览效果")
+        self.btn_preview.setToolTip("只画 mask 前/后的 1D 对比，不生成产物")
+        self.btn_preview.clicked.connect(self._preview_effect)
+        row4.addWidget(self.btn_preview)
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItem("当前图像", "current")
+        self.scope_combo.addItem("勾选的 0 个文件", "checked")
+        self.scope_combo.setToolTip("生成 Mask 2D 的范围")
+        self.scope_combo.currentIndexChanged.connect(
+            lambda _i: self._update_generate_state())
+        row4.addWidget(self.scope_combo)
         self.btn_apply = QPushButton("生成 Mask 2D")
         self.btn_apply.setToolTip(
-            "为当前图像生成一条 Mask 后的 2D 数据（原始像素 + mask）")
+            "为选定范围生成「Mask 后的 2D」产物（原始像素 + mask）")
+        self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self._generate_current)
-        row3.addWidget(self.btn_apply)
-        self.chk_preview = QCheckBox("同时预览 1D")
-        self.chk_preview.setChecked(True)
-        self.chk_preview.setToolTip("生成后在这里画 mask 前/后两条 1D 曲线")
-        row3.addWidget(self.chk_preview)
-        self.btn_apply_checked = QPushButton("应用到勾选文件")
-        self.btn_apply_checked.setToolTip(
-            "把这张 mask 生成到文件栏里勾选的每个原始数据上"
-            "（同一探测器、同形状）")
-        self.btn_apply_checked.clicked.connect(self._apply_to_checked)
-        row3.addWidget(self.btn_apply_checked)
+        row4.addWidget(self.btn_apply)
         for btn in self.findChildren(QPushButton):
             btn.setAutoDefault(False)
-        root.addLayout(row3)
+        root.addLayout(row4)
 
     # ── 工具/状态 ───────────────────────────────────────────────────
     def _set_tool(self, tool):
         self._tool = tool
+        # 选画笔 = 要画画：放大镜自动熄灭（主面板里放大镜也是临时模式）
+        if self.btn_zoom.isChecked():
+            self.btn_zoom.setChecked(False)
+        self._update_status()
+
+    def _on_zoom_toggled(self, on):
+        """放大镜与主面板同语义：点亮 = 缩放/框选，熄灭 = 正常操作。"""
+        if on and self._drawing:
+            self._cancel_current()
+        for btn in self.tool_buttons.values():
+            btn.setEnabled(not on)
+        self.brush.setEnabled(not on)
+        self.canvas.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+        _log(self.main, "Mask 放大镜：开（滚轮缩放、左键框选放大）"
+             if on else "Mask 放大镜：关（左键画 mask）")
         self._update_status()
 
     def _update_status(self):
         self._status_timer.stop()
         if self.image is None or self.mask is None:
-            text = "未载入图像：先 [打开图像…] 或 [用勾选第一张]"
+            text = "未载入图像：先在文件栏勾选一张原始图"
         else:
             st = mask_stats(self.mask)
             h, w = self.image.shape
@@ -281,12 +362,77 @@ class MaskEditorWindow(QDialog):
             zoom = self._zoom_factor()
             if zoom > 1.05:
                 text += f"  |  缩放 {zoom:.1f}×"
+            if self.btn_zoom.isChecked():
+                text += "  |  放大镜开：左键框选放大"
             if self.mask_path is not None:
                 text += f"  |  {Path(self.mask_path).name}"
         self.lbl_status.setText(text)
+        self._update_generate_state()
+
+    def _target_paths(self):
+        """当前生成范围要写哪些原始图。"""
+        if self.scope_combo.currentData() == "checked":
+            return [s.path for s in gui_sources.checked_sources(self.main)
+                    if s.kind == gui_sources.RAW]
+        return [str(self.image_path)] if self.image_path is not None else []
+
+    def _update_generate_state(self):
+        """空 mask / 没有目标 / 刚生成过同样的 mask → 按钮置灰。"""
+        if not hasattr(self, "btn_apply"):
+            return
+        targets = self._target_paths()
+        has_mask = self.mask is not None and bool(self.mask.any())
+        mh = masked2d.mask_hash(self.mask) if self.mask is not None else ""
+        done = (has_mask and bool(targets) and all(
+            (str(Path(p).expanduser().resolve()), mh) in self._generated
+            for p in targets))
+        if done:
+            self.btn_apply.setEnabled(False)
+            self.btn_apply.setText("已生成（无改动）")
+        else:
+            self.btn_apply.setEnabled(has_mask and bool(targets))
+            self.btn_apply.setText("生成 Mask 2D")
+
+    def _set_last_added(self, added):
+        """记下自动检测新增的像素，[查看改动] 才有地方可去。"""
+        self._last_added = (None if added is None or not added.any()
+                            else np.asarray(added, dtype=bool).copy())
+        self._locate_labels = None
+        self._locate_order = []
+        self._locate_idx = 0
+        self.btn_locate.setEnabled(self._last_added is not None)
+
+    def _locate_changes(self):
+        """缩放到上一次自动检测新增的像素；重复点按依次看各处。"""
+        if self._last_added is None:
+            _log(self.main, "Mask：没有可定位的自动检测改动")
+            return
+        if not self._locate_order:
+            labels, n = ndimage.label(self._last_added,
+                                      structure=np.ones((3, 3)))
+            if n == 0:
+                return
+            sizes = ndimage.sum(self._last_added, labels,
+                                np.arange(1, n + 1))
+            self._locate_labels = labels
+            self._locate_order = [int(i)
+                                  for i in np.argsort(sizes)[::-1] + 1]
+            self._locate_idx = 0
+        n = len(self._locate_order)
+        k = self._locate_idx % n
+        self._locate_idx = (k + 1) % n
+        ys, xs = np.where(self._locate_labels == self._locate_order[k])
+        if ys.size == 0:
+            return
+        r0, r1 = int(ys.min()), int(ys.max())
+        c0, c1 = int(xs.min()), int(xs.max())
+        pad = max(4, int(0.25 * max(r1 - r0 + 1, c1 - c0 + 1)))
+        self._zoom_to_box(r0 - pad, r1 + pad, c0 - pad, c1 + pad)
+        _log(self.main, f"Mask 改动：第 {k + 1}/{n} 处"
+                       f"（{int(ys.size)} px）")
 
     def _zoom_factor(self):
-        """当前视图相对"全图"的放大倍数（1.0 = 全图）。"""
+        """当前视图相对完整视野的放大倍数（1.0 = 没放大）。"""
         if self.image is None:
             return 1.0
         x0, x1 = self.ax_img.get_xlim()
@@ -324,20 +470,64 @@ class MaskEditorWindow(QDialog):
         self._update_status()
 
     # ── 图像与 mask 显示 ────────────────────────────────────────────
-    def _open_image(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择代表性图像", self._last_dir,
-            "衍射图像 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)")
-        if path:
-            self.load_image(Path(path))
+    def _raw_sources(self):
+        return [s for s in gui_sources.all_sources(self.main)
+                if s.kind == gui_sources.RAW]
+
+    def _first_checked_raw(self):
+        for s in gui_sources.checked_sources(self.main):
+            if s.kind == gui_sources.RAW:
+                return s.path
+        return None
+
+    def _refresh_image_combo(self):
+        """把文件栏里的原始数据搬进下拉框；换图不重开窗口。"""
+        raw = self._raw_sources()
+        paths = tuple(s.path for s in raw)
+        sig = (paths, str(self.image_path))
+        extra = (self.image_path is not None
+                 and str(self.image_path) not in paths)
+        if sig == self._image_combo_sig:
+            self._select_combo_for_image()
+            return
+        self._image_combo_sig = sig
+        blocked = self.image_combo.blockSignals(True)
+        self.image_combo.clear()
+        for s in raw:
+            self.image_combo.addItem(s.display or Path(s.path).name, s.path)
+        if extra:
+            # 手工 load_image 的图不在文件栏：留一个只读条目，
+            # 状态行和下拉框才不至对不上
+            self.image_combo.insertItem(
+                0, f"{Path(self.image_path).name}（不在文件栏）",
+                str(self.image_path))
+        self.image_combo.blockSignals(blocked)
+        self._select_combo_for_image()
+
+    def _select_combo_for_image(self):
+        idx = (-1 if self.image_path is None
+               else self.image_combo.findData(str(self.image_path)))
+        self.image_combo.setCurrentIndex(idx)
+
+    def _on_image_combo(self, index):
+        if index < 0:
+            return
+        path = self.image_combo.itemData(index)
+        if not path or (self.image_path is not None
+                        and Path(path) == Path(self.image_path)):
+            return
+        self.load_image(Path(path))
 
     def _use_checked(self):
-        raw = [s for s in gui_sources.checked_sources(self.main)
-               if gui_sources.is_rawlike(s.kind)]
-        if not raw:
+        path = self._first_checked_raw()
+        if path is None:
             _log(self.main, "Mask：文件栏没有勾选的原始数据")
             return
-        self.load_image(Path(raw[0].path))
+        if (self.image_path is not None
+                and Path(path) == Path(self.image_path)):
+            self._update_status()
+            return
+        self.load_image(Path(path))
 
     def load_image(self, path):
         try:
@@ -364,8 +554,9 @@ class MaskEditorWindow(QDialog):
                 self.mask = np.zeros(img.shape, dtype=bool)
                 self.mask_path = None
         self._ensure_source()
-        self._last_dir = str(self.image_path.parent)
         self._undo.clear()
+        self._set_last_added(None)
+        self._refresh_image_combo()
         self._draw_image()
         self._update_status()
         _log(self.main, f"Mask 编辑器：载入 {self.image_path.name}"
@@ -602,6 +793,24 @@ class MaskEditorWindow(QDialog):
         self._view_timer.start()
         self._update_status_later()        # 状态行带缩放倍数
 
+    def _zoom_to_box(self, r0, r1, c0, c1):
+        """框选放大：把 (r0, r1, c0, c1) 放进视野（像素坐标，含端点）。"""
+        if self.image is None:
+            return
+        h, w = self.image.shape
+        r0, r1 = sorted((int(r0), int(r1)))
+        c0, c1 = sorted((int(c0), int(c1)))
+        side = max(float(r1 - r0 + 1), float(c1 - c0 + 1), MIN_VIEW_SPAN)
+        cx = (c0 + c1) / 2.0
+        cy = (r0 + r1) / 2.0
+        x0, x1 = self._centered(cx, side, -0.5, w - 0.5)
+        y0, y1 = self._centered(cy, side, -0.5, h - 0.5)
+        self.ax_img.set_xlim(x0, x1)
+        self.ax_img.set_ylim(y0, y1)
+        self._bg = None
+        self._view_timer.start()
+        self._update_status_later()
+
     def _reset_view(self):
         if self.image is None:
             return
@@ -613,7 +822,10 @@ class MaskEditorWindow(QDialog):
         self._update_status()
 
     def _on_scroll(self, event):
-        if (self.image is None or event.inaxes is not self.ax_img
+        # 与主面板一致：放大镜点亮时滚轮才缩放（熄灭时左键是画笔，
+        # 滚轮也不该把视野弄乱）
+        if (not self.btn_zoom.isChecked() or self.image is None
+                or event.inaxes is not self.ax_img
                 or event.xdata is None or event.ydata is None):
             return
         button = event.button
@@ -690,13 +902,17 @@ class MaskEditorWindow(QDialog):
             self.hide()      # 画布吞掉键盘、QDialog 收不到 → 这里代它藏
 
     def _cancel_current(self):
-        """取消正在进行的笔画/矩形/平移；没有任何进行中的操作返回 False。"""
+        """取消正在进行的笔画/矩形/框选/平移；没有进行中的操作返回 False。"""
         if self._cancel_stroke():
+            return True
+        if self._cancel_zoom_box():
             return True
         if self._panning:
             self._panning = False
             self._pan_start = None
-            self.canvas.setCursor(Qt.ArrowCursor)
+            self.canvas.setCursor(
+                Qt.CrossCursor if self.btn_zoom.isChecked()
+                else Qt.ArrowCursor)
             self._redraw_all()
             return True
         return False
@@ -718,6 +934,21 @@ class MaskEditorWindow(QDialog):
         self._rect_start = None
         self._update_overlay()
         self._update_status()
+        return True
+
+    def _cancel_zoom_box(self):
+        """丢掉正在拖的框选放大框；没在框选返回 False。"""
+        if not self._zooming:
+            return False
+        if self._rect_patch is not None:
+            try:
+                self._rect_patch.remove()
+            except Exception:                      # noqa: BLE001
+                pass
+            self._rect_patch = None
+        self._zooming = False
+        self._zoom_start = None
+        self._update_overlay()
         return True
 
     # ── 鼠标绘制 ────────────────────────────────────────────────────
@@ -767,6 +998,19 @@ class MaskEditorWindow(QDialog):
                                self.ax_img.get_ylim())
             self.canvas.setCursor(Qt.ClosedHandCursor)
             return
+        if event.button == 1 and self.btn_zoom.isChecked():
+            # 放大镜点亮：左键 = 框选放大（此时画笔按钮是灰的）
+            rc = self._pixel(event)
+            if rc is None:
+                return
+            self._zooming = True
+            self._zoom_start = rc
+            self._rect_patch = Rectangle(
+                (rc[1] - 0.5, rc[0] - 0.5), 1, 1, fill=False,
+                edgecolor="white", lw=1.0, linestyle="--", zorder=6)
+            self.ax_img.add_patch(self._rect_patch)
+            self._overlay_timer.start()
+            return
         if event.button != 1:
             return
         rc = self._pixel(event)
@@ -794,6 +1038,17 @@ class MaskEditorWindow(QDialog):
         if self._panning and self._pan_start is not None:
             self._pan_move(event)
             return
+        if self._zooming and self._rect_patch is not None:
+            rc = self._pixel(event)
+            if rc is None:
+                return
+            r0, r1 = sorted((self._zoom_start[0], rc[0]))
+            c0, c1 = sorted((self._zoom_start[1], rc[1]))
+            self._rect_patch.set_xy((c0 - 0.5, r0 - 0.5))
+            self._rect_patch.set_width(max(c1 - c0 + 1, 1))
+            self._rect_patch.set_height(max(r1 - r0 + 1, 1))
+            self._overlay_timer.start()
+            return
         if not self._drawing or self.image is None:
             return
         rc = self._pixel(event)
@@ -817,8 +1072,29 @@ class MaskEditorWindow(QDialog):
         if self._panning:
             self._panning = False
             self._pan_start = None
-            self.canvas.setCursor(Qt.ArrowCursor)
+            self.canvas.setCursor(
+                Qt.CrossCursor if self.btn_zoom.isChecked()
+                else Qt.ArrowCursor)
             self._redraw_all()
+            return
+        if self._zooming:
+            start = self._zoom_start
+            rc = self._pixel(event) or start
+            self._zooming = False
+            self._zoom_start = None
+            if self._rect_patch is not None:
+                try:
+                    self._rect_patch.remove()
+                except Exception:                  # noqa: BLE001
+                    pass
+                self._rect_patch = None
+            # 太小的框当误触，不当放大
+            if (start is not None and rc is not None
+                    and max(abs(rc[0] - start[0]),
+                            abs(rc[1] - start[1])) + 1 >= 4):
+                self._zoom_to_box(start[0], rc[0], start[1], rc[1])
+            self._update_overlay()
+            self._update_status()
             return
         if not self._drawing:
             return
@@ -874,27 +1150,32 @@ class MaskEditorWindow(QDialog):
         def apply(result):
             _clean, hot, info = result
             if hot.shape != self.mask.shape:
-                _log(self.main, "Mask 自动坏点：图像已换，结果丢弃")
+                _log(self.main, "Mask 孤立坏点：图像已换，结果丢弃")
                 return
             self._push_undo()
             new = hot & ~self.mask          # 只给新标出的上色，别覆盖手动
             self.mask = combine_masks(self.mask, hot)
             self._ensure_source()[new] = SRC_HOT
+            self._set_last_added(new)
             self._update_overlay()
             self._update_status()
-            _log(self.main, f"Mask 自动坏点："
+            hint = ("（青色；点 [查看改动] 定位）" if new.any()
+                    else "（没有新增像素）")
+            _log(self.main, f"Mask 孤立坏点："
                            f"{info.get('masked_components', '?')} 团 / "
-                           f"{info.get('masked_pixels', int(hot.sum()))} px")
+                           f"{info.get('masked_pixels', int(hot.sum()))} px"
+                           f"{hint}")
 
-        self._start_auto("自动坏点", mask_hot_pixels, (image,), apply)
+        self._start_auto("孤立坏点", mask_hot_pixels, (image,), apply)
 
     def _auto_radial(self):
         if self.image is None:
             return
         ans = QMessageBox.question(
-            self, "径向 nσ（实验性）",
-            "这个方法按径向环带找离群像素；真实衍射环的强弧段可能被\n"
-            "误标（实测 LMFP 上会沿环标出约 18k px）。\n\n"
+            self, "整环离群（实验性）",
+            "这个方法按径向环带找离群像素（与 GSAS-II 的自动 spot mask\n"
+            "同一思路）；真实衍射环的强弧段可能被误标（实测 LMFP 上\n"
+            "约 18k px）。\n\n"
             "建议只作参考，跑完用 [撤销] 或橡皮擦掉误标。继续？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ans != QMessageBox.Yes:
@@ -907,33 +1188,77 @@ class MaskEditorWindow(QDialog):
 
         def apply(radial):
             if radial.shape != self.mask.shape:
-                _log(self.main, "Mask 径向 nσ：图像已换，结果丢弃")
+                _log(self.main, "Mask 整环离群：图像已换，结果丢弃")
                 return
             self._push_undo()
             new = radial & ~self.mask
             self.mask = combine_masks(self.mask, radial)
             self._ensure_source()[new] = SRC_RADIAL
+            self._set_last_added(new)
             self._update_overlay()
             self._update_status()
-            _log(self.main, f"Mask 径向 nσ（实验性）：{int(radial.sum())} px"
-                           f"（n_sigma={nsig:g}）")
+            hint = ("（nσ={:g}；绿色；点 [查看改动] 定位）".format(nsig)
+                    if new.any()
+                    else "（没有新增像素）")
+            _log(self.main,
+                 f"Mask 整环离群（实验性）：{int(radial.sum())} px"
+                 f"{hint}")
 
-        self._start_auto("径向 nσ", _radial_worker, (image, center, nsig),
+        self._start_auto("整环离群", _radial_worker, (image, center, nsig),
                          apply)
 
-    # ── 保存/加载/应用 ──────────────────────────────────────────────
+    # ── 配方 / 通用掩膜 / 生成 ─────────────────────────────────────
     def _default_mask_path(self):
         d = Path(OUTPUTS_DIR) / "masks"
         d.mkdir(parents=True, exist_ok=True)
         name = getattr(self.main, "config_name", "mask") or "mask"
-        return d / f"{name}_mask.npy"
+        return d / f"{name}_mask{RECIPE_SUFFIX}"
 
-    def _save_mask(self):
-        if self.mask is None:
+    def _default_generic_path(self):
+        p = self._default_mask_path()
+        return p.with_name(p.name[:-len(RECIPE_SUFFIX)] + ".npy")
+
+    def _recipe_meta(self):
+        return {
+            "source_image": (Path(self.image_path).name
+                             if self.image_path is not None else ""),
+            "image_shape": ([int(x) for x in self.image.shape]
+                            if self.image is not None else []),
+            "config": getattr(self.main, "config_name", "") or "",
+            "beam_center": [float(x) for x in (
+                getattr(self.main, "config", {}).get("beam_center", ())
+                or ())],
+            "app_version": __version__,
+        }
+
+    def _save_recipe(self):
+        if self.mask is None or not self.mask.any():
+            _log(self.main, "Mask 为空：没有可导出的配方")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存 Mask", str(self._default_mask_path()),
-            "Mask (*.npy *.edf)")
+            self, "导出 Mask 配方", str(self._default_mask_path()),
+            f"Mask 配方 (*{RECIPE_SUFFIX})")
+        if not path:
+            return
+        try:
+            p = save_recipe(Path(path), self.mask,
+                            source=self._ensure_source(),
+                            meta=self._recipe_meta())
+        except Exception as err:                       # noqa: BLE001
+            QMessageBox.critical(self, "导出失败", str(err))
+            return
+        self.mask_path = p
+        self._update_status()
+        _log(self.main, f"Mask 配方已导出：{p}"
+                       "（含来源分层；点 [生成 Mask 2D] 才会建产物）")
+
+    def _export_generic(self):
+        if self.mask is None or not self.mask.any():
+            _log(self.main, "Mask 为空：没有可导出的掩膜")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出通用掩膜", str(self._default_generic_path()),
+            "通用掩膜 (*.npy *.edf)")
         if not path:
             return
         p = Path(path)
@@ -942,27 +1267,31 @@ class MaskEditorWindow(QDialog):
         try:
             save_mask(p, self.mask)
         except Exception as err:                       # noqa: BLE001
-            QMessageBox.critical(self, "保存失败", str(err))
+            QMessageBox.critical(self, "导出失败", str(err))
             return
-        self.mask_path = p
-        self._update_status()
-        _log(self.main, f"Mask 已保存：{p}（点 [生成 Mask 2D] 才会建产物）")
+        _log(self.main, f"通用掩膜已导出：{p}"
+                       "（只有 mask，没有来源分层）")
 
-    def _load_mask(self):
+    def _import_mask(self):
         if self.image is None:
-            QMessageBox.information(self, "先打开图像",
-                                    "先打开一张代表性图像，mask 的形状要"
-                                    "与积分图像一致。")
+            QMessageBox.information(
+                self, "先载入图像",
+                "Mask 的形状要与积分图像一致；先在文件栏勾选一张原始图。")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "加载 Mask", str(self._default_mask_path().parent),
-            "Mask (*.npy *.edf)")
+            self, "导入 Mask 配方或通用掩膜",
+            str(self._default_mask_path().parent),
+            f"Mask 配方 (*{RECIPE_SUFFIX});;通用掩膜 (*.npy *.edf)")
         if not path:
             return
+        p = Path(path)
         try:
-            mask = load_mask(path)
+            if is_recipe(p):
+                mask, src, _meta = load_recipe(p)
+            else:
+                mask, src = load_mask(p), None
         except Exception as err:                       # noqa: BLE001
-            QMessageBox.critical(self, "加载失败", str(err))
+            QMessageBox.critical(self, "导入失败", str(err))
             return
         if mask.shape != self.image.shape:
             QMessageBox.critical(
@@ -970,13 +1299,24 @@ class MaskEditorWindow(QDialog):
                 f"mask {mask.shape} 与图像 {self.image.shape} 不一致")
             return
         self.mask = mask
-        # 读回来的 mask 没有来源信息，统一按“手动”（红）显示
-        self._source = np.where(mask, SRC_MANUAL, 0).astype(np.uint8)
-        self.mask_path = Path(path)
+        if src is None:
+            # 通用掩膜没有来源信息：统一按“手动”（红）显示
+            self._source = np.where(mask, SRC_MANUAL, 0).astype(np.uint8)
+        else:
+            self._source = src.astype(np.uint8, copy=True)
+            self._source[~mask] = 0
+            self._source[self._source > SRC_MANUAL] = SRC_MANUAL
+        self.mask_path = p
         self._undo.clear()
+        self._set_last_added(None)
         self._update_overlay()
         self._update_status()
-        _log(self.main, f"Mask 已加载：{path}（点 [生成 Mask 2D] 才会建产物）")
+        if is_recipe(p):
+            _log(self.main, f"Mask 配方已导入：{p}"
+                           "（来源分层已恢复；点 [生成 Mask 2D] 才会建产物）")
+        else:
+            _log(self.main, f"通用掩膜已导入：{p}"
+                           "（没有来源信息，统一按手动显示）")
 
     def _refresh_groups(self) -> None:
         cb = getattr(self.main, "refresh_groups", None)
@@ -984,7 +1324,7 @@ class MaskEditorWindow(QDialog):
             cb()
 
     def _wire_checked_count(self) -> None:
-        """文件栏勾选一变，就更新 [应用到勾选文件（N）] 里的数字。"""
+        """文件栏勾选一变：更新生成范围里的数字和图像下拉。"""
         fl = getattr(self.main, "file_list", None)
         if fl is not None:
             fl.itemChanged.connect(self._refresh_checked_count)
@@ -996,14 +1336,20 @@ class MaskEditorWindow(QDialog):
                      if s.kind == gui_sources.RAW])
         except Exception:                              # noqa: BLE001
             n = 0
-        self.btn_apply_checked.setText(
-            "应用到勾选文件" if n == 0 else f"应用到勾选文件（{n}）")
+        if hasattr(self, "scope_combo"):
+            self.scope_combo.setItemText(
+                1, f"勾选的 {n} 个文件" if n else "勾选的 0 个文件")
+        self._refresh_image_combo()
+        self._update_generate_state()
 
     def _create_masked2d(self, paths, *, label):
         made = []
+        mh = masked2d.mask_hash(self.mask)
         for p in paths:
             made.append(masked2d.create(p, self.mask, label=label,
                                         mask_path=self.mask_path))
+            self._generated.add(
+                (str(Path(p).expanduser().resolve()), mh))
         return made
 
     def _apply_to_main(self):
@@ -1028,6 +1374,7 @@ class MaskEditorWindow(QDialog):
                        f"（{st['masked_pixels']} px，"
                        f"{st['fraction'] * 100:.2f}%，mask {label}）"
                        "——在文件栏「Mask 后的 2D」里选它，再点 [1D]")
+        self._update_status()
         self._refresh_groups()
 
     def _apply_to_checked(self):
@@ -1046,8 +1393,7 @@ class MaskEditorWindow(QDialog):
         made = 0
         for source in raw:
             try:
-                masked2d.create(source.path, self.mask, label=label,
-                                mask_path=self.mask_path)
+                self._create_masked2d([source.path], label=label)
                 made += 1
             except Exception as err:                   # noqa: BLE001
                 _log(self.main, f"Mask 2D 生成失败：{source.display}——{err}")
@@ -1057,6 +1403,7 @@ class MaskEditorWindow(QDialog):
         _log(self.main, f"Mask 后的 2D：{made}/{len(raw)} 个文件"
                        f"（{st['masked_pixels']} px，mask {label}）"
                        "——在文件栏「Mask 后的 2D」里选它们再点 [1D]")
+        self._update_status()
         self._refresh_groups()
 
     def _clear(self):
@@ -1066,11 +1413,12 @@ class MaskEditorWindow(QDialog):
         self.mask[:] = False
         self._ensure_source()[:] = 0
         self.mask_path = None
+        self._set_last_added(None)
         self._update_overlay()
         self._update_status()
 
     def _generate_current(self):
-        """[生成 Mask 2D]：建产物；勾着「同时预览 1D」就再画前后曲线。"""
+        """[生成 Mask 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""
         if self.image is None or self.mask is None:
             _log(self.main, "Mask：先载入一张图像")
             return
@@ -1079,9 +1427,20 @@ class MaskEditorWindow(QDialog):
             if hasattr(self.main, "status_text"):
                 self.main.status_text.setText("Mask 为空：未生成产物")
             return
-        self._apply_to_main()
-        if self.chk_preview.isChecked():
-            self._preview_1d()
+        if self.scope_combo.currentData() == "checked":
+            self._apply_to_checked()
+        else:
+            self._apply_to_main()
+        self._update_generate_state()
+
+    def _preview_effect(self):
+        """[预览效果]：只画 mask 前/后的 1D，不建产物。"""
+        if self.image is None or self.mask is None:
+            return
+        if not np.any(self.mask):
+            _log(self.main, "Mask 为空：没有可预览的变化")
+            return
+        self._preview_1d()
 
     def _preview_1d(self):
         """在下方画 mask 前/后两条曲线（同步积分，大图约 1–2 s）。"""
@@ -1111,10 +1470,3 @@ class MaskEditorWindow(QDialog):
         ax.grid(alpha=0.25, linestyle=":")
         ax.legend(fontsize=8, loc="best")
         self.canvas.draw_idle()
-
-    def _apply_and_preview(self):
-        """旧入口（测试/脚本用）：生成 + 预览，等价于勾着复选框点 [生成]。"""
-        if self.image is None or self.mask is None:
-            return
-        self._apply_to_main()
-        self._preview_1d()

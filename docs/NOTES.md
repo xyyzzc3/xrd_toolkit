@@ -255,20 +255,30 @@ double-click = 2D (raw + red overlay), right-click = 1D. Masked and unmasked
 
 `load_diffraction_image()` returns a `np.ma.MaskedArray` for manifests;
 `integrate_1d`/`integrate_sectors` union that mask with an explicit `mask=`.
-Supported extras: save/load `.npy`/`.edf` masks; label updates via a sidecar
-`labels.json` (no manifest rewrite, 1D cache stays valid); 1D export headers
-carry `mask: sha <hash8>, N px`; right-click "导出 Mask 2D 数据（.npz）" writes
-a self-contained image + mask + meta file; deleting a Mask 2D removes its 1D
-and processed-product caches. Calibration ring detection still uses the raw
-image. The radial n-sigma detector remains experimental (it flags real rings).
+Supported extras: `.mask.npz` recipes (mask + provenance layers + metadata;
+[导出配方…] / [导入配方…] round-trip the overlay colors), plain `.npy`/`.edf`
+masks for external tools ([导出通用掩膜…], read back as manual), label updates
+via a sidecar `labels.json` (no manifest rewrite, 1D cache stays valid); 1D
+export headers carry `mask: sha <hash8>, N px`; right-click "导出 Mask 2D
+数据（.npz）" writes a self-contained image + mask + meta file; deleting a
+Mask 2D removes its 1D and processed-product caches. Calibration ring
+detection still uses the raw image. The radial n-sigma detector is now
+[整环离群（实验性）] and remains experimental (it flags real rings; GSAS-II's
+auto spot mask uses the same radial-band idea).
 
-Editor view: wheel zoom, middle-button (or Option/Shift + left) drag to pan,
-[全图] resets. Base and overlay are downsampled to the viewed window and
-painted with blitting, so strokes only redraw the overlay — the mask itself
-stays full-resolution. Overlay colors mark provenance: red = brush/rectangle,
-cyan = automatic hot-pixel detection, green = radial n-sigma. The old
-"generate + preview" button is now [生成 Mask 2D] plus a "同时预览 1D"
-checkbox.
+The editor opens on the first checked raw image (image drop-down to switch;
+there is no separate file dialog), draws masks with brush/eraser/rectangle
+plus undo/clear next to the tools, and offers [查看改动] to zoom to newly
+detected pixels. [预览效果] draws the before/after 1D without creating a
+product; [生成 Mask 2D] takes a scope (current image or the N checked files),
+is disabled for an empty mask, and switches to 「已生成（无改动）」 once the
+current mask has been generated. View: [放大镜] toggles the same behaviour as
+plot panels (lit = wheel zoom + left-drag box zoom; off = left-drag paints);
+middle-button (or Option/Shift + left) pans; [复位视图] (Home key) resets.
+Base and overlay are downsampled to the viewed window and painted with
+blitting, so strokes only redraw the overlay — the mask itself stays
+full-resolution. Overlay colors mark provenance: red = brush/rectangle,
+cyan = isolated hot pixels, green = whole-ring outliers.
 
 Quick start: `docs/MASK.zh-CN.md`. Tests: `tests/test_mask.py`,
 `tests/test_mask_editor.py`, `tests/test_masked2d.py`.
@@ -421,7 +431,7 @@ index representatives and layout / the two implementations agreeing).
 | `scripts/check_env.py` | Environment self-check — run this first when something "just won't run" |
 | `scripts/check_gui.py` | GUI link check — drives the interface with real data and real canvas events |
 | `scripts/show_gui.py` | Real-window peek — opens the app, walks three steps, leaves the window up |
-| `scripts/run_tests.py` | The full unit suite behind a watchdog |
+| `scripts/run_tests.py` | The full unit suite behind a watchdog; `--fast` skips the GUI integration suite, `--jobs N` runs one process per test file |
 | `scripts/stress_panels.py` | Panel-stress probe — a regression check for two offscreen deadlocks |
 
 ## GUI in detail

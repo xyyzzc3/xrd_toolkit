@@ -125,14 +125,16 @@ python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
 ## 测试
 
 ```bash
-python scripts/run_tests.py     # 990+ 条，带看门狗
+python scripts/run_tests.py            # 全量，带看门狗
+python scripts/run_tests.py --fast     # 只跑单测 + 静态护栏（约 3 分钟）
+python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个进程）
 ```
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
 
 ## Mask + 原位三相批量
 
-工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器（画笔/橡皮/矩形、自动坏点、保存/加载 `.npy`/`.edf`、mask 前后 1D 预览）；应用 mask 会生成一条 **Mask 后的 2D** 产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的独立快速上手见 [docs/MASK.zh-CN.md](MASK.zh-CN.md)；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
+工具栏 `[校准]` 旁新增独立 `[Mask]` 编辑器：打开时自动载入文件栏勾选的第一张原始图（顶部下拉可换图），画笔/橡皮/矩形画遮罩，`[孤立坏点（局部）]` 抓坏点簇、`[整环离群（实验性）]` 只作参考；`[放大镜]` 与主图面板同语义（点亮 = 滚轮缩放 + 左键框选）；`[导出配方…]` 保存 `.mask.npz`（含来源分层），`[导出通用掩膜…]` 另存 `.npy/.edf`；`[预览效果]` 只画 mask 前后 1D，`[生成 Mask 2D]` 按范围（当前图像 / 勾选文件）建产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的独立快速上手见 [docs/MASK.zh-CN.md](MASK.zh-CN.md)；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
 
 ## 路线图
 

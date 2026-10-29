@@ -155,17 +155,18 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(int(self.ed.mask.sum()), 0)
         self.assertEqual(len(self._products()), 1)
 
-    def test_save_then_regenerate_updates_label(self):
+    def test_recipe_then_regenerate_updates_label(self):
         self._open()
         self.ed.load_image(self.img_path)
         self.ed._fill_rect((10, 10), (20, 20), True)
-        saved = Path(self._td.name) / "my_mask.npy"
+        saved = Path(self._td.name) / "my_mask.mask.npz"
         with mock.patch.object(gui_mask_editor.QFileDialog,
                                "getSaveFileName",
                                return_value=(str(saved), "")):
-            self.ed._save_mask()
+            self.ed._save_recipe()
+        self.assertTrue(saved.is_file())
         self.ed._apply_to_main()
-        self.assertEqual(self._products()[0]["label"], "my_mask.npy")
+        self.assertEqual(self._products()[0]["label"], "my_mask.mask.npz")
 
     def test_apply_to_checked_files(self):
         other = Path(self._td.name) / "frame2.edf"
@@ -178,14 +179,14 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._apply_to_checked()
         self.assertEqual(len(self._products()), 2)
 
-    def test_preview_draws_before_and_after(self):
+    def test_preview_button_draws_before_after_without_product(self):
         self._open()
         self.ed.load_image(self.img_path)
         self.ed._paint_segment((10, 10), (20, 20), True)
-        self.ed._apply_and_preview()
+        self.ed.btn_preview.click()
         QApplication.processEvents()
         self.assertEqual(len(self.ed.ax_prev.lines), 2)
-        self.assertEqual(len(self._products()), 1)
+        self.assertEqual(len(self._products()), 0)
 
     def test_preview_uses_current_2theta_range(self):
         self._open()
@@ -194,7 +195,7 @@ class TestMaskEditor(unittest.TestCase):
         with mock.patch.object(
                 gui_mask_editor, "integrate_1d",
                 return_value=(np.arange(3.0), np.arange(3.0))) as integ:
-            self.ed._apply_and_preview()
+            self.ed.btn_preview.click()
         self.assertEqual(integ.call_count, 2)
         for call in integ.call_args_list:
             self.assertIn("tth_min_deg", call.kwargs)
@@ -249,6 +250,7 @@ class TestMaskEditor(unittest.TestCase):
     def test_scroll_zoom_and_home_reset(self):
         self._open()
         self.ed.load_image(self.img_path)
+        self.ed.btn_zoom.click()          # 与主面板一致：放大镜点亮才滚轮缩放
         self.ed.canvas.draw()
         QApplication.processEvents()
         span0 = self.ed.ax_img.get_xlim()[1] - self.ed.ax_img.get_xlim()[0]
@@ -265,6 +267,7 @@ class TestMaskEditor(unittest.TestCase):
     def test_zoom_keeps_square_pixels(self):
         self._open()
         self.ed.load_image(self.img_path)
+        self.ed.btn_zoom.click()
         self.ed.canvas.draw()
         QApplication.processEvents()
         px, py = self.ed.ax_img.transData.transform((30.0, 170.0))
@@ -316,30 +319,38 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(tuple(rgba[15, 15, :3]), gui_mask_editor.COLOR_MANUAL)
         self.assertEqual(int(rgba[65, 65, 3]), 0)
 
-    def test_generate_respects_preview_checkbox(self):
+    def test_generate_button_makes_product_and_goes_dirty(self):
         self._open()
         self.ed.load_image(self.img_path)
+        self.assertFalse(self.ed.btn_apply.isEnabled())   # 空 mask 不可点
         self.ed._fill_rect((10, 10), (20, 20), True)
-        self.ed.chk_preview.setChecked(False)
+        self.ed._update_status()                          # 画笔松手时也会走这里
+        self.assertTrue(self.ed.btn_apply.isEnabled())
         self.ed.btn_apply.click()
         QApplication.processEvents()
-        self.assertEqual(len(self.ed.ax_prev.lines), 0)
+        self.assertEqual(len(self.ed.ax_prev.lines), 0)   # 预览是独立按钮
         self.assertEqual(len(self._products()), 1)
+        self.assertEqual(self.ed.btn_apply.text(), "已生成（无改动）")
+        self.assertFalse(self.ed.btn_apply.isEnabled())
+        self.ed._fill_rect((30, 30), (35, 35), True)      # 再改一笔
+        self.ed._update_status()
+        self.assertTrue(self.ed.btn_apply.isEnabled())
 
-        self.ed.chk_preview.setChecked(True)
-        self.ed.btn_apply.click()
-        QApplication.processEvents()
-        self.assertEqual(len(self.ed.ax_prev.lines), 2)
-
-    def test_apply_button_shows_checked_count(self):
+    def test_scope_combo_counts_checked_files(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)
         self._open()
-        self.assertNotIn("（", self.ed.btn_apply_checked.text())
+        self.ed.load_image(self.img_path)
+        self.assertIn("0", self.ed.scope_combo.itemText(1))
         self.w.add_files([str(self.img_path), str(other)], select=True)
         QApplication.processEvents()
-        self.assertIn("2", self.ed.btn_apply_checked.text())
-        self.assertEqual(self._products(), [])
+        self.assertIn("2", self.ed.scope_combo.itemText(1))
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed.scope_combo.setCurrentIndex(1)            # 勾选范围
+        self.ed.btn_apply.click()
+        QApplication.processEvents()
+        self.assertEqual(len(self._products()), 2)
+        self.assertEqual(self.ed.btn_apply.text(), "已生成（无改动）")
 
     def test_flush_overlay_blits_without_error(self):
         self._open()
@@ -400,6 +411,117 @@ class TestMaskEditor(unittest.TestCase):
         after = (self.ed.ax_img.get_xlim()[1]
                  - self.ed.ax_img.get_xlim()[0])
         self.assertAlmostEqual(after, 200.0)
+
+    def test_editor_autoloads_first_checked_image(self):
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=True)
+        QApplication.processEvents()
+        self._open()
+        self.assertEqual(Path(self.ed.image_path).resolve(),
+                         self.img_path.resolve())
+        self.assertEqual(self.ed.image_combo.count(), 2)
+        self.assertEqual(self.ed.image_combo.currentData(),
+                         str(self.img_path))
+
+    def test_image_combo_switches_image(self):
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=True)
+        QApplication.processEvents()
+        self._open()
+        self.ed._on_image_combo(1)
+        QApplication.processEvents()
+        self.assertEqual(Path(self.ed.image_path).resolve(),
+                         other.resolve())
+        self.assertEqual(self.ed.mask.shape, self.ed.image.shape)
+
+    def test_magnifier_gates_wheel_and_boxes_zoom(self):
+        """放大镜与主面板同语义：熄灭时滚轮不缩放；点亮时左键框选放大。"""
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        ax = self.ed.ax_img
+        span0 = ax.get_xlim()[1] - ax.get_xlim()[0]
+        px, py = ax.transData.transform((100.0, 100.0))
+        _fire(self.ed.canvas, "scroll_event", px, py, button="up", step=1)
+        self.assertAlmostEqual(ax.get_xlim()[1] - ax.get_xlim()[0], span0)
+
+        self.ed.btn_zoom.click()
+        self.assertFalse(
+            self.ed.tool_buttons[self.ed.TOOL_BRUSH].isEnabled())
+        _fire(self.ed.canvas, "scroll_event", px, py, button="up", step=1)
+        self.assertLess(ax.get_xlim()[1] - ax.get_xlim()[0], span0)
+
+        px0, py0 = ax.transData.transform((40.0, 40.0))
+        px1, py1 = ax.transData.transform((80.0, 80.0))
+        _fire(self.ed.canvas, "button_press_event", px0, py0, button=1)
+        self.assertTrue(self.ed._zooming)
+        _fire(self.ed.canvas, "motion_notify_event", px1, py1,
+              buttons=frozenset({1}))
+        _fire(self.ed.canvas, "button_release_event", px1, py1, button=1)
+        x0, x1 = ax.get_xlim()
+        self.assertLess(x1 - x0, 120.0)
+        self.assertGreaterEqual(x1 - x0, gui_mask_editor.MIN_VIEW_SPAN)
+        self.assertEqual(int(self.ed.mask.sum()), 0)   # 左键没有画画
+
+    def test_locate_changes_zooms_to_the_new_pixels(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        hot = np.zeros(self.ed.image.shape, dtype=bool)
+        hot[150:160, 150:160] = True
+        fake = (self.ed.image, hot, {"masked_components": 1,
+                                    "masked_pixels": int(hot.sum())})
+        with mock.patch.object(gui_mask_editor, "mask_hot_pixels",
+                               return_value=fake):
+            self.ed._auto_hot()
+            _wait_task(self.ed)
+        self.assertTrue(self.ed.btn_locate.isEnabled())
+        self.ed.btn_locate.click()
+        x0, x1 = self.ed.ax_img.get_xlim()
+        self.assertLess(x1 - x0, 200.0)
+
+    def test_recipe_roundtrip_restores_source_layers(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)      # 手动 = 红
+        hot = np.zeros(self.ed.image.shape, dtype=bool)
+        hot[60:70, 60:70] = True
+        fake = (self.ed.image, hot, {"masked_components": 1,
+                                    "masked_pixels": int(hot.sum())})
+        with mock.patch.object(gui_mask_editor, "mask_hot_pixels",
+                               return_value=fake):
+            self.ed._auto_hot()
+            _wait_task(self.ed)
+        saved = Path(self._td.name) / "roundtrip.mask.npz"
+        with mock.patch.object(gui_mask_editor.QFileDialog,
+                               "getSaveFileName",
+                               return_value=(str(saved), "")):
+            self.ed._save_recipe()
+        self.assertTrue(saved.is_file())
+        self.ed._clear()
+        with mock.patch.object(gui_mask_editor.QFileDialog,
+                               "getOpenFileName",
+                               return_value=(str(saved), "")):
+            self.ed._import_mask()
+        rgba, _ext = self.ed._overlay_rgba(1)
+        self.assertEqual(tuple(rgba[15, 15, :3]), gui_mask_editor.COLOR_MANUAL)
+        self.assertEqual(tuple(rgba[65, 65, :3]), gui_mask_editor.COLOR_HOT)
+
+    def test_export_generic_makes_npy_without_touching_recipe(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        target = Path(self._td.name) / "generic.npy"
+        with mock.patch.object(gui_mask_editor.QFileDialog,
+                               "getSaveFileName",
+                               return_value=(str(target), "")):
+            self.ed._export_generic()
+        self.assertTrue(target.is_file())
+        self.assertIsNone(self.ed.mask_path)
 
     def test_status_shows_zoom_factor(self):
         self._open()
