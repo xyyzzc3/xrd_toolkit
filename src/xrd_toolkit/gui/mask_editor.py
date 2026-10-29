@@ -28,6 +28,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QDialog, QDoubleSpinBox,
     QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox,
@@ -127,6 +128,12 @@ class MaskEditorWindow(QDialog):
 
         self._build()
         self._wire_checked_count()
+        # Home = 复位视野（与主窗口 app.py 同一套：绑在窗口上、WindowShortcut，
+        # 焦点在数值框里时 QAbstractSpinBox 会拦下 Home 当前的光标键——两个
+        # 笔刷/σ 输入框里按 Home 不会突然把图缩回去）
+        self.home_sc = QShortcut(QKeySequence(Qt.Key_Home), self)
+        self.home_sc.setContext(Qt.WindowShortcut)
+        self.home_sc.activated.connect(self._reset_view)
         self._update_status()
 
     # ── 界面 ────────────────────────────────────────────────────────
@@ -196,8 +203,8 @@ class MaskEditorWindow(QDialog):
         self.n_sigma.setValue(5.0)
         row2.addWidget(self.n_sigma)
         self.btn_home = QPushButton("全图")
-        self.btn_home.setToolTip("复位 2D 视图（滚轮缩放；中键或 ⌥/Shift + "
-                                 "左键拖动平移）")
+        self.btn_home.setToolTip("复位 2D 视图（Home 键同效；滚轮缩放；中键 "
+                                 "或 ⌥/Shift + 左键拖动平移）")
         self.btn_home.clicked.connect(self._reset_view)
         row2.addWidget(self.btn_home)
         row2.addStretch(1)
@@ -675,6 +682,8 @@ class MaskEditorWindow(QDialog):
         super().keyPressEvent(event)
 
     def _on_canvas_key(self, event):
+        # Home 走 QShortcut（见 __init__）：mpl 的 SPECIAL_KEYS 里没有它，
+        # 焦点在画布上时 key_press_event 根本不会发
         if getattr(event, "key", None) != "escape":
             return
         if not self._cancel_current():

@@ -827,6 +827,13 @@ def check_mask_editor(window, lmfp: str) -> None:
     xspan2 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
     report(abs(xspan2 - w) < 1.0, "[全图] 复位 2D 视图", f"{xspan2:.0f} px")
 
+    # Home 键：与主窗口同一套 QShortcut（离屏 QTest 不驱动快捷键，emit
+    # activated 与 test_gui_integration 的 Home 用例同一条路）
+    fire(editor.canvas, "scroll_event", zx, zy, button="up", step=1)
+    editor.home_sc.activated.emit()
+    xspan3 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
+    report(abs(xspan3 - w) < 1.0, "Home 键复位 2D 视图", f"{xspan3:.0f} px")
+
     editor.btn_apply.click()
     ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
     report(ok, "生成 Mask 2D + 同时预览 1D（mask 前/后两条曲线）")

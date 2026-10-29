@@ -383,6 +383,24 @@ class TestMaskEditor(unittest.TestCase):
         QApplication.processEvents()
         self.assertFalse(self.ed.isVisible())
 
+    def test_home_shortcut_resets_the_view(self):
+        """Home = 复位视野（与主窗口同一套 QShortcut）。
+
+        QTest 在离屏环境不驱动 QShortcut（主窗口那条 Home 测试也是直接
+        emit activated），这里同样测接线 + 动作。
+        """
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._zoom_about(100.0, 100.0, 0.5)
+        before = (self.ed.ax_img.get_xlim()[1]
+                  - self.ed.ax_img.get_xlim()[0])
+        self.assertLess(before, 199.0)
+        self.ed.home_sc.activated.emit()
+        QApplication.processEvents()
+        after = (self.ed.ax_img.get_xlim()[1]
+                 - self.ed.ax_img.get_xlim()[0])
+        self.assertAlmostEqual(after, 200.0)
+
     def test_status_shows_zoom_factor(self):
         self._open()
         self.ed.load_image(self.img_path)
