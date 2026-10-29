@@ -73,6 +73,15 @@
 - **Mask 快速上手（临时文档）**（2026-10-29）：新增
   `docs/MASK.zh-CN.md` 与 `showcase/gui/gui_mask.png` / `gui_mask2d.png`；
   《使用说明》仍锁 v0.1.5，v0.1.6 正式发版时并入并删除独立文件。
+- **Mask 编辑器视图与配色**（2026-10-29）：2D 视图支持滚轮缩放、中键
+  （或 ⌥/Shift + 左键）拖动平移、[全图] 复位；底图与 overlay 只按可视
+  窗口降采样绘制（块内取最大），绘制走 blit（16 ms 合并），2048² 上
+  画笔拖动不再整屏重画。overlay 按来源上色：红 = 画笔/矩形、青 = 自动
+  坏点、绿 = 径向 nσ（只影响显示，mask 仍是 bool）。原单独按钮
+  [生成 Mask 2D 并预览 1D] 合并为 [生成 Mask 2D] + 勾选「同时预览 1D」；
+  [应用到勾选文件] 显示当前勾选的原始图数量。编辑器改为 Qt.Tool 窗口
+  （浮在主界面上、不抢焦点）。`make_gui_shots.py` 新增 `gui_mask` /
+  `gui_mask2d` 两个可重拍场景。
 - **移除窗口级 mask 旧模型**（2026-10-29）：`current_mask`/`mask_epoch`/
   `_masked_curves` 及所有旧的“旧一代曲线”栅栏删除，GUI 只保留 Mask 2D
   产物一条路；空扫积分/瀑布/1D 不再接受全局 mask。

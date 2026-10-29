@@ -262,6 +262,14 @@ a self-contained image + mask + meta file; deleting a Mask 2D removes its 1D
 and processed-product caches. Calibration ring detection still uses the raw
 image. The radial n-sigma detector remains experimental (it flags real rings).
 
+Editor view: wheel zoom, middle-button (or Option/Shift + left) drag to pan,
+[全图] resets. Base and overlay are downsampled to the viewed window and
+painted with blitting, so strokes only redraw the overlay — the mask itself
+stays full-resolution. Overlay colors mark provenance: red = brush/rectangle,
+cyan = automatic hot-pixel detection, green = radial n-sigma. The old
+"generate + preview" button is now [生成 Mask 2D] plus a "同时预览 1D"
+checkbox.
+
 Quick start: `docs/MASK.zh-CN.md`. Tests: `tests/test_mask.py`,
 `tests/test_mask_editor.py`, `tests/test_masked2d.py`.
 
