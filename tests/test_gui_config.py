@@ -27,7 +27,7 @@ from xrd_toolkit.gui.app import create_window
 
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
-# 看门狗的现场文件默认落在仓库 outputs/；测试改到临时目录（见 test_gui_integration 同款说明）
+# 看门狗的现场文件默认落在仓库 outputs/；测试改到临时目录（见 test_gui_integration_core 同款说明）
 gui_watchdog.OUT_DIR = Path(tempfile.mkdtemp(prefix="xrd_hang_cfg_"))
 
 # QApplication 是进程级单例：模块加载时建一次，所有测试共用
@@ -114,7 +114,7 @@ class TestConfigSwitch(unittest.TestCase):
             self.assertIn("150.0", tip)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
             # 下拉框只放短 key，完整备注挂在条目的悬停提示上（说明行
-            # 已删除——与用户讨论定稿，见 test_gui_integration 的
+            # 已删除——与用户讨论定稿，见 test_gui_integration_processing 的
             # test_config_combo_carries_full_label_as_tooltip）
             self.assertEqual(
                 w.config_combo.currentText(), self.FAKE_KEY)
