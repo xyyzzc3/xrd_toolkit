@@ -281,7 +281,7 @@
         <a class="btn ghost" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub 仓库</a>
       </div>
       <div class="trust">
-        <span>993 tests</span>
+        <span>1,094 tests</span>
         <span>CI green</span>
         <span>Windows / macOS</span>
         <span>MIT</span>
@@ -330,7 +330,7 @@
         <div class="feature">
           <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18c3 0 4-10 7-10s3 7 5 7 3-4 6-4"/><path d="M3 21h18" opacity=".45"/></svg></div>
           <h3>全谱拟合</h3>
-          <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜。</p>
+          <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜与逐帧原位批处理。</p>
         </div>
         <div class="feature">
           <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></div>
@@ -346,7 +346,7 @@
       <div class="section-head">
         <div class="kicker">Showcase</div>
         <h2>实际跑出来的样子</h2>
-        <p>真数据截图，不是示意图：校准、背景、批量对比与全谱拟合。</p>
+        <p>真数据截图，不是示意图：校准、背景、批量对比、全谱拟合、Mask 编辑器与 81 帧原位精修。</p>
       </div>
       <div class="gallery">
         <figure class="shot">
@@ -364,6 +364,14 @@
         <figure class="shot">
           <div class="img"><img src="assets/shot_fit.webp" width="1200" height="793" loading="lazy" decoding="async" alt="LaB6 全谱拟合"></div>
           <figcaption><b>LaB₆ 全谱拟合</b>Le Bail 强度拟合，Rwp 4.24%，带差值曲线与布拉格峰位刻度。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_mask.webp" width="1400" height="1000" loading="lazy" decoding="async" alt="Mask 编辑器：2D 图像与掩膜前后的 1D 谱"></div>
+          <figcaption><b>Mask 编辑器</b>画笔 / 矩形 / 孤立坏点检测，按来源配色；下方对比掩膜前后的 1D 谱，2.8° 的伪峰被去掉。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_insitu.webp" width="1650" height="1050" loading="lazy" decoding="async" alt="LMFP 81 帧原位三相精修趋势"></div>
+          <figcaption><b>81 帧原位三相精修</b>LMFP 充放电序列：富锂 / 贫锂相分数、两相晶胞与 Rwp 随帧号变化，GSAS-II 交叉验证。</figcaption>
         </figure>
       </div>
     </div>
