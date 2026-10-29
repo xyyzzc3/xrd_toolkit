@@ -803,9 +803,20 @@ def check_mask_editor(window, lmfp: str) -> None:
     n_masked = int(editor.mask.sum())
     report(n_masked >= 80 * 80, "矩形拖拽写入 mask", f"{n_masked} px")
 
-    editor.btn_preview.click()
+    # 2D 视图：滚轮缩放 → [全图] 复位（大图靠它定位坏点团）
+    xspan0 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
+    zx, zy = editor.ax_img.transData.transform((w / 2.0, h / 2.0))
+    fire(editor.canvas, "scroll_event", zx, zy, button="up", step=1)
+    xspan1 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
+    report(xspan1 < xspan0 * 0.95, "滚轮放大 2D 视图（每格 10%）",
+           f"{xspan0:.0f} → {xspan1:.0f} px")
+    editor.btn_home.click()
+    xspan2 = editor.ax_img.get_xlim()[1] - editor.ax_img.get_xlim()[0]
+    report(abs(xspan2 - w) < 1.0, "[全图] 复位 2D 视图", f"{xspan2:.0f} px")
+
+    editor.btn_apply.click()
     ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
-    report(ok, "生成 Mask 2D 并预览 1D（mask 前/后两条曲线）")
+    report(ok, "生成 Mask 2D + 同时预览 1D（mask 前/后两条曲线）")
     if ok:
         y0 = np.asarray(editor.ax_prev.lines[0].get_ydata())
         y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())

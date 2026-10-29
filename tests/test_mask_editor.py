@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import fabio  # noqa: E402
 import numpy as np  # noqa: E402
+from matplotlib.backend_bases import MouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from xrd_toolkit.gui.app import create_window  # noqa: E402
@@ -35,6 +36,20 @@ def _write_image(path):
     rng = np.random.default_rng(3)
     img = (rng.random((200, 200)) * 800.0 + 50.0).astype(np.float32)
     fabio.edfimage.EdfImage(data=img).write(str(path))
+
+
+def _fire(canvas, name, x, y, **kw):
+    """发一个真鼠标事件（与 scripts/check_gui.py 同一条路径）。"""
+    canvas.callbacks.process(name, MouseEvent(name, canvas, x, y, **kw))
+
+
+def _wait_task(editor):
+    for _ in range(500):
+        QApplication.processEvents()
+        time.sleep(0.01)
+        if editor._auto_task is None:
+            break
+    QApplication.processEvents()
 
 
 class TestMaskEditor(unittest.TestCase):
@@ -201,6 +216,167 @@ class TestMaskEditor(unittest.TestCase):
         QApplication.processEvents()
         self.assertTrue(self.ed.btn_hot.isEnabled())
         self.assertGreater(int(self.ed.mask.sum()), 0)
+
+    def test_downsample_helpers_keep_hot_pixels(self):
+        img = np.zeros((5, 6), dtype=float)
+        img[3, 4] = 9.0
+        small = gui_mask_editor._downsample_max(img, 2)
+        self.assertEqual(small.shape, (3, 3))       # 边缘补齐到 ds 的倍数
+        self.assertEqual(float(small.max()), 9.0)   # 孤立亮斑不被平均掉
+
+        mask = np.zeros((5, 6), dtype=bool)
+        mask[3, 4] = True
+        small_mask = gui_mask_editor._downsample_max(mask, 2)
+        self.assertTrue(small_mask[1, 2])            # 块里有任一像素被遮就算
+        self.assertEqual(int(small_mask.sum()), 1)
+
+    def test_overlay_extent_stays_in_image_coordinates(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        h, w = self.ed.image.shape
+        for ds in (1, 2, 3):
+            rgba, ext = self.ed._overlay_rgba(ds)
+            self.assertAlmostEqual(ext[0], -0.5)
+            self.assertAlmostEqual(ext[2], -0.5)
+            self.assertGreaterEqual(ext[1], w - 0.5)
+            self.assertLess(ext[1], w - 0.5 + ds)   # 最多多补一个块
+            self.assertEqual(rgba.shape[0], int(np.ceil(h / ds)))
+
+    def test_scroll_zoom_and_home_reset(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        span0 = self.ed.ax_img.get_xlim()[1] - self.ed.ax_img.get_xlim()[0]
+        px, py = self.ed.ax_img.transData.transform((100.0, 100.0))
+        _fire(self.ed.canvas, "scroll_event", px, py, button="up", step=1)
+        xlim = self.ed.ax_img.get_xlim()
+        span1 = xlim[1] - xlim[0]
+        self.assertLess(span1, span0)
+        self.assertGreaterEqual(span1, gui_mask_editor.MIN_VIEW_SPAN)
+        self.ed.btn_home.click()
+        xlim = self.ed.ax_img.get_xlim()
+        self.assertAlmostEqual(xlim[1] - xlim[0], 200.0)
+
+    def test_zoom_keeps_square_pixels(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        px, py = self.ed.ax_img.transData.transform((30.0, 170.0))
+        for _ in range(6):
+            _fire(self.ed.canvas, "scroll_event", px, py, button="up", step=1)
+        x0, x1 = self.ed.ax_img.get_xlim()
+        y0, y1 = self.ed.ax_img.get_ylim()
+        self.assertAlmostEqual((x1 - x0), (y1 - y0))
+
+    def test_middle_drag_pans_view(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        self.ed._zoom_about(100.0, 100.0, 0.25)     # 先放大，才有地方平移
+        x0, x1 = self.ed.ax_img.get_xlim()
+        y0, y1 = self.ed.ax_img.get_ylim()
+        px, py = self.ed.ax_img.transData.transform(
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0))
+        _fire(self.ed.canvas, "button_press_event", px, py, button=2)
+        _fire(self.ed.canvas, "motion_notify_event", px - 40.0, py,
+              buttons=frozenset({2}))
+        _fire(self.ed.canvas, "button_release_event", px - 40.0, py, button=2)
+        x0b, x1b = self.ed.ax_img.get_xlim()
+        self.assertAlmostEqual(x1b - x0b, x1 - x0)  # 跨度不变 = 只是平移
+        self.assertGreater(x0b, x0)                 # 拖左 → 内容往右走
+
+    def test_overlay_colors_by_source(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)     # 手动 = 红
+        hot = np.zeros(self.ed.image.shape, dtype=bool)
+        hot[60:70, 60:70] = True
+        fake = (self.ed.image, hot, {"masked_components": 1,
+                                     "masked_pixels": int(hot.sum())})
+        with mock.patch.object(gui_mask_editor, "mask_hot_pixels",
+                               return_value=fake):
+            self.ed._auto_hot()
+            _wait_task(self.ed)
+
+        rgba, _ext = self.ed._overlay_rgba(1)
+        self.assertEqual(tuple(rgba[15, 15, :3]), gui_mask_editor.COLOR_MANUAL)
+        self.assertEqual(tuple(rgba[65, 65, :3]), gui_mask_editor.COLOR_HOT)
+        self.assertEqual(int(rgba[5, 5, 3]), 0)          # 没遮的地方透明
+
+        # 撤销只回退自动坏点那一步；手动方块本来就该留着
+        self.ed._undo_last()
+        rgba, _ext = self.ed._overlay_rgba(1)
+        self.assertEqual(tuple(rgba[15, 15, :3]), gui_mask_editor.COLOR_MANUAL)
+        self.assertEqual(int(rgba[65, 65, 3]), 0)
+
+    def test_generate_respects_preview_checkbox(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed.chk_preview.setChecked(False)
+        self.ed.btn_apply.click()
+        QApplication.processEvents()
+        self.assertEqual(len(self.ed.ax_prev.lines), 0)
+        self.assertEqual(len(self._products()), 1)
+
+        self.ed.chk_preview.setChecked(True)
+        self.ed.btn_apply.click()
+        QApplication.processEvents()
+        self.assertEqual(len(self.ed.ax_prev.lines), 2)
+
+    def test_apply_button_shows_checked_count(self):
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self._open()
+        self.assertNotIn("（", self.ed.btn_apply_checked.text())
+        self.w.add_files([str(self.img_path), str(other)], select=True)
+        QApplication.processEvents()
+        self.assertIn("2", self.ed.btn_apply_checked.text())
+        self.assertEqual(self._products(), [])
+
+    def test_flush_overlay_blits_without_error(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        QApplication.processEvents()
+        self.ed._flush_overlay()               # 抓背景 + blit
+        self.assertIsNotNone(self.ed._bg)      # 支持 blit 的 canvas 才走快路径
+        self.ed._paint_segment((10, 10), (20, 20), True)
+        self.ed._update_overlay()
+        self.ed._flush_overlay()
+        self.assertGreater(int(self.ed.mask.sum()), 0)
+        self.ed._clear()
+        self.ed._flush_overlay()
+        self.assertEqual(int(self.ed.mask.sum()), 0)
+
+    def test_erase_clears_overlay_pixels(self):
+        """blit 背景必须不含 overlay，否则橡皮擦不掉旧色块。"""
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed.canvas.draw()
+        QApplication.processEvents()
+        px, py = self.ed.ax_img.transData.transform((100.0, 100.0))
+        hpx = self.ed.canvas.buffer_rgba().shape[0]
+        row, col = hpx - 1 - int(round(py)), int(round(px))
+
+        def rgb():
+            buf = np.asarray(self.ed.canvas.buffer_rgba())
+            return buf[row, col, :3].copy()
+
+        before = rgb()
+        self.ed._fill_rect((95, 95), (105, 105), True)
+        self.ed._update_overlay()
+        self.ed._flush_overlay()
+        painted = rgb()
+        self.assertFalse(np.array_equal(before, painted))
+
+        self.ed._clear()
+        self.ed._update_overlay()
+        self.ed._flush_overlay()
+        self.assertTrue(np.array_equal(before, rgb()))   # 擦干净，无残留
 
     def test_run_1d_uses_cache_for_masked2d(self):
         path = Path("/tmp/x.mask2d.npz")

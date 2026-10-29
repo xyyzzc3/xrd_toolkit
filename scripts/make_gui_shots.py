@@ -24,6 +24,8 @@ docs/使用说明.md）：
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
     gui_background  自动基线（不加锚点，原始/基线/结果三线）  → README / 使用说明 §6
+    gui_mask        Mask 编辑器：束心方块 + 自动坏点 + mask 前后 1D → Mask 快速上手
+    gui_mask2d      「Mask 后的 2D」条目 + 2D 面板（原图 + mask）→ Mask 快速上手
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**
@@ -672,12 +674,83 @@ def shot_calib(window) -> None:
             print("    " + line)
 
 
+def _mask_image_path():
+    img = Path(LMFP[0])
+    return img if img.is_absolute() else ROOT / img
+
+
+def _mask_editor_setup(window, *, zoom=0.45):
+    """打开 Mask 编辑器、画一份代表性 mask（束心方块 + 自动坏点）。
+
+    走真按钮：[Mask] → [打开图像…] 的那张图直接 load_image 给（不弹
+    文件对话框），矩形用 _fill_rect，自动坏点走 [自动坏点（局部）]。
+    """
+    window.mask_btn.click()
+    settle(400)
+    editor = window.mask_editor
+    editor.load_image(_mask_image_path())
+    settle(400)
+    editor.tool_buttons[editor.TOOL_RECT].click()
+    h, w = editor.image.shape
+    r, c = h // 2, w // 2
+    editor._fill_rect((r - 84, c - 100), (r + 100, c + 100), True)  # 束心
+    editor.btn_hot.click()                       # 自动坏点（后台）
+    wait_for(lambda: editor._auto_task is None, timeout_s=120)
+    settle(300)
+    editor.resize(1400, 1000)
+    settle(600)
+    if zoom:
+        editor._zoom_about(c, r, zoom)           # 放大到能看清 mask
+        editor._redraw_all()
+        settle(500)
+    return editor
+
+
+def shot_mask(window) -> None:
+    """Mask 编辑器：束心方块（红）+ 自动坏点（青）+ mask 前后 1D 预览。"""
+    editor = _mask_editor_setup(window)
+    editor.btn_apply.click()                     # 生成 + 预览（复选框默认勾）
+    wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
+    settle(500)
+    path = OUT / "gui_mask.png"
+    editor.grab().save(str(path))
+    print(f"  ✓ {path.relative_to(ROOT)}  (1400×1000)")
+
+
+def shot_mask2d(window) -> None:
+    """主窗口：文件栏「Mask 后的 2D」条目 + 2D 面板（原图 + mask 叠加）。"""
+    from xrd_toolkit.gui import sources as gui_sources
+    # 原始图先进文件栏：否则 2D 面板标题会带「（不在文件栏）」，
+    # 那是编辑器直接 load_image 的副作用，不是用户路径
+    window.add_files([str(_mask_image_path())], select=True)
+    settle(300)
+    editor = _mask_editor_setup(window, zoom=None)
+    editor.btn_apply.click()
+    wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
+    settle(400)
+    editor.hide()
+    m2d = [s for s in gui_sources.all_sources(window)
+           if s.kind == gui_sources.MASKED2D]
+    if not m2d:
+        raise RuntimeError("Mask 2D 产物没出现（检查 masked2d.create）")
+    window.open_view_source(m2d[0], "2D")
+    key = "2D|" + str(m2d[0].path)
+    wait_for(lambda: key in window.plot_docks
+             and getattr(window.plot_docks[key], "last_image", None) is not None,
+             timeout_s=180)
+    window.resize(1600, 1000)
+    settle(500)
+    fit_panel(window, key)          # 铺满绘图区（规矩 ①）
+    save(window, "gui_mask2d")
+
+
 SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
          "gui_peaks": shot_peaks,
          "gui_compare": shot_compare, "gui_compare_heat": shot_compare_heat,
          "gui_panel_bar": shot_panel_bar, "gui_customize": shot_customize,
          "gui_views": shot_views, "gui_batch": shot_batch,
-         "gui_background": shot_background, "gui_calib": shot_calib}
+         "gui_background": shot_background, "gui_calib": shot_calib,
+         "gui_mask": shot_mask, "gui_mask2d": shot_mask2d}
 
 
 def main() -> int:
