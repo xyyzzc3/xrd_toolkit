@@ -14,7 +14,7 @@
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication
 
 from xrd_toolkit.gui.state.base import _panel_param
@@ -29,7 +29,7 @@ FIT_COLOR = "#CC79A7"          # Okabe–Ito 紫红：与曲线蓝、峰标橙�
 FIT_KEYS = ("拟合线型", "拟合半窗 (°)", "拟合背景", "拟合全部叠加")
 # 5 列挤在 320 px 里，带单位的表头会被裁（实测 "FWHM (°)" 只剩 "WHM"）；
 # 单位放进表头 tooltip，列名只留短名。
-FIT_COLUMNS = ("2θ", "FWHM", "η/m", "面积", "Rwp")
+FIT_COLUMNS = ("W-H", "2θ", "FWHM", "面积", "Rwp")
 
 SHAPE_LABELS = {
     "gaussian": "高斯",
@@ -51,6 +51,7 @@ class FitEntry:
     center0: float
     half_window: float
     fit: object                    # SinglePeakFit
+    wh: bool = True                # 勾选参与 Williamson–Hall（默认参与）
 
 
 def _settings(window, dock):
@@ -92,6 +93,39 @@ def fit_series(tth, intensity, centers, *, shape="pseudovoigt",
     return entries, failures
 
 
+def selected_peak_rows(window):
+    """峰表当前选中的行号（Ctrl/Cmd 多选；没有选中时退回当前行）。"""
+    table = getattr(window, "peak_table", None)
+    if table is None:
+        return []
+    model = table.selectionModel()
+    rows = (sorted({i.row() for i in model.selectedRows()})
+            if model is not None else [])
+    if not rows:
+        row = table.currentRow()
+        if row >= 0:
+            rows = [row]
+    return rows
+
+
+def select_peak_centers(window, centers):
+    """拟合后重新选中这些峰（峰表重填会清掉选择，按钮会变灰）。"""
+    table = getattr(window, "peak_table", None)
+    if table is None:
+        return
+    model = table.selectionModel()
+    if model is None:
+        return
+    wanted = {round(float(c), 6) for c in centers}
+    table.clearSelection()
+    for row in range(table.rowCount()):
+        item = table.item(row, 0)
+        data = item.data(Qt.UserRole) if item is not None else None
+        if data and round(float(data[0]), 6) in wanted:
+            model.select(table.model().index(row, 0),
+                         QItemSelectionModel.Select | QItemSelectionModel.Rows)
+
+
 def _current_curve(window, dock):
     tth = getattr(dock, "last_tth", None)
     y = getattr(dock, "last_intensity", None)
@@ -120,68 +154,95 @@ def _refresh(window):
 
 
 def fit_all_peaks(window):
-    """[拟合全部]：对峰表里的每根峰做单峰拟合。"""
+    """兼容入口：全选峰表后走“拟合选中”（按钮已合并）。"""
+    table = getattr(window, "peak_table", None)
+    if table is not None and table.rowCount():
+        table.selectAll()
+    return fit_selected_peaks(window)
+
+
+def fit_selected_peaks(window):
+    """[拟合选中]：对峰表里选中的每一根做单峰拟合（Ctrl/Cmd 多选）。"""
     dock = _dock_for_fit(window)
     if dock is None:
         return 0
-    peaks = list(getattr(dock, "detected_peaks", None) or [])
-    if not peaks:
-        _log(window, "峰形拟合：先在 1D 页勾上「寻峰并显示峰位」")
+    rows = selected_peak_rows(window)
+    if not rows:
+        _log(window, "峰形拟合：先在峰表里点选一行（Ctrl/Cmd 可多选）")
+        return 0
+    table = window.peak_table
+    centers = []
+    for row in rows:
+        item = table.item(row, 0)
+        data = item.data(Qt.UserRole) if item is not None else None
+        if data:
+            centers.append(float(data[0]))
+        elif item is not None:
+            try:
+                centers.append(float(item.text()))
+            except ValueError:
+                pass
+    if not centers:
         return 0
     tth, y = _current_curve(window, dock)
     if tth is None:
         return 0
     shape, half, bg = _settings(window, dock)
     entries, failures = fit_series(
-        tth, y, [p.center for p in peaks], shape=shape,
-        half_window=half, background=bg)
-    dock.fit_results = entries
+        tth, y, centers, shape=shape, half_window=half, background=bg)
+    # 按峰心合并：同一根重拟覆盖旧结果，其它保留
+    old = {round(e.center0, 6): e
+           for e in (getattr(dock, "fit_results", None) or [])}
+    for entry in entries:
+        old[round(entry.center0, 6)] = entry
+    dock.fit_results = sorted(old.values(), key=lambda e: e.center0)
     dock.fit_sig = _curve_sig(tth, y)
-    fill_fit_table(window, dock, switch=True)
+    fill_fit_table(
+        window, dock,
+        select_center=(entries[0].center0 if entries else None), switch=True)
     _refresh(window)
-    _log(window, f"峰形拟合：成功 {len(entries)} / 失败 {len(failures)}"
+    select_peak_centers(window, centers)
+    _log(window, f"峰形拟合：选中 {len(centers)} 根，"
+                 f"成功 {len(entries)} / 失败 {len(failures)}"
                  f"（{SHAPE_LABELS.get(shape, shape)}，半窗 {half:g}°）")
     for center, err in failures:
         _log(window, f"  峰 {center:.4f}° 拟合失败：{err}")
     return len(entries)
 
 
-def fit_selected_peak(window):
-    """[拟合选中]：只拟合峰表里当前选中的那一根（其余结果保留）。"""
-    dock = _dock_for_fit(window)
-    if dock is None:
+# 兼容旧名字：现在“选中”可以是多行
+fit_selected_peak = fit_selected_peaks
+
+
+def delete_fit_rows(window):
+    """删除拟合结果表里选中的行（右键菜单）。"""
+    dock = window.plot_docks.get(window.focus_panel)
+    if dock is None or not str(window.focus_panel or "").startswith("1D|"):
         return 0
-    table = getattr(window, "peak_table", None)
-    row = table.currentRow() if table is not None else -1
-    if row < 0:
-        _log(window, "峰形拟合：先在峰表里点选一行")
+    table = getattr(window, "fit_table", None)
+    entries = list(getattr(dock, "fit_results", None) or [])
+    if table is None or not entries:
         return 0
-    item = table.item(row, 0)
-    data = item.data(Qt.UserRole) if item is not None else None
-    if data:
-        center = float(data[0])
-    elif item is not None:
-        center = float(item.text())
-    else:
+    model = table.selectionModel()
+    rows = (sorted({i.row() for i in model.selectedRows()})
+            if model is not None else [])
+    if not rows:
+        row = table.currentRow()
+        if row >= 0:
+            rows = [row]
+    if not rows:
         return 0
-    tth, y = _current_curve(window, dock)
-    if tth is None:
-        return 0
-    shape, half, bg = _settings(window, dock)
-    entries, failures = fit_series(
-        tth, y, [center], shape=shape, half_window=half, background=bg)
-    if failures:
-        _log(window, f"峰形拟合：{center:.4f}° 拟合失败——{failures[0][1]}")
-        return 0
-    old = [e for e in (getattr(dock, "fit_results", None) or [])
-           if abs(e.center0 - center) > 1e-6]
-    dock.fit_results = sorted(old + entries, key=lambda e: e.center0)
-    dock.fit_sig = _curve_sig(tth, y)
-    fill_fit_table(window, dock, select_center=center, switch=True)
+    drop = set(rows)
+    keep = [e for i, e in enumerate(entries) if i not in drop]
+    removed = len(entries) - len(keep)
+    dock.fit_results = keep or None
+    if not keep:
+        dock.fit_sig = None
+        dock.wh_result = None
+    fill_fit_table(window, dock)
     _refresh(window)
-    _log(window, f"峰形拟合：{center:.4f}° 完成"
-                 f"（{SHAPE_LABELS.get(shape, shape)}，半窗 {half:g}°）")
-    return 1
+    _log(window, f"峰形拟合：已删除 {removed} 根结果")
+    return removed
 
 
 def clear_fit_results(window):
@@ -191,6 +252,7 @@ def clear_fit_results(window):
         return
     dock.fit_results = None
     dock.fit_sig = None
+    dock.wh_result = None
     fill_fit_table(window, dock)
 
 
@@ -233,26 +295,32 @@ def fill_fit_table(window, dock, *, select_center=None, switch=False):
         if switch:
             tabs.setCurrentIndex(1)
     table.setRowCount(len(entries))
+    from PySide6.QtWidgets import QTableWidgetItem
     pick = 0
     for row, entry in enumerate(entries):
         fit = entry.fit
+        check = QTableWidgetItem("")
+        check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        check.setCheckState(Qt.Checked if entry.wh else Qt.Unchecked)
+        check.setData(Qt.UserRole, entry.center0)       # _selected_center 用
+        check.setData(Qt.UserRole + 1, entry)           # 勾选回写用
+        check.setToolTip(
+            f"勾选：参与 W-H\n初始 2θ {entry.center0:.4f}°\n"
+            f"半窗 {entry.half_window:g}°\n"
+            f"线型 {SHAPE_LABELS.get(fit.shape, fit.shape)}"
+            f"（{_eta_text(fit)}）")
+        table.setItem(row, 0, check)
         values = ((f"{fit.center:.4f}", fit.center),
                   (f"{fit.fwhm:.4f}", fit.fwhm),
-                  (_eta_text(fit), None),
                   (f"{fit.area:.1f}", fit.area),
                   (f"{fit.rwp:.2f}", fit.rwp))
-        for col, (text, value) in enumerate(values):
+        for col, (text, _value) in enumerate(values, start=1):
             item = table.item(row, col)
             if item is None:
-                from PySide6.QtWidgets import QTableWidgetItem
                 item = QTableWidgetItem()
                 table.setItem(row, col, item)
             item.setText(text)
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        table.item(row, 0).setData(Qt.UserRole, entry.center0)
-        table.item(row, 0).setToolTip(
-            f"初始 2θ {entry.center0:.4f}°\n半窗 {entry.half_window:g}°\n"
-            f"线型 {SHAPE_LABELS.get(fit.shape, fit.shape)}")
         if select_center is not None and abs(entry.center0 - select_center) < 1e-6:
             pick = row
     table.selectRow(pick)
@@ -300,10 +368,16 @@ def draw_fit_overlays(window, dock, ax, tth, intensity):
         return 0
     sig = _curve_sig(tth, intensity)
     if sig != getattr(dock, "fit_sig", None):
-        caption = getattr(window, "fit_caption", None)
-        if caption is not None and caption.isVisible():
-            caption.setText(
-                f"拟合结果 · {len(entries)} 根（曲线已变，请重新拟合）")
+        # 曲线变了（重新积分/换处理参数/换裁剪）：旧结果直接作废，
+        # 别在表里留着一组对不上当前曲线的数字（W-H 也跟着清）。
+        had = bool(entries)
+        dock.fit_results = None
+        dock.fit_sig = None
+        dock.wh_result = None
+        if window.plot_docks.get(window.focus_panel) is dock:
+            fill_fit_table(window, dock)
+        if had:
+            _log(window, "曲线已变：旧的峰形拟合结果已清空")
         return 0
     show_all = bool(_panel_param(window, dock, "拟合全部叠加", False))
     selected = None if show_all else _selected_center(window)
@@ -343,9 +417,15 @@ def fit_table_tsv(window, selected_only=False):
     lines = ["\t".join(table.horizontalHeaderItem(c).text()
                        for c in range(table.columnCount()))]
     for row in rows:
-        lines.append("\t".join(
-            (table.item(row, c).text() if table.item(row, c) else "")
-            for c in range(table.columnCount())))
+        values = []
+        for c in range(table.columnCount()):
+            item = table.item(row, c)
+            if c == 0:
+                values.append("✓" if item is not None
+                              and item.checkState() == Qt.Checked else "")
+            else:
+                values.append(item.text() if item is not None else "")
+        lines.append("\t".join(values))
     return "\n".join(lines)
 
 

@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QSpinBox, QTableWidget, QTabWidget, QVBoxLayout)
 
 from xrd_toolkit.gui.fit_view import (
-    FIT_COLUMNS, clear_fit_results, copy_fit_table, fit_all_peaks,
-    fit_selected_peak, install_fit_view)
+    FIT_COLUMNS, clear_fit_results, copy_fit_table, delete_fit_rows,
+    fit_selected_peaks, install_fit_view, selected_peak_rows)
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
 from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
 from xrd_toolkit.gui.peak_view import (
@@ -18,7 +18,8 @@ from xrd_toolkit.gui.peak_view import (
 from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
 from xrd_toolkit.gui.wh_view import (
-    WH_INSTRUMENT_KEY, dock_for_wh, refresh_wh, save_wh_plot)
+    WH_INSTRUMENT_KEY, dock_for_wh, refresh_wh, save_wh_plot,
+    show_wh_dialog)
 
 
 def build_1d_page(window, form_1d, btns_1d):
@@ -155,6 +156,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.verticalHeader().setVisible(False)
     peak_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     peak_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    peak_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
     peak_table.setAlternatingRowColors(True)
     peak_table.setShowGrid(False)
     peak_table.setFrameShape(QFrame.NoFrame)
@@ -178,9 +180,14 @@ def build_1d_page(window, form_1d, btns_1d):
 
     def _peak_menu(pos):
         menu = QMenu(peak_table)
+        act_fit = menu.addAction("拟合选中")
+        menu.addSeparator()
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
         chosen = menu.exec(peak_table.viewport().mapToGlobal(pos))
+        if chosen is act_fit:
+            fit_selected_peaks(window)
+            return
         if chosen is act_sel:
             n = copy_peak_table(window, True)
         elif chosen is act_all:
@@ -217,10 +224,14 @@ def build_1d_page(window, form_1d, btns_1d):
                       ("二次", "quadratic")):
         bg_combo.addItem(text, key)
     all_chk = QCheckBox("叠加全部拟合")
-    btn_fit_all = QPushButton("拟合全部")
-    btn_fit_all.setToolTip("对峰表里每一根峰做单峰拟合（局部背景 + 一个峰）")
+    btn_select_all = QPushButton("全选")
+    btn_select_all.setToolTip(
+        "选中峰表里全部峰；再点 [拟合选中] = 原来的全部拟合")
     btn_fit_sel = QPushButton("拟合选中")
-    btn_fit_sel.setToolTip("只拟合峰表里当前选中的那一根（其余结果保留）")
+    btn_fit_sel.setToolTip(
+        "对峰表里选中的峰逐根拟合（Ctrl/Cmd 多选；其余结果保留）")
+    btn_clear_fit = QPushButton("清除")
+    btn_clear_fit.setToolTip("清空这张图的全部拟合结果与 W-H")
     window.params["拟合线型"] = shape_combo
     window.params["拟合半窗 (°)"] = half_spin
     window.params["拟合背景"] = bg_combo
@@ -239,13 +250,15 @@ def build_1d_page(window, form_1d, btns_1d):
     fit_row2.addWidget(all_chk)
     fit_row3 = QHBoxLayout()
     fit_row3.setContentsMargins(0, 0, 0, 0)
-    fit_row3.addWidget(btn_fit_all, 1)
+    fit_row3.setSpacing(4)
+    fit_row3.addWidget(btn_select_all, 1)
     fit_row3.addWidget(btn_fit_sel, 1)
+    fit_row3.addWidget(btn_clear_fit, 1)
 
     fit_table = QTableWidget(0, len(FIT_COLUMNS))
     fit_table.setHorizontalHeaderLabels(list(FIT_COLUMNS))
     for col, tip in enumerate((
-            "峰位 2θ（度）", "半高宽 FWHM（度）", "峰形混合参数",
+            "勾选：参与 W-H", "峰位 2θ（度）", "半高宽 FWHM（度）",
             "峰面积", "该峰的加权残差 Rwp（%）")):
         header_item = fit_table.horizontalHeaderItem(col)
         if header_item is not None:
@@ -253,6 +266,7 @@ def build_1d_page(window, form_1d, btns_1d):
     fit_table.verticalHeader().setVisible(False)
     fit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     fit_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    fit_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
     fit_table.setAlternatingRowColors(True)
     fit_table.setShowGrid(False)
     fit_table.setFrameShape(QFrame.NoFrame)
@@ -260,17 +274,31 @@ def build_1d_page(window, form_1d, btns_1d):
     fit_table.setMinimumSize(0, 0)
     fit_table.setMaximumWidth(320)
     fit_table.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
-    fit_table.horizontalHeader().setMinimumSectionSize(30)
+    fit_table.horizontalHeader().setMinimumSectionSize(24)
     fit_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+    fit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+    fit_table.setColumnWidth(0, 36)
     fit_table.verticalHeader().setDefaultSectionSize(22)
     fit_table.setVisible(False)
     window.fit_table = fit_table
-    window.fit_all_btn = btn_fit_all
+    window.select_all_peaks_btn = btn_select_all
     window.fit_selected_btn = btn_fit_sel
+    window.clear_fit_btn = btn_clear_fit
     # 拟合结果住进第二个标签页：没有结果时标签置灰，有结果时自动切过去
     peak_tabs.addTab(fit_table, "拟合结果")
     peak_tabs.setTabEnabled(1, False)
     window.peak_tabs = peak_tabs
+
+    def _fit_item_changed(item):
+        if item.column() != 0:
+            return
+        entry = item.data(Qt.UserRole + 1)
+        if entry is None:
+            return
+        entry.wh = item.checkState() == Qt.Checked
+        refresh_wh(window, dock_for_wh(window))
+
+    fit_table.itemChanged.connect(_fit_item_changed)
 
     peak_lay.addWidget(fit_line)
     peak_lay.addWidget(fit_title)
@@ -313,6 +341,11 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_note.setStyleSheet("color: gray;")
     wh_note.setMinimumWidth(0)
     wh_note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    wh_view = QPushButton("查看 W-H 图")
+    wh_view.setEnabled(False)
+    wh_view.setToolTip("在窗口里看 W-H 图（参与/排除的点、拟合线、R²）")
+    wh_view.clicked.connect(
+        lambda: show_wh_dialog(window, dock_for_wh(window)))
     wh_save = QPushButton("保存 W-H 图…")
     wh_save.setEnabled(False)
     wh_save.clicked.connect(
@@ -320,6 +353,7 @@ def build_1d_page(window, form_1d, btns_1d):
     window.wh_d_label = wh_d_label
     window.wh_e_label = wh_e_label
     window.wh_note_label = wh_note
+    window.wh_view_btn = wh_view
     window.wh_save_btn = wh_save
     wh_instr.valueChanged.connect(
         lambda _v=0.0: refresh_wh(window, dock_for_wh(window)))
@@ -328,7 +362,12 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_lay.addLayout(wh_row)
     peak_lay.addLayout(wh_vals)
     peak_lay.addWidget(wh_note)
-    peak_lay.addWidget(wh_save)
+    wh_btns = QHBoxLayout()
+    wh_btns.setContentsMargins(0, 0, 0, 0)
+    wh_btns.setSpacing(4)
+    wh_btns.addWidget(wh_view, 1)
+    wh_btns.addWidget(wh_save, 1)
+    peak_lay.addLayout(wh_btns)
 
     # 标签页放最后并吃掉剩余高度：拟合按钮留在上方，不会被表格挤到
     # 滚动区外面（2026-10-30 实测：先放表格时 [拟合全部] 要滚动才看得见）。
@@ -346,16 +385,33 @@ def build_1d_page(window, form_1d, btns_1d):
     half_spin.valueChanged.connect(_fit_settings_changed)
     bg_combo.currentIndexChanged.connect(_fit_settings_changed)
     all_chk.toggled.connect(lambda _=False: _refresh_1d_display(window))
-    btn_fit_all.clicked.connect(lambda: fit_all_peaks(window))
-    btn_fit_sel.clicked.connect(lambda: fit_selected_peak(window))
+    btn_select_all.clicked.connect(peak_table.selectAll)
+    btn_fit_sel.clicked.connect(lambda: fit_selected_peaks(window))
+    btn_clear_fit.clicked.connect(
+        lambda: (clear_fit_results(window), _refresh_1d_display(window)))
     fit_table.itemSelectionChanged.connect(
         lambda: _refresh_1d_display(window))
 
+    def _sync_fit_button():
+        n = len(selected_peak_rows(window))
+        btn_fit_sel.setEnabled(n > 0)
+        btn_fit_sel.setToolTip(
+            f"对选中的 {n} 根峰拟合" if n
+            else "先在峰表里选一行（Ctrl/Cmd 多选）")
+
+    peak_table.itemSelectionChanged.connect(_sync_fit_button)
+    _sync_fit_button()
+
     def _fit_menu(pos):
         menu = QMenu(fit_table)
+        act_del = menu.addAction("删除选中拟合")
+        menu.addSeparator()
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
         chosen = menu.exec(fit_table.viewport().mapToGlobal(pos))
+        if chosen is act_del:
+            delete_fit_rows(window)
+            return
         if chosen is act_sel:
             n = copy_fit_table(window, True)
         elif chosen is act_all:

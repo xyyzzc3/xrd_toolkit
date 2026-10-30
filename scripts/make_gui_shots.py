@@ -864,7 +864,8 @@ def shot_insitu(window) -> None:
 def shot_wh(window) -> None:
     """1D 页的 Williamson–Hall 数字块（拟合全部后自动出数）。"""
     key = _open_lab6_panel(window, peaks=True)
-    window.fit_all_btn.click()
+    window.select_all_peaks_btn.click()
+    window.fit_selected_btn.click()
     settle(600)
     window.resize(1600, 1000)
     settle(400)

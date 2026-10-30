@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
 import numpy as np  # noqa: E402
+from PySide6.QtCore import QItemSelectionModel, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from unittest import mock  # noqa: E402
 
@@ -78,10 +79,15 @@ class TestFitView(unittest.TestCase):
         return [ln for ln in self.ax.lines
                 if str(ln.get_gid() or "").endswith("fit_curve")]
 
+    def _fit_all(self):
+        self.w.select_all_peaks_btn.click()
+        QApplication.processEvents()
+        self.w.fit_selected_btn.click()
+        QApplication.processEvents()
+
     def test_fit_all_fills_table_and_draws_selected_overlay(self):
         self._open_panel()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.assertEqual(self.w.fit_table.rowCount(), 4)
         self.assertTrue(self.w.fit_table.isVisible())
         self.assertEqual(self.w.peak_tabs.currentIndex(), 1,
@@ -97,12 +103,11 @@ class TestFitView(unittest.TestCase):
 
     def test_wh_block_updates_and_saves(self):
         self._open_panel()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.assertIsNotNone(self.dock.wh_result)
         self.assertEqual(len(self.dock.wh_result.beta_sample_deg), 4)
         self.assertIn("D =", self.w.wh_d_label.text())
-        self.assertIn("4 根峰", self.w.wh_note_label.text())
+        self.assertIn("4/4 根参与", self.w.wh_note_label.text())
 
         before = np.asarray(self.dock.wh_result.beta_sample_deg).copy()
         self.w.params["W-H 仪器 FWHM (°)"].setValue(0.01)
@@ -118,16 +123,14 @@ class TestFitView(unittest.TestCase):
 
     def test_overlay_all_draws_every_fit(self):
         self._open_panel()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.w.params["拟合全部叠加"].setChecked(True)
         QApplication.processEvents()
         self.assertEqual(len(self._fit_lines()), 4)
 
     def test_fit_selected_merges(self):
         self._open_panel()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.w.peak_table.selectRow(1)
         self.w.fit_selected_btn.click()
         QApplication.processEvents()
@@ -136,8 +139,7 @@ class TestFitView(unittest.TestCase):
 
     def test_shape_change_clears_results(self):
         self._open_panel()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.assertEqual(self.w.fit_table.rowCount(), 4)
         self.w.params["拟合线型"].setCurrentIndex(1)       # 高斯
         QApplication.processEvents()
@@ -148,6 +150,54 @@ class TestFitView(unittest.TestCase):
                          "结果作废后应退回「峰表」页")
         self.assertFalse(self.w.peak_tabs.isTabEnabled(1))
         self.assertEqual(self.w.peak_tabs.tabText(1), "拟合结果")
+
+    def test_multi_select_fit_and_wh_exclude(self):
+        self._open_panel()
+        model = self.w.peak_table.selectionModel()
+        for row in range(4):
+            model.select(self.w.peak_table.model().index(row, 0),
+                         QItemSelectionModel.Select
+                         | QItemSelectionModel.Rows)
+        self.w.fit_selected_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(len(self.dock.fit_results), 4)
+        self.w.fit_table.item(0, 0).setCheckState(Qt.Unchecked)
+        QApplication.processEvents()
+        self.assertFalse(self.dock.fit_results[0].wh)
+        self.assertIn("3/4 根参与", self.w.wh_note_label.text())
+
+    def test_delete_fit_row(self):
+        self._open_panel()
+        self._fit_all()
+        self.w.fit_table.selectRow(0)
+        from xrd_toolkit.gui.fit_view import delete_fit_rows
+        self.assertEqual(delete_fit_rows(self.w), 1)
+        self.assertEqual(self.w.fit_table.rowCount(), 3)
+        self.assertEqual(len(self.dock.fit_results), 3)
+        self.assertIn("3/3 根参与", self.w.wh_note_label.text())
+
+    def test_curve_change_clears_fits(self):
+        self._open_panel()
+        self._fit_all()
+        tth = np.asarray(self.dock.last_tth, dtype=float)
+        y = np.asarray(self.dock.last_intensity, dtype=float) + 1.0
+        from xrd_toolkit.gui.plot.drawing import _draw_1d
+        _draw_1d(self.w, self.dock, tth, y)
+        QApplication.processEvents()
+        self.assertIsNone(self.dock.fit_results)
+        self.assertEqual(self.w.fit_table.rowCount(), 0)
+        self.assertFalse(self.w.peak_tabs.isTabEnabled(1))
+
+    def test_wh_view_dialog(self):
+        self._open_panel()
+        self._fit_all()
+        self.w.wh_view_btn.click()
+        QApplication.processEvents()
+        dlg = getattr(self.w, "_wh_dialog", None)
+        self.assertIsNotNone(dlg)
+        self.assertTrue(dlg.isVisible())
+        dlg.close()
+        QApplication.processEvents()
 
     def test_fit_requires_peaks(self):
         path = "data/fake_no_peaks.tif"
@@ -164,8 +214,7 @@ class TestFitView(unittest.TestCase):
         QApplication.processEvents()
         self.w.params["显示峰位"].setChecked(True)
         QApplication.processEvents()
-        self.w.fit_all_btn.click()
-        QApplication.processEvents()
+        self._fit_all()
         self.assertEqual(self.w.fit_table.rowCount(), 0)
 
 
