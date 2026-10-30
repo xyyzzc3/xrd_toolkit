@@ -9,8 +9,10 @@
 同一份。
 
 这里的数字块跟着单峰拟合结果自动更新：≥3 根峰就重算，<3 根提示再拟合。
-仪器展宽用一个**常数 FWHM**（°）近似扣除；要按角度变化的仪器曲线，
-用命令行的 LaB₆ 标样那条路。
+仪器展宽有两种扣法：**常数 FWHM**（°）近似，或直接用精修工作台
+[存为仪器基线] 的 LaB₆ zero/U/V/W/X/Y（按角度逐峰算 FWHM，与命令行
+`fit_peaks.py --instrument-from` 同口径）。基线波长和当前几何不符时
+自动回退常数并写明原因。
 """
 import time
 from pathlib import Path
@@ -18,6 +20,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QPushButton, QVBoxLayout)
 
@@ -27,6 +30,9 @@ from xrd_toolkit.gui.peak_view import _wavelength_for
 from xrd_toolkit.gui.tasks import user_error_text
 
 WH_INSTRUMENT_KEY = "W-H 仪器 FWHM (°)"
+WH_SOURCE_KEY = "W-H 仪器来源"
+WH_SOURCE_CONSTANT = "constant"
+WH_SOURCE_LAB6 = "lab6"
 
 
 def _fit_points(dock):
@@ -82,12 +88,93 @@ def _set_scherrer_label(window, text):
         label.setStyleSheet("color: gray;")
 
 
+def _instrument_baseline(window):
+    """精修工作台存的 LaB₆ 仪器基线；没开过工作台则看主窗口的副本。"""
+    workbench = getattr(window, "refine_editor", None)
+    inst = (getattr(workbench, "_instrument", None)
+            if workbench is not None else None)
+    if inst is None:
+        inst = getattr(window, "instrument_baseline", None)
+    return inst
+
+
+def _baseline_state(window, dock):
+    """（可用?, 给用户看的说明）：基线是否存在、波长是否和这张图一致。"""
+    inst = _instrument_baseline(window)
+    if not inst:
+        return False, ("未保存 LaB₆ 仪器基线：在 [精修] 工作台精修标样后"
+                       "点 [存为仪器基线]")
+    wavelength = _wavelength_for(dock) if dock is not None else None
+    if wavelength is None:
+        return False, "这张图没有几何配置，取不到波长"
+    stored = float(inst.get("wavelength", 0.0) or 0.0)
+    if abs(stored - float(wavelength)) > 0.01:
+        return False, (f"基线来自 λ {stored:.4f} Å，与当前 λ "
+                       f"{float(wavelength):.4f} Å 不符")
+    return True, "用 LaB₆ 基线按角度算每根峰的仪器 FWHM（U/V/W/X/Y）"
+
+
+def _baseline_fwhm(window, centers, wavelength):
+    """用保存的 LaB₆ 参数算逐峰仪器 FWHM（与 fit_peaks.py 同口径）。"""
+    inst = _instrument_baseline(window)
+    p = (inst or {}).get("params") or {}
+    try:
+        from xrd_toolkit.simulation import (
+            reflection_sig_gam, sig_gam_to_fwhm_eta)
+        sig, gam = reflection_sig_gam(
+            np.asarray(centers, dtype=float), float(wavelength),
+            u=float(p.get("u", 0.0) or 0.0),
+            v=float(p.get("v", 0.0) or 0.0),
+            w=float(p.get("w", 0.0) or 0.0),
+            x=float(p.get("x", 0.0) or 0.0),
+            y=float(p.get("y", 0.0) or 0.0),
+            size_um=1e4, mustrain=0.0)
+        fwhm, _eta = sig_gam_to_fwhm_eta(sig, gam)
+        return np.asarray(fwhm, dtype=float), "仪器 LaB₆ 基线"
+    except Exception as err:                       # noqa: BLE001
+        return None, f"LaB₆ 基线算不出仪器宽度：{user_error_text(err)}"
+
+
 def _instrument_fwhm(window, dock, centers, wavelength):
-    """逐峰仪器 FWHM（度）；None = 不扣仪器。"""
+    """逐峰仪器 FWHM（度）与说明；None = 不扣仪器。"""
     const = float(_panel_param(window, dock, WH_INSTRUMENT_KEY, 0.0) or 0.0)
-    if const > 0:
-        return np.full(np.size(centers), const), f"仪器 {const:g}°"
+    const_arr = np.full(np.size(centers), const) if const > 0 else None
+    source = str(_panel_param(window, dock, WH_SOURCE_KEY, WH_SOURCE_CONSTANT))
+    if source == WH_SOURCE_LAB6:
+        ok, why = _baseline_state(window, dock)
+        if ok:
+            fwhm, note = _baseline_fwhm(window, centers, wavelength)
+            if fwhm is not None:
+                return fwhm, note
+            why = note
+        if const_arr is not None:
+            return const_arr, f"{why}，改用常数 {const:g}°"
+        return None, f"{why}，未扣仪器"
+    if const_arr is not None:
+        return const_arr, f"仪器 {const:g}°"
     return None, ""
+
+
+def _sync_source_combo(window, dock):
+    """LaB₆ 项只在基线存在且波长对得上时可选；否则自动退回常数。"""
+    combo = getattr(window, "wh_source_combo", None)
+    if combo is None:
+        return
+    ok, tip = _baseline_state(window, dock)
+    model = combo.model()
+    item = model.item(1) if hasattr(model, "item") else None
+    if item is not None:
+        item.setEnabled(ok)
+    combo.setItemData(1, tip, Qt.ToolTipRole)
+    if not ok and combo.currentData() == WH_SOURCE_LAB6:
+        combo.blockSignals(True)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        if dock is not None and getattr(dock, "params_snapshot", None) is not None:
+            dock.params_snapshot[WH_SOURCE_KEY] = WH_SOURCE_CONSTANT
+    spin = (getattr(window, "params", {}) or {}).get(WH_INSTRUMENT_KEY)
+    if spin is not None:
+        spin.setEnabled(combo.currentData() == WH_SOURCE_CONSTANT)
 
 
 def _scherrer_text(centers, fwhms, wavelength, instrument):
@@ -162,6 +249,7 @@ def compute_wh(window, dock):
 
 def refresh_wh(window, dock):
     """拟合结果/焦点/仪器值变了就重算；<3 根勾选峰时清空数字。"""
+    _sync_source_combo(window, dock)
     save_btn = getattr(window, "wh_save_btn", None)
     view_btn = getattr(window, "wh_view_btn", None)
     if dock is None or not getattr(dock, "fit_results", None):

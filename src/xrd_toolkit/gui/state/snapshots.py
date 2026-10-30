@@ -35,6 +35,10 @@ _DISPLAY_DEFAULTS = {
     "拟合半窗 (°)": 0.12,
     "拟合背景": "linear",
     "拟合全部叠加": False,
+    # W-H 仪器（2026-10-31）：常数 FWHM 或 [精修] 存下的 LaB₆ 基线；
+    # 与拟合参数一样按面板各记各的（快照优先，见 _panel_param）
+    "W-H 仪器 FWHM (°)": 0.0,
+    "W-H 仪器来源": "constant",
     # 对比归一化 = 模式（global 全图最强峰 / file 指定数据 /
     # off 不归一化，默认 off = 原样画原始强度；"各自最强峰"已删，
     # 见 _compare_shown_curves 的说明），

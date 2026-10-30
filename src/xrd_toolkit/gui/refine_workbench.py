@@ -516,6 +516,8 @@ class RefineWorkbench(QWidget):
             "params": params,
             "wavelength": float(self._last_wavelength or 0.0),
         }
+        # 1D 页的 W-H 也读这份基线（工作台关掉后窗口属性还在）
+        self.main.instrument_baseline = self._instrument
         self._update_instrument_label()
         self.chk_fix_instrument.setEnabled(True)
         self.chk_fix_instrument.setChecked(True)

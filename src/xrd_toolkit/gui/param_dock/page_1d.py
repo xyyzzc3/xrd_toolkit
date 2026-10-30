@@ -18,8 +18,8 @@ from xrd_toolkit.gui.peak_view import (
 from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
 from xrd_toolkit.gui.wh_view import (
-    WH_INSTRUMENT_KEY, dock_for_wh, refresh_wh, save_wh_plot,
-    show_wh_dialog)
+    WH_INSTRUMENT_KEY, WH_SOURCE_CONSTANT, WH_SOURCE_KEY, WH_SOURCE_LAB6,
+    dock_for_wh, refresh_wh, save_wh_plot, show_wh_dialog)
 
 
 def build_1d_page(window, form_1d, btns_1d):
@@ -307,8 +307,9 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_lay.addLayout(fit_row3)
 
     # ── Williamson–Hall（2026-10-30）：单峰拟合结果的数字块 ──
-    # 跟着 fit_results 自动重算（见 wh_view.refresh_wh）；仪器展宽用
-    # 常数 FWHM 近似，按角度变化的仪器曲线走命令行 LaB₆ 标样那条路。
+    # 跟着 fit_results 自动重算（见 wh_view.refresh_wh）。仪器展宽两种：
+    # 常数 FWHM，或 [精修] 工作台存下的 LaB₆ 基线（按角度逐峰算，
+    # 2026-10-31）；基线缺失/波长不符时自动退回常数并写明原因。
     wh_line = QFrame()
     wh_line.setFixedHeight(1)
     wh_line.setStyleSheet("background-color: #d5dae0;")
@@ -323,11 +324,24 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_instr.setToolTip("仪器展宽的常数近似；0 = 不扣。要按角度变化请用"
                         "命令行的 LaB₆ 标样")
     window.params[WH_INSTRUMENT_KEY] = wh_instr
+    wh_source = QComboBox()
+    wh_source.addItem("常数 FWHM", WH_SOURCE_CONSTANT)
+    wh_source.addItem("LaB₆ 基线", WH_SOURCE_LAB6)
+    wh_source.setToolTip(
+        "常数：所有峰扣同一个 FWHM；LaB₆ 基线：用 [精修] 工作台保存的"
+        " zero/U/V/W/X/Y 按角度逐峰算（与命令行 --instrument-from 同口径）")
+    window.params[WH_SOURCE_KEY] = wh_source
+    window.wh_source_combo = wh_source
     wh_row = QHBoxLayout()
     wh_row.setContentsMargins(0, 0, 0, 0)
     wh_row.setSpacing(4)
-    wh_row.addWidget(QLabel("仪器 FWHM"))
-    wh_row.addWidget(wh_instr, 1)
+    wh_row.addWidget(QLabel("仪器"))
+    wh_row.addWidget(wh_source, 1)
+    wh_instr_row = QHBoxLayout()
+    wh_instr_row.setContentsMargins(0, 0, 0, 0)
+    wh_instr_row.setSpacing(4)
+    wh_instr_row.addWidget(QLabel("常数 FWHM"))
+    wh_instr_row.addWidget(wh_instr, 1)
     wh_d_label = QLabel("D = —")
     wh_e_label = QLabel("ε = —")
     wh_d_label.setStyleSheet("font-weight: 600;")
@@ -368,15 +382,29 @@ def build_1d_page(window, form_1d, btns_1d):
         # 仪器值按面板各记各的：先写回焦点面板的快照，再重算 W-H。
         # 只连 refresh_wh 的话，_panel_param 会一直读到开图时快照里的
         # 旧值（0），旋钮看起来没反应。
+        if getattr(window, "_param_replaying", False) \
+                or getattr(window, "_param_box_sync", False):
+            return
         dock = dock_for_wh(window)
         if dock is not None and getattr(dock, "params_snapshot", None) is not None:
             dock.params_snapshot[WH_INSTRUMENT_KEY] = float(wh_instr.value())
         refresh_wh(window, dock)
 
+    def _wh_source_changed(_index=0):
+        if getattr(window, "_param_replaying", False) \
+                or getattr(window, "_param_box_sync", False):
+            return
+        dock = dock_for_wh(window)
+        if dock is not None and getattr(dock, "params_snapshot", None) is not None:
+            dock.params_snapshot[WH_SOURCE_KEY] = wh_source.currentData()
+        refresh_wh(window, dock)
+
     wh_instr.valueChanged.connect(_wh_instrument_changed)
+    wh_source.currentIndexChanged.connect(_wh_source_changed)
     peak_lay.addWidget(wh_line)
     peak_lay.addWidget(wh_title)
     peak_lay.addLayout(wh_row)
+    peak_lay.addLayout(wh_instr_row)
     peak_lay.addLayout(wh_vals)
     peak_lay.addWidget(wh_scherrer)
     peak_lay.addWidget(wh_note)

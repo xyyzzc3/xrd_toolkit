@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -136,6 +137,35 @@ class TestFitView(unittest.TestCase):
         self.w.fit_table.item(0, 0).setCheckState(Qt.Unchecked)
         QApplication.processEvents()
         self.assertIn("3 根", self.w.wh_scherrer_label.text())
+
+    def test_wh_uses_saved_lab6_baseline(self):
+        self._open_panel()
+        self._fit_all()
+        from xrd_toolkit.gui.peak_view import _wavelength_for
+        from xrd_toolkit.gui.wh_view import refresh_wh
+        lam = _wavelength_for(self.dock)
+        self.w.refine_editor = SimpleNamespace(_instrument={
+            "params": {"zero": 0.0, "u": 0.0, "v": 0.0,
+                       "w": 1.8, "x": 0.0, "y": 0.0},
+            "wavelength": lam})
+        refresh_wh(self.w, self.dock)
+        QApplication.processEvents()
+        combo = self.w.params["W-H 仪器来源"]
+        self.assertTrue(combo.model().item(1).isEnabled())
+        before = np.asarray(self.dock.wh_result.beta_sample_deg).copy()
+        combo.setCurrentIndex(1)
+        QApplication.processEvents()
+        after = np.asarray(self.dock.wh_result.beta_sample_deg)
+        self.assertTrue(np.all(after <= before + 1e-12))
+        self.assertIn("LaB₆ 基线", self.w.wh_note_label.text())
+        self.assertNotIn("未扣仪器", self.w.wh_scherrer_label.text())
+
+        # 波长不符：不可选，自动退回常数
+        self.w.refine_editor._instrument["wavelength"] = lam + 0.5
+        refresh_wh(self.w, self.dock)
+        QApplication.processEvents()
+        self.assertFalse(combo.model().item(1).isEnabled())
+        self.assertEqual(combo.currentData(), "constant")
 
     def test_overlay_all_draws_every_fit(self):
         self._open_panel()
