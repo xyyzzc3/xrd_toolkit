@@ -345,6 +345,28 @@ class RefineWorkbench(QWidget):
         if idx >= 0:
             self.cif_combo.setCurrentIndex(idx)
 
+    def set_source(self, curve_key=None, cif_path=None):
+        """外部入口（物相工作台的 [送去精修]）预选曲线与 CIF。
+
+        曲线按面板 key 找；CIF 不在当前列表里就加进「用户打开过的」
+        那一份再刷新——物相工作台可以用任意相库目录。
+        """
+        if curve_key:
+            idx = self.curve_combo.findData(curve_key)
+            if idx >= 0:
+                self.curve_combo.setCurrentIndex(idx)
+        if cif_path:
+            path = Path(cif_path)
+            idx = self.cif_combo.findData(str(path))
+            if idx < 0:
+                if path not in self._extra_cifs:
+                    self._extra_cifs.append(path)
+                self.refresh_cifs()
+                idx = self.cif_combo.findData(str(path))
+            if idx >= 0:
+                self.cif_combo.setCurrentIndex(idx)
+        self._set_status("已选好曲线与结构，点 [开始精修]")
+
     def _open_cif(self):
         start = paths.ROOT / "data" / "structures"
         path, _ = QFileDialog.getOpenFileName(

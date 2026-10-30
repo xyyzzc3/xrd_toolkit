@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from pymatgen.core import Lattice, Structure  # noqa: E402
 
 from xrd_toolkit.simulation import core  # noqa: E402
+from xrd_toolkit.simulation import phase_search as ps  # noqa: E402
 import analyze_pattern as ap  # noqa: E402
 
 CU_KA = 1.5406
@@ -27,14 +28,14 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
         cls.lifepo4 = ap.STRUCT / "LiFePO4_olivine.cif"
 
     def test_phase_library_scans_directory_and_skips_al_substrate(self):
-        names = [p.name for p in ap.phase_library(ap.STRUCT)]
+        names = [p.name for p in ps.phase_library(ap.STRUCT)]
         self.assertIn("LiFePO4_olivine.cif", names)
         self.assertIn("LaB6_NIST660c.cif", names)
         self.assertNotIn("Al_metal.cif", names,
                          "Al 只作第二相，不应进入主相候选")
 
     def test_phase_candidates_filters_by_allowed_elements(self):
-        candidates = ap.phase_candidates(
+        candidates = ps.phase_candidates(
             ap.STRUCT, ["Li", "Mn", "Fe", "P", "O"])
         names = [path.name for path, _st in candidates]
         self.assertIn("LiFePO4_olivine.cif", names)
@@ -63,14 +64,15 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
             scaled, wavelength=CU_KA, two_theta_range=(10.0, 80.0), nmax=10)
         inten = inten / inten.max()
         obs = tth[inten >= 0.02]
-        score = ap.score_phase(obs, self.lifepo4, CU_KA, 10.0, 80.0, 0.0)
+        score = ps.score_phase(obs, base, CU_KA, 10.0, 80.0, 0.0)
         self.assertIsNotNone(score)
         _sc, scale, _cov, _pur = score
         self.assertAlmostEqual(scale, 1.01, delta=0.012)
 
     def test_al_substrate_detected(self):
-        al_t, al_i = ap.theoretical_positions(
-            ap.AL_CIF, 0.1223, 1.0, 8.0, 1.0, 0.0)
+        al_st = core.load_structure(str(ap.AL_CIF))
+        al_d0, al_i = ps.reflection_data(al_st, 0.1223, 1.0, 8.0)
+        al_t, al_i = ps.scaled_positions(al_d0, al_i, 0.1223, 1.0, 0.0)
         self.assertGreater(len(al_t), 0)
         j = int(np.argmax(al_i))
         self.assertGreater(al_i[j], 0.9)
@@ -78,6 +80,19 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
             al_t, al_i, 0.1223, 1.0, 8.0, 0.0, self.lifepo4, 1.01)
         self.assertTrue(ranges)
         self.assertTrue(any(lo <= al_t[j] <= hi for lo, hi in ranges))
+
+    def test_screen_phases_ranks_lab6_first(self):
+        lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
+        _, _, tth, inten = core.reflection_table(
+            lab6, wavelength=CU_KA, two_theta_range=(10.0, 80.0), nmax=10)
+        inten = inten / inten.max()
+        obs = tth[inten >= 0.02]
+        matches = ps.screen_phases(obs, ap.STRUCT, CU_KA, 10.0, 80.0, 0.0)
+        self.assertTrue(matches)
+        # 库里有 LaB6 的两份 CIF（1000055 与 NIST660c），分数相同，
+        # 谁是第一取决于文件名；只要求认对物相。
+        self.assertTrue(matches[0].path.name.startswith("LaB6"),
+                        matches[0].path.name)
 
 
 if __name__ == "__main__":

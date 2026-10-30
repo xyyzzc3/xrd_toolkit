@@ -463,6 +463,9 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     refine = getattr(window, "refine_btn", None)
     if refine is not None and refine.isChecked():
         refine.setChecked(False)
+    phase = getattr(window, "phase_btn", None)
+    if phase is not None and phase.isChecked():
+        phase.setChecked(False)
     window._mask_active = True
     window._mask_prev_entrance = getattr(window, "_last_entrance", None)
     window._mask_dock_saved = {
@@ -566,6 +569,9 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     mask = getattr(window, "mask_btn", None)
     if mask is not None and mask.isChecked():
         mask.setChecked(False)
+    phase = getattr(window, "phase_btn", None)
+    if phase is not None and phase.isChecked():
+        phase.setChecked(False)
     window._refine_active = True
     window._refine_prev_entrance = getattr(window, "_last_entrance", None)
     window._refine_dock_saved = {
@@ -611,17 +617,102 @@ def _on_refine_mode(window: QMainWindow, on: bool) -> None:
         _exit_refine_mode(window)
 
 
+_PHASE_TIP = ("物相工作台：选一条 1D 曲线，对相库里的 CIF 打峰位匹配分")
+
+
+def _open_phase_workbench(window: QMainWindow) -> None:
+    """打开/前置中央物相工作台（工具栏 [物相]）。"""
+    from xrd_toolkit.gui.phase_workbench import (
+        PhaseWorkbench, _PhaseSubWindow)
+    if getattr(window, "phase_editor", None) is None:
+        window.phase_editor = PhaseWorkbench(window)
+    dock = getattr(window, "phase_dock", None)
+    if dock is None:
+        dock = _PhaseSubWindow(window)
+        dock.setObjectName("phase_workbench")
+        dock.setWidget(window.phase_editor)
+        window.mdi.addSubWindow(dock)
+        window.phase_dock = dock
+        dock.setWindowTitle("物相工作台")
+        area = window.mdi.viewport().size()
+        dock.resize(max(720, area.width() - 40),
+                    max(520, area.height() - 40))
+        dock.move(12, 12)
+    window.phase_editor.refresh_curves()
+    dock.show()
+    dock.raise_()
+
+
+def _enter_phase_mode(window: QMainWindow) -> None:
+    """进入物相工作台：收起参数/日志坞，中央换成物相工作台。"""
+    if getattr(window, "_phase_active", False):
+        return
+    # 四种工作台互斥：从校准、Mask 或精修进来先把它们退掉
+    calib = getattr(window, "calib_btn", None)
+    if calib is not None and calib.isChecked():
+        calib.setChecked(False)
+    mask = getattr(window, "mask_btn", None)
+    if mask is not None and mask.isChecked():
+        mask.setChecked(False)
+    refine = getattr(window, "refine_btn", None)
+    if refine is not None and refine.isChecked():
+        refine.setChecked(False)
+    window._phase_active = True
+    window._phase_prev_entrance = getattr(window, "_last_entrance", None)
+    window._phase_dock_saved = {
+        name: window._dock_intent.get(name, False)
+        for name in ("参数", "日志")}
+    window._dock_intent["参数"] = False
+    window._dock_intent["日志"] = False
+    _resync_docks(window)
+    _highlight_entrance(window, None)
+    window.mode_label.setText("物相模式")
+    _open_phase_workbench(window)
+    window.phase_btn.setText("退出物相")
+    window.phase_btn.setToolTip("退出物相工作台，回到分析模式")
+    _log(window, "进入物相模式")
+
+
+def _exit_phase_mode(window: QMainWindow) -> None:
+    """退出物相工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
+    if not getattr(window, "_phase_active", False):
+        return
+    window._phase_active = False
+    dock = getattr(window, "phase_dock", None)
+    if dock is not None:
+        dock.hide()
+    saved = getattr(window, "_phase_dock_saved", None) or {}
+    for name, want in saved.items():
+        window._dock_intent[name] = want
+    window._phase_dock_saved = None
+    _resync_docks(window)
+    prev = getattr(window, "_phase_prev_entrance", None)
+    if prev is not None:
+        _highlight_entrance(window, prev)
+    window.mode_label.setText("分析模式")
+    window.phase_btn.setText("物相")
+    window.phase_btn.setToolTip(_PHASE_TIP)
+    _log(window, "退出物相模式")
+
+
+def _on_phase_mode(window: QMainWindow, on: bool) -> None:
+    if on:
+        _enter_phase_mode(window)
+    else:
+        _exit_phase_mode(window)
+
+
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + [Mask] / [精修] 工作台 + 面板开关 + [帮助]。
+    """工具栏 = 五个入口 + [Mask] / [精修] / [物相] 工作台 + 面板开关 + [帮助]。
 
     分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask，
     2026-10-30 加 精修）：
-    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修] │
+    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修][物相] │
     [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性设置"（校准 /
     mask），中间四个是每天干活的循环，按数据流排：**原图**（直接
     看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
     （链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
-    （精修），与 Mask 一样开中央子窗口，不占参数页。
+    （精修 / 物相），与 Mask 一样开中央子窗口，不占参数页。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
     那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
@@ -684,6 +775,16 @@ def _build_toolbar(window: QMainWindow) -> None:
     btn_refine.toggled.connect(lambda on: _on_refine_mode(window, on))
     tb.addWidget(btn_refine)
     window.refine_btn = btn_refine
+
+    window._phase_active = False
+    window._phase_prev_entrance = None
+    window._phase_dock_saved = None
+    btn_phase = QPushButton("物相")
+    btn_phase.setCheckable(True)
+    btn_phase.setToolTip(_PHASE_TIP)
+    btn_phase.toggled.connect(lambda on: _on_phase_mode(window, on))
+    tb.addWidget(btn_phase)
+    window.phase_btn = btn_phase
 
     # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
     # 文字与提示由 _highlight_entrance 统一换（选中时变「退出校准」）
@@ -780,6 +881,9 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     refine = getattr(window, "refine_btn", None)
     if refine is not None and refine.isChecked():
         refine.setChecked(False)
+    phase = getattr(window, "phase_btn", None)
+    if phase is not None and phase.isChecked():
+        phase.setChecked(False)
     if name == "校准" and not window.calib_btn.isChecked():
         return                      # 这一次点击是"退出"，已由 toggled 处理
     if name != "校准" and not window.entrance_buttons[name].isChecked():
@@ -861,6 +965,9 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
         refine = getattr(window, "refine_btn", None)
         if refine is not None and refine.isChecked():
             refine.setChecked(False)            # 校准与精修互斥
+        phase = getattr(window, "phase_btn", None)
+        if phase is not None and phase.isChecked():
+            phase.setChecked(False)             # 校准与物相互斥
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
         window.param_stack.setCurrentIndex(window.PARAM_PAGES["校准"])
@@ -959,10 +1066,12 @@ def create_window() -> QMainWindow:
     # Mask 后的 2D 产物（services/masked2d），不是窗口级开关。
     window.mask_editor = None
     window.mask_dock = None
-    # 精修工作台内容与中央子窗口（2026-10-30）：与 Mask 同一套生命周期，
-    # 子窗口关闭只隐藏，选中的曲线/CIF/上一次结果不销毁。
+    # 精修 / 物相工作台内容与中央子窗口（2026-10-30）：与 Mask 同一套
+    # 生命周期，子窗口关闭只隐藏，选中的曲线/CIF/上一次结果不销毁。
     window.refine_editor = None
     window.refine_dock = None
+    window.phase_editor = None
+    window.phase_dock = None
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：

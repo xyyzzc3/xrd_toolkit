@@ -172,6 +172,20 @@
 - 新模块 `gui/refine_workbench.py`；测试 `tests/test_gui_refine.py`
   （4 条：进出与坞恢复、三种工作台互斥、结构列表、合成 LaB₆ 真拟合）。
 
+### 物相工作台（2026-10-30）
+
+- **工具栏新增 [物相]**：中央工作台（与 Mask、精修同款），选一条 1D 曲线
+  + 相库目录 → [开始筛相]（后台线程：寻峰 → 对目录里每张 CIF 粗扫晶胞
+  缩放打分）→ 候选表按 score 排序；点一行把该相的理论峰位叠在观测曲线上。
+- **元素剪枝与容差**：左栏可填允许元素（如 `Li Mn Fe P O`）先排掉不可能
+  的化学体系；显著度/最小峰距控制寻峰，匹配容差控制峰位允许偏差。
+- **[送去精修]**：把当前曲线和选中的 CIF 一起带进精修工作台，两边的
+  下拉框都预选好。四种工作台（校准 / Mask / 精修 / 物相）互斥。
+- **打分逻辑抽到 `simulation/phase_search.py`**：命令行
+  `scripts/analyze_pattern.py` 与界面共用同一套 coverage + 0.2 × purity；
+  相库扫描、元素剪枝、同分先验都在这里。新增 `tests/test_gui_phase.py`
+  与 `tests/test_analyze.py` 里的 `screen_phases` 用例。
+
 ### 相筛选（2026-10-30）
 
 - **`scripts/analyze_pattern.py` 不再写死四个橄榄石**：`--lib` 指向的
