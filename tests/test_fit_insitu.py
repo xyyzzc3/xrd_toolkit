@@ -117,6 +117,40 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertIn("strict convergence: 50.0%", text)
 
 
+class TestInSituBatch(unittest.TestCase):
+    def _batch(self):
+        from xrd_toolkit.simulation import insitu
+        rich = SimpleNamespace(
+            lattice=SimpleNamespace(abc=(10.35, 6.02, 4.70)))
+        poor = SimpleNamespace(
+            lattice=SimpleNamespace(abc=(10.17, 5.82, 4.78)))
+        return insitu.InSituBatch(rich=rich, poor=poor, al=None, geom={},
+                                  lam=1.0, instrument=None, mask=None)
+
+    def test_seed_inheritance_and_high_rwp(self):
+        from unittest import mock
+        from xrd_toolkit.simulation import insitu
+        batch = self._batch()
+        timers = {"load": 0.1, "integrate": 0.2, "bg": 0.0,
+                  "fit": 1.0, "total": 1.3}
+        with mock.patch.object(insitu, "_fit_one",
+                               return_value=(_result(), timers)):
+            row = batch.fit_frame(Path("frame_001.tif"))
+        self.assertEqual(row["frame"], 1)
+        self.assertTrue(row["usable"])
+        self.assertEqual(len(batch.fitted), 1)
+        self.assertAlmostEqual(batch.seed["rich"][0], 10.35)
+
+        bad = _result(rwp=50.0)
+        with mock.patch.object(insitu, "_fit_one",
+                               return_value=(bad, timers)):
+            row2 = batch.fit_frame(Path("frame_002.tif"))
+        self.assertIn("high_rwp", row2["status"])
+        self.assertFalse(row2["usable"])
+        self.assertAlmostEqual(batch.seed["rich"][0], 10.35,
+                               msg="坏帧不许改下一帧的种子")
+
+
 class TestStatus(unittest.TestCase):
     def setUp(self):
         self.seed = {"rich": (10.35, 6.02, 4.70),

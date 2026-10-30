@@ -204,6 +204,25 @@
   相库扫描、元素剪枝、同分先验都在这里。新增 `tests/test_gui_phase.py`
   与 `tests/test_analyze.py` 里的 `screen_phases` 用例。
 
+### 原位工作台（2026-10-30）
+
+- **工具栏新增 [原位]**：把 `scripts/fit_insitu.py` 的 81 帧三相批处理搬进
+  界面。选帧目录（默认 `~/Desktop/lmfpdata`）、mask（默认
+  `outputs/masks/lmfp1_lab6_mask.npy`，没有就按不遮）、富锂/贫锂/Al 三张
+  CIF、2θ 范围/点数、最大 Rwp、首帧/后续帧迭代与帧数上限。
+- **逐帧链式后台跑**：先后台准备（读三相 CIF + LaB₆ 定仪器），随后每帧
+  一个后台任务；完成后结果进表、趋势图更新、CSV 增量写盘。`[停止]` 在
+  当前帧算完后停，已完成的帧保留。
+- **结果**：表列帧号/文件/状态/Rwp/f_rich/两相 a、c/拟合耗时；趋势图上面
+  是相分数（带 esd）、下面是 Rwp；结束时写 `insitu_fit.csv` 与
+  `fit_summary.txt`，趋势图可另存。异常帧标红/标黄但不中断。
+- **引擎抽到 `simulation/insitu.py`**：命令行与界面共用 `InSituBatch`
+  （种子继承、异常判据、相分数口径），`scripts/fit_insitu.py` 只剩参数与
+  出图。实测单帧 Rwp 2.115%、f_rich 0.917，与命令行逐位一致。
+- 新模块 `gui/insitu_workbench.py`；测试 `tests/test_gui_insitu.py`
+  （进出与五种工作台互斥、假 batch 逐帧编排 + CSV/摘要）与
+  `tests/test_fit_insitu.py` 的 `InSituBatch` 用例。
+
 ### 相筛选（2026-10-30）
 
 - **`scripts/analyze_pattern.py` 不再写死四个橄榄石**：`--lib` 指向的

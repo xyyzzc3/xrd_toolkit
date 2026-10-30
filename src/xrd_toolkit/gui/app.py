@@ -424,6 +424,26 @@ def _build_menu(window: QMainWindow) -> None:
 _MASK_TIP = ("Mask 工作台：画/自动遮罩 beamstop/模块缝/坏点，"
              "生成 Mask 后的 2D 数据（原图 + mask），再去做 1D")
 
+# 所有工作台按钮（校准 + 四个中央工作台）：同一时刻只许亮一个。
+# 新增工作台只要把按钮命名成 <name>_btn 并进这张表。
+_WORKBENCH_BUTTONS = ("calib", "mask", "refine", "phase", "insitu")
+
+
+def _exit_other_workbenches(window: QMainWindow, keep, *,
+                            include_calib=True) -> None:
+    """退出除 keep 外的所有工作台（再点按钮走各自的 toggled → 退出流程）。
+
+    include_calib=False 只给 `_switch_entrance` 用：那条路要先判断
+    "用户点的是不是当前已亮着的入口"，而退出校准会走 `_clear_entrance`
+    把刚点的入口按钮也熄灭——先退校准会把这次点击误判成"再点一次退出"。
+    """
+    for name in _WORKBENCH_BUTTONS:
+        if name == keep or (name == "calib" and not include_calib):
+            continue
+        btn = getattr(window, f"{name}_btn", None)
+        if btn is not None and btn.isChecked():
+            btn.setChecked(False)
+
 
 def _open_mask_workbench(window: QMainWindow) -> None:
     """打开/前置中央 Mask 工作台（工具栏 [Mask]）。
@@ -455,17 +475,8 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     """进入 Mask 工作台：收起参数/日志坞，中央换成 Mask 工作台。"""
     if getattr(window, "_mask_active", False):
         return
-    # 校准、Mask、精修三种工作台互斥：从校准进来先把校准退掉（它会
-    # 恢复分析态）；从精修进来先把精修退掉（同理）
-    calib = getattr(window, "calib_btn", None)
-    if calib is not None and calib.isChecked():
-        calib.setChecked(False)
-    refine = getattr(window, "refine_btn", None)
-    if refine is not None and refine.isChecked():
-        refine.setChecked(False)
-    phase = getattr(window, "phase_btn", None)
-    if phase is not None and phase.isChecked():
-        phase.setChecked(False)
+    # 五种工作台互斥：先把校准/精修/物相/原位退掉（各自恢复自己的状态）
+    _exit_other_workbenches(window, "mask")
     window._mask_active = True
     window._mask_prev_entrance = getattr(window, "_last_entrance", None)
     window._mask_dock_saved = {
@@ -562,16 +573,8 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     """进入精修工作台：收起参数/日志坞，中央换成精修工作台。"""
     if getattr(window, "_refine_active", False):
         return
-    # 三种工作台互斥：从校准或 Mask 进来先把它们退掉
-    calib = getattr(window, "calib_btn", None)
-    if calib is not None and calib.isChecked():
-        calib.setChecked(False)
-    mask = getattr(window, "mask_btn", None)
-    if mask is not None and mask.isChecked():
-        mask.setChecked(False)
-    phase = getattr(window, "phase_btn", None)
-    if phase is not None and phase.isChecked():
-        phase.setChecked(False)
+    # 五种工作台互斥：先把校准/Mask/物相/原位退掉
+    _exit_other_workbenches(window, "refine")
     window._refine_active = True
     window._refine_prev_entrance = getattr(window, "_last_entrance", None)
     window._refine_dock_saved = {
@@ -647,16 +650,8 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     """进入物相工作台：收起参数/日志坞，中央换成物相工作台。"""
     if getattr(window, "_phase_active", False):
         return
-    # 四种工作台互斥：从校准、Mask 或精修进来先把它们退掉
-    calib = getattr(window, "calib_btn", None)
-    if calib is not None and calib.isChecked():
-        calib.setChecked(False)
-    mask = getattr(window, "mask_btn", None)
-    if mask is not None and mask.isChecked():
-        mask.setChecked(False)
-    refine = getattr(window, "refine_btn", None)
-    if refine is not None and refine.isChecked():
-        refine.setChecked(False)
+    # 五种工作台互斥：先把校准/Mask/精修/原位退掉
+    _exit_other_workbenches(window, "phase")
     window._phase_active = True
     window._phase_prev_entrance = getattr(window, "_last_entrance", None)
     window._phase_dock_saved = {
@@ -702,17 +697,93 @@ def _on_phase_mode(window: QMainWindow, on: bool) -> None:
         _exit_phase_mode(window)
 
 
+_INSITU_TIP = ("原位工作台：LMFP 三相批量精修（富锂 / 贫锂 / Al），"
+               "逐帧继承种子，结果表 + 趋势图")
+
+
+def _open_insitu_workbench(window: QMainWindow) -> None:
+    """打开/前置中央原位工作台（工具栏 [原位]）。"""
+    from xrd_toolkit.gui.insitu_workbench import (
+        InSituWorkbench, _InSituSubWindow)
+    if getattr(window, "insitu_editor", None) is None:
+        window.insitu_editor = InSituWorkbench(window)
+    dock = getattr(window, "insitu_dock", None)
+    if dock is None:
+        dock = _InSituSubWindow(window)
+        dock.setObjectName("insitu_workbench")
+        dock.setWidget(window.insitu_editor)
+        window.mdi.addSubWindow(dock)
+        window.insitu_dock = dock
+        dock.setWindowTitle("原位工作台")
+        area = window.mdi.viewport().size()
+        dock.resize(max(720, area.width() - 40),
+                    max(520, area.height() - 40))
+        dock.move(12, 12)
+    dock.show()
+    dock.raise_()
+
+
+def _enter_insitu_mode(window: QMainWindow) -> None:
+    """进入原位工作台：收起参数/日志坞，中央换成原位工作台。"""
+    if getattr(window, "_insitu_active", False):
+        return
+    _exit_other_workbenches(window, "insitu")
+    window._insitu_active = True
+    window._insitu_prev_entrance = getattr(window, "_last_entrance", None)
+    window._insitu_dock_saved = {
+        name: window._dock_intent.get(name, False)
+        for name in ("参数", "日志")}
+    window._dock_intent["参数"] = False
+    window._dock_intent["日志"] = False
+    _resync_docks(window)
+    _highlight_entrance(window, None)
+    window.mode_label.setText("原位模式")
+    _open_insitu_workbench(window)
+    window.insitu_btn.setText("退出原位")
+    window.insitu_btn.setToolTip("退出原位工作台，回到分析模式")
+    _log(window, "进入原位模式")
+
+
+def _exit_insitu_mode(window: QMainWindow) -> None:
+    """退出原位工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
+    if not getattr(window, "_insitu_active", False):
+        return
+    window._insitu_active = False
+    dock = getattr(window, "insitu_dock", None)
+    if dock is not None:
+        dock.hide()
+    saved = getattr(window, "_insitu_dock_saved", None) or {}
+    for name, want in saved.items():
+        window._dock_intent[name] = want
+    window._insitu_dock_saved = None
+    _resync_docks(window)
+    prev = getattr(window, "_insitu_prev_entrance", None)
+    if prev is not None:
+        _highlight_entrance(window, prev)
+    window.mode_label.setText("分析模式")
+    window.insitu_btn.setText("原位")
+    window.insitu_btn.setToolTip(_INSITU_TIP)
+    _log(window, "退出原位模式")
+
+
+def _on_insitu_mode(window: QMainWindow, on: bool) -> None:
+    if on:
+        _enter_insitu_mode(window)
+    else:
+        _exit_insitu_mode(window)
+
+
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + [Mask] / [精修] / [物相] 工作台 + 面板开关 + [帮助]。
+    """工具栏 = 五个入口 + [Mask] / [精修] / [物相] / [原位] 工作台 + 面板开关 + [帮助]。
 
     分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask，
     2026-10-30 加 精修）：
-    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修][物相] │
+    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修][物相][原位] │
     [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性设置"（校准 /
     mask），中间四个是每天干活的循环，按数据流排：**原图**（直接
     看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
     （链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
-    （精修 / 物相），与 Mask 一样开中央子窗口，不占参数页。
+    （精修 / 物相 / 原位），与 Mask 一样开中央子窗口，不占参数页。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
     那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
@@ -785,6 +856,16 @@ def _build_toolbar(window: QMainWindow) -> None:
     btn_phase.toggled.connect(lambda on: _on_phase_mode(window, on))
     tb.addWidget(btn_phase)
     window.phase_btn = btn_phase
+
+    window._insitu_active = False
+    window._insitu_prev_entrance = None
+    window._insitu_dock_saved = None
+    btn_insitu = QPushButton("原位")
+    btn_insitu.setCheckable(True)
+    btn_insitu.setToolTip(_INSITU_TIP)
+    btn_insitu.toggled.connect(lambda on: _on_insitu_mode(window, on))
+    tb.addWidget(btn_insitu)
+    window.insitu_btn = btn_insitu
 
     # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
     # 文字与提示由 _highlight_entrance 统一换（选中时变「退出校准」）
@@ -875,15 +956,11 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
-    # 点分析入口 = 离开 Mask / 精修工作台（先退出，再翻页）
-    if getattr(window, "_mask_active", False) and name != "校准":
-        window.mask_btn.setChecked(False)
-    refine = getattr(window, "refine_btn", None)
-    if refine is not None and refine.isChecked():
-        refine.setChecked(False)
-    phase = getattr(window, "phase_btn", None)
-    if phase is not None and phase.isChecked():
-        phase.setChecked(False)
+    # 点分析入口 = 离开 Mask/精修/物相/原位；**校准留到后面**再退——
+    # 先退校准会走 _clear_entrance，把刚点的入口按钮也熄灭，下一条
+    # 判断会误以为用户是在"再点一次退出"。
+    _exit_other_workbenches(
+        window, "calib" if name == "校准" else None, include_calib=False)
     if name == "校准" and not window.calib_btn.isChecked():
         return                      # 这一次点击是"退出"，已由 toggled 处理
     if name != "校准" and not window.entrance_buttons[name].isChecked():
@@ -960,14 +1037,7 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     「退出校准」——用户 2026-10-01 要的"两副面孔"，五个入口一致）。
     """
     if calibrating:
-        if getattr(window, "_mask_active", False):
-            window.mask_btn.setChecked(False)   # 校准与 Mask 互斥
-        refine = getattr(window, "refine_btn", None)
-        if refine is not None and refine.isChecked():
-            refine.setChecked(False)            # 校准与精修互斥
-        phase = getattr(window, "phase_btn", None)
-        if phase is not None and phase.isChecked():
-            phase.setChecked(False)             # 校准与物相互斥
+        _exit_other_workbenches(window, "calib")   # 校准与四个工作台互斥
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
         window.param_stack.setCurrentIndex(window.PARAM_PAGES["校准"])
@@ -1072,6 +1142,8 @@ def create_window() -> QMainWindow:
     window.refine_dock = None
     window.phase_editor = None
     window.phase_dock = None
+    window.insitu_editor = None
+    window.insitu_dock = None
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：
