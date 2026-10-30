@@ -40,7 +40,7 @@ from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     core, fit_pattern, fit_single_peak, load_structure, plot_williamson_hall,
-    reflection_sig_gam, sig_gam_to_fwhm_eta, summary_block,
+    reflection_sig_gam, scherrer_sizes, sig_gam_to_fwhm_eta, summary_block,
     williamson_hall)
 
 LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
@@ -108,22 +108,60 @@ def main():
         centers = detect_peaks(t, y, bg)
     print(f"{image.name}：{len(centers)} 根峰，线型 {a.shape}，"
           f"λ={lam:.4f} Å")
-    print(f"{'2θ':>8} {'FWHM':>7} {'left':>7} {'right':>7} {'m':>5} "
-          f"{'η':>5} {'area':>9} {'Rwp%':>6}")
     results = []
     failures = []
+    rows = []                       # (原始峰位, 拟合结果或 None, 错误)
     for c in centers:
         try:
             fit = fit_single_peak(t, y, c, shape=a.shape,
                                   half_window=a.half_window)
         except Exception as err:                # noqa: BLE001
-            print(f"{c:8.4f}  拟合失败：{err}")
             failures.append((c, str(err)))
+            rows.append((c, None, str(err)))
             continue
         results.append(fit)
-        print(f"{fit.center:8.4f} {fit.fwhm:7.4f} {fit.fwhm_left:7.4f} "
-              f"{fit.fwhm_right:7.4f} {fit.m:5.2f} {fit.eta:5.2f} "
-              f"{fit.area:9.1f} {fit.rwp:6.2f}")
+        rows.append((c, fit, None))
+
+    # 仪器宽度（也给 Scherrer 用）：只有给了 LaB6 标样图才做
+    inst = None
+    inst_deg = None
+    if a.instrument_from and results:
+        inst = instrument_profile(Path(a.instrument_from), geom, lam)
+        print(f"仪器（LaB6，Le Bail Rwp {inst.rwp:.2f}%）："
+              f"U={inst.params['u']:.2f} V={inst.params['v']:.2f} "
+              f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
+              f"Y={inst.params['y']:.3f}")
+        sig, gam = reflection_sig_gam(
+            np.array([f.center for f in results]), lam,
+            u=inst.params["u"], v=inst.params["v"],
+            w=inst.params["w"], x=inst.params["x"],
+            y=inst.params["y"], size_um=1e4, mustrain=0.0)
+        inst_deg = sig_gam_to_fwhm_eta(sig, gam)[0]
+
+    # 逐峰 Scherrer 尺寸（同一套仪器校正后的 FWHM，K=0.9）
+    sizes_nm = (scherrer_sizes(
+        [f.center for f in results], [f.fwhm for f in results],
+        wavelength=lam, K=0.9, instrument_fwhm_deg=inst_deg)
+        if results else np.asarray([], dtype=float))
+    size_of = iter(sizes_nm)
+
+    print(f"{'2θ':>8} {'FWHM':>7} {'D/nm':>8} {'left':>7} {'right':>7} "
+          f"{'m':>5} {'η':>5} {'area':>9} {'Rwp%':>6}")
+    for c, fit, err in rows:
+        if fit is None:
+            print(f"{c:8.4f}  拟合失败：{err}")
+            continue
+        d = float(next(size_of))
+        dtext = f"{d:8.1f}" if np.isfinite(d) else f"{'—':>8}"
+        print(f"{fit.center:8.4f} {fit.fwhm:7.4f} {dtext} "
+              f"{fit.fwhm_left:7.4f} {fit.fwhm_right:7.4f} "
+              f"{fit.m:5.2f} {fit.eta:5.2f} {fit.area:9.1f} {fit.rwp:6.2f}")
+    finite_sizes = sizes_nm[np.isfinite(sizes_nm)]
+    if finite_sizes.size:
+        print(f"Scherrer（K=0.9）：{finite_sizes.min():.1f}–"
+              f"{finite_sizes.max():.1f} nm，"
+              f"中位 {np.median(finite_sizes):.1f} nm"
+              + ("（未扣仪器，D 为下限）" if inst_deg is None else ""))
 
     # 报告先把单峰这一层写完（W-H 失败也不丢已经拟合出的峰）
     outdir = Path(a.outdir)
@@ -137,13 +175,14 @@ def main():
         f"peak source: {'manual' if a.peaks.strip() else 'auto'}",
         f"hot-pixel mask: {'on' if a.hot_mask else 'off'}",
         "",
-        f"{'2theta':>8} {'FWHM':>8} {'FWHM_left':>10} "
+        f"{'2theta':>8} {'FWHM':>8} {'D_nm':>8} {'FWHM_left':>10} "
         f"{'FWHM_right':>11} {'m':>6} {'eta':>6} {'height':>12} "
         f"{'area':>12} {'Rwp%':>7}",
     ]
-    for f in results:
+    for f, d in zip(results, sizes_nm):
+        dtext = f"{d:8.1f}" if np.isfinite(d) else f"{'—':>8}"
         report.append(
-            f"{f.center:8.4f} {f.fwhm:8.4f} {f.fwhm_left:10.4f} "
+            f"{f.center:8.4f} {f.fwhm:8.4f} {dtext} {f.fwhm_left:10.4f} "
             f"{f.fwhm_right:11.4f} {f.m:6.2f} {f.eta:6.2f} "
             f"{f.height:12.6g} {f.area:12.6g} {f.rwp:7.3f}")
     if failures:
@@ -156,24 +195,25 @@ def main():
     for f in results:
         kv = " ".join(f"{k}={v:.6g}" for k, v in f.params.items())
         report.append(f"  {f.center:.4f}: {kv}")
+    report += [
+        "",
+        "=== Scherrer ===",
+        "size D = K * wavelength / (beta * cos(theta)), K = 0.9",
+        f"instrument correction: "
+        f"{a.instrument_from or 'none (D is a lower bound)'}",
+    ]
+    if finite_sizes.size:
+        report.append(f"size range = {finite_sizes.min():.3f} - "
+                      f"{finite_sizes.max():.3f} nm")
+        report.append(f"size median = {np.median(finite_sizes):.3f} nm "
+                      f"({finite_sizes.size} peaks)")
+    else:
+        report.append("size = not identifiable "
+                      "(peak width <= instrument width)")
 
     wh = None
     wh_out = None
     if a.wh and len(results) >= 3:
-        inst_deg = None
-        inst = None
-        if a.instrument_from:
-            inst = instrument_profile(Path(a.instrument_from), geom, lam)
-            print(f"\n仪器（LaB6，Le Bail Rwp {inst.rwp:.2f}%）："
-                  f"U={inst.params['u']:.2f} V={inst.params['v']:.2f} "
-                  f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
-                  f"Y={inst.params['y']:.3f}")
-            sig, gam = reflection_sig_gam(
-                np.array([f.center for f in results]), lam,
-                u=inst.params["u"], v=inst.params["v"],
-                w=inst.params["w"], x=inst.params["x"],
-                y=inst.params["y"], size_um=1e4, mustrain=0.0)
-            inst_deg = sig_gam_to_fwhm_eta(sig, gam)[0]
         wh = williamson_hall([f.center for f in results],
                              [f.fwhm for f in results],
                              wavelength=lam, K=0.9,
@@ -212,6 +252,7 @@ def main():
 
     # 结论页：用户先看这几行，参数明细在后面（2026-10-26 方案 A）
     entries = [("样品", image.name), ("线型", a.shape)]
+    notes = []
     if results:
         entries.append((
             "成功拟合",
@@ -219,7 +260,15 @@ def main():
             f"{results[0].center:.2f}–{results[-1].center:.2f}°）"))
         mean_fwhm = sum(f.fwhm for f in results) / len(results)
         entries.append(("平均 FWHM", f"{mean_fwhm:.4f}°"))
-    notes = []
+        if finite_sizes.size:
+            entries.append((
+                "Scherrer 尺寸",
+                f"{finite_sizes.min():.1f}–{finite_sizes.max():.1f} nm"
+                f"（中位 {np.median(finite_sizes):.1f}）"))
+        else:
+            entries.append(("Scherrer 尺寸", "不可辨识"))
+        if inst_deg is None:
+            notes.append("Scherrer 未扣仪器宽度，D 为下限")
     degenerate = [f for f in results if f.fwhm < 1e-3]
     if degenerate:
         notes.append("、".join(f"{f.center:.3f}°" for f in degenerate)

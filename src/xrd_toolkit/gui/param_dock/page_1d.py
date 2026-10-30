@@ -336,6 +336,14 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_vals.setContentsMargins(0, 0, 0, 0)
     wh_vals.addWidget(wh_d_label, 1)
     wh_vals.addWidget(wh_e_label, 1)
+    wh_scherrer = QLabel("Scherrer：—")
+    wh_scherrer.setToolTip(
+        "用一样的勾选峰和仪器宽度逐峰算 D = Kλ/(β cosθ)（K=0.9）；"
+        "只统计有限值，范围与中位便于和 W-H 结果对照")
+    wh_scherrer.setWordWrap(True)
+    wh_scherrer.setStyleSheet("color: gray;")
+    wh_scherrer.setMinimumWidth(0)
+    wh_scherrer.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     wh_note = QLabel("再拟合几根峰（至少 3 根）")
     wh_note.setWordWrap(True)
     wh_note.setStyleSheet("color: gray;")
@@ -352,15 +360,25 @@ def build_1d_page(window, form_1d, btns_1d):
         lambda: save_wh_plot(window, dock_for_wh(window)))
     window.wh_d_label = wh_d_label
     window.wh_e_label = wh_e_label
+    window.wh_scherrer_label = wh_scherrer
     window.wh_note_label = wh_note
     window.wh_view_btn = wh_view
     window.wh_save_btn = wh_save
-    wh_instr.valueChanged.connect(
-        lambda _v=0.0: refresh_wh(window, dock_for_wh(window)))
+    def _wh_instrument_changed(_v=0.0):
+        # 仪器值按面板各记各的：先写回焦点面板的快照，再重算 W-H。
+        # 只连 refresh_wh 的话，_panel_param 会一直读到开图时快照里的
+        # 旧值（0），旋钮看起来没反应。
+        dock = dock_for_wh(window)
+        if dock is not None and getattr(dock, "params_snapshot", None) is not None:
+            dock.params_snapshot[WH_INSTRUMENT_KEY] = float(wh_instr.value())
+        refresh_wh(window, dock)
+
+    wh_instr.valueChanged.connect(_wh_instrument_changed)
     peak_lay.addWidget(wh_line)
     peak_lay.addWidget(wh_title)
     peak_lay.addLayout(wh_row)
     peak_lay.addLayout(wh_vals)
+    peak_lay.addWidget(wh_scherrer)
     peak_lay.addWidget(wh_note)
     wh_btns = QHBoxLayout()
     wh_btns.setContentsMargins(0, 0, 0, 0)

@@ -38,6 +38,7 @@ from xrd_toolkit.simulation.fit import FitResult, fit_pattern, rwp
 from xrd_toolkit.simulation.microstructure import (
     WilliamsonHallResult,
     scherrer_size_nm,
+    scherrer_sizes,
     williamson_hall,
 )
 from xrd_toolkit.simulation.peakfit import (
@@ -91,7 +92,8 @@ __all__ = [
     "polarization", "lp_gsas", "legacy_to_gsas", "W_CONV", "GAM_CONV",
     "fit_pattern", "FitResult", "rwp",
     "SHAPES", "SinglePeakFit", "fit_single_peak",
-    "WilliamsonHallResult", "scherrer_size_nm", "williamson_hall",
+    "WilliamsonHallResult", "scherrer_size_nm", "scherrer_sizes",
+    "williamson_hall",
     "fit_entries", "fixed_cell_text", "format_pm", "format_size_um",
     "format_strain", "summary_block",
 ]

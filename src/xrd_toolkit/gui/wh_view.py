@@ -42,7 +42,7 @@ def _fit_points(dock):
     return np.asarray(centers, dtype=float), np.asarray(fwhms, dtype=float)
 
 
-def _set_labels(window, result, note="", total=None):
+def _set_labels(window, result, note="", total=None, inst_note=""):
     d_label = getattr(window, "wh_d_label", None)
     e_label = getattr(window, "wh_e_label", None)
     note_label = getattr(window, "wh_note_label", None)
@@ -66,6 +66,8 @@ def _set_labels(window, result, note="", total=None):
     if note_label is not None:
         count = len(result.beta_sample_deg)
         text = (f"{count}/{total} 根参与" if total else f"{count} 根峰")
+        if inst_note:
+            text += f"；{inst_note}"
         if result.warning:
             text += f"；{result.warning}"
         note_label.setText(text)
@@ -73,39 +75,88 @@ def _set_labels(window, result, note="", total=None):
             "color: #b7791f;" if result.warning else "color: gray;")
 
 
+def _set_scherrer_label(window, text):
+    label = getattr(window, "wh_scherrer_label", None)
+    if label is not None:
+        label.setText(text)
+        label.setStyleSheet("color: gray;")
+
+
+def _instrument_fwhm(window, dock, centers, wavelength):
+    """逐峰仪器 FWHM（度）；None = 不扣仪器。"""
+    const = float(_panel_param(window, dock, WH_INSTRUMENT_KEY, 0.0) or 0.0)
+    if const > 0:
+        return np.full(np.size(centers), const), f"仪器 {const:g}°"
+    return None, ""
+
+
+def _scherrer_text(centers, fwhms, wavelength, instrument):
+    """Scherrer 数字块：范围 + 中位 + 参与根数（只统计有限值）。"""
+    if np.size(centers) == 0:
+        return "Scherrer：—"
+    from xrd_toolkit.simulation.microstructure import scherrer_sizes
+    sizes = scherrer_sizes(centers, fwhms, wavelength=wavelength, K=0.9,
+                           instrument_fwhm_deg=instrument)
+    finite = sizes[np.isfinite(sizes)]
+    if finite.size == 0:
+        return "Scherrer：不可辨识（峰宽不大于仪器宽度）"
+    if np.isclose(float(finite.min()), float(finite.max())):
+        span = f"{finite[0]:.1f} nm"
+    else:
+        span = f"{finite.min():.1f}–{finite.max():.1f} nm"
+    text = (f"Scherrer（K=0.9）：{span}，"
+            f"中位 {np.median(finite):.1f} nm（{finite.size} 根）")
+    if instrument is None:
+        text += "；未扣仪器，D 为下限"
+    missing = int(sizes.size - finite.size)
+    if missing:
+        text += f"；{missing} 根比仪器还窄"
+    return text
+
+
 def compute_wh(window, dock):
     """用 dock 的单峰拟合结果算 W-H；结果存 dock.wh_result。"""
     if dock is None:
         _set_labels(window, None, "先点开一张 1D 图")
+        _set_scherrer_label(window, "Scherrer：—")
         return None
     centers, fwhms = _fit_points(dock)
-    if centers.size < 3:
+    if centers.size == 0:
         total = len(getattr(dock, "fit_results", None) or [])
-        msg = ("没有勾选参与 W-H 的峰" if total and centers.size == 0
+        msg = ("没有勾选参与 W-H 的峰" if total
                else "再拟合几根峰（至少 3 根）")
         dock.wh_result = None
         _set_labels(window, None, msg)
+        _set_scherrer_label(window, "Scherrer：—")
         return None
     wavelength = _wavelength_for(dock)
     if wavelength is None:
         dock.wh_result = None
         _set_labels(window, None, "这张图没有几何配置，取不到波长")
+        _set_scherrer_label(window, "Scherrer：—（取不到波长）")
         return None
-    instrument = float(_panel_param(window, dock, WH_INSTRUMENT_KEY, 0.0) or 0.0)
-    instrument_fwhm = (np.full(centers.size, instrument)
-                       if instrument > 0 else None)
+    instrument, inst_note = _instrument_fwhm(window, dock, centers, wavelength)
+    _set_scherrer_label(
+        window, _scherrer_text(centers, fwhms, wavelength, instrument))
+    if centers.size < 3:
+        total = len(getattr(dock, "fit_results", None) or [])
+        dock.wh_result = None
+        dock.wh_instrument = instrument
+        _set_labels(window, None, "再拟合几根峰（至少 3 根）")
+        return None
     try:
         from xrd_toolkit.simulation.microstructure import williamson_hall
         result = williamson_hall(
             centers, fwhms, wavelength=wavelength,
-            instrument_fwhm_deg=instrument_fwhm)
+            instrument_fwhm_deg=instrument)
     except Exception as err:                       # noqa: BLE001
         dock.wh_result = None
         _set_labels(window, None, user_error_text(err))
         return None
     dock.wh_result = result
     dock.wh_instrument = instrument
-    _set_labels(window, result, total=len(dock.fit_results or []))
+    _set_labels(window, result, total=len(dock.fit_results or []),
+                inst_note=inst_note)
     return result
 
 
@@ -117,6 +168,7 @@ def refresh_wh(window, dock):
         if dock is not None:
             dock.wh_result = None
         _set_labels(window, None, "再拟合几根峰（至少 3 根）")
+        _set_scherrer_label(window, "Scherrer：—")
         if save_btn is not None:
             save_btn.setEnabled(False)
         if view_btn is not None:
@@ -143,22 +195,24 @@ def _r2(result):
     return 1.0 - ss_res / ss_tot
 
 
-def _excluded_points(dock, instrument):
+def _excluded_points(window, dock):
     """未勾选参与 W-H 的峰 → (sin²θ, (βcosθ)²)，画成灰色空心点。"""
-    xs, ys = [], []
-    for entry in (getattr(dock, "fit_results", None) or []):
-        if getattr(entry, "wh", True):
-            continue
-        fit = getattr(entry, "fit", None)
-        if fit is None:
-            continue
-        theta = np.radians(float(fit.center) / 2.0)
-        beta = np.radians(float(fit.fwhm))
-        if instrument > 0:
-            beta = np.sqrt(max(beta * beta - float(instrument) ** 2, 0.0))
-        xs.append(float(np.sin(theta) ** 2))
-        ys.append(float((beta * np.cos(theta)) ** 2))
-    return np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+    entries = [entry for entry in (getattr(dock, "fit_results", None) or [])
+               if not getattr(entry, "wh", True)
+               and getattr(entry, "fit", None) is not None]
+    if not entries:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    centers = np.asarray([float(e.fit.center) for e in entries], dtype=float)
+    fwhms = np.asarray([float(e.fit.fwhm) for e in entries], dtype=float)
+    wavelength = _wavelength_for(dock)
+    instrument = None
+    if wavelength is not None:
+        instrument, _note = _instrument_fwhm(window, dock, centers, wavelength)
+    theta = np.radians(centers / 2.0)
+    beta = np.radians(fwhms)
+    if instrument is not None:
+        beta = np.sqrt(np.maximum(beta * beta - instrument ** 2, 0.0))
+    return (np.sin(theta) ** 2, (beta * np.cos(theta)) ** 2)
 
 
 def show_wh_dialog(window, dock):
@@ -185,7 +239,7 @@ def show_wh_dialog(window, dock):
     y = np.asarray(result.y, dtype=float)
     ax.plot(x, y, "o", ms=5, color="#1f5fa8",
             label=f"参与 {x.size} 根")
-    ex, ey = _excluded_points(dock, getattr(dock, "wh_instrument", 0.0))
+    ex, ey = _excluded_points(window, dock)
     if ex.size:
         ax.plot(ex, ey, "o", ms=5, mfc="none", color="#999999",
                 label=f"排除 {ex.size} 根")

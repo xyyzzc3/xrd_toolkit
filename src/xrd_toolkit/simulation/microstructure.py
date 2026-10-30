@@ -29,6 +29,31 @@ def scherrer_size_nm(fwhm_deg, two_theta_deg, *, wavelength=1.5406,
     return size_ang / 10.0
 
 
+def scherrer_sizes(centers_deg, fwhm_deg, *, wavelength=1.5406, K=0.9,
+                   instrument_fwhm_deg=None):
+    """逐峰 Scherrer 尺寸（nm），可先按平方和扣掉仪器宽度。
+
+    `instrument_fwhm_deg` 与 fwhm 同长；扣完为 0 的峰（比仪器还窄）
+    返回 inf，表示“仪器限制了分辨率，尺寸不可辨识”。
+    """
+    c = np.asarray(centers_deg, dtype=float)
+    b = np.radians(np.asarray(fwhm_deg, dtype=float))
+    if b.shape != c.shape:
+        raise ValueError("centers_deg 与 fwhm_deg 必须同长")
+    if instrument_fwhm_deg is not None:
+        bi = np.radians(np.asarray(instrument_fwhm_deg, dtype=float))
+        if bi.shape != b.shape:
+            raise ValueError("instrument_fwhm_deg 必须与 fwhm 同长")
+        b = np.sqrt(np.maximum(b * b - bi * bi, 0.0))
+    beta_deg = np.degrees(b)
+    out = np.full(beta_deg.shape, np.inf, dtype=float)
+    ok = beta_deg > 0
+    if np.any(ok):
+        out[ok] = scherrer_size_nm(
+            beta_deg[ok], c[ok], wavelength=wavelength, K=K)
+    return out
+
+
 @dataclass
 class WilliamsonHallResult:
     size_nm: float

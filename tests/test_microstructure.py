@@ -19,6 +19,32 @@ class TestScherrer(unittest.TestCase):
             float(ms.scherrer_size_nm(beta_deg, tt, wavelength=lam, K=K)),
             d_nm, delta=1e-6)
 
+    def test_vector_with_instrument_subtraction(self):
+        centers = np.array([20.0, 40.0, 60.0])
+        lam, K, d_nm = 1.5406, 0.9, 50.0
+        theta = np.radians(centers / 2.0)
+        sample = np.degrees(K * lam / (d_nm * 10.0 * np.cos(theta)))
+        inst = np.full(3, 0.01)
+        obs = np.degrees(np.sqrt(np.radians(sample) ** 2
+                                 + np.radians(inst) ** 2))
+        got = ms.scherrer_sizes(centers, obs, wavelength=lam, K=K,
+                                instrument_fwhm_deg=inst)
+        np.testing.assert_allclose(got, d_nm, atol=1e-9)
+        raw = ms.scherrer_sizes(centers, obs, wavelength=lam, K=K)
+        self.assertTrue(np.all(raw < d_nm))
+
+    def test_narrower_than_instrument_is_inf(self):
+        got = ms.scherrer_sizes([30.0, 40.0], [0.01, 0.02],
+                                instrument_fwhm_deg=[0.02, 0.01])
+        np.testing.assert_array_equal(np.isinf(got), [True, False])
+
+    def test_shape_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            ms.scherrer_sizes([30.0, 40.0], [0.02])
+        with self.assertRaises(ValueError):
+            ms.scherrer_sizes([30.0, 40.0], [0.02, 0.03],
+                              instrument_fwhm_deg=[0.01])
+
 
 class TestWilliamsonHall(unittest.TestCase):
     def setUp(self):

@@ -108,6 +108,10 @@ class TestFitView(unittest.TestCase):
         self.assertEqual(len(self.dock.wh_result.beta_sample_deg), 4)
         self.assertIn("D =", self.w.wh_d_label.text())
         self.assertIn("4/4 根参与", self.w.wh_note_label.text())
+        text = self.w.wh_scherrer_label.text()
+        self.assertIn("Scherrer", text)
+        self.assertIn("4 根", text)
+        self.assertIn("未扣仪器", text)
 
         before = np.asarray(self.dock.wh_result.beta_sample_deg).copy()
         self.w.params["W-H 仪器 FWHM (°)"].setValue(0.01)
@@ -120,6 +124,18 @@ class TestFitView(unittest.TestCase):
             out = Path(folder) / "wh.png"
             self.assertIsNotNone(save_wh_plot(self.w, self.dock, out))
             self.assertTrue(out.is_file() and out.stat().st_size > 0)
+
+    def test_scherrer_block_tracks_instrument_and_checks(self):
+        self._open_panel()
+        self._fit_all()
+        self.w.params["W-H 仪器 FWHM (°)"].setValue(0.02)
+        QApplication.processEvents()
+        text = self.w.wh_scherrer_label.text()
+        self.assertNotIn("未扣仪器", text)
+        self.assertIn("仪器 0.02°", self.w.wh_note_label.text())
+        self.w.fit_table.item(0, 0).setCheckState(Qt.Unchecked)
+        QApplication.processEvents()
+        self.assertIn("3 根", self.w.wh_scherrer_label.text())
 
     def test_overlay_all_draws_every_fit(self):
         self._open_panel()
