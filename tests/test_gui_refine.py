@@ -30,6 +30,7 @@ from xrd_toolkit.simulation.gsas_profile import (  # noqa: E402
     simulate_pattern_gsas)
 
 LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
+AL_CIF = ROOT / "data" / "structures" / "Al_metal.cif"
 
 
 def setUpModule():
@@ -149,6 +150,50 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(editor.save_btn.isEnabled())
         self.assertTrue(editor.copy_btn.isEnabled())
         self.assertGreaterEqual(len(editor.fig.axes), 2)
+
+    def test_extra_phase_scale_and_bragg_row(self):
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        idx = editor.cif_combo.findData(str(LAB6_CIF))
+        editor.cif_combo.setCurrentIndex(idx)
+        self.assertTrue(editor.add_extra_phase(AL_CIF))
+        self.assertFalse(editor.add_extra_phase(AL_CIF), "重复加入应被忽略")
+        editor.run_btn.click()
+        ok = _wait_until(lambda: editor.result is not None
+                         and editor._task is None, timeout_ms=30000)
+        self.assertTrue(ok, "带额外相的精修没有完成")
+        self.assertIn("Al:scale", editor.result.params)
+        self.assertIn("Al", editor.result.extra_peak_tth or {})
+
+    def test_instrument_baseline_store_and_fix(self):
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        idx = editor.cif_combo.findData(str(LAB6_CIF))
+        editor.cif_combo.setCurrentIndex(idx)
+        editor.run_btn.click()
+        ok = _wait_until(lambda: editor.result is not None
+                         and editor._task is None, timeout_ms=30000)
+        self.assertTrue(ok, "第一轮精修没有完成")
+        self.assertTrue(editor.save_instrument_btn.isEnabled())
+
+        editor.save_instrument_btn.click()
+        QApplication.processEvents()
+        self.assertIsNotNone(editor._instrument)
+        self.assertTrue(editor.chk_fix_instrument.isEnabled())
+        self.assertTrue(editor.chk_fix_instrument.isChecked())
+        baseline = dict(editor._instrument["params"])
+        self.assertFalse(editor.chk_instr.isEnabled(),
+                         "固定仪器后不再单独精修仪器峰形")
+
+        editor.run_btn.click()
+        ok = _wait_until(lambda: editor.run_btn.isEnabled()
+                         and editor._task is None, timeout_ms=30000)
+        self.assertTrue(ok, "第二轮精修没有完成")
+        for name, value in baseline.items():
+            self.assertAlmostEqual(editor.result.initial[name], value,
+                                   places=6, msg=name)
 
 
 if __name__ == "__main__":

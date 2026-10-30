@@ -33,9 +33,10 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow,
-    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+    QMdiSubWindow, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
@@ -90,12 +91,17 @@ def _cell_free(structure, free):
 
 
 def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
-                max_nfev):
+                max_nfev, extra_paths=(), extra_lebail=True,
+                instrument=None):
     """后台线程里的纯计算：读 CIF → 估背景 → 全谱最小二乘。
 
     不能碰任何界面控件（见 gui.tasks 的线程规则）。pymatgen 属可选
     依赖，缺了要把它自己的安装提示原样交给用户，所以这里把 ImportError
     转成 RuntimeError（ImportError 会被当成"程序内部错误"包装掉）。
+
+    extra_paths 是额外相 CIF（如 Al 集流体）；instrument 是固定的
+    仪器参数字典（zero/U/V/W/X/Y），给定时按 initial 传进去、调用方
+    已把它们从 free 里拿掉。
 
     返回 (FitResult, 说明或 None)：说明用来告诉用户晶胞参数被按晶系
     裁剪过（如立方晶胞只精修 a）。
@@ -111,6 +117,14 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
     background = None
     if bg_window > 0:
         background = estimate_baseline_sliding(tth, y, float(bg_window))
+    extras = []
+    for path in extra_paths:
+        extras.append({
+            "structure": load_structure(str(path)),
+            "label": Path(path).stem.split("_")[0],
+            "b_iso": b_iso_from_cif(str(path)) or None,
+            "refine_intensities": bool(extra_lebail),
+        })
     kwargs = {
         "wavelength": float(wavelength),
         "b_iso": b_iso,
@@ -120,6 +134,10 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
         "free": tuple(free),
         "max_nfev": int(max_nfev),
     }
+    if extras:
+        kwargs["extra_phases"] = extras
+    if instrument:
+        kwargs["initial"] = dict(instrument)
     if background is not None:
         kwargs["background_knots"] = 0.25
         kwargs["background_smooth"] = 0.1
@@ -140,6 +158,9 @@ class RefineWorkbench(QWidget):
         self.result = None
         self._task = None
         self._extra_cifs = []
+        self._extra_phase_paths = []
+        self._instrument = None          # {"params": {...}, "wavelength": Å}
+        self._last_wavelength = None
 
         self._build_ui()
         self.refresh_curves()
@@ -231,6 +252,47 @@ class RefineWorkbench(QWidget):
         for widget in (self.chk_cell, self.chk_instr, self.chk_micro,
                        self.chk_b, self.chk_lebail):
             left_lay.addWidget(widget)
+
+        left_lay.addWidget(_section("仪器"))
+        self.chk_fix_instrument = QCheckBox("固定仪器（用上次 LaB₆ 基线）")
+        self.chk_fix_instrument.setEnabled(False)
+        self.chk_fix_instrument.setToolTip(
+            "先精修一张 LaB₆ 并点 [存为仪器基线]；之后精修样品时固定 "
+            "zero/U/V/W/X/Y，只精修样品的晶胞与微结构")
+        left_lay.addWidget(self.chk_fix_instrument)
+        self.instrument_label = QLabel("仪器基线：未保存")
+        self.instrument_label.setWordWrap(True)
+        self.instrument_label.setStyleSheet("color: gray;")
+        left_lay.addWidget(self.instrument_label)
+        self.save_instrument_btn = QPushButton("存为仪器基线")
+        self.save_instrument_btn.setEnabled(False)
+        self.save_instrument_btn.setToolTip(
+            "把这次 LaB₆ 精修得到的仪器峰形参数存起来，供样品精修复用")
+        self.save_instrument_btn.clicked.connect(self._save_instrument_baseline)
+        left_lay.addWidget(self.save_instrument_btn)
+        self.chk_fix_instrument.toggled.connect(
+            lambda on: self.chk_instr.setEnabled(not on))
+
+        left_lay.addWidget(_section("额外相"))
+        self.extra_list = QListWidget()
+        self.extra_list.setMaximumHeight(72)
+        self.extra_list.setToolTip("额外相（如 Al 集流体）：峰位与峰形跟随"
+                                   "主相，强度默认逐反射自由")
+        left_lay.addWidget(self.extra_list)
+        extra_row = QHBoxLayout()
+        extra_row.setSpacing(4)
+        self.add_extra_btn = QPushButton("加 CIF…")
+        self.add_extra_btn.clicked.connect(self._choose_extra_cif)
+        self.remove_extra_btn = QPushButton("移除")
+        self.remove_extra_btn.clicked.connect(self._remove_extra_cif)
+        extra_row.addWidget(self.add_extra_btn, 1)
+        extra_row.addWidget(self.remove_extra_btn, 1)
+        left_lay.addLayout(extra_row)
+        self.chk_extra_lebail = QCheckBox("额外相强度自由（Le Bail）")
+        self.chk_extra_lebail.setChecked(True)
+        self.chk_extra_lebail.setToolTip(
+            "第二相（如 Al 箔）织构强时，峰强交给数据逐反射解出")
+        left_lay.addWidget(self.chk_extra_lebail)
 
         self.run_btn = QPushButton("开始精修")
         self.run_btn.setToolTip("用选中的 1D 曲线和 CIF 做全谱最小二乘拟合")
@@ -383,6 +445,80 @@ class RefineWorkbench(QWidget):
             self.cif_combo.setCurrentIndex(idx)
         self._set_status(f"已加入结构 {chosen.name}")
 
+    # ── 额外相与仪器基线 ────────────────────────────────────
+    def add_extra_phase(self, path):
+        """加入一张额外相 CIF（如 Al 集流体）；重复加入返回 False。"""
+        path = Path(path)
+        if path in self._extra_phase_paths:
+            return False
+        self._extra_phase_paths.append(path)
+        self.extra_list.addItem(path.stem)
+        item = self.extra_list.item(self.extra_list.count() - 1)
+        item.setToolTip(str(path))
+        self._set_status(f"已加入额外相 {path.stem}")
+        return True
+
+    def _choose_extra_cif(self):
+        start = paths.ROOT / "data" / "structures"
+        path, _ = QFileDialog.getOpenFileName(
+            self, "加入额外相 CIF", str(start),
+            "CIF (*.cif);;所有文件 (*)")
+        if path:
+            self.add_extra_phase(path)
+
+    def _remove_extra_cif(self):
+        row = self.extra_list.currentRow()
+        if row < 0:
+            return
+        self.extra_list.takeItem(row)
+        del self._extra_phase_paths[row]
+
+    def _update_instrument_label(self):
+        if self._instrument is None:
+            self.instrument_label.setText("仪器基线：未保存")
+            return
+        p = self._instrument["params"]
+        self.instrument_label.setText(
+            "仪器基线：zero {zero:.4f}°，U {u:.3g}，V {v:.3g}，"
+            "W {w:.3g}，X {x:.3g}，Y {y:.3g}（λ {lam:.4f} Å）".format(
+                zero=p.get("zero", float("nan")),
+                u=p.get("u", float("nan")),
+                v=p.get("v", float("nan")),
+                w=p.get("w", float("nan")),
+                x=p.get("x", float("nan")),
+                y=p.get("y", float("nan")),
+                lam=self._instrument["wavelength"]))
+
+    def _save_instrument_baseline(self):
+        """把这次 LaB₆ 精修的仪器峰形参数存成基线。"""
+        if self.result is None:
+            self._set_status("先精修一张 LaB₆ 再存仪器基线")
+            return
+        cif = self.cif_combo.currentData() or ""
+        if "lab6" not in Path(cif).name.lower():
+            self._set_status("当前结构不是 LaB₆，仪器基线要从 LaB₆ 精修存")
+            return
+        names = ("zero", "u", "v", "w", "x", "y")
+        params = {name: float(self.result.params[name]) for name in names
+                  if name in self.result.params}
+        self._instrument = {
+            "params": params,
+            "wavelength": float(self._last_wavelength or 0.0),
+        }
+        self._update_instrument_label()
+        self.chk_fix_instrument.setEnabled(True)
+        self.chk_fix_instrument.setChecked(True)
+        self._set_status("仪器基线已保存，下次精修样品可用「固定仪器」")
+
+    def _fixed_instrument(self, wavelength):
+        """勾了「固定仪器」就返回参数字典；波长不符返回 "mismatch"。"""
+        if not self.chk_fix_instrument.isChecked() or self._instrument is None:
+            return None
+        stored = float(self._instrument["wavelength"])
+        if abs(stored - float(wavelength)) > 0.01:
+            return "mismatch"
+        return dict(self._instrument["params"])
+
     def _selected_dock(self):
         key = self.curve_combo.currentData()
         if not key:
@@ -452,6 +588,19 @@ class RefineWorkbench(QWidget):
         lebail = self.chk_lebail.isChecked()
         bg_window = (float(self.bg_window.value())
                      if self.bg_combo.currentData() == "auto" else 0.0)
+        fixed = self._fixed_instrument(wavelength)
+        if fixed == "mismatch":
+            stored = self._instrument["wavelength"]
+            self._set_status(
+                f"仪器基线来自 λ {stored:.4f} Å，与当前 λ {wavelength:.4f} Å "
+                f"不符；请取消「固定仪器」再精修")
+            return
+        if fixed:
+            free = [name for name in free
+                    if name not in ("zero", "u", "v", "w", "x", "y")]
+        self._last_wavelength = wavelength
+        extra_paths = tuple(self._extra_phase_paths)
+        extra_lebail = self.chk_extra_lebail.isChecked()
 
         self.run_btn.setEnabled(False)
         self._set_status("精修中，请稍候…")
@@ -476,7 +625,8 @@ class RefineWorkbench(QWidget):
 
         task = BackgroundTask(
             _fit_worker, cif_path, tth, y, wavelength, free, lebail,
-            bg_window, 800, on_done=done, on_error=error)
+            bg_window, 800, extra_paths, extra_lebail, fixed,
+            on_done=done, on_error=error)
         self._task = task
         self.main._tasks.append(task)
         task.start()
@@ -490,6 +640,9 @@ class RefineWorkbench(QWidget):
             f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%")
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
+        cif = self.cif_combo.currentData() or ""
+        self.save_instrument_btn.setEnabled(
+            "lab6" in Path(cif).name.lower())
         self.tabs.setCurrentIndex(0)
         suffix = f"；{note}" if note else ""
         self._set_status(
@@ -573,10 +726,14 @@ class RefineWorkbench(QWidget):
 
     def _fill_params(self, result):
         skip = {"scale", "size_mix", "strain_mix"}
-        rows = [(name, value) for name, value in result.params.items()
-                if name not in skip
-                and not name.startswith("intensity_a")
-                and ":" not in name]
+        rows = []
+        for name, value in result.params.items():
+            if name in skip or name.startswith("intensity_a"):
+                continue
+            # 额外相只保留 scale（Al:scale）；逐反射强度/微结构不进表
+            if ":" in name and not name.endswith(":scale"):
+                continue
+            rows.append((name, value))
         table = self.param_table
         table.setRowCount(len(rows))
         for i, (name, value) in enumerate(rows):
