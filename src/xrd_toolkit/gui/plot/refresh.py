@@ -13,6 +13,7 @@ from xrd_toolkit.gui.panel_state import (
     _drop_pending_display, _log, _note_params_consumed, _panel_param,
     _refresh_pending_labels, _stash_pending_display)
 from xrd_toolkit.gui.peak_view import PEAK_KEYS
+from xrd_toolkit.gui.fit_view import FIT_KEYS
 from xrd_toolkit.gui.plot.curves import _retarget_product_panel_to_source
 from xrd_toolkit.gui.plot.drawing import (
     _draw_1d, _draw_2d, _draw_profile, _draw_waterfall)
@@ -202,7 +203,8 @@ def _refresh_1d_display(window: QMainWindow) -> None:
     if getattr(window, "_param_replaying", False) \
             or getattr(window, "_param_box_sync", False):
         return   # 回放快照 / 程序同步写控件（缩放写回等）都不是用户改动
-    keys = ("对数纵轴", "纵轴自动", "纵轴下限", "纵轴上限") + PEAK_KEYS
+    keys = ("对数纵轴", "纵轴自动", "纵轴下限", "纵轴上限") \
+        + PEAK_KEYS + FIT_KEYS
     dock = window.plot_docks.get(window.focus_panel)
     if dock is None:
         # 没有编辑对象：记进"待应用"账本，出图时当新面板的起点

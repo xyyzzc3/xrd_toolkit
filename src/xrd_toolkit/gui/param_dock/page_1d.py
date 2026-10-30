@@ -4,10 +4,13 @@
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QMenu, QPushButton, QSizePolicy, QSpinBox, QTableWidget,
-    QVBoxLayout)
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
+    QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSizePolicy,
+    QSpinBox, QTableWidget, QVBoxLayout)
 
+from xrd_toolkit.gui.fit_view import (
+    FIT_COLUMNS, clear_fit_results, copy_fit_table, fit_all_peaks,
+    fit_selected_peak, install_fit_view)
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
 from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
 from xrd_toolkit.gui.peak_view import (
@@ -186,6 +189,120 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_lay.addWidget(peak_line)
     peak_lay.addWidget(peak_caption)
     peak_lay.addWidget(peak_table, 1)
+
+    # ── 峰形拟合（2026-10-30）：峰表给峰位，这里逐个拟合 ─────────
+    fit_line = QFrame()
+    fit_line.setFixedHeight(1)
+    fit_line.setStyleSheet("background-color: #d5dae0;")
+    fit_title = QLabel("峰形拟合")
+    fit_title.setStyleSheet("color: gray; font-weight: 600;")
+    shape_combo = QComboBox()
+    for text, key in (("伪 Voigt", "pseudovoigt"),
+                      ("高斯", "gaussian"),
+                      ("洛伦兹", "lorentzian"),
+                      ("分裂 Pearson VII", "split_pearson7")):
+        shape_combo.addItem(text, key)
+    half_spin = QDoubleSpinBox()
+    half_spin.setRange(0.02, 0.5)
+    half_spin.setDecimals(3)
+    half_spin.setSingleStep(0.01)
+    half_spin.setValue(0.12)
+    half_spin.setSuffix(" °")
+    bg_combo = QComboBox()
+    for text, key in (("线性", "linear"), ("无", "none"),
+                      ("二次", "quadratic")):
+        bg_combo.addItem(text, key)
+    all_chk = QCheckBox("叠加全部拟合")
+    btn_fit_all = QPushButton("拟合全部")
+    btn_fit_all.setToolTip("对峰表里每一根峰做单峰拟合（局部背景 + 一个峰）")
+    btn_fit_sel = QPushButton("拟合选中")
+    btn_fit_sel.setToolTip("只拟合峰表里当前选中的那一根（其余结果保留）")
+    window.params["拟合线型"] = shape_combo
+    window.params["拟合半窗 (°)"] = half_spin
+    window.params["拟合背景"] = bg_combo
+    window.params["拟合全部叠加"] = all_chk
+
+    fit_row1 = QHBoxLayout()
+    fit_row1.setContentsMargins(0, 0, 0, 0)
+    fit_row1.addWidget(QLabel("线型"))
+    fit_row1.addWidget(shape_combo, 1)
+    fit_row1.addWidget(QLabel("半窗"))
+    fit_row1.addWidget(half_spin)
+    fit_row2 = QHBoxLayout()
+    fit_row2.setContentsMargins(0, 0, 0, 0)
+    fit_row2.addWidget(QLabel("背景"))
+    fit_row2.addWidget(bg_combo, 1)
+    fit_row2.addWidget(all_chk)
+    fit_row3 = QHBoxLayout()
+    fit_row3.setContentsMargins(0, 0, 0, 0)
+    fit_row3.addWidget(btn_fit_all, 1)
+    fit_row3.addWidget(btn_fit_sel, 1)
+
+    fit_result_caption = QLabel("拟合结果")
+    fit_result_caption.setStyleSheet("color: gray;")
+    fit_result_caption.setVisible(False)
+    fit_table = QTableWidget(0, len(FIT_COLUMNS))
+    fit_table.setHorizontalHeaderLabels(list(FIT_COLUMNS))
+    fit_table.verticalHeader().setVisible(False)
+    fit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    fit_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    fit_table.setAlternatingRowColors(True)
+    fit_table.setShowGrid(False)
+    fit_table.setFrameShape(QFrame.NoFrame)
+    fit_table.setMinimumHeight(50)
+    fit_table.setMinimumSize(0, 0)
+    fit_table.setMaximumWidth(320)
+    fit_table.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+    fit_table.horizontalHeader().setMinimumSectionSize(30)
+    fit_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+    fit_table.verticalHeader().setDefaultSectionSize(22)
+    fit_table.setVisible(False)
+    window.fit_table = fit_table
+    window.fit_caption = fit_result_caption
+    window.fit_all_btn = btn_fit_all
+    window.fit_selected_btn = btn_fit_sel
+
+    peak_lay.addWidget(fit_line)
+    peak_lay.addWidget(fit_title)
+    peak_lay.addLayout(fit_row1)
+    peak_lay.addLayout(fit_row2)
+    peak_lay.addLayout(fit_row3)
+    peak_lay.addWidget(fit_result_caption)
+    peak_lay.addWidget(fit_table, 1)
+
+    def _fit_settings_changed(*_):
+        # 回放快照/程序回填不算用户改参数（同 _refresh_1d_display 的守卫）
+        if getattr(window, "_param_replaying", False) \
+                or getattr(window, "_param_box_sync", False):
+            return
+        clear_fit_results(window)
+        _refresh_1d_display(window)
+
+    shape_combo.currentIndexChanged.connect(_fit_settings_changed)
+    half_spin.valueChanged.connect(_fit_settings_changed)
+    bg_combo.currentIndexChanged.connect(_fit_settings_changed)
+    all_chk.toggled.connect(lambda _=False: _refresh_1d_display(window))
+    btn_fit_all.clicked.connect(lambda: fit_all_peaks(window))
+    btn_fit_sel.clicked.connect(lambda: fit_selected_peak(window))
+    fit_table.itemSelectionChanged.connect(
+        lambda: _refresh_1d_display(window))
+
+    def _fit_menu(pos):
+        menu = QMenu(fit_table)
+        act_sel = menu.addAction("复制选中行")
+        act_all = menu.addAction("复制全部")
+        chosen = menu.exec(fit_table.viewport().mapToGlobal(pos))
+        if chosen is act_sel:
+            n = copy_fit_table(window, True)
+        elif chosen is act_all:
+            n = copy_fit_table(window, False)
+        else:
+            return
+        _log(window, f"已复制拟合结果 {n} 行" if n
+                     else "拟合结果没有可复制的行")
+
+    fit_table.setContextMenuPolicy(Qt.CustomContextMenu)
+    fit_table.customContextMenuRequested.connect(_fit_menu)
     peak_box.setVisible(False)
     window.peak_box = peak_box
     window.peak_table = peak_table
@@ -209,6 +326,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.cellDoubleClicked.connect(
         lambda row, _col: zoom_to_peak(window, row))
     install_peak_view(window)
+    install_fit_view(window)      # 焦点切换时刷拟合结果表（接在峰表钩子后）
 
     # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
     # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图

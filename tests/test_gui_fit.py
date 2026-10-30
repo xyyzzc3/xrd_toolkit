@@ -1,0 +1,144 @@
+"""1D 页峰形拟合的窗口级测试（2026-10-30）。
+
+用一条合成谱（4 根高斯峰）走真实链路：出 1D 图 → 勾寻峰 → [拟合全部]
+→ 拟合结果表 / 图上叠加曲线 / 改参数清空 / 只拟合选中。
+"""
+import os
+import sys
+import unittest
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
+
+import numpy as np  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
+from unittest import mock  # noqa: E402
+
+try:
+    from tests import _gui_integration_support as _support
+    from tests._gui_integration_support import *  # noqa: F401,F403
+except ModuleNotFoundError:  # 直接运行本文件
+    from tests import _gui_integration_support as _support
+    from tests._gui_integration_support import *  # noqa: F401,F403
+
+
+def setUpModule():
+    _support.setUpModule()
+
+
+def _gauss(x, center, fwhm, height):
+    return height * np.exp(-4.0 * np.log(2.0) * ((x - center) / fwhm) ** 2)
+
+
+def _synth(path, geom, npt):
+    x = np.linspace(1.001, 7.999, 2500)
+    y = np.full_like(x, 100.0)
+    y += _gauss(x, 2.0, 0.06, 1200) + _gauss(x, 3.0, 0.05, 900)
+    y += _gauss(x, 4.5, 0.08, 700) + _gauss(x, 6.0, 0.07, 500)
+    return x, y
+
+
+class TestFitView(unittest.TestCase):
+    def setUp(self):
+        self._old_root = _support.stage_cache.CACHE_ROOT
+        self.w = create_window()
+        self.w.show()
+        QApplication.processEvents()
+
+    def tearDown(self):
+        self.w.hide()
+        self.w.close()
+        QApplication.processEvents()
+        _support.stage_cache.point_root(self._old_root)
+
+    def _open_panel(self):
+        path = "data/fake_fit.tif"
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
+                               side_effect=_synth):
+            add_checked(self.w, [path])
+            _open_view(self.w, "1D")
+            ok = _wait_until(
+                lambda: f"1D|{path}" in self.w.plot_docks
+                and getattr(self.w.plot_docks[f"1D|{path}"],
+                            "last_tth", None) is not None)
+        self.assertTrue(ok, "1D 图没算完")
+        self.dock = self.w.plot_docks[f"1D|{path}"]
+        self.w.entrance_buttons["1D"].click()
+        QApplication.processEvents()
+        self.w.params["显示峰位"].setChecked(True)
+        self.assertTrue(_wait_until(lambda: self.w.peak_table.rowCount() >= 4),
+                        "寻峰没列出 4 根")
+        self.ax = _support.gui_panel_state._content(self.dock).axes_1d
+
+    def _fit_lines(self):
+        return [ln for ln in self.ax.lines
+                if str(ln.get_gid() or "").endswith("fit_curve")]
+
+    def test_fit_all_fills_table_and_draws_selected_overlay(self):
+        self._open_panel()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(self.w.fit_table.rowCount(), 4)
+        self.assertTrue(self.w.fit_table.isVisible())
+        centers = [entry.fit.center for entry in self.dock.fit_results]
+        for got, want in zip(centers, (2.0, 3.0, 4.5, 6.0)):
+            self.assertAlmostEqual(got, want, places=2)
+        self.assertEqual(len(self._fit_lines()), 1)   # 默认只叠选中峰
+        peak = self.dock.detected_peaks[0]
+        self.assertAlmostEqual(self.dock.fit_results[0].fit.center,
+                               peak.center, places=2)
+
+    def test_overlay_all_draws_every_fit(self):
+        self._open_panel()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.w.params["拟合全部叠加"].setChecked(True)
+        QApplication.processEvents()
+        self.assertEqual(len(self._fit_lines()), 4)
+
+    def test_fit_selected_merges(self):
+        self._open_panel()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.w.peak_table.selectRow(1)
+        self.w.fit_selected_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(self.w.fit_table.rowCount(), 4)   # 其余保留
+        self.assertEqual(len(self.dock.fit_results), 4)
+
+    def test_shape_change_clears_results(self):
+        self._open_panel()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(self.w.fit_table.rowCount(), 4)
+        self.w.params["拟合线型"].setCurrentIndex(1)       # 高斯
+        QApplication.processEvents()
+        self.assertEqual(self.w.fit_table.rowCount(), 0)
+        self.assertIsNone(self.dock.fit_results)
+        self.assertEqual(len(self._fit_lines()), 0)
+
+    def test_fit_requires_peaks(self):
+        path = "data/fake_no_peaks.tif"
+        with mock.patch.object(gui_plot_spawn, "_compute_integration",
+                               side_effect=lambda p, g, n:
+                               (np.linspace(1.0, 8.0, 500),
+                                np.full(500, 10.0))):
+            add_checked(self.w, [path])
+            _open_view(self.w, "1D")
+            _wait_until(lambda: f"1D|{path}" in self.w.plot_docks
+                        and getattr(self.w.plot_docks[f"1D|{path}"],
+                                    "last_tth", None) is not None)
+        self.w.entrance_buttons["1D"].click()
+        QApplication.processEvents()
+        self.w.params["显示峰位"].setChecked(True)
+        QApplication.processEvents()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(self.w.fit_table.rowCount(), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
