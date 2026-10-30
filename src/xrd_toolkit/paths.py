@@ -27,6 +27,18 @@ ROOT = Path(__file__).resolve().parents[2]
 APP_DIR_NAME = "XRD_Toolkit"
 
 
+def structures_dir() -> Path:
+    """参考 CIF 目录：打包后在包目录，开发时在仓库 data/structures。
+
+    2026-10-30：精修/物相/原位三个工作台默认要读这些 CIF，所以它们
+    必须随包（spec 把它们放到 xrd_toolkit/data/structures）。
+    """
+    packaged = Path(__file__).resolve().parent / "data" / "structures"
+    if packaged.is_dir():
+        return packaged
+    return ROOT / "data" / "structures"
+
+
 def default_outputs_dir(frozen: bool = None, platform: str = None,
                         home: Path = None) -> Path:
     """产物根目录的默认值（纯函数——三个分支可直接单测）。

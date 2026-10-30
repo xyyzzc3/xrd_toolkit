@@ -124,7 +124,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **偏置束心与扇形分析**——束心打在探测器边缘/角落的数据全程支持（pyFAI 分箱不可靠时自动切自研 numpy 积分）；36 扇区瀑布图一眼看出择优取向与被切环的几何。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、1D 图上直接寻峰与峰表、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
 - **四个分析工作台**——物相筛选（相库 / 元素过滤 / 多相叠加 / CSV）、全谱精修（额外相 / 仪器基线 / 采纳为图面板）、原位三相批量（逐帧结果与趋势）、Mask 编辑；全部与参数页、图面板共享同一套引擎。
-- **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 为可选依赖：`pip install 'xrd-toolkit[simulation]'`）。
+- **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 自 0.2 起随主依赖安装（GUI 分析工作台需要它）；`[simulation]` extra 保留为别名）。
 - **自动寻峰与单峰峰形拟合**——稳健噪声估计 + 显著度/峰高门槛 + 最小峰距 + 可选 FWHM 过滤的自动寻峰（`services/peak_finding.py`）；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 单峰拟合（局部背景），以及 Scherrer 尺寸和带仪器校正（quadrature / linear 扣标样）的 Williamson–Hall 分析；命令行入口 `scripts/fit_peaks.py`。
 - **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相、按空间群约束的原子坐标与位点占位精修，以及固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
 
@@ -165,11 +165,11 @@ python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个
 
 ## Mask + 原位三相批量
 
-工具栏 `[校准]` 旁新增 `[Mask]` 中央工作台（进入时收起参数坞和日志坞，退出恢复）：打开时自动载入文件栏勾选的第一张原始图（顶部下拉可换图），画笔/橡皮/矩形画遮罩，`[孤立坏点（局部）]` 抓坏点簇、`[整环离群（实验性）]` 只作参考；`[放大镜]` 与主图面板同语义（点亮 = 滚轮缩放 + 左键框选）；`[导出配方…]` 保存 `.mask.npz`（含来源分层），`[导出通用掩膜…]` 另存 `.npy/.edf`；`[预览效果]` 只画 mask 前后 1D，`[生成 Mask 2D]` 按范围（当前图像 / 勾选文件）建产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的独立快速上手见 [docs/MASK.zh-CN.md](MASK.zh-CN.md)；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
+工具栏 `[校准]` 旁新增 `[Mask]` 中央工作台（进入时收起参数坞和日志坞，退出恢复）：打开时自动载入文件栏勾选的第一张原始图（顶部下拉可换图），画笔/橡皮/矩形画遮罩，`[孤立坏点（局部）]` 抓坏点簇、`[整环离群（实验性）]` 只作参考；`[放大镜]` 与主图面板同语义（点亮 = 滚轮缩放 + 左键框选）；`[导出配方…]` 保存 `.mask.npz`（含来源分层），`[导出通用掩膜…]` 另存 `.npy/.edf`；`[预览效果]` 只画 mask 前后 1D，`[生成 Mask 2D]` 按范围（当前图像 / 勾选文件）建产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的操作步骤见《使用说明》第 8 节；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
 
 ## 路线图
 
-寻峰、峰形拟合与全谱（Le Bail/结构）拟合已在 v0.1.5 落地。剩下的：
+寻峰、峰形拟合、W-H、全谱（Le Bail/结构）拟合与四个分析工作台已在 v0.2.0 落地。剩下的：
 
 - 机器学习：物相识别聚类 + 峰形 CNN 分类
 - 实验室光源数据与 Si 标样的实验验证
@@ -188,7 +188,7 @@ python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个
 │   ├── cli.py                  # 命令行共用交互选文件菜单
 │   ├── core/processor.py       # 图像计算（线剖面、自动定位环圆心）
 │   ├── services/               # data_loader · integrator · background · range_selector · ring_metrics · peak_finding · stage_cache
-│   ├── simulation/             # CIF → 理论粉末谱、寻峰/峰形拟合与微结构分析（手写版；pymatgen 可选）
+│   ├── simulation/             # CIF → 理论粉末谱、寻峰/峰形拟合与微结构分析（手写版；pymatgen 核心依赖）
 │   └── gui/                    # PySide6 桌面界面（python -m xrd_toolkit.gui）
 ├── tests/                      # 合成图像单元测试 + 界面集成测试
 ├── docs/                       # 英文 README、详细说明

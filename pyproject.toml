@@ -11,11 +11,13 @@ description = "Modular Python toolkit for 2D X-ray diffraction analysis: calibra
 readme = "README.md"
 requires-python = ">=3.9"
 # PySide6 是 GUI 的主依赖（2026-10-03 补：以前漏了，只有开发机的手工
-# conda 环境装着它——陌生人 pip install 完根本起不来界面）
-dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai", "PySide6"]
+# conda 环境装着它——陌生人 pip install 完根本起不来界面）。
+# pymatgen 2026-10-30 起也是主依赖：精修/物相/原位三个 GUI 工作台都要
+# 读 CIF、算结构因子；以前只在 [simulation] 里，下载的 app 点不开它们。
+dependencies = ["numpy", "scipy", "matplotlib", "fabio", "pyfai", "PySide6",
+                "pymatgen"]
 
-# 模拟模块（xrd_toolkit.simulation，RY04 第六周并入）需要 pymatgen；
-# 主程序不依赖它：不装也能正常用，装上才有模拟功能。
+# 兼容旧安装命令：pymatgen 已在主依赖里，这个 extra 保留为别名。
 [project.optional-dependencies]
 simulation = ["pymatgen"]
 

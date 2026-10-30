@@ -407,7 +407,7 @@ class RefineWorkbench(QWidget):
             seen.append(path)
             self.cif_combo.addItem(path.stem, str(path))
 
-        base = paths.ROOT / "data" / "structures"
+        base = paths.structures_dir()
         if base.is_dir():
             for path in sorted(base.glob("*.cif")):
                 add(path)
@@ -441,7 +441,7 @@ class RefineWorkbench(QWidget):
         self._set_status("已选好曲线与结构，点 [开始精修]")
 
     def _open_cif(self):
-        start = paths.ROOT / "data" / "structures"
+        start = paths.structures_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "打开 CIF", str(start),
             "CIF (*.cif);;所有文件 (*)")
@@ -470,7 +470,7 @@ class RefineWorkbench(QWidget):
         return True
 
     def _choose_extra_cif(self):
-        start = paths.ROOT / "data" / "structures"
+        start = paths.structures_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "加入额外相 CIF", str(start),
             "CIF (*.cif);;所有文件 (*)")

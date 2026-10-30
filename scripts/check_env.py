@@ -52,7 +52,8 @@ def main() -> int:
     # ── 2. 第三方依赖（pyproject 的 dependencies + GUI 的 Qt 绑定）──
     import importlib
 
-    deps = ["numpy", "scipy", "matplotlib", "fabio", "pyFAI", "PySide6"]
+    deps = ["numpy", "scipy", "matplotlib", "fabio", "pyFAI", "PySide6",
+            "pymatgen"]
     missing = []
     vers = []
     for name in deps:

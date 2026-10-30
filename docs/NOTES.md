@@ -285,7 +285,7 @@ blitting, so strokes only redraw the overlay — the mask itself stays
 full-resolution. Overlay colors mark provenance: red = brush/rectangle,
 cyan = isolated hot pixels, green = whole-ring outliers.
 
-Quick start: `docs/MASK.zh-CN.md`. Tests: `tests/test_mask.py`,
+Quick start: the Mask chapter of `docs/使用说明.html` (section 8). Tests: `tests/test_mask.py`,
 `tests/test_mask_editor.py`, `tests/test_masked2d.py`.
 
 ## LMFP in-situ three-phase batch

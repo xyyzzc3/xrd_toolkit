@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
 版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
 
-## [Unreleased]
+## [0.2.0rc1] — 2026-10-30
 
 ### 拟合（模拟/精修）
 

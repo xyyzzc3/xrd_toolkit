@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (collect_data_files,
+                                     collect_dynamic_libs,
                                      collect_submodules)
 
 HERE = Path(SPECPATH)              # packaging/（PyInstaller 注入的全局）
@@ -66,11 +67,25 @@ datas += [(str(ROOT / "docs" / "使用说明.html"), "xrd_toolkit"),
           (str(HERE / "THIRD_PARTY_NOTICES.txt"), "xrd_toolkit"),
           # 运行时窗口图标（Windows 任务栏用；见 app._set_app_icon）
           (str(HERE / "icon.png"), "xrd_toolkit")]
+# ⑤ 参考 CIF：精修 / 物相 / 原位三个工作台的默认相库（paths.structures_dir）
+datas += [(str(ROOT / "data" / "structures"), "xrd_toolkit/data/structures")]
+# ⑥ pymatgen（CIF 解析、结构因子；2026-10-30 起是 GUI 分析工作台的核心依赖）
+datas += collect_data_files("pymatgen")
+binaries = collect_dynamic_libs("spglib")
 
 hiddenimports = []
 hiddenimports += collect_submodules("fabio")        # 动态注册的格式表
 hiddenimports += collect_submodules("pyFAI.ext")    # cython 加速模块
 hiddenimports += ["silx.image.marchingsquares"]     # pyFAI.goniometer 的硬依赖
+hiddenimports += collect_submodules("pymatgen")     # CIF / 对称群 / 元素数据
+hiddenimports += collect_submodules("spglib")
+# 函数内延迟导入的新工作台（显式钉住，别指望静态分析全收）
+hiddenimports += ["xrd_toolkit.gui.refine_workbench",
+                  "xrd_toolkit.gui.phase_workbench",
+                  "xrd_toolkit.gui.insitu_workbench",
+                  "xrd_toolkit.gui.wh_view",
+                  "xrd_toolkit.simulation.insitu",
+                  "xrd_toolkit.simulation.phase_search"]
 
 # 明确不要的：装不下也用不到的大件/开发件（tkinter 是 PyInstaller 经典
 # 误收项；tkagg 后端我们不选——matplotlib.use("qtagg") 钉死了）
@@ -80,7 +95,7 @@ excludes = ["tkinter", "PyQt5", "PyQt6", "PySide2", "IPython",
 a = Analysis(
     [str(HERE / "launcher.py")],
     pathex=[str(ROOT / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     excludes=excludes,

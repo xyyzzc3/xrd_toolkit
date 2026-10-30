@@ -250,7 +250,7 @@ masked 与未遮罩的 1D 是两个不同的源，可并存/并排对比。
   误标 ~18k px，生产用手动画 + 孤立坏点。GSAS-II 的自动 spot mask 也是
   同一思路（按 2θ 环带统计），不是另一类算法。
 
-操作步骤/截图：`docs/MASK.zh-CN.md`（临时独立文档，正式发版并入
+操作步骤/截图：`docs/使用说明.html` 第 8 节（Mask 工作台）；原临时文档已并入
 《使用说明》后删除）；测试：`tests/test_mask.py`、`tests/test_mask_editor.py`、
 `tests/test_masked2d.py`；真数据链路：`scripts/check_gui.py` I 节。
 

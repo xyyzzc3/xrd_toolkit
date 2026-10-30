@@ -144,6 +144,28 @@ def run() -> int:
             notices.read_text(encoding="utf-8", errors="replace"),
             "随包第三方许可声明（含 LGPL 全文）", str(notices))
 
+    # ⑧ pymatgen + 参考 CIF（精修/物相/原位工作台的命根子）
+    try:
+        from pymatgen.core import Structure
+        cif = paths.structures_dir() / "LaB6_NIST660c.cif"
+        structure = Structure.from_file(str(cif))
+        _report(len(structure) > 0, "pymatgen + 参考 CIF",
+                f"{cif.name}，{len(structure)} 个位点")
+    except Exception as err:                            # noqa: BLE001
+        _report(False, "pymatgen + 参考 CIF", repr(err))
+
+    # ⑨ 四个分析工作台的模块（函数内延迟导入，打包最容易漏）
+    try:
+        import xrd_toolkit.gui.refine_workbench    # noqa: F401
+        import xrd_toolkit.gui.phase_workbench     # noqa: F401
+        import xrd_toolkit.gui.insitu_workbench    # noqa: F401
+        import xrd_toolkit.gui.wh_view             # noqa: F401
+        import xrd_toolkit.simulation.insitu       # noqa: F401
+        import xrd_toolkit.simulation.phase_search  # noqa: F401
+        _report(True, "分析工作台模块（精修/物相/原位/W-H）")
+    except Exception as err:                            # noqa: BLE001
+        _report(False, "分析工作台模块（精修/物相/原位/W-H）", repr(err))
+
     return _finish()
 
 

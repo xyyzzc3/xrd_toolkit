@@ -45,9 +45,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from xrd_toolkit.simulation import plot_fit  # noqa: E402
 from xrd_toolkit.simulation.insitu import (  # noqa: E402
     DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, FIRST_NFEV, FRAME_NFEV,
-    InSituBatch, _cell, _extra_phases, _fractions, _fraction_esd,
-    _frames, _instrument, _row, _status, _tag, _write_summary,
-    frames_in_dir, prepare_setup)
+    LAB6_CIF, LAB6_TIF, InSituBatch, _cell, _extra_phases, _fractions,
+    _fraction_esd, _frames, _instrument, _row, _status, _tag,
+    _write_summary, frames_in_dir, prepare_setup)
 
 DEFAULT_DATA = Path.home() / "Desktop" / "lmfpdata"
 DEFAULT_MASK = Path("outputs") / "masks" / "lmfp1_lab6_mask.npy"
@@ -103,6 +103,9 @@ def main():
     ap.add_argument("--rich", default=str(DEFAULT_RICH))
     ap.add_argument("--poor", default=str(DEFAULT_POOR))
     ap.add_argument("--al", default=str(DEFAULT_AL))
+    ap.add_argument("--lab6", default=str(LAB6_TIF),
+                    help="LaB₆ 标样帧（用来定仪器峰形）")
+    ap.add_argument("--lab6-cif", default=str(LAB6_CIF))
     ap.add_argument("--outdir", default=str(
         Path(tempfile.gettempdir()) / "xrd_toolkit_insitu"),
         help="输出目录（默认系统临时目录；交付时用 outputs/insitu）")
@@ -136,7 +139,9 @@ def main():
     try:
         batch = prepare_setup(
             args.config, rich_path=args.rich, poor_path=args.poor,
-            al_path=args.al, mask_path=mask_path, max_rwp=args.max_rwp,
+            al_path=args.al, mask_path=mask_path,
+            lab6_tif=args.lab6, lab6_cif=args.lab6_cif,
+            max_rwp=args.max_rwp,
             first_nfev=args.first_nfev, frame_nfev=args.frame_nfev)
     except Exception as err:                       # noqa: BLE001
         ap.error(f"准备失败：{err}")
@@ -174,9 +179,11 @@ def main():
 
     if batch.fitted:
         picks = []
-        for idx in (0, len(batch.fitted) // 2, len(batch.fitted) - 1):
-            if idx not in {p[0] for p in picks}:
-                picks.append(batch.fitted[idx])
+        seen = set()
+        for pos in (0, len(batch.fitted) // 2, len(batch.fitted) - 1):
+            if pos not in seen:          # 少帧时三个位置会重合，只画一次
+                seen.add(pos)
+                picks.append(batch.fitted[pos])
         for i, path, res, f_rich, status in picks:
             out = outdir / f"insitu_fit_frame_{i:03d}.png"
             plot_fit(

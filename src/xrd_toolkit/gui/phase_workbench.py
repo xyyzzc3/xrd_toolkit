@@ -134,7 +134,7 @@ class PhaseWorkbench(QWidget):
         self.main = main_window
         self.setObjectName("phase_workbench")
 
-        self.lib_dir = paths.ROOT / "data" / "structures"
+        self.lib_dir = paths.structures_dir()
         self.rows = []
         self.curve = None
         self._task = None

@@ -50,7 +50,8 @@ def _fmt(value, digits=3):
 
 
 def _prepare_worker(config_name, rich_path, poor_path, al_path, mask_path,
-                    max_rwp, first_nfev, frame_nfev, npt, tth_min, tth_max):
+                    lab6_path, max_rwp, first_nfev, frame_nfev, npt,
+                    tth_min, tth_max):
     """后台准备：读结构 + LaB₆ 定仪器 + 读 mask，返回 InSituBatch。"""
     try:
         from xrd_toolkit.simulation.insitu import prepare_setup
@@ -58,8 +59,8 @@ def _prepare_worker(config_name, rich_path, poor_path, al_path, mask_path,
         raise RuntimeError(str(err)) from err
     return prepare_setup(
         config_name, rich_path=rich_path, poor_path=poor_path,
-        al_path=al_path, mask_path=mask_path, max_rwp=max_rwp,
-        first_nfev=first_nfev, frame_nfev=frame_nfev,
+        al_path=al_path, mask_path=mask_path, lab6_tif=lab6_path,
+        max_rwp=max_rwp, first_nfev=first_nfev, frame_nfev=frame_nfev,
         npt=npt, tth_min=tth_min, tth_max=tth_max)
 
 
@@ -73,16 +74,24 @@ class InSituWorkbench(QWidget):
 
         try:
             from xrd_toolkit.simulation.insitu import (
-                DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, frames_in_dir)
+                DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, LAB6_TIF,
+                frames_in_dir)
             self._frames_in_dir = frames_in_dir
         except ImportError:
             DEFAULT_RICH = DEFAULT_POOR = DEFAULT_AL = None
+            LAB6_TIF = None
             self._frames_in_dir = lambda *a, **k: []
 
         default_data = Path.home() / "Desktop" / "lmfpdata"
         if not default_data.is_dir():
-            default_data = paths.ROOT / "data"
+            repo_data = paths.ROOT / "data"
+            default_data = (repo_data if repo_data.is_dir()
+                            else Path.home())
         self.data_dir = default_data
+        # 仓库样例只在开发机有；打包后由用户选自己的 LaB₆ 标样帧
+        self.lab6_path = (Path(LAB6_TIF)
+                          if LAB6_TIF is not None and Path(LAB6_TIF).is_file()
+                          else None)
         # 与命令行同一个默认 mask（只在 LMFP 几何下自动带；其它配置按不遮）
         default_mask = (paths.default_outputs_dir() / "masks"
                         / "lmfp1_lab6_mask.npy")
@@ -107,6 +116,7 @@ class InSituWorkbench(QWidget):
             self.mask_label.setToolTip(str(self.mask_path))
         self._refresh_data_label()
         self._refresh_phase_labels()
+        self._refresh_lab6_label()
         self._draw_trends()
 
     # ── 界面组装 ─────────────────────────────────────────────
@@ -175,6 +185,21 @@ class InSituWorkbench(QWidget):
                 lambda _=False, k=key: self._choose_phase(k))
             row.addWidget(btn)
             left_lay.addLayout(row)
+
+        lab6_row = QHBoxLayout()
+        lab6_row.setSpacing(4)
+        lab6_row.addWidget(QLabel("LaB₆ 标样图"))
+        self.lab6_label = QLabel("未选")
+        self.lab6_label.setStyleSheet("color: gray;")
+        self.lab6_label.setWordWrap(True)
+        self.lab6_label.setMinimumWidth(0)
+        self.lab6_label.setSizePolicy(QSizePolicy.Ignored,
+                                      QSizePolicy.Preferred)
+        lab6_row.addWidget(self.lab6_label, 1)
+        lab6_btn = QPushButton("换…")
+        lab6_btn.clicked.connect(self._choose_lab6)
+        lab6_row.addWidget(lab6_btn)
+        left_lay.addLayout(lab6_row)
 
         left_lay.addWidget(_section("参数"))
         self.max_rwp = QDoubleSpinBox()
@@ -322,7 +347,7 @@ class InSituWorkbench(QWidget):
         self.mask_label.setToolTip("")
 
     def _choose_phase(self, key):
-        start = paths.ROOT / "data" / "structures"
+        start = paths.structures_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 CIF 结构", str(start), "CIF (*.cif);;所有文件 (*)")
         if not path:
@@ -338,6 +363,25 @@ class InSituWorkbench(QWidget):
                 name = name[:17] + "…"
             label.setText(name)
             label.setToolTip(str(path) if path else "")
+
+    def _choose_lab6(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 LaB₆ 标样帧", str(self.data_dir),
+            "衍射图 (*.tif *.tiff *.edf *.cbf);;所有文件 (*)")
+        if not path:
+            return
+        self.lab6_path = Path(path)
+        self._refresh_lab6_label()
+
+    def _refresh_lab6_label(self):
+        path = self.lab6_path
+        name = path.name if path else "未选"
+        if len(name) > 18:
+            name = name[:17] + "…"
+        self.lab6_label.setText(name)
+        self.lab6_label.setToolTip(
+            str(path) if path else
+            "原位工作台需要一张 LaB₆ 标样帧来定仪器峰形")
 
     def _choose_outdir(self):
         chosen = QFileDialog.getExistingDirectory(
@@ -361,6 +405,9 @@ class InSituWorkbench(QWidget):
             if not self.phase_paths.get(key):
                 self._set_status(f"先给{text}选一张 CIF")
                 return
+        if self.lab6_path is None:
+            self._set_status("先选一张 LaB₆ 标样帧（用来定仪器峰形）")
+            return
         self._stop = False
         self._index = 0
         self.batch = None
@@ -393,6 +440,7 @@ class InSituWorkbench(QWidget):
             str(self.phase_paths["rich"]), str(self.phase_paths["poor"]),
             str(self.phase_paths["al"]),
             (str(self.mask_path) if self.mask_path else None),
+            str(self.lab6_path),
             float(self.max_rwp.value()), int(self.first_nfev.value()),
             int(self.frame_nfev.value()), int(self.npt.value()),
             float(self.tth_min.value()), float(self.tth_max.value()),

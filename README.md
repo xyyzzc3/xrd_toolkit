@@ -100,7 +100,8 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
 - **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
 - **Desktop app over the same engine** — five stage entrances, a live parameter panel, on-curve peak finding with a peak table, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF export.
-- **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is an optional extra: `pip install 'xrd-toolkit[simulation]'`).
+- **Four analysis workbenches** — Mask (paint + hot spots + recipes → Mask 2D product), phase screening (CIF library, element filter, multi-phase overlay, CSV), full-pattern refinement (extra phases, LaB₆ instrument baseline, adopt-as-panel) and the in-situ three-phase batch (per-frame table + trend plot). They share the same engines as the CLI scripts.
+- **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is part of the core dependencies since 0.2, since the GUI workbenches need it — the `[simulation]` extra remains as an alias).
 - **Peak finding and single-peak profile fitting** — automatic peak detection with a robust noise estimate, prominence/height thresholds, minimum spacing and optional FWHM filtering (`services/peak_finding.py`); Gaussian, Lorentzian, pseudo-Voigt and split-Pearson VII single-peak fits with local backgrounds (`scripts/fit_peaks.py`), plus Scherrer size and instrument-corrected Williamson–Hall analysis (quadrature or linear subtraction of a LaB₆ standard's width).
 - **Full-pattern fitting of measured standard patterns** — an independent implementation of the Thompson–Cox–Hastings pseudo-Voigt profile with Caglioti/Lorentzian width terms, following the GSAS-II PXC parameter conventions and units (Caglioti, Paoletti & Ricci, 1958; Thompson, Cox & Hastings, 1987; Toby & Von Dreele, 2013), with the profile cross-checked against GSAS-II simulations. Supports Le Bail or structural fits, extra phases, symmetry-constrained atomic-coordinate and site-occupancy refinement, and fixed-pixel hot-spot masking. The LaB₆ standard fixes the instrument profile and its own pattern is fitted with Le Bail intensities (Rwp 4.24%); example: `showcase/simulation/sim_xrd_fit_LaB6.png`.
 
@@ -109,7 +110,7 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 ```bash
 conda env create -f environment.yml    # once
 conda activate XRD_Toolkit_Environment
-pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI / PySide6 come along
+pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI / PySide6 / pymatgen come along
 python -m xrd_toolkit.gui              # the desktop app
 ```
 
@@ -157,15 +158,15 @@ sources that can be compared side by side.
 (Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly
 flags, a CSV summary and split timings. A three-frame GSAS-II cross-check
 (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
-trends against our fit. **Mask quick start (Chinese):**
-[docs/MASK.zh-CN.md](docs/MASK.zh-CN.md). Fit parameters, the in-situ
+trends against our fit. **Mask quick start:** the Mask chapter of the Chinese manual
+(`docs/使用说明.html`, section 8). Fit parameters, the in-situ
 results and the cross-check: [docs/NOTES.md](docs/NOTES.md)
 (`#mask-and-mask-2d-products`, `#lmfp-in-situ-three-phase-batch`).
 
 ## Roadmap
 
 Peak finding, profile fitting and full-pattern (Le Bail/structural) fitting
-landed in v0.1.5. The remaining items are:
+landed in v0.2.0, together with the four analysis workbenches. The remaining items are:
 
 - Machine learning: clustering for phase identification and CNN peak-shape classification
 - Experimental validation on laboratory-source data and an Si standard
@@ -184,7 +185,7 @@ landed in v0.1.5. The remaining items are:
 │   ├── cli.py                     # shared interactive file-selection menu
 │   ├── core/processor.py          # image processing (line profiles, ring-centre localization)
 │   ├── services/                  # data_loader · integrator · background · range_selector · ring_metrics · peak_finding · stage_cache
-│   ├── simulation/                # CIF → powder pattern, peak/profile fitting and microstructure (hand-written; pymatgen optional)
+│   ├── simulation/                # CIF → powder pattern, peak/profile fitting and microstructure (hand-written; pymatgen core)
 │   └── gui/                       # PySide6 desktop app (python -m xrd_toolkit.gui)
 ├── tests/                         # synthetic-image unit tests + GUI integration tests
 ├── docs/                          # Chinese README, long-form notes

@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from xrd_toolkit.config import get_config
-from xrd_toolkit.paths import ROOT
+from xrd_toolkit.paths import ROOT, structures_dir
 from xrd_toolkit.services.background import estimate_baseline_sliding
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.integrator import integrate_1d
@@ -32,12 +32,13 @@ from xrd_toolkit.services.mask import load_mask
 from xrd_toolkit.simulation import (
     b_iso_from_cif, fit_pattern, load_structure)
 
-DEFAULT_RICH = ROOT / "data" / "structures" / "LiMn0.6Fe0.4PO4_olivine.cif"
-DEFAULT_POOR = (ROOT / "data" / "structures"
-                / "Mn0.6Fe0.4PO4_heterosite_rich_axis.cif")
-DEFAULT_AL = ROOT / "data" / "structures" / "Al_metal.cif"
+_STRUCT = structures_dir()
+DEFAULT_RICH = _STRUCT / "LiMn0.6Fe0.4PO4_olivine.cif"
+DEFAULT_POOR = _STRUCT / "Mn0.6Fe0.4PO4_heterosite_rich_axis.cif"
+DEFAULT_AL = _STRUCT / "Al_metal.cif"
+# 仓库自带的 LaB₆ 标样帧只用于开发/命令行；打包后由用户在界面里选
 LAB6_TIF = ROOT / "data" / "lab6-00024.tif"
-LAB6_CIF = ROOT / "data" / "structures" / "LaB6_NIST660c.cif"
+LAB6_CIF = _STRUCT / "LaB6_NIST660c.cif"
 
 # 与 fit_lmfp.py 一致的 Al 参考晶胞（实测峰位）
 AL_A = 4.061
@@ -424,19 +425,22 @@ class InSituBatch:
 
 
 def prepare_setup(config_name="lmfp1_lab6", *, rich_path=None, poor_path=None,
-                  al_path=None, mask_path=None, max_rwp=20.0,
+                  al_path=None, mask_path=None, lab6_tif=None,
+                  lab6_cif=None, max_rwp=20.0,
                   first_nfev=FIRST_NFEV, frame_nfev=FRAME_NFEV,
                   npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
     """GUI [原位] 的准备步骤：读结构、定仪器、读 mask，返回 InSituBatch。
 
-    这一步含 LaB6 拟合（数秒），GUI 要放在后台线程跑。
+    lab6_tif 是用户的 LaB₆ 标样帧（打包后仓库样例不带）；None 时退回
+    仓库里的 `data/lab6-00024.tif`，没有就报错。这一步含拟合（数秒），
+    GUI 要放在后台线程跑。
     """
     geom = dict(get_config(config_name)["geometry"])
     lam = geom["wavelength_m"] * 1e10
     rich = load_structure(str(rich_path or DEFAULT_RICH))
     poor = load_structure(str(poor_path or DEFAULT_POOR))
     al = load_structure(str(al_path or DEFAULT_AL))
-    inst = _instrument(geom, lam)
+    inst = _instrument(geom, lam, lab6_tif=lab6_tif, lab6_cif=lab6_cif)
     if inst is None:
         raise RuntimeError("没有 LaB₆ 标样图，无法固定仪器峰形")
     mask = None
