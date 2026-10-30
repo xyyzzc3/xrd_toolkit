@@ -43,6 +43,20 @@ class TestHotPixelMask(unittest.TestCase):
         # 峰值不够的小亮团不动
         self.assertFalse(mask[171, 31])
 
+    def test_grow_extends_into_halo_only(self):
+        img = _synthetic()
+        # 给亮团加一圈光晕（1000 counts：高于背景、低于芯）
+        img[143:157, 43:57] = 1000.0
+        img[146:154, 46:54] = 50000.0
+        _c0, core, _ = mask_hot_pixels(img)
+        _c3, grown, info = mask_hot_pixels(img, grow_px=3)
+        self.assertGreater(int(grown.sum()), int(core.sum()))
+        self.assertEqual(info["grow_px"], 3)
+        self.assertTrue(grown[150, 50])          # 芯还在
+        self.assertTrue(grown[144, 44])          # 光晕被扩到
+        self.assertFalse(grown[10, 10])          # 远处背景不动
+        self.assertFalse(grown[30, 150])         # 大面积亮区仍不碰
+
     def test_full_resolution_matches_downsampled(self):
         img = _synthetic()
         _c1, m1, _ = mask_hot_pixels(img, downsample=1)

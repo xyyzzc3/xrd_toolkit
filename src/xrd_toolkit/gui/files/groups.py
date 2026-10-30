@@ -261,7 +261,12 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""
-        leaf = FileItem([f"{raw_item.text(0)} · {tail}"])
+        # 1D/处理产物不继承 Mask 2D 条目上的「Mask2D（未导出配方）」尾巴：
+        # 那条尾巴只说明 mask 配方有没有导出，不该跟着分析结果走。
+        source = gui_sources.source_of(raw_item)
+        base = (gui_sources.panel_display(source)
+                if source is not None else raw_item.text(0))
+        leaf = FileItem([f"{base} · {tail}"])
         leaf.setFlags(leaf.flags() | Qt.ItemIsUserCheckable)
         leaf.setCheckState(0, Qt.Unchecked)
         gui_sources.set_item_source(leaf, raw_item.data(0, Qt.UserRole),

@@ -91,6 +91,12 @@ class TestMaskEditor(unittest.TestCase):
     def _products(self):
         return masked2d.list_products()
 
+    def test_panel_display_drops_mask2d_recipe_tag(self):
+        source = gui_sources.make_source(
+            "/tmp/x.mask2d.npz", display="LMFP_1 · Mask2D（未导出配方）",
+            kind=gui_sources.MASKED2D)
+        self.assertEqual(gui_sources.panel_display(source), "LMFP_1")
+
     def test_toolbar_button_opens_and_reuses_window(self):
         self.assertIsNone(self.w.mask_editor)
         self._open()
@@ -129,6 +135,22 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(int(products[0]["masked_pixels"]), n_brush)
         self.assertEqual(Path(products[0]["raw_path"]),
                          self.img_path.resolve())
+
+    def test_switch_image_restores_per_image_mask(self):
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        n_mask = int(self.ed.mask.sum())
+        self.assertGreater(n_mask, 0)
+
+        self.ed.load_image(other)
+        self.assertEqual(int(self.ed.mask.sum()), 0,
+                         "新图没有 mask，应先清空")
+        self.ed.load_image(self.img_path)
+        self.assertEqual(int(self.ed.mask.sum()), n_mask,
+                         "换回原图应恢复该图自己的 mask")
 
     def test_generate_clears_raw_checks(self):
         self.w.add_files([str(self.img_path)], select=True)
@@ -381,6 +403,9 @@ class TestMaskEditor(unittest.TestCase):
         self._open()
         self.ed.load_image(self.img_path)
         _wait_preview(self.ed)
+        cur = self.ed.scope_combo.findData("current")
+        self.ed.scope_combo.setCurrentIndex(cur)
+        self.ed._update_generate_state()
         self.assertFalse(self.ed.btn_apply.isEnabled())   # 空 mask 不可点
         self.ed._fill_rect((10, 10), (20, 20), True)
         self.ed._update_status()                          # 画笔松手时也会走这里
@@ -400,12 +425,14 @@ class TestMaskEditor(unittest.TestCase):
         _write_image(other)
         self._open()
         self.ed.load_image(self.img_path)
-        self.assertIn("0", self.ed.scope_combo.itemText(1))
+        chk_idx = self.ed.scope_combo.findData("checked")
+        self.assertIn("0", self.ed.scope_combo.itemText(chk_idx))
         self.w.add_files([str(self.img_path), str(other)], select=True)
         QApplication.processEvents()
-        self.assertIn("2", self.ed.scope_combo.itemText(1))
+        self.assertIn("2", self.ed.scope_combo.itemText(chk_idx))
         self.ed._fill_rect((10, 10), (20, 20), True)
-        self.ed.scope_combo.setCurrentIndex(1)            # 勾选范围
+        self.ed._update_status()
+        self.ed.scope_combo.setCurrentIndex(chk_idx)      # 勾选范围
         self.ed.btn_apply.click()
         QApplication.processEvents()
         self.assertEqual(len(self._products()), 2)
@@ -678,6 +705,7 @@ class TestMaskEditor(unittest.TestCase):
         """blit 背景必须不含 overlay，否则橡皮擦不掉旧色块。"""
         self._open()
         self.ed.load_image(self.img_path)
+        _wait_preview(self.ed)
         self.ed.canvas.draw()
         QApplication.processEvents()
         px, py = self.ed.ax_img.transData.transform((100.0, 100.0))

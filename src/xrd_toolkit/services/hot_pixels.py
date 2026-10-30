@@ -52,7 +52,8 @@ def _local_median(img, window, downsample):
 
 def mask_hot_pixels(image, *, window=DEFAULT_WINDOW, ratio=DEFAULT_RATIO,
                     max_area=DEFAULT_MAX_AREA, min_peak=DEFAULT_MIN_PEAK,
-                    downsample=DEFAULT_DOWNSAMPLE):
+                    downsample=DEFAULT_DOWNSAMPLE, grow_px=0,
+                    halo_ratio=2.0):
     """检测孤立亮团并替换为局部中值。
 
     参数：
@@ -63,12 +64,16 @@ def mask_hot_pixels(image, *, window=DEFAULT_WINDOW, ratio=DEFAULT_RATIO,
         min_peak  连通域峰值下限（counts）
         downsample 局部中值的降采样倍数（2 = 先 2×2 均值再 15×15 中值；
                    1 = 全分辨率中值，慢约 4 倍）
+        grow_px   检测到芯之后向外扩几圈（0 = 不扩；GUI 默认 3）
+        halo_ratio 扩张时允许进入的像素下限（相对局部中值，默认 2×）：
+                   只吃光晕，不吃真正的背景/弱环
 
     返回：
         (cleaned, mask, info)
         cleaned   坏点替换成局部中值后的图像（copy）
         mask      bool 数组，True = 被替换的像素
-        info      dict：候选连通域数、掩掉的连通域数、掩掉像素数
+        info      dict：候选连通域数、掩掉的连通域数、掩掉像素数、
+                  扩张像素数
     """
     img = np.asarray(image, dtype=float)
     if img.ndim != 2:
@@ -89,8 +94,28 @@ def mask_hot_pixels(image, *, window=DEFAULT_WINDOW, ratio=DEFAULT_RATIO,
             continue
         mask[sl] |= sel
         kept += 1
+    # 芯 → 光晕：只往“仍然比局部中值亮 halo_ratio 倍”的邻域扩，
+    # 最多 grow_px 圈。默认 0（命令行保持原口径），GUI 默认 3。
+    grown = mask
+    if int(grow_px) > 0 and mask.any():
+        # 用**全图中位背景**做下限，而不是亮团附近的局部中值：大光晕
+        # 会把 15×15 窗口的中值抬起来，按局部值算就永远扩不出去。
+        background = float(np.median(med))
+        floor = max(float(halo_ratio) * max(background, 1.0),
+                    0.02 * float(min_peak))
+        allowed = img > floor
+        structure = np.ones((3, 3), dtype=bool)
+        grown = mask.copy()
+        for _ in range(int(grow_px)):
+            nxt = ndimage.binary_dilation(
+                grown, structure=structure) & allowed
+            if not np.any(nxt & ~grown):
+                break
+            grown = nxt
     cleaned = img.copy()
-    cleaned[mask] = med[mask]
+    cleaned[grown] = med[grown]
     info = {"candidates": int(n), "masked_components": kept,
-            "masked_pixels": int(mask.sum())}
-    return cleaned, mask, info
+            "masked_pixels": int(grown.sum()),
+            "grown_pixels": int(grown.sum() - mask.sum()),
+            "grow_px": int(grow_px)}
+    return cleaned, grown, info

@@ -111,10 +111,11 @@ def _open_source_view(window: QMainWindow, name: str, source) -> str:
     key, dock = _resolve_dock(window, name, source.item)
     if dock is None:
         _apply_range_memory(window, path)   # 甲：新图用该文件自己的范围，不用盒子里的遗留值
-        dock = _open_plot_panel(window, name, key, f"{name}_{source.display}")
+        panel_name = gui_sources.panel_display(source)
+        dock = _open_plot_panel(window, name, key, f"{name}_{panel_name}")
         dock.panel_file = path
         dock.panel_item = source.item
-        dock.panel_display = source.display
+        dock.panel_display = panel_name
         dock.figure_saved = False
         dock.params_snapshot = _data_snapshot(window)
         # 面板先建、数据后到（后台积分）——中间那段别让人对着一块空白
@@ -182,7 +183,7 @@ def _open_product_panel(window: QMainWindow, source) -> str:
         return key
     dock = window.plot_docks.get(key)
     if dock is None:
-        title = f"1D_{source.display}"
+        title = f"1D_{gui_sources.panel_display(source)}"
         dock = _open_plot_panel(window, "1D", key, title)
         dock.panel_display = title
         dock.figure_saved = False
@@ -310,6 +311,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
     for i, source in enumerate(targets):
         path = Path(source.path)
         display = source.display
+        panel_name = gui_sources.panel_display(source)
         key, dock = _resolve_dock(window, name, source.item)
         if dock is None:
             if i and i % 8 == 0:
@@ -319,7 +321,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
                 _log(window, f"正在开面板：{i + 1}/{len(targets)}…")
                 _progress_show(window, len(targets), i + 1)   # 开面板也有进度
                 _settle(window)
-            title = f"{name}_{display}"
+            title = f"{name}_{panel_name}"
             if single_new and source.kind == gui_sources.RAW:
                 _apply_range_memory(window, path)   # 甲：单张新图用该文件自己的范围
             # 新面板级联摆放，现有面板原地不动（开新图不再重排旧图）
@@ -327,7 +329,7 @@ def _plot_view(window: QMainWindow, name: str) -> None:
             dock.panel_file = path   # 面板绑定自己的文件（删文件不影响已开的面板）
             dock.panel_item = source.item   # 面板绑定自己的列表条目（重名条目各自成图）
             show_placeholder(dock, "正在计算…")   # 同上：算完自然被冲掉
-            dock.panel_display = display   # 显示名（标题/日志/默认存盘名用）
+            dock.panel_display = panel_name   # 显示名（标题/日志/默认存盘名用）
             dock.figure_saved = False   # 有没有存过盘（关窗询问用）
             dock.params_snapshot = _data_snapshot(window)   # 开图快照：数据用当前值，显示从默认起步
             if merged:

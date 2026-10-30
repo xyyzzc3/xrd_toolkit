@@ -61,6 +61,21 @@ def make_source(path, display: str = None, kind: str = RAW, key: str = None,
                            display=display or p.name)
 
 
+def panel_display(source) -> str:
+    """图面板标题 / 默认存盘名用的显示名。
+
+    Mask 2D 的文件栏条目为了说明“配方有没有导出”，名字里带
+    ` · Mask2D（未导出配方）`；做成 1D 之后这个名字就不该再跟着走，
+    只留原始文件名。
+    """
+    text = (getattr(source, "display", None)
+            or Path(getattr(source, "path", "")).name)
+    if (getattr(source, "kind", None) == MASKED2D
+            and " · Mask2D" in text):
+        text = text.split(" · Mask2D", 1)[0]
+    return text
+
+
 def source_of(item) -> SimpleNamespace:
     """条目 → Source（纯读，改不了东西）。"""
     if item is None:

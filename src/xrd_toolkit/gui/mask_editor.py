@@ -27,6 +27,8 @@ mask 永远是全分辨率；只有**显示**按视图降采样（块内取最�
 像素约定：mask[y, x] = True 表示该像素被遮掉；与
 `services.mask`、`services.integrator` 一致。mask 必须与图像同形。
 """
+from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -138,6 +140,8 @@ class MaskWorkbench(QWidget):
         self._preview_task = None
         self._preview_epoch = 0
         self._preview_cache = None
+        # 每张图各记一份 mask（换图按图载入；最近 4 张，防 81 帧吃内存）
+        self._mask_cache = OrderedDict()
         # 已经生成过产物的 (原图路径, mask 哈希)：用来把按钮标成"已生成"
         self._generated = set()
         self._image_combo_sig = None
@@ -307,6 +311,62 @@ class MaskWorkbench(QWidget):
         row3.addStretch(1)
         root.addLayout(row3)
 
+        # ── 高级：孤立坏点的检测参数（默认收起）───────────────────
+        adv_toggle = QHBoxLayout()
+        self.btn_adv = QPushButton("高级（孤立坏点参数）")
+        self.btn_adv.setCheckable(True)
+        self.btn_adv.setToolTip(
+            "中值窗口 / 亮斑倍数 / 面积上限 / 峰值下限 / 扩张 px；"
+            "默认值按当前 LMFP 面板调过")
+        adv_toggle.addWidget(self.btn_adv)
+        adv_toggle.addStretch(1)
+        root.addLayout(adv_toggle)
+        self.adv_panel = QWidget()
+        adv = QHBoxLayout(self.adv_panel)
+        adv.setContentsMargins(0, 0, 0, 0)
+        adv.setSpacing(6)
+        self.adv_window = QSpinBox()
+        self.adv_window.setRange(3, 51)
+        self.adv_window.setSingleStep(2)
+        self.adv_window.setValue(15)
+        self.adv_window.setToolTip("局部中值窗口（奇数，px）；越大越只看大尺度背景")
+        self.adv_ratio = QDoubleSpinBox()
+        self.adv_ratio.setRange(1.0, 50.0)
+        self.adv_ratio.setDecimals(1)
+        self.adv_ratio.setSingleStep(0.5)
+        self.adv_ratio.setValue(8.0)
+        self.adv_ratio.setSuffix(" ×")
+        self.adv_ratio.setToolTip("比局部中值亮多少倍才算候选；越小越激进")
+        self.adv_max_area = QSpinBox()
+        self.adv_max_area.setRange(10, 100000)
+        self.adv_max_area.setSingleStep(50)
+        self.adv_max_area.setValue(300)
+        self.adv_max_area.setSuffix(" px")
+        self.adv_max_area.setToolTip("连通域面积上限；超过视为真实环/亮区，不动")
+        self.adv_min_peak = QDoubleSpinBox()
+        self.adv_min_peak.setRange(0.0, 1.0e7)
+        self.adv_min_peak.setDecimals(0)
+        self.adv_min_peak.setValue(20000.0)
+        self.adv_min_peak.setSuffix(" counts")
+        self.adv_min_peak.setToolTip("候选连通域的峰值下限")
+        self.adv_grow = QSpinBox()
+        self.adv_grow.setRange(0, 10)
+        self.adv_grow.setValue(3)
+        self.adv_grow.setSuffix(" px")
+        self.adv_grow.setToolTip(
+            "检测到芯后向外扩几圈（只吃比背景亮的光晕）；0 = 只遮芯")
+        for text, widget in (("窗口", self.adv_window),
+                             ("亮斑倍数", self.adv_ratio),
+                             ("面积上限", self.adv_max_area),
+                             ("峰值下限", self.adv_min_peak),
+                             ("扩张", self.adv_grow)):
+            adv.addWidget(QLabel(text))
+            adv.addWidget(widget)
+        adv.addStretch(1)
+        self.adv_panel.setVisible(False)
+        self.btn_adv.toggled.connect(self.adv_panel.setVisible)
+        root.addWidget(self.adv_panel)
+
         self.fig = Figure(figsize=(10, 7.4))
         gs = self.fig.add_gridspec(2, 1, height_ratios=[3.4, 1.25],
                                    hspace=0.28)
@@ -359,9 +419,11 @@ class MaskWorkbench(QWidget):
         self.btn_preview.clicked.connect(self._preview_effect)
         row4.addWidget(self.btn_preview)
         self.scope_combo = QComboBox()
-        self.scope_combo.addItem("当前图像", "current")
         self.scope_combo.addItem("勾选的 0 个文件", "checked")
-        self.scope_combo.setToolTip("生成 Mask 2D 的范围")
+        self.scope_combo.addItem("当前图像", "current")
+        self.scope_combo.setCurrentIndex(0)      # 默认：勾选的文件
+        self.scope_combo.setToolTip(
+            "生成 Mask 2D 的范围（默认勾选的文件；可换成当前图像）")
         self.scope_combo.currentIndexChanged.connect(
             lambda _i: self._update_generate_state())
         row4.addWidget(self.scope_combo)
@@ -606,6 +668,73 @@ class MaskWorkbench(QWidget):
             return
         self.load_image(Path(path))
 
+    def _stash_mask(self):
+        """把当前图的 mask 记进内存缓存（换图前调用，最近 4 张）。"""
+        if self.image_path is None or self.mask is None:
+            return
+        key = str(Path(self.image_path).expanduser().resolve())
+        self._mask_cache[key] = (
+            self.mask.copy(),
+            None if self._source is None else self._source.copy(),
+            self.mask_path)
+        self._mask_cache.move_to_end(key)
+        while len(self._mask_cache) > 4:
+            self._mask_cache.popitem(last=False)
+
+    def _mask_for_image(self, path, shape):
+        """按图取 mask：本会话缓存 → 已保存配方 → 该图的 Mask 2D。"""
+        key = str(Path(path).expanduser().resolve())
+        cached = self._mask_cache.get(key)
+        if cached is not None and cached[0].shape == tuple(shape):
+            self._mask_cache.move_to_end(key)
+            mask, source, mask_path = cached
+            return (mask.copy(),
+                    None if source is None else source.copy(),
+                    mask_path)
+        hit = self._recipe_for_image(path, shape)
+        if hit is not None:
+            return hit
+        return self._manifest_for_image(path, shape)
+
+    def _recipe_for_image(self, path, shape):
+        folder = Path(OUTPUTS_DIR) / "masks"
+        if not folder.is_dir():
+            return None
+        hits = []
+        for p in folder.glob(f"*{RECIPE_SUFFIX}"):
+            try:
+                mask, source, meta = load_recipe(p)
+            except Exception:                          # noqa: BLE001
+                continue
+            if mask.shape != tuple(shape):
+                continue
+            if str(meta.get("source_image") or "") != Path(path).name:
+                continue
+            hits.append((p.stat().st_mtime, mask, source, p))
+        if not hits:
+            return None
+        hits.sort(key=lambda item: item[0], reverse=True)
+        _mtime, mask, source, p = hits[0]
+        return mask, source, p
+
+    def _manifest_for_image(self, path, shape):
+        target = str(Path(path).expanduser().resolve())
+        hits = []
+        for meta in masked2d.list_products():
+            if str(Path(meta.get("raw_path") or "").resolve()) != target:
+                continue
+            if list(map(int, meta.get("shape") or [])) != list(map(int, shape)):
+                continue
+            hits.append(meta)
+        if not hits:
+            return None
+        meta = max(hits, key=lambda m: float(m.get("created") or 0.0))
+        _raw, mask, _meta = masked2d.load_manifest(meta["path"])
+        source = np.where(mask, SRC_MANUAL, 0).astype(np.uint8)
+        mask_path = (Path(meta["mask_path"])
+                     if meta.get("mask_path") else None)
+        return mask, source, mask_path
+
     def load_image(self, path):
         try:
             img = load_diffraction_image(str(path))
@@ -615,6 +744,7 @@ class MaskWorkbench(QWidget):
         if img.ndim != 2:
             QMessageBox.critical(self, "读取失败", "不是 2D 图像")
             return
+        self._stash_mask()                  # 换图前：把当前图的 mask 记下来
         if np.ma.isMaskedArray(img):
             # 从 Mask 2D 产物打开：解析到原始图，并把它的 mask 载入编辑器
             raw_path, mask0, _meta = masked2d.load_manifest(path)
@@ -627,8 +757,12 @@ class MaskWorkbench(QWidget):
         else:
             self.image = img
             self.image_path = Path(path)
-            if self.mask is None or self.mask.shape != img.shape:
+            loaded = self._mask_for_image(Path(path), img.shape)
+            if loaded is not None:
+                self.mask, self._source, self.mask_path = loaded
+            else:
                 self.mask = np.zeros(img.shape, dtype=bool)
+                self._source = np.zeros(img.shape, dtype=np.uint8)
                 self.mask_path = None
         self._ensure_source()
         self._undo.clear()
@@ -1251,14 +1385,22 @@ class MaskWorkbench(QWidget):
             self._update_overlay()
             self._update_status()
             self._schedule_preview()
-            hint = ("（青色；点 [查看改动] 定位）" if new.any()
+            hint = (f"（青色；扩张 {info.get('grown_pixels', 0)} px；"
+                    "点 [查看改动] 定位）" if new.any()
                     else "（没有新增像素）")
             self._say(f"Mask 孤立坏点："
                            f"{info.get('masked_components', '?')} 团 / "
                            f"{info.get('masked_pixels', int(hot.sum()))} px"
                            f"{hint}")
 
-        self._start_auto("孤立坏点", mask_hot_pixels, (image,), apply)
+        fn = partial(
+            mask_hot_pixels,
+            window=int(self.adv_window.value()),
+            ratio=float(self.adv_ratio.value()),
+            max_area=int(self.adv_max_area.value()),
+            min_peak=float(self.adv_min_peak.value()),
+            grow_px=int(self.adv_grow.value()))
+        self._start_auto("孤立坏点", fn, (image,), apply)
 
     def _auto_radial(self):
         if self.image is None:
@@ -1431,8 +1573,10 @@ class MaskWorkbench(QWidget):
         except Exception:                              # noqa: BLE001
             n = 0
         if hasattr(self, "scope_combo"):
-            self.scope_combo.setItemText(
-                1, f"勾选的 {n} 个文件" if n else "勾选的 0 个文件")
+            idx = self.scope_combo.findData("checked")
+            if idx >= 0:
+                self.scope_combo.setItemText(
+                    idx, f"勾选的 {n} 个文件" if n else "勾选的 0 个文件")
         self._refresh_image_combo()
         self._update_generate_state()
 
@@ -1468,7 +1612,7 @@ class MaskWorkbench(QWidget):
             self._say("Mask 为空：没有生成 Mask 后的 2D")
             self.main.status_text.setText("Mask 为空：未生成产物")
             return
-        label = self.mask_path.name if self.mask_path else "未保存"
+        label = self.mask_path.name if self.mask_path else "未导出配方"
         try:
             self._create_masked2d([self.image_path], label=label)
         except Exception as err:                       # noqa: BLE001
@@ -1498,7 +1642,7 @@ class MaskWorkbench(QWidget):
         if not raw:
             self._say("没有勾选的原始数据：先在文件栏勾上要应用 mask 的文件")
             return
-        label = self.mask_path.name if self.mask_path else "未保存"
+        label = self.mask_path.name if self.mask_path else "未导出配方"
         made = 0
         made_paths = []
         for source in raw:
@@ -1510,7 +1654,10 @@ class MaskWorkbench(QWidget):
                 self._say(f"Mask 2D 生成失败：{source.display}——{err}")
         if made_paths:
             self._uncheck_raw(made_paths)
-            self.scope_combo.setCurrentIndex(0)   # 勾选已清零：回到当前图像
+            idx = self.scope_combo.findData("current")
+            if idx >= 0:
+                # 勾选已清零：回到当前图像，按钮才能显示「已生成（无改动）」
+                self.scope_combo.setCurrentIndex(idx)
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"Mask 后的 2D 已生成 {made} 条")
