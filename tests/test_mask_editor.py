@@ -55,6 +55,15 @@ def _wait_task(editor):
     QApplication.processEvents()
 
 
+def _wait_preview(editor):
+    for _ in range(500):
+        QApplication.processEvents()
+        time.sleep(0.01)
+        if editor._preview_task is None:
+            break
+    QApplication.processEvents()
+
+
 class TestMaskEditor(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
@@ -121,6 +130,50 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(Path(products[0]["raw_path"]),
                          self.img_path.resolve())
 
+    def test_generate_clears_raw_checks(self):
+        self.w.add_files([str(self.img_path)], select=True)
+        QApplication.processEvents()
+        self._open()
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._apply_to_main()
+        QApplication.processEvents()
+        raws = [s for s in gui_sources.all_sources(self.w)
+                if s.kind == gui_sources.RAW]
+        self.assertTrue(raws)
+        for source in raws:
+            self.assertEqual(source.item.checkState(), Qt.Unchecked,
+                             "生成 Mask 2D 后原始数据应取消勾选")
+
+    def test_live_preview_and_locator_context(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        self.assertTrue(self.ed.chk_preview.isChecked())
+        self.assertIn("推荐", self.ed.btn_hot.text())
+        self.assertIn("实验性", self.ed.btn_radial.text())
+        self.assertIn("仅整环离群", self.ed.n_sigma_label.text())
+
+        self.ed._fill_rect((50, 50), (60, 60), True)
+        with mock.patch.object(
+                gui_mask_editor, "_preview_worker",
+                return_value=(np.linspace(1.0, 8.0, 100), np.ones(100),
+                              np.linspace(1.0, 8.0, 100), np.zeros(100))):
+            self.ed._refresh_preview()
+            for _ in range(500):
+                QApplication.processEvents()
+                time.sleep(0.01)
+                if self.ed._preview_task is None:
+                    break
+        QApplication.processEvents()
+        self.assertEqual(len(self.ed.ax_prev.lines), 2)
+
+        added = np.zeros_like(self.ed.mask)
+        added[100, 100] = True
+        self.ed._set_last_added(added)
+        self.ed._locate_changes()
+        self.assertIsNotNone(self.ed._locate_patch)
+        self.assertLessEqual(self.ed._zoom_factor(), 3.0,
+                             "1×1 改动不该把视图放大到极限")
+
     def test_apply_twice_dedupes(self):
         self._open()
         self.ed.load_image(self.img_path)
@@ -186,18 +239,21 @@ class TestMaskEditor(unittest.TestCase):
         self.ed.load_image(self.img_path)
         self.ed._paint_segment((10, 10), (20, 20), True)
         self.ed.btn_preview.click()
-        QApplication.processEvents()
+        _wait_preview(self.ed)
         self.assertEqual(len(self.ed.ax_prev.lines), 2)
         self.assertEqual(len(self._products()), 0)
 
     def test_preview_uses_current_2theta_range(self):
         self._open()
         self.ed.load_image(self.img_path)
+        _wait_preview(self.ed)
         self.ed._paint_segment((10, 10), (20, 20), True)
+        self.ed._preview_cache = None
         with mock.patch.object(
                 gui_mask_editor, "integrate_1d",
                 return_value=(np.arange(3.0), np.arange(3.0))) as integ:
             self.ed.btn_preview.click()
+            _wait_preview(self.ed)
         self.assertEqual(integ.call_count, 2)
         for call in integ.call_args_list:
             self.assertIn("tth_min_deg", call.kwargs)
@@ -324,13 +380,14 @@ class TestMaskEditor(unittest.TestCase):
     def test_generate_button_makes_product_and_goes_dirty(self):
         self._open()
         self.ed.load_image(self.img_path)
+        _wait_preview(self.ed)
         self.assertFalse(self.ed.btn_apply.isEnabled())   # 空 mask 不可点
         self.ed._fill_rect((10, 10), (20, 20), True)
         self.ed._update_status()                          # 画笔松手时也会走这里
         self.assertTrue(self.ed.btn_apply.isEnabled())
         self.ed.btn_apply.click()
         QApplication.processEvents()
-        self.assertEqual(len(self.ed.ax_prev.lines), 0)   # 预览是独立按钮
+        self.assertEqual(len(self.ed.ax_prev.lines), 1)   # 无 mask 的常驻预览
         self.assertEqual(len(self._products()), 1)
         self.assertEqual(self.ed.btn_apply.text(), "已生成（无改动）")
         self.assertFalse(self.ed.btn_apply.isEnabled())
@@ -357,7 +414,7 @@ class TestMaskEditor(unittest.TestCase):
     def test_flush_overlay_blits_without_error(self):
         self._open()
         self.ed.load_image(self.img_path)
-        QApplication.processEvents()
+        _wait_preview(self.ed)
         self.ed._flush_overlay()               # 抓背景 + blit
         self.assertIsNotNone(self.ed._bg)      # 支持 blit 的 canvas 才走快路径
         self.ed._paint_segment((10, 10), (20, 20), True)

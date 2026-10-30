@@ -738,7 +738,7 @@ def shot_mask(window) -> None:
 
 
 def shot_mask2d(window) -> None:
-    """主窗口：文件栏「Mask 后的 2D」条目 + 2D 面板（原图 + mask 叠加）。"""
+    """主窗口页面：生成后文件栏出现「Mask 后的 2D」条目（不打开 2D 面板）。"""
     from xrd_toolkit.gui import sources as gui_sources
     editor = _mask_editor_setup(window, zoom=None)
     editor.btn_apply.click()
@@ -747,19 +747,9 @@ def shot_mask2d(window) -> None:
              timeout_s=180)
     settle(400)
     window.mask_btn.setChecked(False)
-    settle(300)
-    m2d = [s for s in gui_sources.all_sources(window)
-           if s.kind == gui_sources.MASKED2D]
-    if not m2d:
-        raise RuntimeError("Mask 2D 产物没出现（检查 masked2d.create）")
-    window.open_view_source(m2d[0], "2D")
-    key = "2D|" + str(m2d[0].path)
-    wait_for(lambda: key in window.plot_docks
-             and getattr(window.plot_docks[key], "last_image", None) is not None,
-             timeout_s=180)
-    window.resize(1600, 1000)
     settle(500)
-    fit_panel(window, key)          # 铺满绘图区（规矩 ①）
+    window.resize(1600, 1000)
+    settle(400)
     save(window, "gui_mask2d")
 
 

@@ -38,9 +38,9 @@ from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QMdiSubWindow, QSpinBox, QVBoxLayout, QWidget)
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
+    QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QMdiSubWindow, QSpinBox, QVBoxLayout, QWidget)
 
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
@@ -82,6 +82,18 @@ def _radial_worker(image, center, n_sigma):
     return radial_outlier_mask(image, center, n_sigma=n_sigma)
 
 
+def _preview_worker(image, mask, geom, npt, unmasked):
+    """后台算 1D 预览：无 mask 曲线可复用，只重算带 mask 的那条。"""
+    if unmasked is None:
+        t0, y0 = integrate_1d(image, npt=npt, **geom)
+    else:
+        t0, y0 = unmasked
+    if mask is None or not mask.any():
+        return t0, y0, None, None
+    _t1, y1 = integrate_1d(image, npt=npt, mask=mask, **geom)
+    return t0, y0, t0, y1
+
+
 class MaskWorkbench(QWidget):
     """Mask 中央工作台的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
 
@@ -121,6 +133,11 @@ class MaskWorkbench(QWidget):
         self._locate_labels = None
         self._locate_order = []
         self._locate_idx = 0
+        self._locate_patch = None
+        # 1D 实时预览：防抖 + 后台积分 + 无 mask 曲线缓存
+        self._preview_task = None
+        self._preview_epoch = 0
+        self._preview_cache = None
         # 已经生成过产物的 (原图路径, mask 哈希)：用来把按钮标成"已生成"
         self._generated = set()
         self._image_combo_sig = None
@@ -146,6 +163,10 @@ class MaskWorkbench(QWidget):
         self._status_timer.setSingleShot(True)
         self._status_timer.setInterval(200)
         self._status_timer.timeout.connect(self._update_status)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(250)
+        self._preview_timer.timeout.connect(self._refresh_preview)
 
         self._build()
         self._wire_checked_count()
@@ -252,23 +273,30 @@ class MaskWorkbench(QWidget):
 
         # ── 第三行：自动检测 ───────────────────────────────────────
         row3 = QHBoxLayout()
-        self.btn_hot = QPushButton("孤立坏点（局部）")
+        self.btn_hot = QPushButton("孤立坏点（局部，推荐）")
         self.btn_hot.setToolTip(
-            "局部中值 + 小连通域：只抓孤立亮团/坏点簇，"
+            "15×15 局部中值 + 小连通域：只抓孤立亮团/坏点簇，"
             "不碰真实衍射环（生产路径）")
         self.btn_hot.clicked.connect(self._auto_hot)
         row3.addWidget(self.btn_hot)
-        self.btn_radial = QPushButton("整环离群（实验性）")
+        self.btn_radial = QPushButton("整环离群（实验性，勿遮真实环）")
         self.btn_radial.setToolTip(
             "按径向环带找离群像素（与 GSAS-II 的自动 spot mask 同一思路）；"
-            "真实衍射环的强弧段可能被误标，只作参考")
+            "真实衍射环的强弧段/织构（如 Al 基片）会被误标，只作参考")
         self.btn_radial.clicked.connect(self._auto_radial)
         row3.addWidget(self.btn_radial)
-        row3.addWidget(QLabel("nσ"))
+        self.n_sigma_label = QLabel("nσ（仅整环离群）")
+        self.n_sigma_label.setToolTip(
+            "整环离群的阈值：稳健 σ 的倍数。越小越激进（标得越多）；"
+            "孤立坏点检测不用这个值")
+        row3.addWidget(self.n_sigma_label)
         self.n_sigma = QDoubleSpinBox()
         self.n_sigma.setRange(1.0, 20.0)
         self.n_sigma.setSingleStep(0.5)
         self.n_sigma.setValue(5.0)
+        self.n_sigma.setToolTip(
+            "整环离群阈值（稳健 σ 倍数）：越小越激进；"
+            "孤立坏点检测不用这个值")
         row3.addWidget(self.n_sigma)
         self.btn_locate = QPushButton("查看改动")
         self.btn_locate.setToolTip(
@@ -317,8 +345,17 @@ class MaskWorkbench(QWidget):
             "红色 = 画笔/矩形；青色 = 孤立坏点（局部）；"
             "绿色 = 整环离群（实验性）。橡皮擦掉的就是没遮。")
         row4.addWidget(self.lbl_legend)
+        self.chk_preview = QCheckBox("实时预览")
+        self.chk_preview.setChecked(True)
+        self.chk_preview.setToolTip(
+            "改动结束后自动重算下方 1D 预览（大图可关掉、手动点 [预览效果]）")
+        self.chk_preview.toggled.connect(
+            lambda on: self._schedule_preview() if on
+            else self._preview_timer.stop())
+        row4.addWidget(self.chk_preview)
         self.btn_preview = QPushButton("预览效果")
-        self.btn_preview.setToolTip("只画 mask 前/后的 1D 对比，不生成产物")
+        self.btn_preview.setToolTip(
+            "立即重算 mask 前/后的 1D 对比；实时预览开着时会自动更新")
         self.btn_preview.clicked.connect(self._preview_effect)
         row4.addWidget(self.btn_preview)
         self.scope_combo = QComboBox()
@@ -414,6 +451,7 @@ class MaskWorkbench(QWidget):
 
     def _set_last_added(self, added):
         """记下自动检测新增的像素，[查看改动] 才有地方可去。"""
+        self._clear_locate_patch()
         self._last_added = (None if added is None or not added.any()
                             else np.asarray(added, dtype=bool).copy())
         self._locate_labels = None
@@ -445,10 +483,29 @@ class MaskWorkbench(QWidget):
             return
         r0, r1 = int(ys.min()), int(ys.max())
         c0, c1 = int(xs.min()), int(xs.max())
-        pad = max(4, int(0.25 * max(r1 - r0 + 1, c1 - c0 + 1)))
-        self._zoom_to_box(r0 - pad, r1 + pad, c0 - pad, c1 + pad)
+        cy = (r0 + r1) / 2.0
+        cx = (c0 + c1) / 2.0
+        # 固定 96×96 的上下文（不再按改动大小加 pad：1×1 热像素会被
+        # 放大到极限、周围全看不见）。改动本身用红框标住。
+        self._zoom_to_box(cy - 48, cy + 48, cx - 48, cx + 48)
+        self._clear_locate_patch()
+        self._locate_patch = Rectangle(
+            (c0 - 0.5, r0 - 0.5), max(c1 - c0 + 1, 1),
+            max(r1 - r0 + 1, 1), fill=False, edgecolor="#ff1744",
+            lw=1.6, zorder=8)
+        self.ax_img.add_patch(self._locate_patch)
+        self.canvas.draw_idle()
         self._say(f"Mask 改动：第 {k + 1}/{n} 处"
-                       f"（{int(ys.size)} px）")
+                       f"（中心 行 {int(cy)}, 列 {int(cx)}；{int(ys.size)} px）")
+
+    def _clear_locate_patch(self):
+        """去掉 [查看改动] 留下的红框（换图/新检测/清空时）。"""
+        if self._locate_patch is not None:
+            try:
+                self._locate_patch.remove()
+            except Exception:                          # noqa: BLE001
+                pass
+            self._locate_patch = None
 
     def _zoom_factor(self):
         """当前视图相对完整视野的放大倍数（1.0 = 没放大）。"""
@@ -487,6 +544,7 @@ class MaskWorkbench(QWidget):
         self.mask, self._source = self._undo.pop()
         self._update_overlay()
         self._update_status()
+        self._schedule_preview()
 
     # ── 图像与 mask 显示 ────────────────────────────────────────────
     def _raw_sources(self):
@@ -577,6 +635,8 @@ class MaskWorkbench(QWidget):
         self._set_last_added(None)
         self._refresh_image_combo()
         self._draw_image()
+        self._preview_cache = None
+        self._refresh_preview()      # 一开始就显示无 mask 的 1D
         self._update_status()
         self._say(f"Mask 编辑器：载入 {self.image_path.name}"
                        f"（{img.shape[0]}×{img.shape[1]} px）")
@@ -673,7 +733,7 @@ class MaskWorkbench(QWidget):
         self.ax_prev.tick_params(labelsize=7)
         self.ax_prev.grid(alpha=0.25, linestyle=":")
         self.ax_prev.text(
-            0.5, 0.5, "点 [生成 Mask 2D]（勾着「同时预览 1D」）看 mask 前后",
+            0.5, 0.5, "载入图像后这里显示 1D；画 mask 后自动叠加红色对照",
             transform=self.ax_prev.transAxes, ha="center", va="center",
             color="0.45", fontsize=9)
         self.canvas.draw_idle()
@@ -1142,6 +1202,7 @@ class MaskWorkbench(QWidget):
         self._last = None
         self._rect_start = None
         self._update_status()          # 收笔/松手：状态行立刻对齐（不等节流）
+        self._schedule_preview()       # 改完了：防抖后自动更新 1D
 
     # ── 自动检测 ────────────────────────────────────────────────────
     def _auto_busy(self, busy: bool) -> None:
@@ -1189,6 +1250,7 @@ class MaskWorkbench(QWidget):
             self._set_last_added(new)
             self._update_overlay()
             self._update_status()
+            self._schedule_preview()
             hint = ("（青色；点 [查看改动] 定位）" if new.any()
                     else "（没有新增像素）")
             self._say(f"Mask 孤立坏点："
@@ -1204,9 +1266,10 @@ class MaskWorkbench(QWidget):
         ans = QMessageBox.question(
             self, "整环离群（实验性）",
             "这个方法按径向环带找离群像素（与 GSAS-II 的自动 spot mask\n"
-            "同一思路）；真实衍射环的强弧段可能被误标（实测 LMFP 上\n"
-            "约 18k px）。\n\n"
-            "建议只作参考，跑完用 [撤销] 或橡皮擦掉误标。继续？",
+            "同一思路）；真实衍射环的强弧段/织构（如 Al 基片）会被误标\n"
+            "（实测 LMFP 上约 18k px）。\n\n"
+            "不要用它去遮真实峰；跑完用 [查看改动] 和 1D 预览逐处确认，\n"
+            "误标用 [撤销] 或橡皮擦掉。继续？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ans != QMessageBox.Yes:
             return
@@ -1227,6 +1290,7 @@ class MaskWorkbench(QWidget):
             self._set_last_added(new)
             self._update_overlay()
             self._update_status()
+            self._schedule_preview()
             hint = ("（nσ={:g}；绿色；点 [查看改动] 定位）".format(nsig)
                     if new.any()
                     else "（没有新增像素）")
@@ -1340,6 +1404,7 @@ class MaskWorkbench(QWidget):
         self._set_last_added(None)
         self._update_overlay()
         self._update_status()
+        self._schedule_preview()
         if is_recipe(p):
             self._say(f"Mask 配方已导入：{p}"
                            "（来源分层已恢复；点 [生成 Mask 2D] 才会建产物）")
@@ -1381,6 +1446,20 @@ class MaskWorkbench(QWidget):
                 (str(Path(p).expanduser().resolve()), mh))
         return made
 
+    def _uncheck_raw(self, paths):
+        """新产物出现 → 取消对应原始数据的勾选（既有规矩，2026-10-01）。
+
+        只动**用到的原始数据**，不动刚生成的 Mask 2D；批量时失败的文件
+        保持勾选，方便直接重试。
+        """
+        wanted = {str(Path(p).expanduser().resolve()) for p in paths}
+        for source in gui_sources.all_sources(self.main):
+            if source.kind != gui_sources.RAW:
+                continue
+            if str(Path(source.path).expanduser().resolve()) in wanted:
+                source.item.setCheckState(Qt.Unchecked)
+        QApplication.processEvents()
+
     def _apply_to_main(self):
         """为当前图像生成一条 Mask 后的 2D（原图 + mask manifest）。"""
         if self.mask is None or self.image_path is None:
@@ -1396,6 +1475,7 @@ class MaskWorkbench(QWidget):
             QMessageBox.critical(self, "生成失败", str(err))
             self._say(f"Mask 2D 生成失败：{err}")
             return
+        self._uncheck_raw([self.image_path])
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"Mask 后的 2D 已生成：{st['masked_pixels']} px")
@@ -1420,12 +1500,17 @@ class MaskWorkbench(QWidget):
             return
         label = self.mask_path.name if self.mask_path else "未保存"
         made = 0
+        made_paths = []
         for source in raw:
             try:
                 self._create_masked2d([source.path], label=label)
                 made += 1
+                made_paths.append(source.path)
             except Exception as err:                   # noqa: BLE001
                 self._say(f"Mask 2D 生成失败：{source.display}——{err}")
+        if made_paths:
+            self._uncheck_raw(made_paths)
+            self.scope_combo.setCurrentIndex(0)   # 勾选已清零：回到当前图像
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"Mask 后的 2D 已生成 {made} 条")
@@ -1445,6 +1530,7 @@ class MaskWorkbench(QWidget):
         self._set_last_added(None)
         self._update_overlay()
         self._update_status()
+        self._schedule_preview()
 
     def _generate_current(self):
         """[生成 Mask 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""
@@ -1463,41 +1549,83 @@ class MaskWorkbench(QWidget):
         self._update_generate_state()
 
     def _preview_effect(self):
-        """[预览效果]：只画 mask 前/后的 1D，不建产物。"""
+        """[预览效果]：立即重算 mask 前/后的 1D（不建产物）。"""
         if self.image is None or self.mask is None:
             return
-        if not np.any(self.mask):
-            self._say("Mask 为空：没有可预览的变化")
-            return
-        self._preview_1d()
+        self._refresh_preview()
 
-    def _preview_1d(self):
-        """在下方画 mask 前/后两条曲线（同步积分，大图约 1–2 s）。"""
+    def _schedule_preview(self):
+        """改动结束后防抖 250 ms 再算；实时预览关着就什么都不做。"""
+        chk = getattr(self, "chk_preview", None)
+        if chk is None or not chk.isChecked():
+            return
+        if self.image is None or self.mask is None:
+            return
+        self._preview_epoch += 1      # 旧任务的结果立即作废，别闪回旧曲线
+        self._preview_timer.start()
+
+    def _refresh_preview(self):
+        """后台算 1D 预览：缓存无 mask 曲线，只重算带 mask 的那条。"""
         if self.image is None or self.mask is None:
             return
         geom = _collect_geometry(self.main)
         npt = int(self.main.params["输出点数"].value())
-        self.lbl_status.setText("积分预览中…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            t0, y0 = integrate_1d(self.image, npt=npt, **geom)
-            _t1, y1 = integrate_1d(self.image, npt=npt, mask=self.mask,
-                                   **geom)
-        except Exception as err:                       # noqa: BLE001
-            QMessageBox.critical(self, "预览失败", str(err))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-            self._update_status()
+        key = (id(self.image), tuple(sorted(geom.items())), npt)
+        cache = self._preview_cache
+        unmasked = ((cache[1], cache[2])
+                    if cache is not None and cache[0] == key else None)
+        epoch = self._preview_epoch + 1
+        self._preview_epoch = epoch
+        mask = self.mask.copy()
+        task = None
+
+        def done(result):
+            try:
+                self.main._tasks.remove(task)
+            except ValueError:
+                pass
+            if self._preview_task is task:
+                self._preview_task = None
+            if epoch != self._preview_epoch:
+                return
+            t0, y0, t1, y1 = result
+            self._preview_cache = (key, t0, y0)
+            self._draw_preview(t0, y0, t1, y1)
+
+        def error(message):
+            try:
+                self.main._tasks.remove(task)
+            except ValueError:
+                pass
+            if self._preview_task is task:
+                self._preview_task = None
+            if epoch == self._preview_epoch:
+                self._say(f"1D 预览失败：{message}")
+
+        task = BackgroundTask(
+            _preview_worker, self.image, mask, geom, npt, unmasked,
+            on_done=done, on_error=error)
+        self._preview_task = task
+        self.main._tasks.append(task)
+        task.start()
+
+    def _draw_preview(self, t0, y0, t1, y1):
+        """下方 1D 预览：无 mask 灰线；有 mask 时叠红线。"""
         ax = self.ax_prev
         ax.clear()
         ax.plot(t0, y0, lw=0.8, color="0.45", label="no mask")
-        ax.plot(t0, y1, lw=0.9, color="tab:red", label="with mask")
+        if t1 is not None:
+            ax.plot(t1, y1, lw=0.9, color="tab:red", label="with mask")
+        else:
+            ax.text(0.5, 0.5, "mask 为空：画/自动检测后这里出现红色对照",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=9, color="#888888")
         ax.set_xlabel("2θ (°)", fontsize=8)
         ax.set_ylabel("counts", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.grid(alpha=0.25, linestyle=":")
-        ax.legend(fontsize=8, loc="best")
+        if t1 is not None:
+            ax.legend(fontsize=8, loc="best")
         self.canvas.draw_idle()
 
 
