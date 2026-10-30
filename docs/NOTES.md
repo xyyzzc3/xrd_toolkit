@@ -430,7 +430,7 @@ index representatives and layout / the two implementations agreeing).
 | `scripts/sector_waterfall.py` | Sector integration (36 sectors) + waterfall plot + uniformity statistics |
 | `scripts/simulate_xrd.py` | CIF → theoretical powder pattern (Bragg + structure factor, hand-written; `--compare` re-checks against the pymatgen reference) |
 | `scripts/fit_lmfp.py` | LaB₆ instrument calibration + LMFP full-pattern fit (Le Bail + Al substrate phase, hot-spot mask; `--no-hot-mask`, `--exclude-al`) |
-| `scripts/analyze_pattern.py` | Automatic phase screening + full-pattern fit/report from a TIFF + config |
+| `scripts/analyze_pattern.py` | Automatic phase screening over every CIF in `--lib` (optional `--elements` filter) + full-pattern fit/report from a TIFF + config |
 | `scripts/simulate_study.py` | Teaching/simulation studies: basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II cross-check simulations (run inside the separate `gsas2` env) |
 | `scripts/gsas2_insitu_crosscheck.py` | Three-frame GSAS-II cross-check of the in-situ batch (`prepare` → `refine` in the `gsas2` env → `compare`) |

@@ -2,21 +2,23 @@
 """只给数据，自动分析（LMFP 第一版，2026-10-22）。
 
 输入：2D TIFF（或 1D 文本暂未接） + 批次几何配置。
-输出：自动找峰（`services/peak_finding`）→ 在内置橄榄石相库里筛相
+输出：自动找峰（`services/peak_finding`）→ 在相库里筛相
 （粗扫晶胞缩放）→ 自动识别 Al 集流体 (111) → 结构拟合
 （晶胞/Size/应变/B/背景）→ Le Bail 非负峰强 → 图 + 文本报告
 （相筛选摘要 + 仪器/结构/Le Bail 三段完整参数表）。
 
 相库/几何仍是先验：
   * 几何来自 `--config`（LMFP 默认 `lmfp1_lab6`，λ=0.1223 Å）；
-  * 相库默认 `data/structures` 里的三种橄榄石 + Al；未知相不在库里时
-    只会报“未识别”，不会硬认。
+  * 相库 = `--lib` 目录下的全部 `.cif`（`Al_metal.cif` 除外，它只作
+    基片相）；`--elements` 可按允许的元素集合先剪枝（大库建议给）。
+    未知相不在库里时只会报“未识别”，不会硬认。
 
 用法：
     python scripts/analyze_pattern.py                       # 两张 LMFP
     python scripts/analyze_pattern.py data/LMFP_1_atten0-00029.tif
 """
 import argparse
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -37,14 +39,56 @@ from xrd_toolkit.simulation import (  # noqa: E402
     plot_fit, summary_block)
 
 STRUCT = ROOT / "data" / "structures"
-OLIVINE_LIB = [
-    # 样品 Mn:Fe = 6:4（2026-10-27）；5:5 保留作相近组分的候选
-    STRUCT / "LiMn0.6Fe0.4PO4_olivine.cif",
-    STRUCT / "LiMn0.5Fe0.5PO4_olivine.cif",
-    STRUCT / "LiFePO4_olivine.cif",
-    STRUCT / "LiMnPO4_olivine.cif",
-]
 AL_CIF = STRUCT / "Al_metal.cif"
+# LMFP 先验：样品 Mn:Fe = 6:4（2026-10-27）。只用于**同分**排序——这套
+# 数据对 Mn/Fe 比不敏感，0.5:0.5 与 0.6:0.4 的 score/Rwp 基本相同，
+# 所以按已知组分把 6:4 排在前面；打分本身不看这个表。
+PREFERRED = (
+    "LiMn0.6Fe0.4PO4_olivine.cif",
+    "LiMn0.5Fe0.5PO4_olivine.cif",
+    "LiFePO4_olivine.cif",
+    "LiMnPO4_olivine.cif",
+)
+
+
+def phase_library(lib):
+    """相库目录里的全部 CIF，按文件名排序。
+
+    `Al_metal.cif` 永远不进入主相候选：它是集流体的第二相，由
+    `al_substrate_ranges` 单独识别、在 fit 里按额外相处理。把它当主相
+    候选会让“纯 Al 样品”拿到最高分，结果整个分析跑偏。
+    """
+    lib = Path(lib)
+    al = (lib / AL_CIF.name).resolve()
+    return [p for p in sorted(lib.glob("*.cif"))
+            if p.is_file() and p.resolve() != al]
+
+
+def phase_candidates(lib, elements=()):
+    """扫描相库并读结构，按允许的元素集合剪枝；返回 [(path, Structure)]。
+
+    elements 为空 = 不筛。给了集合时只保留**元素全部落在集合里**的
+    相（例如 'Li Mn Fe P O' 会排掉 Al2O3、LaB6）。读不出来的 CIF
+    跳过，不让一张坏卡片打断整批分析。
+    """
+    wanted = {str(e).strip().capitalize()
+              for e in elements if str(e).strip()}
+    out = []
+    for path in phase_library(lib):
+        try:
+            structure = load_structure(str(path))
+        except Exception:                          # noqa: BLE001
+            continue
+        if wanted:
+            have = {el.symbol for el in structure.composition.elements}
+            if not have.issubset(wanted):
+                continue
+        out.append((path, structure))
+    # 同分时按 LMFP 先验排（稳定排序；打分排序也保持这个先后）
+    rank = {name: i for i, name in enumerate(PREFERRED)}
+    out.sort(key=lambda item: (rank.get(item[0].name, len(PREFERRED)),
+                               item[0].name))
+    return out
 DEFAULT_IMAGES = [
     ROOT / "data" / "LMFP_1_atten0-00029.tif",
     ROOT / "data" / "LMFP_1_atten0-00031.tif",
@@ -90,9 +134,12 @@ def detect_peaks(t, y, bg):
             np.array([p.height for p in peaks]))
 
 
-def _reflection_data(cif, lam, tmin, tmax):
-    """一次算好 hkl 无关的 d0 与相对强度，供晶胞缩放扫描复用。"""
-    st = load_structure(str(cif))
+def _reflection_data(cif, lam, tmin, tmax, structure=None):
+    """一次算好 hkl 无关的 d0 与相对强度，供晶胞缩放扫描复用。
+
+    structure 给定时直接用（相库扫描已经读过 CIF，不重复加载）。
+    """
+    st = structure if structure is not None else load_structure(str(cif))
     _hkl, d0, _tth, inten = core.reflection_table(
         st, wavelength=lam, two_theta_range=(tmin, tmax), nmax=10)
     inten = np.asarray(inten, dtype=float)
@@ -106,15 +153,18 @@ def _positions(d0, inten, lam, scale, zero):
     return 2.0 * np.degrees(np.arcsin(sin_t)) + zero, inten
 
 
-def theoretical_positions(cif, lam, tmin, tmax, scale=1.0, zero=0.0):
-    d0, inten = _reflection_data(cif, lam, tmin, tmax)
+def theoretical_positions(cif, lam, tmin, tmax, scale=1.0, zero=0.0,
+                          structure=None):
+    d0, inten = _reflection_data(cif, lam, tmin, tmax, structure=structure)
     return _positions(d0, inten, lam, scale, zero)
 
 
-def score_phase(obs_t, cif, lam, tmin, tmax, zero, tol=0.04):
+def score_phase(obs_t, cif, lam, tmin, tmax, zero, tol=0.04,
+                structure=None):
     """粗扫晶胞缩放，按观测峰覆盖 + 理论峰纯度打分。"""
     best = None
-    d0_all, int_all = _reflection_data(cif, lam, tmin, tmax)
+    d0_all, int_all = _reflection_data(
+        cif, lam, tmin, tmax, structure=structure)
     strong = int_all >= 0.02
     d0_all, int_all = d0_all[strong], int_all[strong]
     for scale in np.linspace(0.96, 1.05, 91):
@@ -137,13 +187,15 @@ def score_phase(obs_t, cif, lam, tmin, tmax, zero, tol=0.04):
 
 
 def al_substrate_ranges(obs_t, obs_h, lam, tmin, tmax, zero, primary_cif,
-                        primary_scale):
+                        primary_scale, al_cif=None, primary_structure=None):
     """识别 Al 集流体的强峰（主要看 Al (111)）。返回 [(lo,hi), …]。"""
-    if not AL_CIF.exists():
+    al_cif = AL_CIF if al_cif is None else Path(al_cif)
+    if not al_cif.exists():
         return []
-    al_t, al_i = theoretical_positions(AL_CIF, lam, tmin, tmax, 1.0, zero)
+    al_t, al_i = theoretical_positions(al_cif, lam, tmin, tmax, 1.0, zero)
     prim_t, prim_i = theoretical_positions(
-        primary_cif, lam, tmin, tmax, primary_scale, zero)
+        primary_cif, lam, tmin, tmax, primary_scale, zero,
+        structure=primary_structure)
     hmax = float(np.max(obs_h)) if len(obs_h) else 1.0
     out = []
     for x, ai in zip(al_t, al_i):
@@ -162,7 +214,7 @@ def al_substrate_ranges(obs_t, obs_h, lam, tmin, tmax, zero, primary_cif,
 
 
 def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
-            exclude, tmin, tmax, use_al=False, hot_mask=True):
+            exclude, tmin, tmax, use_al=False, hot_mask=True, al_cif=None):
     t, y = load_1d(path, geom, tmin, tmax, hot_mask=hot_mask)
     bg = estimate_baseline_sliding(t, y, 0.2)
     w = 1.0 / np.maximum(y, 1.0)
@@ -171,8 +223,9 @@ def fit_one(path, primary, primary_name, cell0, geom, lam, inst, outdir,
         w_leb[(t > lo) & (t < hi)] = 0.0
     w_struct = w if use_al else w_leb
     extras = []
-    if use_al and AL_CIF.exists():
-        al = load_structure(str(AL_CIF))
+    al_cif = AL_CIF if al_cif is None else Path(al_cif)
+    if use_al and al_cif.exists():
+        al = load_structure(str(al_cif))
         extras.append({
             "structure": al, "label": "Al",
             "a": 4.061, "b": 4.061, "c": 4.061,
@@ -233,7 +286,11 @@ def main():
     ap.add_argument("images", nargs="*", default=[str(p) for p in DEFAULT_IMAGES])
     ap.add_argument("--config", default="lmfp1_lab6")
     ap.add_argument("--lib", default=str(STRUCT),
-                    help="包含 .cif 的相库目录（默认 data/structures）")
+                    help="包含 .cif 的相库目录（默认 data/structures；"
+                         "目录下所有 .cif 都是主相候选，Al_metal.cif 除外）")
+    ap.add_argument("--elements", default="",
+                    help="只保留元素全在这张表里的相（空格或逗号分隔，"
+                         "如 'Li Mn Fe P O'；默认不筛）")
     ap.add_argument("--outdir", default=str(DEFAULT_OOB))
     ap.add_argument("--tmin", type=float, default=1.0)
     ap.add_argument("--tmax", type=float, default=8.0)
@@ -246,9 +303,13 @@ def main():
     outdir = Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     lib = Path(a.lib)
-    olivines = [lib / p.name for p in OLIVINE_LIB if (lib / p.name).exists()]
-    if not olivines:
-        ap.error(f"相库里没有橄榄石 CIF：{lib}")
+    allowed = [e for e in re.split(r"[,\s]+", a.elements) if e]
+    candidates = phase_candidates(lib, allowed)
+    if not candidates:
+        ap.error(f"相库里没有可用的 CIF：{lib}"
+                 + (f"（元素筛选：{a.elements}）" if allowed else ""))
+    print(f"相库 {lib}：{len(phase_library(lib))} 张 CIF，"
+          f"元素筛选后 {len(candidates)} 张")
     inst = instrument_profile(geom, lam)
     print(f"几何 {a.config}：λ={lam:.4f} Å；"
           + (f"仪器来自 LaB₆（Rwp {inst.rwp:.2f}%）" if inst else
@@ -268,22 +329,27 @@ def main():
             continue
         zero = inst.params["zero"] if inst else 0.0
         ranked = []
-        for cif in olivines:
-            sc = score_phase(obs_t, cif, lam, a.tmin, a.tmax, zero)
+        for cif, structure in candidates:
+            sc = score_phase(obs_t, cif, lam, a.tmin, a.tmax, zero,
+                             structure=structure)
             if sc:
-                ranked.append((sc, cif))
+                ranked.append((sc, cif, structure))
+        if not ranked:
+            print("  相筛选：没有候选相能在观测峰上打分")
+            continue
         ranked.sort(key=lambda x: -x[0][0])
         top = ranked[0]
-        primary = load_structure(str(top[1]))
+        primary = top[2]
         scale = top[0][1]
         cell0 = tuple(v * scale for v in primary.lattice.abc)
         print("  相筛选：")
-        for (sc, scale_i, cov, pur), cif in ranked[:3]:
+        for (sc, scale_i, cov, pur), cif, _st in ranked[:3]:
             print(f"    {cif.name:34} score {sc:.3f} "
                   f"scale {scale_i:.4f} coverage {cov:.2f} purity {pur:.2f}")
-        primary = load_structure(str(top[1]))
+        al_cif = lib / AL_CIF.name
         exclude = al_substrate_ranges(
-            obs_t, obs_h, lam, a.tmin, a.tmax, zero, top[1], scale)
+            obs_t, obs_h, lam, a.tmin, a.tmax, zero, top[1], scale,
+            al_cif=al_cif, primary_structure=primary)
         use_al = bool(exclude)
         if use_al:
             print("  自动识别 Al 集流体峰，按 Al 基片（逐反射强度）建模："
@@ -293,7 +359,7 @@ def main():
         struct, lebail, out = fit_one(
             p, primary, top[1].name, cell0, geom, lam, inst, outdir,
             exclude, a.tmin, a.tmax, use_al=use_al, hot_mask=hot_mask,
-)
+            al_cif=al_cif)
         al_txt = (f" Al={struct.params['Al:scale']:.3g}"
                   if "Al:scale" in struct.params else "")
 
@@ -312,7 +378,7 @@ def main():
         with open(out.with_suffix(".txt"), "w", encoding="utf-8") as fh:
             fh.write(summary_block(entries, notes) + "\n")
             fh.write(f"{p.name}\nprimary: {top[1].name} scale={scale:.4f}\n")
-            for (sc, scale_i, cov, pur), cif in ranked:
+            for (sc, scale_i, cov, pur), cif, _st in ranked:
                 fh.write(f"  {cif.name}: score={sc:.3f} scale={scale_i:.4f} "
                          f"coverage={cov:.3f} purity={pur:.3f}\n")
             fh.write(f"exclude: {exclude}\n")

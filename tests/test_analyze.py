@@ -24,7 +24,23 @@ CU_KA = 1.5406
 class TestAutoAnalysisHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.lifepo4 = ap.OLIVINE_LIB[0]
+        cls.lifepo4 = ap.STRUCT / "LiFePO4_olivine.cif"
+
+    def test_phase_library_scans_directory_and_skips_al_substrate(self):
+        names = [p.name for p in ap.phase_library(ap.STRUCT)]
+        self.assertIn("LiFePO4_olivine.cif", names)
+        self.assertIn("LaB6_NIST660c.cif", names)
+        self.assertNotIn("Al_metal.cif", names,
+                         "Al 只作第二相，不应进入主相候选")
+
+    def test_phase_candidates_filters_by_allowed_elements(self):
+        candidates = ap.phase_candidates(
+            ap.STRUCT, ["Li", "Mn", "Fe", "P", "O"])
+        names = [path.name for path, _st in candidates]
+        self.assertIn("LiFePO4_olivine.cif", names)
+        self.assertIn("LiMn0.6Fe0.4PO4_olivine.cif", names)
+        self.assertNotIn("LaB6_NIST660c.cif", names)
+        self.assertNotIn("Al_metal.cif", names)
 
     def test_detect_peaks_returns_positions_and_local_heights(self):
         x = np.arange(1.0, 2.0, 0.001)
