@@ -85,6 +85,36 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 
 </details>
 
+<details>
+<summary>展开分析工作台（峰形拟合 / 物相 / 精修 / 原位）</summary>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="../showcase/gui/gui_wh.png" width="100%"><br>
+      <sub>1D 页的峰形拟合与 Williamson–Hall——逐峰拟合后自动给出 D / ε（这组 LaB₆ 标样：20 根峰）</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="../showcase/gui/gui_phase.png" width="100%"><br>
+      <sub>物相筛选——13 个候选按峰位打分；LaB₆ 与 LiFePO₄ 双选，两组理论峰位叠在观测曲线上</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="../showcase/gui/gui_refine.png" width="100%"><br>
+      <sub>全谱精修——LaB₆ + Al 额外相、仪器基线固定；观测/计算/背景三联图、obs−calc 差值与两相布拉格刻度</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="../showcase/gui/gui_insitu.png" width="100%"><br>
+      <sub>原位三相批量——3 帧真 LMFP 数据逐帧精修；相分数（带 esd）与 Rwp 趋势 + 结果表</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
+
 ## 亮点
 
 - **2D → 1D 积分**——0°–360° 完整方位角积分，输出标准两列 txt（2θ(deg), intensity），供寻峰、拟合、PDF 分析使用。
@@ -93,6 +123,7 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **批量与分阶段产物**——文件夹一键导入、整批积分；曲线与扣背景曲线按阶段缓存（文件指纹 + 几何 + 设置的键，跨会话复用）并显示成文件栏**分组**：81 个文件的那一批，两下点击进对比图或热图，不用重积分。
 - **偏置束心与扇形分析**——束心打在探测器边缘/角落的数据全程支持（pyFAI 分箱不可靠时自动切自研 numpy 积分）；36 扇区瀑布图一眼看出择优取向与被切环的几何。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、1D 图上直接寻峰与峰表、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
+- **四个分析工作台**——物相筛选（相库 / 元素过滤 / 多相叠加 / CSV）、全谱精修（额外相 / 仪器基线 / 采纳为图面板）、原位三相批量（逐帧结果与趋势）、Mask 编辑；全部与参数页、图面板共享同一套引擎。
 - **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 为可选依赖：`pip install 'xrd-toolkit[simulation]'`）。
 - **自动寻峰与单峰峰形拟合**——稳健噪声估计 + 显著度/峰高门槛 + 最小峰距 + 可选 FWHM 过滤的自动寻峰（`services/peak_finding.py`）；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 单峰拟合（局部背景），以及 Scherrer 尺寸和带仪器校正（quadrature / linear 扣标样）的 Williamson–Hall 分析；命令行入口 `scripts/fit_peaks.py`。
 - **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相、按空间群约束的原子坐标与位点占位精修，以及固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。

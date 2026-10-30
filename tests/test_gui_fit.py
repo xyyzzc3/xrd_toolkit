@@ -5,6 +5,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -93,6 +94,27 @@ class TestFitView(unittest.TestCase):
         peak = self.dock.detected_peaks[0]
         self.assertAlmostEqual(self.dock.fit_results[0].fit.center,
                                peak.center, places=2)
+
+    def test_wh_block_updates_and_saves(self):
+        self._open_panel()
+        self.w.fit_all_btn.click()
+        QApplication.processEvents()
+        self.assertIsNotNone(self.dock.wh_result)
+        self.assertEqual(len(self.dock.wh_result.beta_sample_deg), 4)
+        self.assertIn("D =", self.w.wh_d_label.text())
+        self.assertIn("4 根峰", self.w.wh_note_label.text())
+
+        before = np.asarray(self.dock.wh_result.beta_sample_deg).copy()
+        self.w.params["W-H 仪器 FWHM (°)"].setValue(0.01)
+        QApplication.processEvents()
+        after = np.asarray(self.dock.wh_result.beta_sample_deg)
+        self.assertLessEqual(float(after.max()), float(before.max()) + 1e-12)
+
+        from xrd_toolkit.gui.wh_view import save_wh_plot
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "wh.png"
+            self.assertIsNotNone(save_wh_plot(self.w, self.dock, out))
+            self.assertTrue(out.is_file() and out.stat().st_size > 0)
 
     def test_overlay_all_draws_every_fit(self):
         self._open_panel()

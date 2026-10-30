@@ -21,6 +21,7 @@ from xrd_toolkit.gui.state.base import _panel_param
 from xrd_toolkit.gui.state.config import _AUX_GID_PREFIX
 from xrd_toolkit.gui.state.processing import _proc_curve
 from xrd_toolkit.gui.panel_state import _log
+from xrd_toolkit.gui.wh_view import refresh_wh
 from xrd_toolkit.simulation.peakfit import (
     fit_single_peak, gaussian, lorentzian, pseudo_voigt, split_pearson7)
 
@@ -223,6 +224,7 @@ def fill_fit_table(window, dock, *, select_center=None, switch=False):
             if tabs.currentIndex() == 1:
                 tabs.setCurrentIndex(0)
         table.blockSignals(False)
+        refresh_wh(window, dock)
         return
     table.setVisible(True)
     if tabs is not None:
@@ -255,6 +257,7 @@ def fill_fit_table(window, dock, *, select_center=None, switch=False):
             pick = row
     table.selectRow(pick)
     table.blockSignals(False)
+    refresh_wh(window, dock)
 
 
 def _selected_center(window):

@@ -26,6 +26,10 @@ docs/使用说明.md）：
     gui_background  自动基线（不加锚点，原始/基线/结果三线）  → README / 使用说明 §6
     gui_mask        Mask 编辑器：束心方块 + 孤立坏点 + mask 前后 1D → Mask 快速上手
     gui_mask2d      「Mask 后的 2D」条目 + 2D 面板（原图 + mask）→ Mask 快速上手
+    gui_refine      精修工作台：LaB₆ + Al 额外相 + 仪器基线     → README 分析工作台
+    gui_phase       物相工作台：13 候选 + LaB₆/LiFePO₄ 双选叠加 → README 分析工作台
+    gui_insitu      原位工作台：3 帧真 LMFP 数据（表 + 趋势）  → README 分析工作台
+    gui_wh          1D 页峰形拟合 + Williamson–Hall 数字块    → README 分析工作台
 
 不开真窗口（QT_QPA_PLATFORM=offscreen + widget.grab），所以 CLI 里
 也能跑；**真实数据**（data/ 下的 lab6 + 3 张 LMFP）与**真实计算**
@@ -65,7 +69,7 @@ _EXPORT_DEMO = Path(tempfile.mkdtemp(prefix="xrd_export_demo_", dir="/tmp"))
 
 from unittest import mock                                  # noqa: E402
 
-from PySide6.QtCore import Qt                              # noqa: E402
+from PySide6.QtCore import QItemSelectionModel, Qt          # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton    # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state       # noqa: E402
@@ -759,13 +763,134 @@ def shot_mask2d(window) -> None:
     save(window, "gui_mask2d")
 
 
+def _hide_side_docks(window) -> None:
+    """工作台模式会收起参数/日志坞；离屏未 show 的窗口里 _resync_docks
+    不一定把显隐推到位，截图前显式收一下。"""
+    window.param_dock.hide()
+    window.log_dock.hide()
+    settle(200)
+
+
+def _select_cif(combo, path) -> None:
+    """把 CIF 选进下拉框（不在列表里就临时加一条）。"""
+    target = str(Path(path).resolve())
+    idx = combo.findData(target)
+    if idx < 0:
+        combo.addItem(Path(target).stem, target)
+        idx = combo.count() - 1
+    combo.setCurrentIndex(idx)
+
+
+def _open_lab6_panel(window, *, peaks=False) -> str:
+    """导入 LaB₆、出 1D 图，等曲线出来；返回面板 key。"""
+    add_all(window, [LAB6], entrance="1D")
+    window.view_buttons["1D"].click()
+    key = "1D|" + LAB6
+    wait_for(lambda: key in window.plot_docks
+             and getattr(window.plot_docks[key], "last_tth", None) is not None)
+    if peaks:
+        window.params["显示峰位"].setChecked(True)
+        wait_for(lambda: window.peak_table.rowCount() >= 3)
+    return key
+
+
+def shot_refine(window) -> None:
+    """精修工作台：LaB₆ + Al 额外相 + 仪器基线。"""
+    from xrd_toolkit.simulation.insitu import DEFAULT_AL, LAB6_CIF
+    _open_lab6_panel(window)
+    window.refine_btn.click()
+    settle(300)
+    _hide_side_docks(window)
+    editor = window.refine_editor
+    _select_cif(editor.cif_combo, LAB6_CIF)
+    editor.add_extra_phase(DEFAULT_AL)
+    editor.run_btn.click()
+    wait_for(lambda: editor.result is not None and editor._task is None,
+             timeout_s=180)
+    editor.save_instrument_btn.click()
+    settle(400)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_dock(window, window.refine_dock)
+    save(window, "gui_refine")
+
+
+def shot_phase(window) -> None:
+    """物相工作台：LaB₆ 曲线 → 相库筛选 → LaB₆ + LiFePO₄ 双选叠加。"""
+    _open_lab6_panel(window)
+    window.phase_btn.click()
+    settle(300)
+    _hide_side_docks(window)
+    editor = window.phase_editor
+    editor.screen_btn.click()
+    wait_for(lambda: len(editor.rows) > 0, timeout_s=180)
+    model = editor.table.selectionModel()
+    model.clearSelection()
+    picks = [0]
+    for i, row in enumerate(editor.rows):
+        if row.path.name.startswith("LiFePO4"):
+            picks.append(i)
+            break
+    for i in picks:
+        model.select(editor.table.model().index(i, 0),
+                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    settle(400)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_dock(window, window.phase_dock)
+    save(window, "gui_phase")
+
+
+def shot_insitu(window) -> None:
+    """原位工作台：3 帧真数据的三相批量（表 + 趋势图）。"""
+    frames_dir = _SCRATCH / "insitu_frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for p in LMFP[:3]:
+        src = Path(p) if Path(p).is_absolute() else ROOT / p
+        dst = frames_dir / src.name
+        if not dst.exists():
+            os.symlink(src, dst)
+    window.insitu_btn.click()
+    settle(300)
+    _hide_side_docks(window)
+    editor = window.insitu_editor
+    editor.data_dir = frames_dir
+    editor.outdir = _SCRATCH / "insitu_out"
+    editor.limit.setValue(3)
+    editor._refresh_data_label()
+    editor.start_btn.click()
+    wait_for(lambda: editor.start_btn.isEnabled()
+             and editor.table.rowCount() >= 3, timeout_s=600)
+    # 截图里别露出临时目录；真实窗口显示的仍是完整路径
+    editor.data_label.setText("LMFP 原位序列（3 帧）")
+    editor.data_label.setToolTip(str(frames_dir))
+    settle(500)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_dock(window, window.insitu_dock)
+    save(window, "gui_insitu")
+
+
+def shot_wh(window) -> None:
+    """1D 页的 Williamson–Hall 数字块（拟合全部后自动出数）。"""
+    key = _open_lab6_panel(window, peaks=True)
+    window.fit_all_btn.click()
+    settle(600)
+    window.resize(1600, 1000)
+    settle(400)
+    fit_panel(window, key)
+    save(window, "gui_wh")
+
+
 SHOTS = {"gui_welcome": shot_welcome, "gui_main": shot_main,
          "gui_peaks": shot_peaks,
          "gui_compare": shot_compare, "gui_compare_heat": shot_compare_heat,
          "gui_panel_bar": shot_panel_bar, "gui_customize": shot_customize,
          "gui_views": shot_views, "gui_batch": shot_batch,
          "gui_background": shot_background, "gui_calib": shot_calib,
-         "gui_mask": shot_mask, "gui_mask2d": shot_mask2d}
+         "gui_mask": shot_mask, "gui_mask2d": shot_mask2d,
+         "gui_refine": shot_refine, "gui_phase": shot_phase,
+         "gui_insitu": shot_insitu, "gui_wh": shot_wh}
 
 
 def main() -> int:

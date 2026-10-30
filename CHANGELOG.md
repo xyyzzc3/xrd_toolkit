@@ -153,6 +153,9 @@
   省下半屏高度；拟合完成自动切到「拟合结果」页，结果作废或清空后退回
   「峰表」页。5 列挤在 320 px 里，拟合表头改用短名（2θ / FWHM / η/m /
   面积 / Rwp），单位放进表头 tooltip。
+- **Williamson–Hall 数字块**（2026-10-30 晚）：单峰拟合 ≥3 根峰后自动算
+  W-H，1D 页直接显示 D / ε / 峰数与警告；仪器 FWHM 用常数近似可扣；
+  [保存 W-H 图…] 出 PNG/PDF。结果跟随当前面板，不写产物。
 - 新模块 `gui/fit_view.py`；测试 `tests/test_gui_fit.py`（5 条合成谱用例）。
 
 ### 精修工作台（2026-10-30）
@@ -222,6 +225,14 @@
 - 新模块 `gui/insitu_workbench.py`；测试 `tests/test_gui_insitu.py`
   （进出与五种工作台互斥、假 batch 逐帧编排 + CSV/摘要）与
   `tests/test_fit_insitu.py` 的 `InSituBatch` 用例。
+
+### 文档与展示（2026-10-30）
+
+- **showcase 新增四张**：`gui_wh`（1D 峰形拟合 + W-H 数字块）、
+  `gui_phase`（物相筛选双选叠加）、`gui_refine`（额外相 + 仪器基线）、
+  `gui_insitu`（3 帧原位批量）；`docs/README.zh-CN.md` 增加「分析工作台」
+  展示墙，`scripts/make_gui_shots.py` 增加对应场景（工作台截图显式收起
+  参数/日志坞，离屏窗口才会与真实模式一致）。
 
 ### 相筛选（2026-10-30）
 

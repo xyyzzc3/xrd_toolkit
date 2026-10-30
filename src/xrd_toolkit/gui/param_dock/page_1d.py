@@ -17,6 +17,8 @@ from xrd_toolkit.gui.peak_view import (
     TABLE_COLUMNS, copy_peak_table, install_peak_view, zoom_to_peak)
 from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
+from xrd_toolkit.gui.wh_view import (
+    WH_INSTRUMENT_KEY, dock_for_wh, refresh_wh, save_wh_plot)
 
 
 def build_1d_page(window, form_1d, btns_1d):
@@ -275,6 +277,59 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_lay.addLayout(fit_row1)
     peak_lay.addLayout(fit_row2)
     peak_lay.addLayout(fit_row3)
+
+    # ── Williamson–Hall（2026-10-30）：单峰拟合结果的数字块 ──
+    # 跟着 fit_results 自动重算（见 wh_view.refresh_wh）；仪器展宽用
+    # 常数 FWHM 近似，按角度变化的仪器曲线走命令行 LaB₆ 标样那条路。
+    wh_line = QFrame()
+    wh_line.setFixedHeight(1)
+    wh_line.setStyleSheet("background-color: #d5dae0;")
+    wh_title = QLabel("Williamson–Hall")
+    wh_title.setStyleSheet("color: gray; font-weight: 600;")
+    wh_instr = QDoubleSpinBox()
+    wh_instr.setRange(0.0, 1.0)
+    wh_instr.setDecimals(3)
+    wh_instr.setSingleStep(0.005)
+    wh_instr.setValue(0.0)
+    wh_instr.setSuffix(" °")
+    wh_instr.setToolTip("仪器展宽的常数近似；0 = 不扣。要按角度变化请用"
+                        "命令行的 LaB₆ 标样")
+    window.params[WH_INSTRUMENT_KEY] = wh_instr
+    wh_row = QHBoxLayout()
+    wh_row.setContentsMargins(0, 0, 0, 0)
+    wh_row.setSpacing(4)
+    wh_row.addWidget(QLabel("仪器 FWHM"))
+    wh_row.addWidget(wh_instr, 1)
+    wh_d_label = QLabel("D = —")
+    wh_e_label = QLabel("ε = —")
+    wh_d_label.setStyleSheet("font-weight: 600;")
+    wh_e_label.setStyleSheet("font-weight: 600;")
+    wh_vals = QHBoxLayout()
+    wh_vals.setContentsMargins(0, 0, 0, 0)
+    wh_vals.addWidget(wh_d_label, 1)
+    wh_vals.addWidget(wh_e_label, 1)
+    wh_note = QLabel("再拟合几根峰（至少 3 根）")
+    wh_note.setWordWrap(True)
+    wh_note.setStyleSheet("color: gray;")
+    wh_note.setMinimumWidth(0)
+    wh_note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    wh_save = QPushButton("保存 W-H 图…")
+    wh_save.setEnabled(False)
+    wh_save.clicked.connect(
+        lambda: save_wh_plot(window, dock_for_wh(window)))
+    window.wh_d_label = wh_d_label
+    window.wh_e_label = wh_e_label
+    window.wh_note_label = wh_note
+    window.wh_save_btn = wh_save
+    wh_instr.valueChanged.connect(
+        lambda _v=0.0: refresh_wh(window, dock_for_wh(window)))
+    peak_lay.addWidget(wh_line)
+    peak_lay.addWidget(wh_title)
+    peak_lay.addLayout(wh_row)
+    peak_lay.addLayout(wh_vals)
+    peak_lay.addWidget(wh_note)
+    peak_lay.addWidget(wh_save)
+
     # 标签页放最后并吃掉剩余高度：拟合按钮留在上方，不会被表格挤到
     # 滚动区外面（2026-10-30 实测：先放表格时 [拟合全部] 要滚动才看得见）。
     peak_lay.addWidget(peak_tabs, 1)
