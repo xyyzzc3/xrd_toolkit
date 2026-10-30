@@ -455,10 +455,14 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     """进入 Mask 工作台：收起参数/日志坞，中央换成 Mask 工作台。"""
     if getattr(window, "_mask_active", False):
         return
-    # 校准与 Mask 互斥：从校准进来先把校准退掉（它会恢复分析态）
+    # 校准、Mask、精修三种工作台互斥：从校准进来先把校准退掉（它会
+    # 恢复分析态）；从精修进来先把精修退掉（同理）
     calib = getattr(window, "calib_btn", None)
     if calib is not None and calib.isChecked():
         calib.setChecked(False)
+    refine = getattr(window, "refine_btn", None)
+    if refine is not None and refine.isChecked():
+        refine.setChecked(False)
     window._mask_active = True
     window._mask_prev_entrance = getattr(window, "_last_entrance", None)
     window._mask_dock_saved = {
@@ -518,15 +522,106 @@ def _on_mask_mode(window: QMainWindow, on: bool) -> None:
         _exit_mask_mode(window)
 
 
-def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + [Mask] 独立编辑器 + 面板开关 + [帮助]。
+_REFINE_TIP = ("精修工作台：选一条 1D 曲线和一张 CIF，"
+               "做 Le Bail 或结构全谱拟合")
 
-    分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask）：
-    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [文件][参数][日志] │
-    [帮助▾]`——左边一格是"一次性设置"（校准 / mask），右边四个是每天
-    干活的循环，按数据流排：**原图**（直接
+
+def _open_refine_workbench(window: QMainWindow) -> None:
+    """打开/前置中央精修工作台（工具栏 [精修]）。
+
+    与 Mask 工作台同一套做法：内容常驻，子窗口只是显示容器；× 关闭
+    = 退出精修模式，内容不销毁。模块级延迟导入避开 app ↔
+    refine_workbench 的环。
+    """
+    from xrd_toolkit.gui.refine_workbench import (
+        RefineWorkbench, _RefineSubWindow)
+    if getattr(window, "refine_editor", None) is None:
+        window.refine_editor = RefineWorkbench(window)
+    dock = getattr(window, "refine_dock", None)
+    if dock is None:
+        dock = _RefineSubWindow(window)
+        dock.setObjectName("refine_workbench")
+        dock.setWidget(window.refine_editor)
+        window.mdi.addSubWindow(dock)
+        window.refine_dock = dock
+        dock.setWindowTitle("精修工作台")
+        area = window.mdi.viewport().size()
+        dock.resize(max(720, area.width() - 40),
+                    max(520, area.height() - 40))
+        dock.move(12, 12)
+    window.refine_editor.refresh_curves()
+    window.refine_editor.refresh_cifs()
+    dock.show()
+    dock.raise_()
+
+
+def _enter_refine_mode(window: QMainWindow) -> None:
+    """进入精修工作台：收起参数/日志坞，中央换成精修工作台。"""
+    if getattr(window, "_refine_active", False):
+        return
+    # 三种工作台互斥：从校准或 Mask 进来先把它们退掉
+    calib = getattr(window, "calib_btn", None)
+    if calib is not None and calib.isChecked():
+        calib.setChecked(False)
+    mask = getattr(window, "mask_btn", None)
+    if mask is not None and mask.isChecked():
+        mask.setChecked(False)
+    window._refine_active = True
+    window._refine_prev_entrance = getattr(window, "_last_entrance", None)
+    window._refine_dock_saved = {
+        name: window._dock_intent.get(name, False)
+        for name in ("参数", "日志")}
+    window._dock_intent["参数"] = False
+    window._dock_intent["日志"] = False
+    _resync_docks(window)
+    _highlight_entrance(window, None)
+    window.mode_label.setText("精修模式")
+    _open_refine_workbench(window)
+    window.refine_btn.setText("退出精修")
+    window.refine_btn.setToolTip("退出精修工作台，回到分析模式")
+    _log(window, "进入精修模式")
+
+
+def _exit_refine_mode(window: QMainWindow) -> None:
+    """退出精修工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
+    if not getattr(window, "_refine_active", False):
+        return
+    window._refine_active = False
+    dock = getattr(window, "refine_dock", None)
+    if dock is not None:
+        dock.hide()
+    saved = getattr(window, "_refine_dock_saved", None) or {}
+    for name, want in saved.items():
+        window._dock_intent[name] = want
+    window._refine_dock_saved = None
+    _resync_docks(window)
+    prev = getattr(window, "_refine_prev_entrance", None)
+    if prev is not None:
+        _highlight_entrance(window, prev)
+    window.mode_label.setText("分析模式")
+    window.refine_btn.setText("精修")
+    window.refine_btn.setToolTip(_REFINE_TIP)
+    _log(window, "退出精修模式")
+
+
+def _on_refine_mode(window: QMainWindow, on: bool) -> None:
+    if on:
+        _enter_refine_mode(window)
+    else:
+        _exit_refine_mode(window)
+
+
+def _build_toolbar(window: QMainWindow) -> None:
+    """工具栏 = 五个入口 + [Mask] / [精修] 工作台 + 面板开关 + [帮助]。
+
+    分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask，
+    2026-10-30 加 精修）：
+    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修] │
+    [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性设置"（校准 /
+    mask），中间四个是每天干活的循环，按数据流排：**原图**（直接
     看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
-    （链加工）→ **对比**（多文件汇总）。
+    （链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
+    （精修），与 Mask 一样开中央子窗口，不占参数页。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
     那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
@@ -576,6 +671,19 @@ def _build_toolbar(window: QMainWindow) -> None:
         window.entrance_buttons[name] = btn
         btn.clicked.connect(lambda checked=False, n=name:
                             _switch_entrance(window, n))
+
+    # [精修] 与 [Mask] 同类：打开中央工作台（不进 entrance_buttons /
+    # PARAM_PAGES）。可勾选：点亮 = 精修模式，再点一次 = 退出。
+    tb.addSeparator()
+    window._refine_active = False
+    window._refine_prev_entrance = None
+    window._refine_dock_saved = None
+    btn_refine = QPushButton("精修")
+    btn_refine.setCheckable(True)
+    btn_refine.setToolTip(_REFINE_TIP)
+    btn_refine.toggled.connect(lambda on: _on_refine_mode(window, on))
+    tb.addWidget(btn_refine)
+    window.refine_btn = btn_refine
 
     # 兼容：旧名字 [校准] 开关（测试与 calib.py 都按 window.calib_btn 找）
     # 文字与提示由 _highlight_entrance 统一换（选中时变「退出校准」）
@@ -666,9 +774,12 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
-    # 点分析入口 = 离开 Mask 工作台（先退出，再翻页）
+    # 点分析入口 = 离开 Mask / 精修工作台（先退出，再翻页）
     if getattr(window, "_mask_active", False) and name != "校准":
         window.mask_btn.setChecked(False)
+    refine = getattr(window, "refine_btn", None)
+    if refine is not None and refine.isChecked():
+        refine.setChecked(False)
     if name == "校准" and not window.calib_btn.isChecked():
         return                      # 这一次点击是"退出"，已由 toggled 处理
     if name != "校准" and not window.entrance_buttons[name].isChecked():
@@ -747,6 +858,9 @@ def _on_mode(window: QMainWindow, calibrating: bool) -> None:
     if calibrating:
         if getattr(window, "_mask_active", False):
             window.mask_btn.setChecked(False)   # 校准与 Mask 互斥
+        refine = getattr(window, "refine_btn", None)
+        if refine is not None and refine.isChecked():
+            refine.setChecked(False)            # 校准与精修互斥
         window.mode_label.setText("校准模式")
         _log(window, "进入校准模式")
         window.param_stack.setCurrentIndex(window.PARAM_PAGES["校准"])
@@ -845,6 +959,10 @@ def create_window() -> QMainWindow:
     # Mask 后的 2D 产物（services/masked2d），不是窗口级开关。
     window.mask_editor = None
     window.mask_dock = None
+    # 精修工作台内容与中央子窗口（2026-10-30）：与 Mask 同一套生命周期，
+    # 子窗口关闭只隐藏，选中的曲线/CIF/上一次结果不销毁。
+    window.refine_editor = None
+    window.refine_dock = None
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：
