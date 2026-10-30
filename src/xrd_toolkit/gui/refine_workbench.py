@@ -25,6 +25,7 @@
 放在后台线程跑，界面不卡。
 """
 import time
+import time
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +40,8 @@ from PySide6.QtWidgets import (
     QWidget)
 
 from xrd_toolkit import paths
-from xrd_toolkit.gui.panel_state import _collect_geometry, _log
+from xrd_toolkit.gui.panel_state import (
+    _collect_geometry, _data_snapshot, _log, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
 
@@ -310,6 +312,13 @@ class RefineWorkbench(QWidget):
         save_row.addWidget(self.save_btn, 1)
         save_row.addWidget(self.copy_btn, 1)
         left_lay.addLayout(save_row)
+        self.adopt_btn = QPushButton("采纳为图面板")
+        self.adopt_btn.setEnabled(False)
+        self.adopt_btn.setToolTip(
+            "把精修结果开成一张普通 1D 图：观测/计算/背景叠在一起，"
+            "可保存、参与对比")
+        self.adopt_btn.clicked.connect(self._adopt_panel)
+        left_lay.addWidget(self.adopt_btn)
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -640,6 +649,7 @@ class RefineWorkbench(QWidget):
             f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%")
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
+        self.adopt_btn.setEnabled(True)
         cif = self.cif_combo.currentData() or ""
         self.save_instrument_btn.setEnabled(
             "lab6" in Path(cif).name.lower())
@@ -768,6 +778,62 @@ class RefineWorkbench(QWidget):
             return
         QApplication.clipboard().setText(self.result.report())
         self._set_status("报告已复制到剪贴板")
+
+    def _adopt_panel(self):
+        """把精修结果开成一张普通 1D 图面板（参与保存/对比/导出）。
+
+        面板数据 = 拟合用的那条曲线（观测），`dock.fit_overlay` 带
+        计算线/背景/布拉格刻度，`_draw_1d` 每次重画都会把它叠回去。
+        处理链在这个面板上默认全关——否则扣背景/平滑会把观测线改了，
+        和计算线不在一个尺度上。
+        """
+        if self.result is None:
+            self._set_status("先精修再采纳")
+            return
+        from xrd_toolkit.gui.plot.drawing import _draw_1d
+        from xrd_toolkit.gui.plot.panel_build import _open_plot_panel
+        result = self.result
+        cif = self.cif_combo.currentData() or ""
+        phase = Path(cif).stem or "fit"
+        title = f"精修 {phase}  Rwp {result.rwp:.2f}%"
+        key = f"1D|fit:{time.time_ns()}"
+        dock = _open_plot_panel(self.main, "1D", key, title)
+        snap = _data_snapshot(self.main)
+        snap.update({
+            "2θ 下限 (°)": float(np.min(result.tth)),
+            "2θ 上限 (°)": float(np.max(result.tth)),
+            "视图 2θ 下限 (°)": None,
+            "视图 2θ 上限 (°)": None,
+            "背景扣除模式": "off",
+            "平滑曲线": False,
+            "裁剪区间": [],
+            "负值截断为 0": False,
+        })
+        dock.params_snapshot = snap
+        dock.panel_file = None
+        dock.panel_display = f"{phase}_fit"
+        tth = np.asarray(result.tth, dtype=float).copy()
+        y = np.asarray(result.y_obs, dtype=float).copy()
+        dock.last_tth = tth
+        dock.last_intensity = y
+        bragg = [(label, pos, _PHASE_COLORS[i % len(_PHASE_COLORS)])
+                 for i, (label, pos) in enumerate(self._bragg_rows(result))]
+        dock.fit_overlay = {
+            "sig": (int(tth.size), float(np.nansum(np.nan_to_num(y)))),
+            "tth": tth,
+            "y_calc": np.asarray(result.y_calc, dtype=float).copy(),
+            "background": (None if result.background is None else
+                           np.asarray(result.background, dtype=float).copy()),
+            "bragg": bragg,
+            "label": phase,
+            "rwp": result.rwp,
+        }
+        dock.figure_saved = False
+        _draw_1d(self.main, dock, tth, y)
+        _set_focus(self.main, key, title)
+        dock.raise_()
+        self._set_status("已采纳为图面板；回分析模式就能看到")
+        _log(self.main, f"精修结果已采纳为图面板：{title}")
 
     def _set_status(self, text):
         self.status.setText(text)

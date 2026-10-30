@@ -53,6 +53,35 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
                      gid=_AUX_GID_PREFIX + "anchor", label="Anchors")[0]
         ln.set_zorder(6)
 
+def _draw_fit_overlay(ax, overlay) -> None:
+    """把精修结果（计算线 / 背景 / 布拉格刻度）叠在 1D 面板上。
+
+    只给 [采纳为图面板] 建出来的图用：观测曲线在下面已经画好，这里
+    补计算曲线、背景与各相的布拉格刻度。差值图单轴放不下——要看
+    obs−calc 回精修工作台。
+    """
+    tth = np.asarray(overlay["tth"], dtype=float)
+    calc = np.asarray(overlay["y_calc"], dtype=float)
+    ax.plot(tth, calc, linestyle="--", lw=1.0, color="#CC79A7",
+            gid=_AUX_GID_PREFIX + "fit_calc", label="计算")
+    background = overlay.get("background")
+    if background is not None and np.size(background):
+        ax.plot(tth, np.asarray(background, dtype=float), linestyle=":",
+                lw=0.9, color="#d0544e",
+                gid=_AUX_GID_PREFIX + "fit_bg", label="背景")
+    rows = overlay.get("bragg") or []
+    trans = ax.get_xaxis_transform()
+    for i, (_label, positions, color) in enumerate(rows):
+        pos = np.asarray(positions, dtype=float)
+        ax.plot(pos, np.full(len(pos), 0.03 + 0.035 * i), marker="|",
+                linestyle="none", ms=7, mew=0.9, color=color,
+                transform=trans, clip_on=True,
+                gid=_AUX_GID_PREFIX + f"fit_bragg_{i}")
+    if ax.lines:
+        ax.lines[0].set_label("观测")
+    ax.legend(fontsize=7, loc="best", framealpha=0.85)
+
+
 def _bg_path_of(dock):
     """面板对应的文件路径（锚点按路径存；路径是唯一的，显示名可能重名）。"""
     return getattr(dock, "panel_file", None)
@@ -99,6 +128,15 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
     # 必须同一个口径
     path = _bg_path_of(dock)
     raw = intensity          # 辅助线里的"原始曲线"要的是未扣的那份
+    # 精修结果叠加（[采纳为图面板] 建出来的图才有）：曲线指纹对上才画，
+    # 换了数据就静默不画，免得把旧拟合线盖在新曲线上。
+    fit_overlay = getattr(dock, "fit_overlay", None)
+    if fit_overlay is not None:
+        fit_sig = (int(np.size(tth)),
+                   float(np.nansum(np.nan_to_num(
+                       np.asarray(intensity, dtype=float)))))
+        if fit_sig != fit_overlay.get("sig"):
+            fit_overlay = None
     tth, intensity, base = _proc_curve(window, dock, path, tth, intensity)
     # 裁剪挖空**也作用于两条辅助线**（2026-10-08 用户："剪完……扣完
     # 背景的峰看不清。两条线都在一张图，保证都能看清"）：被剪的区间三条
@@ -124,6 +162,8 @@ def _draw_1d(window: QMainWindow, dock, tth, intensity) -> None:
                 lw=0.8)
         if base is not None:
             _draw_bg_overlay(window, dock, ax, tth, raw, base, path)
+        if fit_overlay is not None:
+            _draw_fit_overlay(ax, fit_overlay)
         lo = _panel_param(window, dock, "视图 2θ 下限 (°)", None)
         hi = _panel_param(window, dock, "视图 2θ 上限 (°)", None)
         # 这个窗口是用户缩放的（缩放/平移写回快照）还是按参数算的？

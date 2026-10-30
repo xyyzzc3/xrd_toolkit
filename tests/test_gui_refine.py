@@ -151,6 +151,29 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(editor.copy_btn.isEnabled())
         self.assertGreaterEqual(len(editor.fig.axes), 2)
 
+    def test_adopt_creates_normal_panel(self):
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        idx = editor.cif_combo.findData(str(LAB6_CIF))
+        editor.cif_combo.setCurrentIndex(idx)
+        editor.run_btn.click()
+        ok = _wait_until(lambda: editor.result is not None
+                         and editor._task is None, timeout_ms=30000)
+        self.assertTrue(ok, "精修没有完成")
+        editor.adopt_btn.click()
+        QApplication.processEvents()
+        keys = [k for k in self.w.plot_docks
+                if str(k).startswith("1D|fit:")]
+        self.assertEqual(len(keys), 1, "应恰好开出一张精修图面板")
+        dock = self.w.plot_docks[keys[0]]
+        self.assertIn("精修", dock.windowTitle())
+        self.assertIsNotNone(getattr(dock, "fit_overlay", None))
+        ax = _support.gui_panel_state._content(dock).axes_1d
+        labels = [line.get_label() for line in ax.lines]
+        self.assertIn("观测", labels)
+        self.assertIn("计算", labels)
+
     def test_extra_phase_scale_and_bragg_row(self):
         self._open_panel()
         self._enter()
