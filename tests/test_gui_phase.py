@@ -7,6 +7,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
+import numpy as np  # noqa: E402
+from PySide6.QtCore import QItemSelectionModel  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from unittest import mock  # noqa: E402
 
@@ -134,6 +137,52 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertTrue(editor.fig.axes[0].collections,
                         "选中候选相后应画出理论峰位")
         self.assertTrue(editor.send_btn.isEnabled())
+
+    def test_multi_select_draws_all_selected_phases(self):
+        self._screen()
+        editor = self.w.phase_editor
+        self.assertEqual(editor.table.currentRow(), 0)
+        model = editor.table.selectionModel()
+        idx = editor.table.model().index(1, 0)
+        model.select(idx, QItemSelectionModel.Select
+                     | QItemSelectionModel.Rows)
+        QApplication.processEvents()
+        self.assertGreaterEqual(len(editor.fig.axes[0].collections), 2,
+                                "选两个相应画出两组理论峰位")
+        legend = editor.fig.axes[0].get_legend()
+        self.assertIsNotNone(legend)
+        texts = [text.get_text() for text in legend.get_texts()]
+        self.assertGreaterEqual(
+            sum("理论峰位" in text for text in texts), 2)
+
+    def test_load_text_curve_and_screen(self):
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        editor = self.w.phase_editor
+        tth, y = _synth("", self.w.config["geometry"], 3000)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "curve.txt"
+            np.savetxt(path, np.column_stack([tth, y]),
+                       header="2theta intensity", comments="# ")
+            self.assertTrue(editor.load_curve_file(path))
+            self.assertEqual(editor.curve_combo.currentData(),
+                             f"file:{path}")
+            editor.screen_btn.click()
+            ok = _wait_until(lambda: len(editor.rows) > 0,
+                             timeout_ms=30000)
+            self.assertTrue(ok, "文件曲线筛相没有完成")
+            self.assertTrue(editor.rows[0].path.name.startswith("LaB6"),
+                            editor.rows[0].path.name)
+
+    def test_export_results_writes_csv(self):
+        self._screen()
+        editor = self.w.phase_editor
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "screen.csv"
+            editor._export_results(path)
+            text = path.read_text(encoding="utf-8-sig")
+        self.assertIn("phase,score", text)
+        self.assertIn("LaB6", text)
 
     def test_send_to_refine_preselects_curve_and_cif(self):
         self._screen()

@@ -17,6 +17,9 @@
 数据来源：选中 1D 面板的积分曲线（`last_tth` / `last_intensity`）。
 寻峰参数在左栏：显著度（σ 倍数）与最小峰距；匹配容差是峰位允许偏差。
 """
+import csv
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,10 +35,38 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
-from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 
 _OBS_COLOR = "#333333"
-_STICK_COLOR = "#e08a1e"
+# 多相叠加时按选中顺序轮换；与精修图的布拉格刻度同一套色系
+_PHASE_COLORS = ("#1f5fa8", "#e08a1e", "#2a9d8f", "#8e5aa8",
+                 "#c0392b", "#16a085", "#7f8c8d", "#d35400")
+
+
+def _load_text_curve(path):
+    """读两列文本曲线（2θ, 强度）：跳过 # 注释与读不动的行。
+
+    GUI 导出的 txt 就是这种格式（# 说明块 + 两列）；CSV/制表符/空格
+    分隔都认。少于 20 个有效点视为坏文件。
+    """
+    rows = []
+    with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = re.split(r"[,\s;]+", line)
+            if len(parts) < 2:
+                continue
+            try:
+                rows.append((float(parts[0]), float(parts[1])))
+            except ValueError:
+                continue
+    if len(rows) < 20:
+        raise ValueError("有效数据行少于 20 行")
+    arr = np.asarray(rows, dtype=float)
+    arr = arr[np.argsort(arr[:, 0])]
+    return arr[:, 0].copy(), arr[:, 1].copy()
 
 
 @dataclass
@@ -107,6 +138,8 @@ class PhaseWorkbench(QWidget):
         self.rows = []
         self.curve = None
         self._task = None
+        self._loaded_curves = {}       # {"file:路径": {"tth", "intensity", "label"}}
+        self._last_wavelength = None
 
         self._build_ui()
         self.refresh_curves()
@@ -130,6 +163,11 @@ class PhaseWorkbench(QWidget):
         self.use_focus_btn = QPushButton("用当前图")
         self.use_focus_btn.clicked.connect(self._use_focus_curve)
         top.addWidget(self.use_focus_btn)
+        self.open_curve_btn = QPushButton("打开 1D…")
+        self.open_curve_btn.setToolTip(
+            "读两列文本（2θ, 强度），不用先在 1D 页出图")
+        self.open_curve_btn.clicked.connect(self._choose_curve_file)
+        top.addWidget(self.open_curve_btn)
         top.addSpacing(10)
         top.addWidget(QLabel("相库"))
         self.lib_label = QLabel("")
@@ -203,6 +241,12 @@ class PhaseWorkbench(QWidget):
         self.send_btn.setToolTip("把当前曲线和选中的 CIF 带进精修工作台")
         self.send_btn.clicked.connect(self._send_to_refine)
         left_lay.addWidget(self.send_btn)
+        self.export_btn = QPushButton("导出结果…")
+        self.export_btn.setEnabled(False)
+        self.export_btn.setToolTip(
+            "把候选表写成 CSV（含相库、元素、波长），方便贴进报告")
+        self.export_btn.clicked.connect(self._export_results)
+        left_lay.addWidget(self.export_btn)
         hint = QLabel("相库里的 Al_metal.cif 不参与主相候选：它只作集流体"
                       "第二相，由精修工作台按额外相处理。")
         hint.setWordWrap(True)
@@ -224,7 +268,7 @@ class PhaseWorkbench(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setFrameShape(QFrame.NoFrame)
@@ -256,6 +300,8 @@ class PhaseWorkbench(QWidget):
                 continue
             title = dock.windowTitle() or str(key).split("|", 1)[-1]
             self.curve_combo.addItem(title, key)
+        for key, entry in self._loaded_curves.items():
+            self.curve_combo.addItem(entry["label"], key)
         self.curve_combo.blockSignals(False)
         idx = self.curve_combo.findData(keep) if keep else -1
         if idx < 0 and self.curve_combo.count():
@@ -265,8 +311,8 @@ class PhaseWorkbench(QWidget):
         self._on_curve_changed(clear=False)
 
     def _on_curve_changed(self, clear=False):
-        dock = self._selected_dock()
-        tth = getattr(dock, "last_tth", None) if dock is not None else None
+        curve = self._selected_curve()
+        tth = curve[0] if curve is not None else None
         if tth is not None:
             tth = np.asarray(tth, dtype=float)
             self.status.setText(
@@ -277,14 +323,13 @@ class PhaseWorkbench(QWidget):
             self.rows = []
             self.table.setRowCount(0)
             self.send_btn.setEnabled(False)
+            self.export_btn.setEnabled(False)
             self.best_label.setText("还没有筛相")
             self.best_label.setStyleSheet("color: gray;")
-            intensity = (getattr(dock, "last_intensity", None)
-                         if dock is not None else None)
-            if tth is not None and intensity is not None:
-                self.curve = (np.asarray(tth, dtype=float),
-                              np.asarray(intensity, dtype=float))
-                self._draw(self.curve, None)
+            if curve is not None:
+                self.curve = (np.asarray(curve[0], dtype=float),
+                              np.asarray(curve[1], dtype=float))
+                self._draw(self.curve, [])
             else:
                 self.curve = None
                 self._draw_placeholder()
@@ -294,6 +339,47 @@ class PhaseWorkbench(QWidget):
         if not key:
             return None
         return getattr(self.main, "plot_docks", {}).get(key)
+
+    def _selected_curve(self):
+        """当前曲线的 (2θ, 强度)：面板里的或从文本文件载入的。"""
+        key = self.curve_combo.currentData()
+        if not key:
+            return None
+        if str(key).startswith("file:"):
+            entry = self._loaded_curves.get(key)
+            if entry is None:
+                return None
+            return entry["tth"], entry["intensity"]
+        dock = getattr(self.main, "plot_docks", {}).get(key)
+        if dock is None or getattr(dock, "last_tth", None) is None:
+            return None
+        return (np.asarray(dock.last_tth, dtype=float),
+                np.asarray(dock.last_intensity, dtype=float))
+
+    def _choose_curve_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "打开 1D 曲线", str(paths.default_outputs_dir()),
+            "文本 (*.txt *.csv *.dat);;所有文件 (*)")
+        if path:
+            self.load_curve_file(path)
+
+    def load_curve_file(self, path):
+        """载入两列文本曲线（公开给测试/脚本调用）。"""
+        path = Path(path)
+        try:
+            tth, intensity = _load_text_curve(path)
+        except Exception as err:                   # noqa: BLE001
+            self._set_status(f"读取曲线失败：{user_error_text(err)}")
+            return False
+        key = f"file:{path}"
+        self._loaded_curves[key] = {
+            "tth": tth, "intensity": intensity, "label": path.name}
+        self.refresh_curves()
+        idx = self.curve_combo.findData(key)
+        if idx >= 0:
+            self.curve_combo.setCurrentIndex(idx)
+        self._set_status(f"已载入 {path.name}（{tth.size} 点）")
+        return True
 
     def _use_focus_curve(self):
         key = getattr(self.main, "focus_panel", None)
@@ -337,12 +423,12 @@ class PhaseWorkbench(QWidget):
         if self._task is not None:
             self._set_status("上一轮筛相还在跑，请稍候")
             return
-        dock = self._selected_dock()
-        if dock is None or getattr(dock, "last_tth", None) is None:
+        curve = self._selected_curve()
+        if curve is None:
             self._set_status("先选一条已经算完的 1D 曲线")
             return
-        tth = np.asarray(dock.last_tth, dtype=float).copy()
-        y = np.asarray(dock.last_intensity, dtype=float).copy()
+        tth = np.asarray(curve[0], dtype=float).copy()
+        y = np.asarray(curve[1], dtype=float).copy()
         if tth.size != y.size or tth.size < 20:
             self._set_status("这条曲线点太少或长度不一致，无法筛相")
             return
@@ -352,6 +438,7 @@ class PhaseWorkbench(QWidget):
         except (KeyError, TypeError):
             self._set_status("当前几何配置没有波长，先去校准页选一条配置")
             return
+        self._last_wavelength = wavelength
         self.curve = (tth, y)
         self.screen_btn.setEnabled(False)
         self.send_btn.setEnabled(False)
@@ -411,6 +498,7 @@ class PhaseWorkbench(QWidget):
                 f"（coverage {best.coverage:.2f} / purity {best.purity:.2f}）")
             self.best_label.setStyleSheet("color: #1f5fa8; font-weight: 600;")
             self.send_btn.setEnabled(True)
+            self.export_btn.setEnabled(True)
             self._set_status(
                 f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根")
             _log(self.main, f"物相筛选完成：{len(rows)} 个候选，"
@@ -419,6 +507,7 @@ class PhaseWorkbench(QWidget):
             self.best_label.setText("没有候选相能匹配观测峰")
             self.best_label.setStyleSheet("color: gray;")
             self.send_btn.setEnabled(False)
+            self.export_btn.setEnabled(False)
             self._set_status("筛相完成：没有候选相")
         self._draw_selected()
 
@@ -440,32 +529,49 @@ class PhaseWorkbench(QWidget):
             return self.rows[idx]
         return None
 
+    def _selected_rows(self):
+        """表里所有选中的候选行（Ctrl/Cmd 多选时按行号排序）。"""
+        model = self.table.selectionModel()
+        indexes = (sorted({i.row() for i in model.selectedRows()})
+                   if model is not None else [])
+        rows = [self.rows[i] for i in indexes if 0 <= i < len(self.rows)]
+        if not rows:
+            current = self._selected_row()
+            if current is not None:
+                rows = [current]
+        return rows
+
     def _draw_selected(self):
         if self.curve is None:
             return
-        self._draw(self.curve, self._selected_row())
+        self._draw(self.curve, self._selected_rows())
 
-    def _draw(self, curve, row):
+    def _draw(self, curve, rows):
         tth, y = curve
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR, label="观测")
-        if row is not None:
+        span = float(np.nanmax(y) - np.nanmin(y))
+        amp = 0.55 * span if span > 0 else 1.0
+        y0 = float(np.nanmin(y))
+        for i, row in enumerate(rows):
             keep = row.intensity >= 0.02
             sticks_t = row.tth[keep]
             sticks_i = row.intensity[keep]
             in_range = (sticks_t >= tth.min()) & (sticks_t <= tth.max())
             sticks_t, sticks_i = sticks_t[in_range], sticks_i[in_range]
-            span = float(np.nanmax(y) - np.nanmin(y))
-            amp = 0.55 * span if span > 0 else 1.0
-            y0 = float(np.nanmin(y))
+            color = _PHASE_COLORS[i % len(_PHASE_COLORS)]
             ax.vlines(sticks_t, y0, y0 + sticks_i * amp,
-                      color=_STICK_COLOR, lw=1.0, alpha=0.9,
+                      color=color, lw=1.0, alpha=0.9,
                       label=f"{row.path.stem} 理论峰位")
+        if len(rows) == 1:
+            row = rows[0]
             ax.set_title(
                 f"{row.path.stem}   score {row.score:.3f}   "
                 f"（coverage {row.coverage:.2f} / purity {row.purity:.2f}）",
                 fontsize=10)
+        elif rows:
+            ax.set_title(f"{len(rows)} 个候选相叠加", fontsize=10)
         else:
             ax.set_title("观测曲线", fontsize=10)
         ax.set_xlabel("2θ (°)", fontsize=8)
@@ -483,6 +589,9 @@ class PhaseWorkbench(QWidget):
             self._set_status("先在候选表里点一行")
             return
         curve_key = self.curve_combo.currentData()
+        if str(curve_key or "").startswith("file:") or self._selected_dock() is None:
+            self._set_status("文件曲线没有对应的 1D 面板，不能直接送去精修")
+            return
         self.main.phase_btn.setChecked(False)      # 退出物相模式
         self.main.refine_btn.setChecked(True)      # 进入精修模式
         editor = getattr(self.main, "refine_editor", None)
@@ -492,6 +601,46 @@ class PhaseWorkbench(QWidget):
         editor.set_source(curve_key, str(row.path))
         _log(self.main, f"已把 {row.path.stem} 送去精修"
                         f"（{self.curve_combo.currentText()}）")
+
+    def _export_results(self, path=None):
+        """把候选表写成 CSV；path 给定时不弹框（测试/脚本用）。"""
+        if not self.rows:
+            self._set_status("还没有可导出的筛相结果")
+            return
+        if path is None:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            default = (paths.default_outputs_dir()
+                       / f"phase_screen_{stamp}.csv")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "导出筛相结果", str(default),
+                "CSV (*.csv);;文本 (*.txt)")
+            if not path:
+                return
+        try:
+            with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write("# XRD Toolkit phase screen\n")
+                fh.write(f"# curve: {self.curve_combo.currentText()}\n")
+                fh.write(f"# library: {self.lib_dir}\n")
+                fh.write(
+                    "# elements: "
+                    f"{self.elements_edit.text().strip() or '(all)'}\n")
+                fh.write("# wavelength_A: "
+                         f"{float(self._last_wavelength or 0.0):.6f}\n")
+                fh.write("# generated: "
+                         f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                writer = csv.writer(fh)
+                writer.writerow(["phase", "score", "coverage", "purity",
+                                 "scale", "path"])
+                for row in self.rows:
+                    writer.writerow([
+                        row.path.stem, f"{row.score:.6f}",
+                        f"{row.coverage:.6f}", f"{row.purity:.6f}",
+                        f"{row.scale:.6f}", str(row.path)])
+        except OSError as err:                    # noqa: BLE001
+            self._set_status(f"导出失败：{user_error_text(err)}")
+            return
+        self._set_status(f"已导出 {Path(path).name}（{len(self.rows)} 行）")
+        _log(self.main, f"筛相结果已导出：{path}")
 
     def _set_status(self, text):
         self.status.setText(text)
