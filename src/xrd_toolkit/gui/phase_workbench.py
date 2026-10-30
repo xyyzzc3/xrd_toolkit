@@ -28,10 +28,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDoubleSpinBox, QFileDialog,
-    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMdiSubWindow,
-    QMenu, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget)
+    QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMdiSubWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
+    QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
@@ -137,6 +138,7 @@ class PhaseWorkbench(QWidget):
         self.lib_dir = paths.structures_dir()
         self.rows = []
         self.curve = None
+        self.obs_t = None
         self._task = None
         self._loaded_curves = {}       # {"file:路径": {"tth", "intensity", "label"}}
         self._last_wavelength = None
@@ -241,6 +243,13 @@ class PhaseWorkbench(QWidget):
         self.send_btn.setToolTip("把当前曲线和选中的 CIF 带进精修工作台")
         self.send_btn.clicked.connect(self._send_to_refine)
         left_lay.addWidget(self.send_btn)
+        self.cell_btn = QPushButton("精修晶胞")
+        self.cell_btn.setEnabled(False)
+        self.cell_btn.setToolTip(
+            "用观测峰位对选中的 CIF 做峰位级晶胞精修（七个晶系都可，"
+            "同时修 2θ 零位）；结果含 a/b/c/α/β/γ 与匹配率")
+        self.cell_btn.clicked.connect(self._refine_selected_cell)
+        left_lay.addWidget(self.cell_btn)
         self.export_btn = QPushButton("导出结果…")
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip(
@@ -323,8 +332,10 @@ class PhaseWorkbench(QWidget):
             # 换曲线后旧候选不再对应这条曲线（[送去精修] 会送错配对），
             # 清空结果等用户重新筛；进入工作台时的 refresh 不清（状态保留）
             self.rows = []
+            self.obs_t = None
             self.table.setRowCount(0)
             self.send_btn.setEnabled(False)
+            self.cell_btn.setEnabled(False)
             self.export_btn.setEnabled(False)
             self.best_label.setText("还没有筛相")
             self.best_label.setStyleSheet("color: gray;")
@@ -444,6 +455,7 @@ class PhaseWorkbench(QWidget):
         self.curve = (tth, y)
         self.screen_btn.setEnabled(False)
         self.send_btn.setEnabled(False)
+        self.cell_btn.setEnabled(False)
         self._set_status("筛相中，请稍候…")
         _log(self.main, f"物相筛选：{self.lib_dir} → "
                         f"{self.curve_combo.currentText()}")
@@ -476,6 +488,7 @@ class PhaseWorkbench(QWidget):
 
     def _on_screen_done(self, obs_t, rows):
         self.rows = rows
+        self.obs_t = np.asarray(obs_t, dtype=float)
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
@@ -500,6 +513,7 @@ class PhaseWorkbench(QWidget):
                 f"（coverage {best.coverage:.2f} / purity {best.purity:.2f}）")
             self.best_label.setStyleSheet("color: #1f5fa8; font-weight: 600;")
             self.send_btn.setEnabled(True)
+            self.cell_btn.setEnabled(True)
             self.export_btn.setEnabled(True)
             self._set_status(
                 f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根")
@@ -509,6 +523,7 @@ class PhaseWorkbench(QWidget):
             self.best_label.setText("没有候选相能匹配观测峰")
             self.best_label.setStyleSheet("color: gray;")
             self.send_btn.setEnabled(False)
+            self.cell_btn.setEnabled(False)
             self.export_btn.setEnabled(False)
             self._set_status("筛相完成：没有候选相")
         self._draw_selected()
@@ -621,6 +636,71 @@ class PhaseWorkbench(QWidget):
             self._copy_table(False)
 
     # ── 送去精修 ────────────────────────────────────────────
+    def _refine_selected_cell(self):
+        """峰位级晶胞精修（七个晶系）；结果显示在非模态对话框。"""
+        row = self._selected_row()
+        if row is None:
+            self._set_status("先在候选表里选一个相")
+            return None
+        if self.obs_t is None or np.asarray(self.obs_t).size < 3:
+            self._set_status("还没有观测峰：先点 [开始筛相]")
+            return None
+        wavelength = self._last_wavelength
+        if wavelength is None:
+            try:
+                wavelength = float(
+                    _collect_geometry(self.main)["wavelength_m"] * 1e10)
+            except (KeyError, TypeError):
+                self._set_status("当前几何配置没有波长，先去校准页选一条配置")
+                return None
+        try:
+            from xrd_toolkit.simulation import load_structure
+            from xrd_toolkit.simulation.cell_refine import refine_cell
+            structure = load_structure(str(row.path))
+            result = refine_cell(
+                structure, self.obs_t, wavelength=float(wavelength),
+                match_tol_deg=float(self.tolerance.value()), max_hkl=12)
+        except Exception as err:                   # noqa: BLE001
+            self._set_status(f"晶胞精修失败：{user_error_text(err)}")
+            _log(self.main, f"晶胞精修失败：{user_error_text(err)}")
+            return None
+        self._show_cell_refine(result, row)
+        self._set_status(
+            f"晶胞精修：{row.path.stem} {result.system}，"
+            f"匹配 {len(result.matches)} 根，RMS {result.rms_deg:.4f}°")
+        _log(self.main, f"晶胞精修：{row.path.stem}（{result.system}）"
+                        f" 匹配 {len(result.matches)} 根，"
+                        f"RMS {result.rms_deg:.4f}°")
+        return result
+
+    def _show_cell_refine(self, result, row):
+        old = getattr(self, "_cell_dialog", None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:                      # noqa: BLE001
+                pass
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"晶胞精修 — {row.path.stem}")
+        dlg.resize(760, 560)
+        lay = QVBoxLayout(dlg)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(result.report())
+        lay.addWidget(view, 1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        copy = QPushButton("复制报告")
+        copy.clicked.connect(
+            lambda: QApplication.clipboard().setText(result.report()))
+        buttons.addWidget(copy)
+        close = QPushButton("关闭")
+        close.clicked.connect(dlg.close)
+        buttons.addWidget(close)
+        lay.addLayout(buttons)
+        self._cell_dialog = dlg
+        dlg.show()
+
     def _send_to_refine(self):
         row = self._selected_row()
         if row is None:

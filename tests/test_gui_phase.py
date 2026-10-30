@@ -18,7 +18,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
 import numpy as np  # noqa: E402
 from PySide6.QtCore import QItemSelectionModel  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPlainTextEdit  # noqa: E402
 from unittest import mock  # noqa: E402
 
 try:
@@ -137,6 +137,21 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertTrue(editor.fig.axes[0].collections,
                         "选中候选相后应画出理论峰位")
         self.assertTrue(editor.send_btn.isEnabled())
+
+    def test_refine_cell_dialog(self):
+        self._screen()
+        editor = self.w.phase_editor
+        self.assertTrue(editor.cell_btn.isEnabled())
+        editor.cell_btn.click()
+        QApplication.processEvents()
+        dlg = getattr(editor, "_cell_dialog", None)
+        self.assertIsNotNone(dlg)
+        self.assertTrue(dlg.isVisible())
+        text = dlg.findChild(QPlainTextEdit).toPlainText()
+        self.assertIn("cell refinement", text)
+        self.assertIn("cubic", text)
+        dlg.close()
+        QApplication.processEvents()
 
     def test_multi_select_draws_all_selected_phases(self):
         self._screen()

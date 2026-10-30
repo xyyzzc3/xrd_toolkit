@@ -4,6 +4,12 @@
 plots 出图。pymatgen 属可选依赖（见 pyproject 的
 [project.optional-dependencies].simulation）。
 """
+from xrd_toolkit.simulation.cell_refine import (
+    CellMatch,
+    CellRefineResult,
+    crystal_system,
+    refine_cell,
+)
 from xrd_toolkit.simulation.core import (
     b_iso_from_cif,
     d_spacing,
@@ -106,4 +112,5 @@ __all__ = [
     "format_strain", "summary_block",
     "WT_NOTE", "PhaseQuantity", "PhaseWeight", "cell_volume",
     "phase_mass_factor", "phase_weight_percent",
+    "CellMatch", "CellRefineResult", "crystal_system", "refine_cell",
 ]
