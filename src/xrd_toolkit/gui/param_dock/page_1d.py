@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSizePolicy,
-    QSpinBox, QTableWidget, QVBoxLayout)
+    QSpinBox, QTableWidget, QTabWidget, QVBoxLayout)
 
 from xrd_toolkit.gui.fit_view import (
     FIT_COLUMNS, clear_fit_results, copy_fit_table, fit_all_peaks,
@@ -130,7 +130,9 @@ def build_1d_page(window, form_1d, btns_1d):
 
     show_peaks.toggled.connect(toggle_peaks)
 
-    # 峰表：带浅色边框的小卡片；没有峰时整块隐藏（页面不留一块空表）
+    # 峰表与拟合结果共用一块标签页区域（2026-10-30）：两张表竖着叠会
+    # 把参数页越拉越长，而看峰表选中行和看拟合结果很少需要同时进行。
+    # 没有峰时整块隐藏（页面不留一块空表）。
     peak_box = QFrame()
     peak_box.setObjectName("peak_section")
     peak_box.setFrameShape(QFrame.NoFrame)
@@ -140,11 +142,12 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_line = QFrame()
     peak_line.setFixedHeight(1)
     peak_line.setStyleSheet("background-color: #d5dae0;")
-    peak_caption = QLabel("峰表")
-    peak_caption.setStyleSheet("color: gray; font-weight: 600;")
-    peak_caption.setWordWrap(True)
-    peak_caption.setSizePolicy(QSizePolicy.Ignored,
-                               peak_caption.sizePolicy().verticalPolicy())
+    peak_tabs = QTabWidget()
+    peak_tabs.setObjectName("peak_tabs")
+    peak_tabs.setDocumentMode(True)
+    peak_tabs.setMaximumWidth(320)
+    peak_tabs.setMinimumHeight(90)
+    peak_tabs.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
     peak_table = QTableWidget(0, len(TABLE_COLUMNS))
     peak_table.setHorizontalHeaderLabels(list(TABLE_COLUMNS))
     peak_table.verticalHeader().setVisible(False)
@@ -187,8 +190,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_table.setContextMenuPolicy(Qt.CustomContextMenu)
     peak_table.customContextMenuRequested.connect(_peak_menu)
     peak_lay.addWidget(peak_line)
-    peak_lay.addWidget(peak_caption)
-    peak_lay.addWidget(peak_table, 1)
+    peak_tabs.addTab(peak_table, "峰表")
 
     # ── 峰形拟合（2026-10-30）：峰表给峰位，这里逐个拟合 ─────────
     fit_line = QFrame()
@@ -238,11 +240,14 @@ def build_1d_page(window, form_1d, btns_1d):
     fit_row3.addWidget(btn_fit_all, 1)
     fit_row3.addWidget(btn_fit_sel, 1)
 
-    fit_result_caption = QLabel("拟合结果")
-    fit_result_caption.setStyleSheet("color: gray;")
-    fit_result_caption.setVisible(False)
     fit_table = QTableWidget(0, len(FIT_COLUMNS))
     fit_table.setHorizontalHeaderLabels(list(FIT_COLUMNS))
+    for col, tip in enumerate((
+            "峰位 2θ（度）", "半高宽 FWHM（度）", "峰形混合参数",
+            "峰面积", "该峰的加权残差 Rwp（%）")):
+        header_item = fit_table.horizontalHeaderItem(col)
+        if header_item is not None:
+            header_item.setToolTip(tip)
     fit_table.verticalHeader().setVisible(False)
     fit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     fit_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -258,17 +263,21 @@ def build_1d_page(window, form_1d, btns_1d):
     fit_table.verticalHeader().setDefaultSectionSize(22)
     fit_table.setVisible(False)
     window.fit_table = fit_table
-    window.fit_caption = fit_result_caption
     window.fit_all_btn = btn_fit_all
     window.fit_selected_btn = btn_fit_sel
+    # 拟合结果住进第二个标签页：没有结果时标签置灰，有结果时自动切过去
+    peak_tabs.addTab(fit_table, "拟合结果")
+    peak_tabs.setTabEnabled(1, False)
+    window.peak_tabs = peak_tabs
 
     peak_lay.addWidget(fit_line)
     peak_lay.addWidget(fit_title)
     peak_lay.addLayout(fit_row1)
     peak_lay.addLayout(fit_row2)
     peak_lay.addLayout(fit_row3)
-    peak_lay.addWidget(fit_result_caption)
-    peak_lay.addWidget(fit_table, 1)
+    # 标签页放最后并吃掉剩余高度：拟合按钮留在上方，不会被表格挤到
+    # 滚动区外面（2026-10-30 实测：先放表格时 [拟合全部] 要滚动才看得见）。
+    peak_lay.addWidget(peak_tabs, 1)
 
     def _fit_settings_changed(*_):
         # 回放快照/程序回填不算用户改参数（同 _refresh_1d_display 的守卫）
@@ -306,7 +315,6 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_box.setVisible(False)
     window.peak_box = peak_box
     window.peak_table = peak_table
-    window.peak_caption = peak_caption
     # 峰表直接接在「寻峰并显示峰位」下面：表单结束就是它，不另起一层；
     # 放在滚动内容的竖直布局里（stretch=1），拿走页面剩下的高度。
     outer = getattr(form_1d, "_outer_layout", None)

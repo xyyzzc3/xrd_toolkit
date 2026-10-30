@@ -83,6 +83,9 @@ class TestFitView(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(self.w.fit_table.rowCount(), 4)
         self.assertTrue(self.w.fit_table.isVisible())
+        self.assertEqual(self.w.peak_tabs.currentIndex(), 1,
+                         "拟合完应自动切到「拟合结果」页")
+        self.assertEqual(self.w.peak_tabs.tabText(1), "拟合结果 · 4 根")
         centers = [entry.fit.center for entry in self.dock.fit_results]
         for got, want in zip(centers, (2.0, 3.0, 4.5, 6.0)):
             self.assertAlmostEqual(got, want, places=2)
@@ -119,6 +122,10 @@ class TestFitView(unittest.TestCase):
         self.assertEqual(self.w.fit_table.rowCount(), 0)
         self.assertIsNone(self.dock.fit_results)
         self.assertEqual(len(self._fit_lines()), 0)
+        self.assertEqual(self.w.peak_tabs.currentIndex(), 0,
+                         "结果作废后应退回「峰表」页")
+        self.assertFalse(self.w.peak_tabs.isTabEnabled(1))
+        self.assertEqual(self.w.peak_tabs.tabText(1), "拟合结果")
 
     def test_fit_requires_peaks(self):
         path = "data/fake_no_peaks.tif"

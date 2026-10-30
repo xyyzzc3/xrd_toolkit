@@ -26,7 +26,9 @@ from xrd_toolkit.simulation.peakfit import (
 
 FIT_COLOR = "#CC79A7"          # Okabe–Ito 紫红：与曲线蓝、峰标橙都分得开
 FIT_KEYS = ("拟合线型", "拟合半窗 (°)", "拟合背景", "拟合全部叠加")
-FIT_COLUMNS = ("2θ (°)", "FWHM (°)", "η / m", "面积", "Rwp (%)")
+# 5 列挤在 320 px 里，带单位的表头会被裁（实测 "FWHM (°)" 只剩 "WHM"）；
+# 单位放进表头 tooltip，列名只留短名。
+FIT_COLUMNS = ("2θ", "FWHM", "η/m", "面积", "Rwp")
 
 SHAPE_LABELS = {
     "gaussian": "高斯",
@@ -134,7 +136,7 @@ def fit_all_peaks(window):
         half_window=half, background=bg)
     dock.fit_results = entries
     dock.fit_sig = _curve_sig(tth, y)
-    fill_fit_table(window, dock)
+    fill_fit_table(window, dock, switch=True)
     _refresh(window)
     _log(window, f"峰形拟合：成功 {len(entries)} / 失败 {len(failures)}"
                  f"（{SHAPE_LABELS.get(shape, shape)}，半窗 {half:g}°）")
@@ -174,7 +176,7 @@ def fit_selected_peak(window):
            if abs(e.center0 - center) > 1e-6]
     dock.fit_results = sorted(old + entries, key=lambda e: e.center0)
     dock.fit_sig = _curve_sig(tth, y)
-    fill_fit_table(window, dock, select_center=center)
+    fill_fit_table(window, dock, select_center=center, switch=True)
     _refresh(window)
     _log(window, f"峰形拟合：{center:.4f}° 完成"
                  f"（{SHAPE_LABELS.get(shape, shape)}，半窗 {half:g}°）")
@@ -199,10 +201,14 @@ def _eta_text(fit):
     return "—"
 
 
-def fill_fit_table(window, dock, *, select_center=None):
-    """把 dock.fit_results 填进「拟合结果」表；没有结果时整块隐藏。"""
+def fill_fit_table(window, dock, *, select_center=None, switch=False):
+    """把 dock.fit_results 填进「拟合结果」标签页；没有结果时该页置灰。
+
+    switch=True 只给"用户刚点了拟合"的两条路：切到拟合结果页，让人
+    立刻看到表。焦点切换时的刷新不切页，否则每点一张图就被拽走。
+    """
     table = getattr(window, "fit_table", None)
-    caption = getattr(window, "fit_caption", None)
+    tabs = getattr(window, "peak_tabs", None)
     if table is None:
         return
     entries = (list(getattr(dock, "fit_results", None) or [])
@@ -211,14 +217,19 @@ def fill_fit_table(window, dock, *, select_center=None):
     table.setRowCount(0)
     if not entries:
         table.setVisible(False)
-        if caption is not None:
-            caption.setVisible(False)
+        if tabs is not None:
+            tabs.setTabEnabled(1, False)
+            tabs.setTabText(1, "拟合结果")
+            if tabs.currentIndex() == 1:
+                tabs.setCurrentIndex(0)
         table.blockSignals(False)
         return
     table.setVisible(True)
-    if caption is not None:
-        caption.setVisible(True)
-        caption.setText(f"拟合结果 · {len(entries)} 根")
+    if tabs is not None:
+        tabs.setTabEnabled(1, True)
+        tabs.setTabText(1, f"拟合结果 · {len(entries)} 根")
+        if switch:
+            tabs.setCurrentIndex(1)
     table.setRowCount(len(entries))
     pick = 0
     for row, entry in enumerate(entries):

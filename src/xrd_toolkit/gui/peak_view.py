@@ -292,16 +292,18 @@ def fill_peak_table(window, dock, peaks):
     if table is None or box is None:
         return
     table.setRowCount(0)
+    tabs = getattr(window, "peak_tabs", None)
     if not peaks:
         box.setVisible(False)
+        if tabs is not None:
+            tabs.setTabText(0, "峰表")
         hook = getattr(window, "_peak_table_stretch", None)
         if hook is not None:
             hook(False)
         return
-    caption = getattr(window, "peak_caption", None)
-    if caption is not None:
-        # 窄坞：标题只留「峰表 · N 根」；双击提示放进表格 tooltip
-        caption.setText(f"峰表 · {len(peaks)} 根")
+    if tabs is not None:
+        # 窄坞：标签只留「峰表 · N 根」；双击提示放进表格 tooltip
+        tabs.setTabText(0, f"峰表 · {len(peaks)} 根")
     table.setToolTip("双击一行放大到该峰")
     # 高度由布局决定（卡片在滚动内容里 stretch=1），行多时表内滚动
     hook = getattr(window, "_peak_table_stretch", None)

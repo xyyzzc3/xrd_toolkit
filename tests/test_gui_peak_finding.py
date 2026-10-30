@@ -138,7 +138,7 @@ class TestGuiPeakFinding(unittest.TestCase):
             self.assertIn("面积", QApplication.clipboard().text())
             w.peak_table.selectRow(0)
             self.assertEqual(peak_view.copy_peak_table(w, True), 1)
-            self.assertEqual(w.peak_caption.text(), "峰表 · 2 根")
+            self.assertEqual(w.peak_tabs.tabText(0), "峰表 · 2 根")
             self.assertIn("双击", w.peak_table.toolTip())
             self.assertLessEqual(w.peak_table.maximumWidth(), 320,
                                  "全屏时表格不许被拉宽")
