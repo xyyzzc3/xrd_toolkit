@@ -5,6 +5,34 @@
 
 ## [0.2.0rc1] — 2026-10-30
 
+### 峰分析、定量与晶胞（2026-10-31）
+
+- **Scherrer 接到 CLI/GUI**：`scherrer_sizes` 支持逐峰计算并按平方和
+  扣仪器宽度；`fit_peaks.py` 控制台/报告新增 `D_nm` 列、Scherrer 段与
+  结论行（`--instrument-from` 现在同时喂给 Scherrer 和 W-H）；1D 页
+  W-H 数字块下新增 Scherrer 行（只统计勾选参与 W-H 的峰，K=0.9）。
+- **W-H 可直接用 LaB₆ 仪器基线**：1D 页「仪器」下拉可选常数 FWHM 或
+  `[精修]` 工作台存下的 LaB₆ zero/U/V/W/X/Y；基线按角度逐峰算 FWHM
+  （与 `fit_peaks.py --instrument-from` 同口径），没有基线或波长不符时
+  自动退回常数并在提示里写明原因。
+- **定量相分数（wt%）**：新增 `simulation/quantitative.py`，按
+  `W_p ∝ S_p·Z_p·M_p·V_p` 计算晶态相重量分数；`FitResult.phase_weights`
+  在报告里给出逐相表（S/Z/M/V/wt%），非晶/未知相不参与分母；Le Bail
+  相的 S 取逐反射强度的加权平均。`fit_pattern` 把各相 scale 统一换算到
+  原始 `m|F|²LP` 强度上（`pattern_from_structure(normalize=False)`），
+  合成两相谱可把 wt% 反解回已知比例。`fit_lmfp.py`、`fit_insitu.py`
+  的终端/摘要/CSV 与精修、原位工作台都显示 wt%；原位
+  `wt_rich/wt_poor` 只在 LMFP 两相间归一化，Al 单列。
+- **七晶系峰位晶胞精修**：新增 `simulation/cell_refine.py` 与
+  `scripts/refine_cell.py`——观测峰位 ↔ hkl/d 一一匹配（Hungarian +
+  晶胞缩放粗扫），按晶系约束（立方 a；四方/六方 a,c；三方 a,α；
+  正交 a,b,c；单斜一个非直角；三斜六个）最小二乘，并同时精修 2θ
+  零位；报告含 a/b/c/α/β/γ、esd、RMS 与逐峰 hkl。物相工作台新增
+  `[精修晶胞]`（非模态报告，可复制）。
+- **测试/文档**：新增 `tests/test_quantitative.py`、`tests/test_cell_refine.py`
+  与 `tests/test_fit_peaks_script.py`；《使用说明》、README、NOTES 与
+  CHANGELOG 同步更新。
+
 ### 拟合（模拟/精修）
 
 - **Al 基片逐反射强度 + 背景曲率罚项**（2026-10-27）：LMFP 的 Al (331)

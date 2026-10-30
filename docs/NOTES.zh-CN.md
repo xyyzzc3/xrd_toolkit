@@ -346,7 +346,17 @@ max_nfev=120，后续 40，种子继承上一可用帧。
 
 - **2D → 1D 积分**——0°–360° 完整方位角积分，输出标准两列 txt（2θ(deg), intensity），供寻峰、拟合、PDF 分析使用。
 - **1D 峰形拟合（界面，2026-10-30）**——1D 页峰表下面直接做单峰拟合：线型（高斯/洛伦兹/伪 Voigt/分裂 Pearson VII）、半窗、局部背景（无/线性/二次）；`[拟合全部]` 或 `[拟合选中]`，结果显示在「拟合结果」标签页（与峰表同一块区域，拟合完自动切过去；结果作废后退回峰表页）并可在图上叠拟合曲线（默认只叠选中峰，可勾「叠加全部拟合」）。用画出来的处理后的曲线，只显示、不写产物；线型/半窗/背景一改旧结果自动作废。
-- **Williamson–Hall（界面，2026-10-30）**——单峰拟合 ≥3 根峰后自动算 W-H（`simulation.microstructure`），1D 页直接显示 D / ε / 峰数与警告；仪器展宽用常数 FWHM 近似可扣；`[保存 W-H 图…]` 出 PNG/PDF。结果跟随当前面板，不写产物。
+- **Williamson–Hall / Scherrer（界面，2026-10-30/31）**——单峰拟合 ≥3 根峰后自动算 W-H（`simulation.microstructure`），1D 页直接显示 D / ε / 峰数与警告；同一批勾选峰逐峰算 Scherrer（K=0.9）并显示范围/中位。仪器宽度可用常数 FWHM，也可用 `[精修]` 工作台存下的 LaB₆ 基线（zero/U/V/W/X/Y，按角度逐峰算；波长不符自动退回常数）。`[保存 W-H 图…]` 出 PNG/PDF；结果跟随当前面板，不写产物。
+- **定量相分数（2026-10-31）**——`simulation/quantitative.py`：多相拟合按
+  `W_p ∝ S_p·Z_p·M_p·V_p`（Z/M 由 pymatgen 约简化学式、V 由精修晶胞）算晶态相
+  wt%；`FitResult.phase_weights` 进报告，精修参数表/原位表/CSV 显示。非晶/未知
+  相不参与分母；Le Bail 相的 S 取逐反射强度加权平均。原位 `wt_rich/wt_poor` 只在
+  LMFP 两相间归一化，Al 单列。
+- **七晶系峰位晶胞精修（2026-10-31）**——`simulation/cell_refine.py` 与
+  `scripts/refine_cell.py`：枚举 hkl → 观测峰 ↔ d 一一匹配（Hungarian + 缩放粗扫）
+  → 按晶系约束最小二乘（立方 a；四方/六方 a,c；三方 a,α；正交 a,b,c；单斜一个
+  非直角；三斜六个），同时修 2θ 零位。物相工作台 `[精修晶胞]` 直接对选中 CIF 出
+  报告（a/b/c/α/β/γ、esd、RMS、逐峰 hkl）。
 - **精修工作台（界面，2026-10-30）**——工具栏 `[精修]` 打开中央工作台（与 Mask 编辑器同一套 MDI 子窗口做法）：选一条已算完的 1D 曲线、一张 `data/structures` 里的 CIF（也可 [打开 CIF…]），勾精修项（晶胞 a/b/c、仪器 U/V/W/X/Y、Size/Mustrain、温度因子 B，或 Le Bail 强度自由），背景选自动基线或不做，走与命令行同一个 `simulation.fit.fit_pattern` 引擎，在后台线程跑。结果是观测/计算/背景三联图 + obs−calc 差值 + 布拉格刻度，加 Rwp/Rp、参数表（初值/拟合值/esd）与完整报告；图可存 PNG/PDF，报告可一键复制。晶胞参数按晶系自动裁剪（立方只留 a，非正交跳过并在状态行说明）。关闭只隐藏，曲线、CIF 与上一次结果都留着；与校准、Mask、物相四种工作台互斥。左栏可加多张额外相 CIF（如 Al 集流体，默认强度逐反射自由，图上多一行布拉格刻度、参数表出现 `Al:scale`）；精修一张 LaB₆ 后可 [存为仪器基线]，样品精修勾「固定仪器」即固定 zero/U/V/W/X/Y，波长不符会拒绝应用并在状态行提示。精修完成后 [采纳为图面板] 可把观测/计算/背景开成一张普通 1D 图（处理链默认关，按曲线指纹叠加），参与保存与对比。
 - **物相工作台（界面，2026-10-30）**——工具栏 `[物相]` 打开中央工作台：选一条已算完的 1D 曲线 + 相库目录（默认 `data/structures`，也可 [选目录…]），可填允许元素（如 `Li Mn Fe P O`）先剪枝，点 `[开始筛相]` 在后台对目录里每张 CIF 粗扫晶胞缩放打分；候选表按 score 排序，点一行把该相的理论峰位叠在观测曲线上。`[送去精修]` 把曲线和选中 CIF 预选进精修工作台。打分与命令行 `scripts/analyze_pattern.py` 同源（`simulation.phase_search`：coverage + 0.2 × purity）；`Al_metal.cif` 只作第二相，不参与主相候选。候选表支持 Ctrl/Cmd 多选叠加（每个相一种颜色）；`[打开 1D…]` 可直接读两列文本曲线；`[导出结果…]` 把候选表写成 CSV（含相库、元素、波长与时间）。
 - **原位工作台（界面，2026-10-30）**——工具栏 `[原位]` 把 81 帧三相批处理搬进界面：选帧目录（默认 `~/Desktop/lmfpdata`）、mask（默认 `outputs/masks/lmfp1_lab6_mask.npy`）、富锂/贫锂/Al 三张 CIF、2θ 范围/点数、迭代次数与帧数上限；先后台准备（LaB₆ 定仪器 + 读结构），随后逐帧后台精修。结果表列 Rwp/f_rich/两相晶胞/耗时，趋势图上面是相分数（带 esd）、下面是 Rwp；CSV 增量写盘，结束时写 `fit_summary.txt`。`[停止]` 在当前帧算完后停，已完成的帧保留。相分数仍是相对散射强度分数，不是 wt%。引擎在 `simulation.insitu`，与 `scripts/fit_insitu.py` 共用。
@@ -389,7 +399,8 @@ pymatgen 是**可选依赖**（`pip install 'xrd-toolkit[simulation]'`）：只�
 | `scripts/simulate_study.py` | 教学/模拟图：basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II 对拍模拟（在单独的 `gsas2` 环境里跑） |
 | `scripts/gsas2_insitu_crosscheck.py` | 原位三相批量的 3 帧 GSAS-II 独立对照（prepare → 在 `gsas2` 环境 refine → compare） |
-| `scripts/fit_peaks.py` | 自动寻峰（`services/peak_finding.py`）+ 单峰四线型拟合（Gaussian/Lorentzian/pseudo-Voigt/split-Pearson VII）+ Scherrer/W-H（标样扣仪器宽度） |
+| `scripts/fit_peaks.py` | 自动寻峰（`services/peak_finding.py`）+ 单峰四线型拟合（Gaussian/Lorentzian/pseudo-Voigt/split-Pearson VII）+ 逐峰 Scherrer/W-H（标样扣仪器宽度） |
+| `scripts/refine_cell.py` | 七个晶系的峰位级晶胞精修（可同时修 2θ 零位），观测峰 ↔ hkl/d 一一匹配并输出逐峰表 |
 | `scripts/check_env.py` | 环境自检——"跑不起来"时先跑它 |
 | `scripts/check_gui.py` | 界面链路探针——真数据 + 真画布事件把界面走一遍 |
 | `scripts/show_gui.py` | 真窗口看一眼——真数据走三步，窗口留给你自己点 |

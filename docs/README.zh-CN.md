@@ -125,7 +125,8 @@ macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、1D 图上直接寻峰与峰表、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF 导出。
 - **四个分析工作台**——物相筛选（相库 / 元素过滤 / 多相叠加 / CSV）、全谱精修（额外相 / 仪器基线 / 采纳为图面板）、原位三相批量（逐帧结果与趋势）、Mask 编辑；全部与参数页、图面板共享同一套引擎。
 - **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 自 0.2 起随主依赖安装（GUI 分析工作台需要它）；`[simulation]` extra 保留为别名）。
-- **自动寻峰与单峰峰形拟合**——稳健噪声估计 + 显著度/峰高门槛 + 最小峰距 + 可选 FWHM 过滤的自动寻峰（`services/peak_finding.py`）；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 单峰拟合（局部背景），以及 Scherrer 尺寸和带仪器校正（quadrature / linear 扣标样）的 Williamson–Hall 分析；命令行入口 `scripts/fit_peaks.py`。
+- **自动寻峰与单峰峰形拟合**——稳健噪声估计 + 显著度/峰高门槛 + 最小峰距 + 可选 FWHM 过滤的自动寻峰（`services/peak_finding.py`）；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 单峰拟合（局部背景），以及逐峰 Scherrer 尺寸和带仪器校正（quadrature / linear 扣标样，或 GUI 里已保存的 LaB₆ 基线）的 Williamson–Hall 分析；命令行入口 `scripts/fit_peaks.py`。
+- **定量相分数与晶胞精修**——按 Rietveld 公式给拟合模型里的晶态相算 wt%（Z·M·V 来自 CIF 与精修晶胞；非晶/未知相不参与分母，报告里写明），以及七个晶系的峰位级晶胞精修（含 2θ 零位；`scripts/refine_cell.py`，或物相工作台的 `[精修晶胞]`）。
 - **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相、按空间群约束的原子坐标与位点占位精修，以及固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
 
 ## 安装（从源码跑）

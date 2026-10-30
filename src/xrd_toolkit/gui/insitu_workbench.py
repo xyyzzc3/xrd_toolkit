@@ -269,8 +269,9 @@ class InSituWorkbench(QWidget):
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._save_trend)
         left_lay.addWidget(self.save_btn)
-        hint = QLabel("相分数是相对散射强度分数，不是 wt%；看趋势可以，"
-                      "别当定量结果。")
+        hint = QLabel("f_rich 是相对散射强度分数，看趋势用；wt rich% / "
+                      "wt poor% 是晶态相的 Rietveld 重量分数（Al 单列、"
+                      "不进 LMFP 分母）。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         hint.setMinimumWidth(0)

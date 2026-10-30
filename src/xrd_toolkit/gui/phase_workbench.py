@@ -681,7 +681,7 @@ class PhaseWorkbench(QWidget):
             except Exception:                      # noqa: BLE001
                 pass
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"晶胞精修 — {row.path.stem}")
+        dlg.setWindowTitle(f"晶胞精修：{row.path.stem}")
         dlg.resize(760, 560)
         lay = QVBoxLayout(dlg)
         view = QPlainTextEdit()

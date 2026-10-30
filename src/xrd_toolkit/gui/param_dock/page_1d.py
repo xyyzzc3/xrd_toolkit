@@ -329,7 +329,7 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_source.addItem("LaB₆ 基线", WH_SOURCE_LAB6)
     wh_source.setToolTip(
         "常数：所有峰扣同一个 FWHM；LaB₆ 基线：用 [精修] 工作台保存的"
-        " zero/U/V/W/X/Y 按角度逐峰算（与命令行 --instrument-from 同口径）")
+        " zero/U/V/W/X/Y 按角度逐峰算（与命令行 --instrument-from 同一套算法）")
     window.params[WH_SOURCE_KEY] = wh_source
     window.wh_source_combo = wh_source
     wh_row = QHBoxLayout()
