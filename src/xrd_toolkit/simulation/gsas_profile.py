@@ -185,22 +185,26 @@ def simulate_pattern_gsas(structure, *, wavelength=1.5406, zero_deg=0.0,
                           size_um=None, mustrain=None,
                           size_mix=1.0, strain_mix=1.0,
                           polariz=0.5, b_iso=None, md=None,
-                          scale=100.0, normalize=True,
+                          scale=100.0, normalize=True, raw=False,
                           nmax=10, min_intensity=0.01):
     """GSAS-II 同口径的可调用函数：一组参数 → 一条面积守恒的模拟谱。
 
     参数单位见模块 docstring；默认 w=18.033 centideg² ↔ 0.1° FWHM
     （与旧 `profile.simulate_pattern` 的默认 0.1° 对齐）。`normalize=True`
-    时整条谱按最大值缩放到 `scale`（画图用）；`normalize=False` 返回原始
-    相对强度（拟合用，比例因子由拟合器自己解）。
+    时整条谱按最大值缩放到 `scale`（画图用）；`normalize=False` 返回
+    各相各自归一化的相对强度（拟合用，比例因子由拟合器自己解）。
+    `raw=True`（2026-10-31）改为保留 m·|F|²·LP 的绝对相对强度，供
+    多相定量验证用；不能与 normalize=True 同时用。
 
     返回 (tth, intensity, peaks, is_hex)，与 `profile.simulate_pattern`
     同形，便于替换。
     """
+    if raw and normalize:
+        raise ValueError("raw=True 与 normalize=True 不能同时用")
     tth_sticks, inten_sticks, peaks, is_hex = core.pattern_from_structure(
         structure, wavelength=wavelength, two_theta_range=two_theta_range,
         nmax=nmax, min_intensity=min_intensity, b_iso=b_iso, md=md,
-        polariz=polariz)
+        polariz=polariz, normalize=not raw)
 
     lo, hi = float(two_theta_range[0]), float(two_theta_range[1])
     tth = np.arange(lo, hi + step_deg / 2.0, step_deg)

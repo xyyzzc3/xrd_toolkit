@@ -748,6 +748,9 @@ class RefineWorkbench(QWidget):
             if ":" in name and not name.endswith(":scale"):
                 continue
             rows.append((name, value))
+        for row in (getattr(result, "phase_weights", None) or []):
+            if np.isfinite(row.weight_percent):
+                rows.append((f"wt% {row.label}", row.weight_percent))
         table = self.param_table
         table.setRowCount(len(rows))
         for i, (name, value) in enumerate(rows):
@@ -758,6 +761,10 @@ class RefineWorkbench(QWidget):
                 item = QTableWidgetItem(text)
                 if col:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if name.startswith("wt%"):
+                    item.setToolTip(
+                        "定量相分数：只对拟合模型里的晶态相；"
+                        "非晶/未知相不参与分母")
                 table.setItem(i, col, item)
 
     def _param_tsv(self, selected_only=False):

@@ -11,9 +11,10 @@
     → 逐帧后台精修：读图 → 积分 → 三相拟合 → 结果进表/趋势图
     → 结束写 CSV 与 fit_summary.txt
 
-相分数口径：A_p = scale_p × Σ(table.inten_p) × norm_p / 100，
-f_rich = A_rich / (A_rich + A_poor)。这是**相对散射强度分数**，不是
-Rietveld 重量分数；看趋势可以，别当 wt% 写。
+相分数口径：f_rich = A_rich / (A_rich + A_poor)，A_p = scale_p ×
+Σ(table.inten_p) × norm_p / 100，是**相对散射强度分数**；表里另有
+`wt rich%` / `wt poor%`（Rietveld 重量分数，只对晶态相；Al 单列，
+不进 LMFP 分母）。趋势图仍画 f_rich，两种口径别混着引用。
 """
 import csv
 import time
@@ -35,7 +36,8 @@ from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 
 _COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
-            "rich a", "rich c", "poor a", "poor c", "拟合 s")
+            "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
+            "poor c", "拟合 s")
 _RICH_COLOR = "#1f5fa8"
 _POOR_COLOR = "#e08a1e"
 _RWP_COLOR = "#c0392b"
@@ -491,7 +493,8 @@ class InSituWorkbench(QWidget):
         self._write_csv()
         self._set_status(
             f"第 {row['frame']}/{len(self.frames)} 帧：{row['status']}  "
-            f"Rwp {_fmt(row['rwp'])}%  f_rich {_fmt(row['f_rich'])}")
+            f"Rwp {_fmt(row['rwp'])}%  f_rich {_fmt(row['f_rich'])}  "
+            f"wt {_fmt(row.get('wt_rich', float('nan')), 1)}%")
         self._start_next()
 
     def _stop_run(self):
@@ -526,6 +529,8 @@ class InSituWorkbench(QWidget):
         values = (
             str(row["frame"]), row["file"], row["status"],
             _fmt(row["rwp"], 2), _fmt(row["f_rich"], 3),
+            _fmt(row.get("wt_rich", float("nan")), 2),
+            _fmt(row.get("wt_poor", float("nan")), 2),
             _fmt(row["rich_a"], 4), _fmt(row["rich_c"], 4),
             _fmt(row["poor_a"], 4), _fmt(row["poor_c"], 4),
             _fmt(row["t_fit_s"], 1),

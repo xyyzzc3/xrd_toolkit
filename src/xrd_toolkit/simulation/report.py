@@ -94,6 +94,19 @@ def fit_entries(sample, phase, result, *, lebail=None, al_scale=None,
                    f"Le Bail {lebail.rwp:.2f}%")
     entries.append(("拟合质量", quality))
 
+    # 定量相分数（2026-10-31）：有 Le Bail 结果时用它（强度口径与图一致）。
+    weighted = lebail if lebail is not None else result
+    weights = getattr(weighted, "phase_weights", None)
+    if weights:
+        text = "，".join(
+            f"{row.label} {row.weight_percent:.1f}%" if math.isfinite(
+                row.weight_percent) else f"{row.label} —"
+            for row in weights)
+        entries.append(("定量相分数", text))
+        note = getattr(weighted, "phase_weight_note", "")
+        if note:
+            notes.append(note)
+
     if al_scale is not None:
         if getattr(result, "extra_lebail", None):
             entries.append(("第二相", "Al 基片（逐峰强度）"))

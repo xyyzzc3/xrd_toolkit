@@ -37,7 +37,13 @@ def _result(*, success=True, rwp=2.0, rich_a=10.35):
         extra_phase_table_sum={"LMFP_poor": 20.0},
         extra_phase_norm={"LMFP_poor": 250.0},
         extra_lebail={"Al": {"i_fit": np.array([5.0]),
-                             "norm": 500.0}})
+                             "norm": 500.0}},
+        phase_label="LMFP_rich",
+        phase_weights=[
+            SimpleNamespace(label="LMFP_rich", weight_percent=60.0),
+            SimpleNamespace(label="LMFP_poor", weight_percent=30.0),
+            SimpleNamespace(label="Al", weight_percent=10.0),
+        ])
 
 
 class TestFrames(unittest.TestCase):
@@ -98,6 +104,10 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertAlmostEqual(r["poor_a_esd"], 0.01)
         self.assertAlmostEqual(r["rich_a"], 10.35)
         self.assertTrue(np.isnan(r["f_rich_esd"]))  # 没有线性协方差时给 nan
+        # wt_rich/wt_poor 只在 LMFP 两相之间归一化；Al 单列
+        self.assertAlmostEqual(r["wt_rich"], 200.0 / 3.0)
+        self.assertAlmostEqual(r["wt_poor"], 100.0 / 3.0)
+        self.assertAlmostEqual(r["wt_al"], 10.0)
 
     def test_summary_counts_usable(self):
         rows = [

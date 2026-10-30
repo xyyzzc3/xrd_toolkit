@@ -286,6 +286,13 @@ def main():
               + (f"，Al scale（Le Bail）={al_scale:.3g}"
                  if al_scale is not None else "")
               + f"；→ {out}（报告 {txt.name}）")
+        weights = (getattr(lebail, "phase_weights", None)
+                   or getattr(struct, "phase_weights", None) or [])
+        if weights:
+            print("  定量相分数（wt%，仅晶态相）：" + "，".join(
+                f"{row.label} {row.weight_percent:.1f}%"
+                if np.isfinite(row.weight_percent)
+                else f"{row.label} —" for row in weights))
 
 
 if __name__ == "__main__":

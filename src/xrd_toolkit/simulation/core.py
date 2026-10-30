@@ -321,7 +321,7 @@ def _hex_representative(orbit):
 
 def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 80.0),
                            nmax=10, merge_tol=1e-3, min_intensity=0.01,
-                           b_iso=None, md=None, polariz=0.5):
+                           b_iso=None, md=None, polariz=0.5, normalize=True):
     """手写版主流程。返回 (2θ 数组, 归一化强度数组, 峰表, 是否六方)。
 
     峰表每项：[2θ, 强度%, [(代表 hkl, 多重性), ...]]
@@ -334,6 +334,10 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
 
     polariz（可选，2026-10-22 向 GSAS-II 对齐）：光束偏振度 P，
     0.5 = 非偏振（默认，与旧结果逐位相同），同步辐射常用 0.95。
+
+    normalize（可选，2026-10-31）：True（默认）把强度归一到最强峰 =
+    100；False 返回原始 m·|F|²·LP 强度，供定量相分数还原绝对标度。
+    过滤仍按"相对最强峰的百分比"判断，两种模式选出的峰完全一致。
     """
     lo, hi = two_theta_range
     lattice = structure.lattice.matrix
@@ -379,7 +383,8 @@ def pattern_from_structure(structure, wavelength=1.5406, two_theta_range=(10.0, 
             merged.append([tt, inten, [(rep, m)]])
 
     imax = max(v[1] for v in merged)
-    peaks = [[tt, inten / imax * 100.0, _conventionalize_refs(refs)]
+    peaks = [[tt, (inten / imax * 100.0 if normalize else inten),
+              _conventionalize_refs(refs)]
              for tt, inten, refs in merged
              if inten / imax * 100.0 >= min_intensity]
     two_thetas = np.array([p[0] for p in peaks])

@@ -55,6 +55,14 @@ from xrd_toolkit.simulation.plots import (
     plot_profile,
     plot_williamson_hall,
 )
+from xrd_toolkit.simulation.quantitative import (
+    WT_NOTE,
+    PhaseQuantity,
+    PhaseWeight,
+    cell_volume,
+    phase_mass_factor,
+    phase_weight_percent,
+)
 from xrd_toolkit.simulation.profile import (
     caglioti_fwhm_deg,
     lorentz_fwhm_deg,
@@ -96,4 +104,6 @@ __all__ = [
     "williamson_hall",
     "fit_entries", "fixed_cell_text", "format_pm", "format_size_um",
     "format_strain", "summary_block",
+    "WT_NOTE", "PhaseQuantity", "PhaseWeight", "cell_volume",
+    "phase_mass_factor", "phase_weight_percent",
 ]

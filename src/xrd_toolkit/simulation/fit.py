@@ -45,6 +45,8 @@ from xrd_toolkit.simulation.gsas_profile import (
     reflection_sig_gam,
     sig_gam_to_fwhm_eta,
 )
+from xrd_toolkit.simulation.quantitative import (
+    WT_NOTE, PhaseQuantity, phase_weight_percent)
 from xrd_toolkit.simulation.site_model import SiteModel
 
 # 可优化的参数与默认边界（GSAS-II 口径）
@@ -134,6 +136,9 @@ class FitResult:
     # 只含线性块；非线性参数（晶胞/峰形）的协方差不在内。
     linear_names: Optional[list] = None
     linear_cov: Optional[np.ndarray] = None
+    # 定量相分数（wt%）：只对拟合模型里的晶态相；见 quantitative.py
+    phase_weights: Optional[list] = None
+    phase_weight_note: str = ""
 
     def report(self) -> str:
         """人读的参数表 + 拟合优度（英文，便于直接贴报告）。"""
@@ -241,6 +246,23 @@ class FitResult:
                 wy, x, y, z = vals
                 lines.append(f"  {label:>6} {wy:>4}  "
                              f"x={x:.5f} y={y:.5f} z={z:.5f}")
+        if self.phase_weights:
+            lines.append("")
+            lines.append("=== quantitative phase fractions "
+                         "(crystalline phases only) ===")
+            lines.append(f"{'phase':>12} {'wt%':>9} {'S':>12} "
+                         f"{'Z':>6} {'M':>11} {'V':>11}")
+            for row in self.phase_weights:
+                wt = ("—" if not np.isfinite(row.weight_percent)
+                      else f"{row.weight_percent:.3f}")
+                lines.append(
+                    f"{row.label:>12} {wt:>9} {row.scale:12.5g} "
+                    f"{row.z:6.2f} {row.molar_mass:11.3f} "
+                    f"{row.volume:11.3f}")
+                if row.warning:
+                    lines.append(f"  warning: {row.warning}")
+            if self.phase_weight_note:
+                lines.append(self.phase_weight_note)
         if self.stages:
             lines.append("stages: " + " -> ".join("+".join(s) for s in self.stages))
         return "\n".join(lines)
@@ -255,6 +277,7 @@ class _PeakTable:
     def __init__(self, structure, wavelength, two_theta_range, nmax,
                  b_iso, polariz, keep_unmerged=False, md=None,
                  dynamic=False, md_refine=False, site_model=None):
+        self.structure = structure      # 定量相分数要 Z/M/V
         self.a0, self.b0, self.c0 = (float(x) for x in structure.lattice.abc)
         self.cubic = (max(self.a0, self.b0, self.c0)
                       - min(self.a0, self.b0, self.c0) < 1e-4)
@@ -355,7 +378,8 @@ class _PeakTable:
             tth, inten, _peaks, _is_hex = core.pattern_from_structure(
                 structure, wavelength=wavelength,
                 two_theta_range=two_theta_range, nmax=nmax,
-                min_intensity=0.0, b_iso=b_iso, md=md, polariz=polariz)
+                min_intensity=0.0, b_iso=b_iso, md=md, polariz=polariz,
+                normalize=False)
             self.hkl = None
             self.d0 = None
             self.orthorhombic = False
@@ -960,6 +984,54 @@ def _piecewise_linear_basis(tth, spacing):
     return basis, knots
 
 
+def _phase_quantities(structure, table, scale, amps, p_final,
+                      extra_models, params, model):
+    """把各相换算成作用在原始 m|F|²LP 上的 scale（定量相分数用）。"""
+    def _cell_from(mapping, fallback):
+        return tuple(float(mapping.get(k, getattr(fallback.lattice, k)))
+                     for k in ("a", "b", "c"))
+
+    quantities = []
+    norm_main = float(table._inten_norm) or 1.0
+    if amps is not None and np.size(table.inten):
+        # Le Bail 主相：模型总强度 / 原始表总强度 = 加权平均振幅×100/norm
+        s_main = (float(np.sum(np.asarray(amps, dtype=float)
+                               * np.asarray(table.inten, dtype=float)))
+                  * 100.0 / (norm_main * float(np.sum(table.inten))))
+        source = "le_bail"
+    else:
+        s_main = float(scale) * 100.0 / norm_main
+        source = "structure"
+    quantities.append(PhaseQuantity(
+        label="main", structure=structure, scale=s_main,
+        cell=_cell_from(p_final, structure), source=source))
+    for label, em in extra_models:
+        norm = float(em.table._inten_norm) or 1.0
+        st = getattr(em.table, "structure", None)
+        cell = tuple(float(em.fixed.get(k, getattr(st.lattice, k)))
+                     for k in ("a", "b", "c"))
+        if getattr(em, "lebail", False):
+            mask = np.asarray(em.lebail_mask, dtype=bool) \
+                if getattr(em, "lebail_mask", None) is not None \
+                else np.ones(np.size(em.table.inten), dtype=bool)
+            i_tab = np.asarray(em.table.inten, dtype=float)[mask]
+            amps_x = np.asarray(model.extra_peak_amps.get(label, []),
+                                dtype=float)
+            s_x = (float(np.sum(amps_x * i_tab)) * 100.0
+                   / (norm * float(np.sum(i_tab)))
+                   if i_tab.size and amps_x.size == i_tab.size
+                   else float("nan"))
+            src = "le_bail"
+        else:
+            s_x = (float(params.get(f"{label}:scale", float("nan")))
+                   * 100.0 / norm)
+            src = "structure"
+        quantities.append(PhaseQuantity(
+            label=str(label), structure=st, scale=s_x,
+            cell=cell, source=src))
+    return quantities
+
+
 def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 polariz=0.5, b_iso=None, md=None,
                 two_theta_range=None, nmax=10,
@@ -1486,6 +1558,19 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     if site_model is not None:
         site_coords = site_model.summary(
             {n: values[n] for n in site_model.param_names if n in values})
+    phase_weights = None
+    phase_weight_note = ""
+    if model.extra_models:              # 单相谱不报"100%"，没信息量
+        try:
+            quantities = _phase_quantities(
+                structure, table, scale, amps, p_final,
+                model.extra_models, params, model)
+            if quantities:
+                quantities[0].label = str(phase_label or "main")
+            phase_weights = phase_weight_percent(quantities)
+            phase_weight_note = WT_NOTE
+        except Exception as err:                   # noqa: BLE001
+            phase_weight_note = f"定量相分数不可用：{err}"
     return FitResult(
         params=params, stderr=stderr, rwp=rwp, rp=rp, chi2=chi2,
         reduced_chi2=reduced, n_obs=len(y_raw), n_params=n_params,
@@ -1505,7 +1590,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         extra_peak_tth=(extra_tth or None),
         extra_lebail=(extra_lebail or None),
         phase_label=phase_label, site_coords=site_coords,
-        linear_names=linear_names, linear_cov=linear_cov)
+        linear_names=linear_names, linear_cov=linear_cov,
+        phase_weights=phase_weights,
+        phase_weight_note=phase_weight_note)
 
 
 def rwp(y_obs, y_calc, weights="poisson"):

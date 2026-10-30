@@ -21,8 +21,9 @@
 相分数口径（2026-10-27 与用户定的第一版）：
   A_p = scale_p × Σ(table.inten_p) × table.norm_p / 100
   f_rich = A_rich / (A_rich + A_poor)，Al 只作参考、不参与 LMFP 分数。
-这是**相对散射强度分数**，不是 Rietveld 重量分数（绝对标度/密度/
-分子量未校正）；看趋势可以，别当 wt% 写。
+这是**相对散射强度分数**，看趋势用。2026-10-31 起 CSV/摘要另有
+`wt_rich` / `wt_poor`（Rietveld 重量分数，只对晶态相；Al 单列、
+不进 LMFP 分母），两种口径不要混着引用。
 
 用法（数据在桌面）：
     python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
@@ -170,6 +171,7 @@ def main():
                 print(f"  异常：{row['status']}", flush=True)
             print(f"  status={row['status']}  Rwp={row['rwp']:.3f}%  "
                   f"f_rich={row['f_rich']:.3f}  "
+                  f"wt_rich={row['wt_rich']:.2f}%  "
                   f"fit={row['t_fit_s']:.1f}s", flush=True)
 
     rows = batch.rows

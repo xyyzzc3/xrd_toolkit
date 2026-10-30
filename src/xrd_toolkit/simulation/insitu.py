@@ -14,7 +14,9 @@
 相分数口径（2026-10-27 与用户定的第一版）：
   A_p = scale_p × Σ(table.inten_p) × table.norm_p / 100
   f_rich = A_rich / (A_rich + A_poor)，Al 只作参考、不参与 LMFP 分数。
-这是**相对散射强度分数**，不是 Rietveld 重量分数；看趋势可以，别当 wt%。
+这是**相对散射强度分数**，看趋势用；2026-10-31 起另有 Rietveld 口径的
+`wt_rich` / `wt_poor` / `wt_al`（`FitResult.phase_weights`），只对晶态相，
+Al 仍单列、不进 LMFP 的归一化分母。
 """
 import math
 import re
@@ -260,6 +262,21 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
         f_esd = _fraction_esd(res, A_rich, A_poor)
     else:
         A_al = f_esd = float("nan")
+    weights = {row.label: row.weight_percent
+               for row in (getattr(res, "phase_weights", None) or [])} \
+        if res is not None else {}
+    wt_al = weights.get("Al", float("nan"))
+    # wt_rich / wt_poor 只在两个 LMFP 相之间归一化（与 f_rich 同一口径：
+    # Al 基片只作参考，不进 LMFP 分母）；wt_al 是含 Al 的全相分数。
+    wt_rich = weights.get(getattr(res, "phase_label", None), float("nan")) \
+        if res is not None else float("nan")
+    wt_poor = weights.get("LMFP_poor", float("nan"))
+    lmfp_total = wt_rich + wt_poor
+    if math.isfinite(lmfp_total) and lmfp_total > 0:
+        wt_rich = 100.0 * wt_rich / lmfp_total
+        wt_poor = 100.0 * wt_poor / lmfp_total
+    else:
+        wt_rich = wt_poor = float("nan")
     esd = res.stderr if res is not None else {}
 
     def _e(name):
@@ -281,6 +298,10 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
         "f_poor": (1.0 - f_rich if math.isfinite(f_rich)
                    else float("nan")),
         "f_rich_esd": f_esd,
+        # 定量 wt%（2026-10-31）：只对晶态相；Al 单列、不参与 LMFP 分母
+        "wt_rich": wt_rich,
+        "wt_poor": wt_poor,
+        "wt_al": wt_al,
         "rich_a": rich_cell[0], "rich_b": rich_cell[1],
         "rich_c": rich_cell[2],
         "rich_a_esd": _e("a"), "rich_b_esd": _e("b"),
@@ -329,8 +350,15 @@ def write_summary(outdir, rows, mask_on):
         "  (ok_soft = optimizer exit flag, Rwp/phase fractions still good)",
         f"2x frames estimate: {2 * total / 60.0:.1f} min"
         " (linear; integration and fit both scale with N)",
-        "phase fractions: relative scattering intensity, not wt%.",
+        "phase fractions: f_rich = relative scattering intensity; "
+        "wt_rich/wt_poor = Rietveld wt% (crystalline phases only; "
+        "Al is reported separately and excluded from the LMFP denominator).",
     ]
+    for key, label in (("wt_rich", "rich"), ("wt_poor", "poor")):
+        vals = [float(r.get(key, float("nan"))) for r in rows]
+        vals = [v for v in vals if math.isfinite(v)]
+        if vals:
+            lines.append(f"mean wt% {label}: {float(np.mean(vals)):.2f}")
     path = Path(outdir) / "fit_summary.txt"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path, means, total
