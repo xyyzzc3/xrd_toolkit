@@ -35,9 +35,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-    QMdiSubWindow, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget)
+    QMdiSubWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
+    QSizePolicy, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import (
@@ -350,6 +350,8 @@ class RefineWorkbench(QWidget):
         self.param_table.setFrameShape(QFrame.NoFrame)
         self.param_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.Stretch)
+        self.param_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.param_table.customContextMenuRequested.connect(self._param_menu)
         self.report_view = QPlainTextEdit()
         self.report_view.setReadOnly(True)
         self.report_view.setPlaceholderText("精修完成后这里显示完整报告")
@@ -755,6 +757,41 @@ class RefineWorkbench(QWidget):
                 if col:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 table.setItem(i, col, item)
+
+    def _param_tsv(self, selected_only=False):
+        """参数表的 TSV：表头 + 行（右键菜单与测试共用）。"""
+        model = self.param_table.selectionModel()
+        rows = (sorted({i.row() for i in model.selectedRows()})
+                if selected_only and model is not None
+                else list(range(self.param_table.rowCount())))
+        lines = ["参数\t初值\t拟合值\tesd"]
+        for row in rows:
+            values = []
+            for col in range(self.param_table.columnCount()):
+                item = self.param_table.item(row, col)
+                values.append(item.text() if item is not None else "")
+            lines.append("\t".join(values))
+        return "\n".join(lines)
+
+    def _copy_params(self, selected_only=False):
+        text = self._param_tsv(selected_only)
+        n = max(0, len(text.splitlines()) - 1)
+        if n == 0:
+            self._set_status("参数表没有可复制的行")
+            return 0
+        QApplication.clipboard().setText(text)
+        _log(self.main, f"已复制参数表 {n} 行")
+        return n
+
+    def _param_menu(self, pos):
+        menu = QMenu(self.param_table)
+        act_sel = menu.addAction("复制选中行")
+        act_all = menu.addAction("复制全部")
+        chosen = menu.exec(self.param_table.viewport().mapToGlobal(pos))
+        if chosen is act_sel:
+            self._copy_params(True)
+        elif chosen is act_all:
+            self._copy_params(False)
 
     def _save_figure(self):
         if self.result is None:

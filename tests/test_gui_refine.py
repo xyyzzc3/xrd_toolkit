@@ -151,6 +151,22 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(editor.copy_btn.isEnabled())
         self.assertGreaterEqual(len(editor.fig.axes), 2)
 
+    def test_copy_parameter_table(self):
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        idx = editor.cif_combo.findData(str(LAB6_CIF))
+        editor.cif_combo.setCurrentIndex(idx)
+        editor.run_btn.click()
+        ok = _wait_until(lambda: editor.result is not None
+                         and editor._task is None, timeout_ms=30000)
+        self.assertTrue(ok, "精修没有完成")
+        n = editor._copy_params(False)
+        self.assertGreater(n, 0)
+        text = QApplication.clipboard().text()
+        self.assertIn("参数", text)
+        self.assertIn("zero", text)
+
     def test_adopt_creates_normal_panel(self):
         self._open_panel()
         self._enter()

@@ -28,10 +28,10 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMdiSubWindow, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget)
+    QAbstractItemView, QApplication, QComboBox, QDoubleSpinBox, QFileDialog,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMdiSubWindow,
+    QMenu, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
@@ -274,6 +274,8 @@ class PhaseWorkbench(QWidget):
         self.table.setFrameShape(QFrame.NoFrame)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._draw_selected)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_menu)
         right.addWidget(self.table)
         right.setStretchFactor(0, 3)
         right.setStretchFactor(1, 1)
@@ -581,6 +583,42 @@ class PhaseWorkbench(QWidget):
         ax.legend(fontsize=8, loc="best")
         self.fig.subplots_adjust(left=0.10, right=0.98, top=0.93, bottom=0.12)
         self.canvas.draw_idle()
+
+    # ── 候选表复制 ──────────────────────────────────────────
+    def _table_tsv(self, selected_only=False):
+        """候选表的 TSV：表头 + 行（右键菜单与测试共用）。"""
+        model = self.table.selectionModel()
+        rows = (sorted({i.row() for i in model.selectedRows()})
+                if selected_only and model is not None
+                else list(range(self.table.rowCount())))
+        lines = ["相\tscore\tcoverage\tpurity\tscale"]
+        for row in rows:
+            values = []
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                values.append(item.text() if item is not None else "")
+            lines.append("\t".join(values))
+        return "\n".join(lines)
+
+    def _copy_table(self, selected_only=False):
+        text = self._table_tsv(selected_only)
+        n = max(0, len(text.splitlines()) - 1)
+        if n == 0:
+            self._set_status("候选表没有可复制的行")
+            return 0
+        QApplication.clipboard().setText(text)
+        _log(self.main, f"已复制候选表 {n} 行")
+        return n
+
+    def _table_menu(self, pos):
+        menu = QMenu(self.table)
+        act_sel = menu.addAction("复制选中行")
+        act_all = menu.addAction("复制全部")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is act_sel:
+            self._copy_table(True)
+        elif chosen is act_all:
+            self._copy_table(False)
 
     # ── 送去精修 ────────────────────────────────────────────
     def _send_to_refine(self):

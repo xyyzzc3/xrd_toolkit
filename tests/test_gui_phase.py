@@ -174,6 +174,15 @@ class TestPhaseWorkbench(unittest.TestCase):
             self.assertTrue(editor.rows[0].path.name.startswith("LaB6"),
                             editor.rows[0].path.name)
 
+    def test_copy_candidate_table(self):
+        self._screen()
+        editor = self.w.phase_editor
+        n = editor._copy_table(False)
+        self.assertEqual(n, len(editor.rows))
+        text = QApplication.clipboard().text()
+        self.assertIn("score", text)
+        self.assertIn("LaB6", text)
+
     def test_export_results_writes_csv(self):
         self._screen()
         editor = self.w.phase_editor
