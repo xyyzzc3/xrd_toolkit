@@ -256,15 +256,14 @@ class PhaseWorkbench(QWidget):
         self.cell_btn.clicked.connect(self._refine_selected_cell)
         left_lay.addWidget(self.cell_btn)
         self.export_btn = QPushButton("导出结果…")
-        self.export_btn.setEnabled(False)
+        # 不置灰：没筛相时点它会给出"先点 [开始筛相]"的提示，而不是没反应
         self.export_btn.setToolTip(
-            "把候选表写成 CSV（含相库、元素、波长），方便贴进报告")
+            "把候选表写成 CSV（含相库、元素、波长）；先 [开始筛相] 出候选")
         self.export_btn.clicked.connect(self._export_results)
         left_lay.addWidget(self.export_btn)
         self.export_default_btn = QPushButton("导出到默认位置")
-        self.export_default_btn.setEnabled(False)
         self.export_default_btn.setToolTip(
-            "不弹保存框，直接写到默认输出目录；演示或保存失败时用")
+            "不弹保存框，直接写到默认输出目录；先 [开始筛相] 出候选")
         self.export_default_btn.clicked.connect(self._export_default)
         left_lay.addWidget(self.export_default_btn)
         hint = QLabel(
@@ -367,8 +366,8 @@ class PhaseWorkbench(QWidget):
             self.table.setRowCount(0)
             self.send_btn.setEnabled(False)
             self.cell_btn.setEnabled(False)
-            self.export_btn.setEnabled(False)
-            self.export_default_btn.setEnabled(False)
+            self.export_btn.setEnabled(True)
+            self.export_default_btn.setEnabled(True)
             self.best_label.setText("还没有筛相")
             self.best_label.setStyleSheet("color: gray;")
             if curve is not None:
@@ -568,8 +567,8 @@ class PhaseWorkbench(QWidget):
             self.best_label.setStyleSheet("color: gray;")
             self.send_btn.setEnabled(False)
             self.cell_btn.setEnabled(False)
-            self.export_btn.setEnabled(False)
-            self.export_default_btn.setEnabled(False)
+            self.export_btn.setEnabled(True)
+            self.export_default_btn.setEnabled(True)
             self._set_status("筛相完成：没有候选相")
         self._draw_selected()
 
@@ -854,16 +853,19 @@ class PhaseWorkbench(QWidget):
     def _export_results(self, path=None, *, fallback=True):
         """把候选表写成 CSV；path 给定时不弹框（测试/脚本用）。"""
         if not self.rows:
-            self._set_status("还没有可导出的筛相结果")
+            self._set_status("还没有可导出的筛相结果；先点 [开始筛相] 出候选")
             return
         if path is None:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             default = (paths.default_outputs_dir()
                        / f"phase_screen_{stamp}.csv")
+            self._set_status("选择保存位置…")
+            _log(self.main, "物相导出：打开保存框")
             path, _ = QFileDialog.getSaveFileName(
-                self, "导出筛相结果", str(default),
+                self.main, "导出筛相结果", str(default),
                 "CSV (*.csv);;文本 (*.txt)")
             if not path:
+                self._set_status("导出已取消")
                 return
         try:
             actual = self._write_phase_csv(path)
@@ -891,7 +893,7 @@ class PhaseWorkbench(QWidget):
     def _export_default(self):
         """不弹保存框，直接写到默认输出目录。"""
         if not self.rows:
-            self._set_status("还没有可导出的筛相结果")
+            self._set_status("还没有可导出的筛相结果；先点 [开始筛相] 出候选")
             return
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self._export_results(

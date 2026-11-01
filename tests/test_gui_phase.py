@@ -163,6 +163,16 @@ class TestPhaseWorkbench(unittest.TestCase):
                 editor.curve_combo.findData(key))
             self.assertIsNotNone(editor._selected_curve())
 
+    def test_export_without_screening_explains_why(self):
+        """没筛相点导出要给提示，不能没反应（2026-11-02）。"""
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        editor = self.w.phase_editor
+        self.assertTrue(editor.export_btn.isEnabled())
+        editor.export_btn.click()
+        QApplication.processEvents()
+        self.assertIn("先点 [开始筛相]", editor.status.text())
+
     def test_refine_cell_dialog(self):
         self._screen()
         editor = self.w.phase_editor
