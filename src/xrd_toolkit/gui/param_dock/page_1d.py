@@ -81,6 +81,59 @@ def build_1d_page(window, form_1d, btns_1d):
     window.params["纵轴上限"].valueChanged.connect(
         lambda _v=0.0: _refresh_1d_display(window))
 
+    # ── 数据与出图（2026-11-02 从页面底部搬上来）──
+    # 操作习惯：勾文件 / 改 2θ → 出图 / 重算，都是"分析之前"的动作，
+    # 放在 1D 显示之后、寻峰之前；页面底部不再有固定按钮栏（用户
+    # 2026-11-02："留一个出图在 wh 不更奇怪吗"）。
+    add_caption(form_1d, "数据与出图")
+    # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
+    # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
+    data_defaults = {
+        "2θ 下限 (°)": 1.0,
+        "2θ 上限 (°)": 8.0,
+        "输出点数": 3000,
+    }
+    btn_reset_data = QPushButton("恢复默认")
+    btn_reset_data.setObjectName("reset_data_btn")
+    btn_reset_data.setToolTip("把上面三项数据参数复位成初值（几何回到当前配置"
+                              "条目）——<b>只复位，不计算</b>，要算再点右边的"
+                              " [重算这张图]")
+    # 名字按"对谁、算什么"写（用户 2026-09-27："1d 的应用和出图有点歧义"）：
+    # 这个按钮只作用于**编辑对象**那一张（见 _apply_params），与下面那个
+    # 对一批勾选文件出图的按钮是两件事
+    btn_apply = QPushButton("重算这张图")
+    btn_apply.setObjectName("apply_btn")
+    btn_apply.setToolTip("按参数面板顶部的 2θ 范围 / 点数重新积分，"
+                         "并重画<b>编辑对象</b>那张图（不是一批）")
+    btn_apply.clicked.connect(lambda: _apply_params(window))
+
+    def reset_data():
+        _apply_config(window, window.config_combo.currentIndex())
+        for name, value in data_defaults.items():
+            window.params[name].setValue(value)
+        _log(window, "数据参数已恢复默认（未计算，点 [重算这张图] 生效）")
+
+    btn_reset_data.clicked.connect(reset_data)
+
+    btn_col = QHBoxLayout()
+    btn_col.setSpacing(4)
+    # 通栏宽一分为二：[恢复默认] 在左、[应用] 在右
+    btn_col.addWidget(btn_reset_data, 1)
+    btn_col.addWidget(btn_apply, 1)
+    form_1d.addRow(btn_col)
+    # 本页产出：对勾选文件出 1D 图（常用循环不用切到「原图」页）
+    btn_plot_1d = QPushButton("出图（尚未勾选）")
+    btn_plot_1d.setObjectName("plot_1d_btn")
+    btn_plot_1d.setToolTip("对<b>文件栏里勾选</b>的条目出 1D 图（勾了多少项，"
+                           "按钮上就写着多少）：勾原始文件 = 现场积分；"
+                           "勾产物条目 = 直接读那一份，不重算")
+    window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
+    # 兼容别名（2026-10-07 类型行拆分）：view_buttons["1D"] 从此指向这颗
+    # 按钮——1D 的出图入口就在「1D」页，其它视图名（对比/热图）同理见下。
+    window.view_buttons["1D"] = btn_plot_1d
+    btn_plot_1d.clicked.connect(lambda: _plot_view(window, "1D"))
+    form_1d.addRow(btn_plot_1d)
+
     # ── 寻峰（2026-10-23；2026-10-24 去按钮、标签避让）──
     # 只是显示：按面板快照里的参数在画出来的曲线上找峰、画标记、填峰表。
     # 默认关——不在别人图上冒标记；参数改了立刻重画（同「1D 显示」）。
@@ -498,50 +551,5 @@ def build_1d_page(window, form_1d, btns_1d):
     install_peak_view(window)
     install_fit_view(window)      # 焦点切换时刷拟合结果表（接在峰表钩子后）
 
-    # [恢复默认] + [应用] 并排：[恢复默认] 只把参数复位（几何回到
-    # 当前配置条目、区间/点数回到初值），不计算；[应用] 才重算焦点视图
-    data_defaults = {
-        "2θ 下限 (°)": 1.0,
-        "2θ 上限 (°)": 8.0,
-        "输出点数": 3000,
-    }
-    btn_reset_data = QPushButton("恢复默认")
-    btn_reset_data.setObjectName("reset_data_btn")
-    btn_reset_data.setToolTip("把上面三项数据参数复位成初值（几何回到当前配置"
-                              "条目）——<b>只复位，不计算</b>，要算再点右边的"
-                              " [重算这张图]")
-    # 名字按"对谁、算什么"写（用户 2026-09-27："1d 的应用和出图有点歧义"）：
-    # 这个按钮只作用于**编辑对象**那一张（见 _apply_params），与下面那个
-    # 对一批勾选文件出图的按钮是两件事
-    btn_apply = QPushButton("重算这张图")
-    btn_apply.setObjectName("apply_btn")
-    btn_apply.setToolTip("按参数面板顶部的 2θ 范围 / 点数重新积分，"
-                         "并重画<b>编辑对象</b>那张图（不是一批）")
-    btn_apply.clicked.connect(lambda: _apply_params(window))
-
-    def reset_data():
-        _apply_config(window, window.config_combo.currentIndex())
-        for name, value in data_defaults.items():
-            window.params[name].setValue(value)
-        _log(window, "数据参数已恢复默认（未计算，点 [重算这张图] 生效）")
-
-    btn_reset_data.clicked.connect(reset_data)
-
-    btn_col = QHBoxLayout()
-    btn_col.setSpacing(4)
-    # 通栏宽一分为二（与用户讨论定稿）：[恢复默认] 在左、[应用] 在右
-    btn_col.addWidget(btn_reset_data, 1)
-    btn_col.addWidget(btn_apply, 1)
-    btns_1d.addLayout(btn_col)   # 按钮固定在本页最下方（滚动区之外）
-    # 本页产出：对勾选文件出 1D 图（常用循环不用切到「原图」页）
-    btn_plot_1d = QPushButton("出图（尚未勾选）")
-    btn_plot_1d.setObjectName("plot_1d_btn")
-    btn_plot_1d.setToolTip("对<b>文件栏里勾选</b>的条目出 1D 图（勾了多少项，"
-                           "按钮上就写着多少）：勾原始文件 = 现场积分；"
-                           "勾产物条目 = 直接读那一份，不重算")
-    window.plot_1d_btn = btn_plot_1d   # 登记按钮（测试用）
-    # 兼容别名（2026-10-07 类型行拆分）：view_buttons["1D"] 从此指向这颗
-    # 按钮——1D 的出图入口就在「1D」页，其它视图名（对比/热图）同理见下。
-    window.view_buttons["1D"] = btn_plot_1d
-    btn_plot_1d.clicked.connect(lambda: _plot_view(window, "1D"))
-    btns_1d.addWidget(btn_plot_1d)
+    # 页面底部固定栏留空：三个按钮已搬到「1D 显示」和「寻峰」之间
+    # （2026-11-02 用户拍板；原固定栏设计见 make_page() 的说明）。
