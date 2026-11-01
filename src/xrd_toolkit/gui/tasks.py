@@ -159,6 +159,9 @@ def _env_error_hint(exc):
         return "内存不够了；先关掉一些别的程序，或分批处理"
     if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
         return "磁盘空间不够；清理一些空间再试"
+    if isinstance(exc, OSError) and exc.errno == errno.EBADF:
+        return ("这个保存位置不可用（系统返回了无效的文件）；"
+                "换一个普通文件夹（桌面或文稿）再试")
     name = type(exc).__name__
     if name in _IMAGE_READ_ERRORS:
         return ("读不出这张图（文件可能损坏、没下载完，或不是支持的格式"

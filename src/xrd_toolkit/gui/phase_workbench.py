@@ -18,6 +18,7 @@
 寻峰参数在左栏：显著度（σ 倍数）与最小峰距；匹配容差是峰位允许偏差。
 """
 import csv
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -259,6 +260,12 @@ class PhaseWorkbench(QWidget):
             "把候选表写成 CSV（含相库、元素、波长），方便贴进报告")
         self.export_btn.clicked.connect(self._export_results)
         left_lay.addWidget(self.export_btn)
+        self.export_default_btn = QPushButton("导出到默认位置")
+        self.export_default_btn.setEnabled(False)
+        self.export_default_btn.setToolTip(
+            "不弹保存框，直接写到默认输出目录；演示或保存失败时用")
+        self.export_default_btn.clicked.connect(self._export_default)
+        left_lay.addWidget(self.export_default_btn)
         hint = QLabel(
             f"当前项目预设：{PROJECT_PRESET['second_phase_cif']} 视为第二相，"
             "不参与主相候选，由精修工作台按额外相处理。")
@@ -360,6 +367,7 @@ class PhaseWorkbench(QWidget):
             self.send_btn.setEnabled(False)
             self.cell_btn.setEnabled(False)
             self.export_btn.setEnabled(False)
+            self.export_default_btn.setEnabled(False)
             self.best_label.setText("还没有筛相")
             self.best_label.setStyleSheet("color: gray;")
             if curve is not None:
@@ -488,6 +496,8 @@ class PhaseWorkbench(QWidget):
         self.screen_btn.setEnabled(False)
         self.send_btn.setEnabled(False)
         self.cell_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.export_default_btn.setEnabled(False)
         self._set_status("筛相中，请稍候…")
         _log(self.main, f"物相筛选：{self.lib_dir} → "
                         f"{self.curve_combo.currentText()}")
@@ -547,6 +557,7 @@ class PhaseWorkbench(QWidget):
             self.send_btn.setEnabled(True)
             self.cell_btn.setEnabled(True)
             self.export_btn.setEnabled(True)
+            self.export_default_btn.setEnabled(True)
             self._set_status(
                 f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根")
             _log(self.main, f"物相筛选完成：{len(rows)} 个候选，"
@@ -557,6 +568,7 @@ class PhaseWorkbench(QWidget):
             self.send_btn.setEnabled(False)
             self.cell_btn.setEnabled(False)
             self.export_btn.setEnabled(False)
+            self.export_default_btn.setEnabled(False)
             self._set_status("筛相完成：没有候选相")
         self._draw_selected()
 
@@ -768,22 +780,22 @@ class PhaseWorkbench(QWidget):
         _log(self.main, f"已把 {row.path.stem} 送去精修"
                         f"（{self.curve_combo.currentText()}）")
 
-    def _export_results(self, path=None):
-        """把候选表写成 CSV；path 给定时不弹框（测试/脚本用）。"""
-        if not self.rows:
-            self._set_status("还没有可导出的筛相结果")
-            return
-        if path is None:
+    def _write_phase_csv(self, path):
+        """写候选表 CSV；返回实际路径（校验/建目录/原子替换）。
+
+        路径是文件夹或没有后缀时自动补文件名 / .csv；先写同目录临时文件
+        再 os.replace，避免半截文件，也把 EBADF 这类怪路径挡在 try 里。
+        """
+        p = Path(path).expanduser()
+        if p.is_dir():
             stamp = time.strftime("%Y%m%d-%H%M%S")
-            default = (paths.default_outputs_dir()
-                       / f"phase_screen_{stamp}.csv")
-            path, _ = QFileDialog.getSaveFileName(
-                self, "导出筛相结果", str(default),
-                "CSV (*.csv);;文本 (*.txt)")
-            if not path:
-                return
+            p = p / f"phase_screen_{stamp}.csv"
+        if p.suffix.lower() not in (".csv", ".txt"):
+            p = p.with_suffix(".csv")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
         try:
-            with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            with open(tmp, "w", encoding="utf-8-sig", newline="") as fh:
                 fh.write("# XRD Toolkit phase screen\n")
                 fh.write(f"# curve: {self.curve_combo.currentText()}\n")
                 fh.write(f"# library: {self.lib_dir}\n")
@@ -802,11 +814,61 @@ class PhaseWorkbench(QWidget):
                         row.path.stem, f"{row.score:.6f}",
                         f"{row.coverage:.6f}", f"{row.purity:.6f}",
                         f"{row.scale:.6f}", str(row.path)])
-        except OSError as err:                    # noqa: BLE001
-            self._set_status(f"导出失败：{user_error_text(err)}")
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+        return p
+
+    def _export_results(self, path=None, *, fallback=True):
+        """把候选表写成 CSV；path 给定时不弹框（测试/脚本用）。"""
+        if not self.rows:
+            self._set_status("还没有可导出的筛相结果")
             return
-        self._set_status(f"已导出 {Path(path).name}（{len(self.rows)} 行）")
-        _log(self.main, f"筛相结果已导出：{path}")
+        if path is None:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            default = (paths.default_outputs_dir()
+                       / f"phase_screen_{stamp}.csv")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "导出筛相结果", str(default),
+                "CSV (*.csv);;文本 (*.txt)")
+            if not path:
+                return
+        try:
+            actual = self._write_phase_csv(path)
+        except OSError as err:
+            if not fallback:
+                self._set_status(f"导出失败：{user_error_text(err)}")
+                return
+            fallback_dir = paths.default_outputs_dir()
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            try:
+                actual = self._write_phase_csv(
+                    fallback_dir / f"phase_screen_{stamp}.csv")
+            except OSError as err2:
+                self._set_status(f"导出失败：{user_error_text(err2)}")
+                return
+            self._set_status(
+                f"原位置不可用（{user_error_text(err)}），"
+                f"已导出到 {actual}")
+            _log(self.main,
+                 f"筛相结果原位置写不进（{err}），已回退到 {actual}")
+            return
+        self._set_status(f"已导出 {actual.name}（{len(self.rows)} 行）")
+        _log(self.main, f"筛相结果已导出：{actual}")
+
+    def _export_default(self):
+        """不弹保存框，直接写到默认输出目录。"""
+        if not self.rows:
+            self._set_status("还没有可导出的筛相结果")
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self._export_results(
+            paths.default_outputs_dir() / f"phase_screen_{stamp}.csv",
+            fallback=False)
 
     def _set_status(self, text):
         self.status.setText(text)

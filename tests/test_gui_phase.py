@@ -233,6 +233,44 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertIn("phase,score", text)
         self.assertIn("LaB6", text)
 
+    def test_export_falls_back_to_default_outputs(self):
+        """保存位置不可写时回退到默认输出目录（2026-11-02）。"""
+        self._screen()
+        editor = self.w.phase_editor
+        from xrd_toolkit.gui import phase_workbench as gui_phase
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            blocker = root / "blocker"
+            blocker.write_text("not a folder", encoding="utf-8")
+            bad = blocker / "screen.csv"       # parent 是文件，mkdir 会失败
+            fallback = root / "fallback"
+            with mock.patch.object(gui_phase.paths, "default_outputs_dir",
+                                   return_value=fallback):
+                editor._export_results(str(bad))
+            files = list(fallback.glob("phase_screen_*.csv"))
+            self.assertTrue(files, editor.status.text())
+            self.assertIn("已导出", editor.status.text())
+
+    def test_export_default_button_writes_without_dialog(self):
+        """一键导出到默认位置，不弹保存框（2026-11-02）。"""
+        self._screen()
+        editor = self.w.phase_editor
+        from xrd_toolkit.gui import phase_workbench as gui_phase
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(gui_phase.paths, "default_outputs_dir",
+                                   return_value=Path(folder)):
+                editor.export_default_btn.click()
+                QApplication.processEvents()
+            files = list(Path(folder).glob("phase_screen_*.csv"))
+            self.assertTrue(files, editor.status.text())
+
+    def test_ebadf_error_is_explained(self):
+        import errno
+
+        from xrd_toolkit.gui.tasks import user_error_text
+        msg = user_error_text(OSError(errno.EBADF, "Bad file descriptor"))
+        self.assertIn("保存位置", msg)
+
     def test_send_to_refine_preselects_curve_and_cif(self):
         self._screen()
         editor = self.w.phase_editor
