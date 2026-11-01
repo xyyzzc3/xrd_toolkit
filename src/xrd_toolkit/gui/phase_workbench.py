@@ -746,7 +746,8 @@ class PhaseWorkbench(QWidget):
             default = (paths.default_outputs_dir()
                        / f"cell_refine_{row.path.stem}_{stamp}.txt")
             path, _ = QFileDialog.getSaveFileName(
-                dlg, "保存峰位精修晶胞报告", str(default), "文本 (*.txt)")
+                dlg, "保存峰位精修晶胞报告", str(default), "文本 (*.txt)",
+                options=QFileDialog.DontUseNativeDialog)
             if not path:
                 return
             p = Path(path).expanduser()
@@ -863,7 +864,8 @@ class PhaseWorkbench(QWidget):
             _log(self.main, "物相导出：打开保存框")
             path, _ = QFileDialog.getSaveFileName(
                 self.main, "导出筛相结果", str(default),
-                "CSV (*.csv);;文本 (*.txt)")
+                "CSV (*.csv);;文本 (*.txt)",
+                options=QFileDialog.DontUseNativeDialog)
             if not path:
                 self._set_status("导出已取消")
                 return
