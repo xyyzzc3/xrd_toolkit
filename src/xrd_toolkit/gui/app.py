@@ -778,12 +778,12 @@ def _build_toolbar(window: QMainWindow) -> None:
 
     分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask，
     2026-10-30 加 精修）：
-    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [精修][物相][原位] │
+    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [物相][精修][原位] │
     [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性设置"（校准 /
     mask），中间四个是每天干活的循环，按数据流排：**原图**（直接
     看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→ **处理**
     （链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
-    （精修 / 物相 / 原位），与 Mask 一样开中央子窗口，不占参数页。
+    （物相 → 精修 → 原位），与 Mask 一样开中央子窗口，不占参数页。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
     那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
@@ -834,18 +834,11 @@ def _build_toolbar(window: QMainWindow) -> None:
         btn.clicked.connect(lambda checked=False, n=name:
                             _switch_entrance(window, n))
 
-    # [精修] 与 [Mask] 同类：打开中央工作台（不进 entrance_buttons /
-    # PARAM_PAGES）。可勾选：点亮 = 精修模式，再点一次 = 退出。
+    # [物相][精修][原位] 与 [Mask] 同类：打开中央工作台（不进
+    # entrance_buttons / PARAM_PAGES）。可勾选：点亮 = 该模式，再点一次
+    # = 退出。顺序按数据流：先认相（物相），再定量精修，最后批处理原位
+    # （物相工作台的 [送去精修] 就是把 CIF 交给精修）。
     tb.addSeparator()
-    window._refine_active = False
-    window._refine_prev_entrance = None
-    window._refine_dock_saved = None
-    btn_refine = QPushButton("精修")
-    btn_refine.setCheckable(True)
-    btn_refine.setToolTip(_REFINE_TIP)
-    btn_refine.toggled.connect(lambda on: _on_refine_mode(window, on))
-    tb.addWidget(btn_refine)
-    window.refine_btn = btn_refine
 
     window._phase_active = False
     window._phase_prev_entrance = None
@@ -856,6 +849,16 @@ def _build_toolbar(window: QMainWindow) -> None:
     btn_phase.toggled.connect(lambda on: _on_phase_mode(window, on))
     tb.addWidget(btn_phase)
     window.phase_btn = btn_phase
+
+    window._refine_active = False
+    window._refine_prev_entrance = None
+    window._refine_dock_saved = None
+    btn_refine = QPushButton("精修")
+    btn_refine.setCheckable(True)
+    btn_refine.setToolTip(_REFINE_TIP)
+    btn_refine.toggled.connect(lambda on: _on_refine_mode(window, on))
+    tb.addWidget(btn_refine)
+    window.refine_btn = btn_refine
 
     window._insitu_active = False
     window._insitu_prev_entrance = None
