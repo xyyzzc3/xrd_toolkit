@@ -18,7 +18,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
 import numpy as np  # noqa: E402
 from PySide6.QtCore import QItemSelectionModel  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPlainTextEdit  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPlainTextEdit, QPushButton  # noqa: E402
 from unittest import mock  # noqa: E402
 
 try:
@@ -167,14 +167,28 @@ class TestPhaseWorkbench(unittest.TestCase):
         self._screen()
         editor = self.w.phase_editor
         self.assertTrue(editor.cell_btn.isEnabled())
+        self.assertEqual(editor.cell_btn.text(), "峰位精修晶胞")
         editor.cell_btn.click()
         QApplication.processEvents()
         dlg = getattr(editor, "_cell_dialog", None)
         self.assertIsNotNone(dlg)
         self.assertTrue(dlg.isVisible())
         text = dlg.findChild(QPlainTextEdit).toPlainText()
+        self.assertIn("不写回 CIF", text)
         self.assertIn("cell refinement", text)
         self.assertIn("cubic", text)
+        from xrd_toolkit.gui import phase_workbench as gui_phase
+        save = next(b for b in dlg.findChildren(QPushButton)
+                    if b.text() == "保存报告…")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "cell_refine.txt"
+            with mock.patch.object(gui_phase.QFileDialog,
+                                   "getSaveFileName",
+                                   return_value=(str(path), "")):
+                save.click()
+            self.assertTrue(path.is_file())
+            self.assertIn("cell refinement",
+                          path.read_text(encoding="utf-8"))
         dlg.close()
         QApplication.processEvents()
 

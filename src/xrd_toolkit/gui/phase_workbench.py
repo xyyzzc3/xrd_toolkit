@@ -31,9 +31,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMdiSubWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget)
+    QMdiSubWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
@@ -247,11 +247,12 @@ class PhaseWorkbench(QWidget):
         self.send_btn.setToolTip("把当前曲线和选中的 CIF 带进精修工作台")
         self.send_btn.clicked.connect(self._send_to_refine)
         left_lay.addWidget(self.send_btn)
-        self.cell_btn = QPushButton("精修晶胞")
+        self.cell_btn = QPushButton("峰位精修晶胞")
         self.cell_btn.setEnabled(False)
         self.cell_btn.setToolTip(
             "用观测峰位对选中的 CIF 做峰位级晶胞精修（七个晶系都可，"
-            "同时修 2θ 零位）；结果含 a/b/c/α/β/γ 与匹配率")
+            "同时修 2θ 零位）；结果含 a/b/c/α/β/γ 与匹配率，"
+            "只出报告、不写回 CIF 或候选")
         self.cell_btn.clicked.connect(self._refine_selected_cell)
         left_lay.addWidget(self.cell_btn)
         self.export_btn = QPushButton("导出结果…")
@@ -705,14 +706,14 @@ class PhaseWorkbench(QWidget):
                 structure, self.obs_t, wavelength=float(wavelength),
                 match_tol_deg=float(self.tolerance.value()), max_hkl=12)
         except Exception as err:                   # noqa: BLE001
-            self._set_status(f"晶胞精修失败：{user_error_text(err)}")
-            _log(self.main, f"晶胞精修失败：{user_error_text(err)}")
+            self._set_status(f"峰位精修晶胞失败：{user_error_text(err)}")
+            _log(self.main, f"峰位精修晶胞失败：{user_error_text(err)}")
             return None
         self._show_cell_refine(result, row)
         self._set_status(
-            f"晶胞精修：{row.path.stem} {result.system}，"
+            f"峰位精修晶胞：{row.path.stem} {result.system}，"
             f"匹配 {len(result.matches)} 根，RMS {result.rms_deg:.4f}°")
-        _log(self.main, f"晶胞精修：{row.path.stem}（{result.system}）"
+        _log(self.main, f"峰位精修晶胞：{row.path.stem}（{result.system}）"
                         f" 匹配 {len(result.matches)} 根，"
                         f"RMS {result.rms_deg:.4f}°")
         return result
@@ -725,19 +726,46 @@ class PhaseWorkbench(QWidget):
             except Exception:                      # noqa: BLE001
                 pass
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"晶胞精修：{row.path.stem}")
+        dlg.setWindowTitle(f"峰位精修晶胞：{row.path.stem}")
         dlg.resize(760, 560)
         lay = QVBoxLayout(dlg)
+        note = "结果不写回 CIF/候选，只作检查与交接。\n\n"
+        text = note + result.report()
         view = QPlainTextEdit()
         view.setReadOnly(True)
-        view.setPlainText(result.report())
+        view.setPlainText(text)
         lay.addWidget(view, 1)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         copy = QPushButton("复制报告")
         copy.clicked.connect(
-            lambda: QApplication.clipboard().setText(result.report()))
+            lambda: QApplication.clipboard().setText(text))
         buttons.addWidget(copy)
+
+        def _save():
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            default = (paths.default_outputs_dir()
+                       / f"cell_refine_{row.path.stem}_{stamp}.txt")
+            path, _ = QFileDialog.getSaveFileName(
+                dlg, "保存峰位精修晶胞报告", str(default), "文本 (*.txt)")
+            if not path:
+                return
+            p = Path(path).expanduser()
+            if p.is_dir():
+                p = p / f"cell_refine_{row.path.stem}_{stamp}.txt"
+            if p.suffix.lower() != ".txt":
+                p = p.with_suffix(".txt")
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text, encoding="utf-8")
+            except OSError as err:                 # noqa: BLE001
+                QMessageBox.critical(dlg, "保存失败", user_error_text(err))
+                return
+            self._set_status(f"已保存报告：{p.name}")
+
+        save = QPushButton("保存报告…")
+        save.clicked.connect(_save)
+        buttons.addWidget(save)
         close = QPushButton("关闭")
         close.clicked.connect(dlg.close)
         buttons.addWidget(close)
