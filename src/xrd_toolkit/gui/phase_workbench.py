@@ -150,7 +150,6 @@ class PhaseWorkbench(QWidget):
         self._build_ui()
         self.refresh_curves()
         self._refresh_lib_label()
-        self._draw_placeholder()
 
     # ── 界面组装 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -370,6 +369,23 @@ class PhaseWorkbench(QWidget):
             else:
                 self.curve = None
                 self._draw_placeholder()
+        else:
+            # 进入工作台/刷新下拉：不清结果，但要把当前曲线画出来
+            if curve is not None:
+                self.curve = (np.asarray(curve[0], dtype=float),
+                              np.asarray(curve[1], dtype=float))
+                self._draw_selected()
+            else:
+                self.curve = None
+                self._draw_placeholder()
+
+    def showEvent(self, event):
+        """重新显示时补一次绘制（MDI 隐藏期间 draw_idle 可能被吞）。"""
+        super().showEvent(event)
+        if getattr(self, "curve", None) is None:
+            self._draw_placeholder()
+        else:
+            self._draw_selected()
 
     def _selected_dock(self):
         key = self.curve_combo.currentData()

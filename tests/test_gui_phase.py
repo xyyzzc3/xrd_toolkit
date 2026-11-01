@@ -173,6 +173,15 @@ class TestPhaseWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.assertIn("先点 [开始筛相]", editor.status.text())
 
+    def test_curve_shows_on_open(self):
+        """进入物相工作台就该看到选中的 1D 曲线（2026-11-02）。"""
+        self._open_panel()
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        editor = self.w.phase_editor
+        self.assertIsNotNone(editor.curve)
+        self.assertGreater(len(editor.fig.axes[0].lines), 0)
+
     def test_refine_cell_dialog(self):
         self._screen()
         editor = self.w.phase_editor

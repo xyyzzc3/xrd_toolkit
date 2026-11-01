@@ -99,6 +99,15 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
 
+    def test_curve_shows_before_fitting(self):
+        """进入精修工作台就该看到观测曲线，而不是空白（2026-11-02）。"""
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        self.assertIsNone(editor.result)
+        self.assertGreater(len(editor.fig.axes[0].lines), 0)
+        self.assertIn("观测曲线", editor.fig.axes[0].get_title())
+
     def test_mutual_exclusion_with_mask_and_calibration(self):
         self._enter()
         self.w.mask_btn.click()

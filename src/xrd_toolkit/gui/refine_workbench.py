@@ -158,6 +158,7 @@ class RefineWorkbench(QWidget):
         self.setObjectName("refine_workbench")
 
         self.result = None
+        self._curve_key = None
         self._task = None
         self._extra_cifs = []
         self._extra_phase_paths = []
@@ -167,7 +168,6 @@ class RefineWorkbench(QWidget):
         self._build_ui()
         self.refresh_curves()
         self.refresh_cifs()
-        self._draw_placeholder()
 
     # ── 界面组装 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -560,6 +560,19 @@ class RefineWorkbench(QWidget):
             self.lambda_label.setText(f"λ = {wavelength:.4f} Å")
         except (KeyError, TypeError):
             self.lambda_label.setText("λ")
+        key = self.curve_combo.currentData()
+        if key != getattr(self, "_curve_key", None):
+            # 换曲线：旧拟合结果作废，别让图和表对不上
+            self._curve_key = key
+            self.result = None
+            self.rwp_label.setText("Rwp = —")
+            self.report_view.clear()
+            self.param_table.setRowCount(0)
+            self.save_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
+            self.adopt_btn.setEnabled(False)
+        if self.result is None:
+            self._draw_observed()
 
     # ── 精修 ────────────────────────────────────────────────
     def _free_params(self):
@@ -666,6 +679,35 @@ class RefineWorkbench(QWidget):
                         f"（{self.cif_combo.currentText()}）{suffix}")
 
     # ── 画图与结果表 ────────────────────────────────────────
+    def _draw_observed(self):
+        """拟合前先把选中的观测曲线画出来。"""
+        dock = self._selected_dock()
+        tth = getattr(dock, "last_tth", None) if dock is not None else None
+        y = getattr(dock, "last_intensity", None) if dock is not None else None
+        if tth is None or y is None:
+            self._draw_placeholder()
+            return
+        tth = np.asarray(tth, dtype=float)
+        y = np.asarray(y, dtype=float)
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR)
+        ax.set_title("观测曲线（点 [开始精修] 拟合）", fontsize=10)
+        ax.set_xlabel("2θ (°)", fontsize=8)
+        ax.set_ylabel("counts", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.grid(alpha=0.25, linestyle=":")
+        self.fig.subplots_adjust(left=0.11, right=0.98, top=0.93, bottom=0.12)
+        self.canvas.draw_idle()
+
+    def showEvent(self, event):
+        """重新显示时补一次绘制（MDI 隐藏期间 draw_idle 可能被吞）。"""
+        super().showEvent(event)
+        if getattr(self, "result", None) is not None:
+            self._draw(self.result)
+        else:
+            self._draw_observed()
+
     def _draw_placeholder(self):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
