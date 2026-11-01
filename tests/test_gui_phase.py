@@ -168,8 +168,8 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.w.phase_btn.click()
         QApplication.processEvents()
         editor = self.w.phase_editor
-        self.assertTrue(editor.export_btn.isEnabled())
-        editor.export_btn.click()
+        self.assertTrue(editor.export_default_btn.isEnabled())
+        editor.export_default_btn.click()
         QApplication.processEvents()
         self.assertIn("先点 [开始筛相]", editor.status.text())
 
