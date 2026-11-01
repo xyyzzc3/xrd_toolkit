@@ -5,6 +5,12 @@
 
 ## [0.2.0rc1] — 2026-10-30
 
+### 数据路径（2026-11-02）
+
+- **原位数据根改为 `~/Data/XRD/lmfpdata`**：81 帧数据不再放桌面；项目预设、
+  `fit_insitu.py` / `measure_perf.py` / `gsas2_insitu_crosscheck.py` /
+  `check_insitu_peaks.py` 的默认值、截图脚本与使用说明/ NOTES 同步。
+
 ### 项目预设标注（2026-11-02）
 
 - **把 LMFP 默认值集中成项目预设**：新增 `presets.py`（几何、第二相

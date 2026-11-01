@@ -26,7 +26,7 @@
 不进 LMFP 分母），两种口径不要混着引用。
 
 用法（数据在桌面）：
-    python scripts/fit_insitu.py --data ~/Desktop/lmfpdata \
+    python scripts/fit_insitu.py --data ~/Data/XRD/lmfpdata \
         --mask outputs/masks/lmfp1_lab6_mask.npy \
         --outdir outputs/insitu
 
@@ -50,7 +50,7 @@ from xrd_toolkit.simulation.insitu import (  # noqa: E402
     _fraction_esd, _frames, _instrument, _row, _status, _tag,
     _write_summary, frames_in_dir, prepare_setup)
 
-DEFAULT_DATA = Path.home() / "Desktop" / "lmfpdata"
+DEFAULT_DATA = Path.home() / "Data" / "XRD" / "lmfpdata"
 DEFAULT_MASK = Path("outputs") / "masks" / "lmfp1_lab6_mask.npy"
 
 
@@ -97,7 +97,7 @@ def _trend_figure(outdir, rows):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data", default=str(DEFAULT_DATA),
-                    help="原位帧目录（默认 ~/Desktop/lmfpdata）")
+                    help="原位帧目录（默认 ~/Data/XRD/lmfpdata）")
     ap.add_argument("--mask", default=str(DEFAULT_MASK),
                     help="mask 文件（.npy/.edf；空字符串 = 不遮）")
     ap.add_argument("--config", default="lmfp1_lab6")

@@ -14,6 +14,6 @@ PROJECT_PRESET = {
     # 物相筛选时视为"第二相"、不参与主相候选的 CIF 文件名
     "second_phase_cif": "Al_metal.cif",
     # 原位工作台的默认帧目录与默认 mask 文件名
-    "insitu_dir": "~/Desktop/lmfpdata",
+    "insitu_dir": "~/Data/XRD/lmfpdata",
     "insitu_mask_name": "lmfp1_lab6_mask.npy",
 }

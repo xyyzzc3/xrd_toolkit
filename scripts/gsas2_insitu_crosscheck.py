@@ -5,7 +5,7 @@
 
     # 1) 准备数据（本项目环境；需要 pymatgen）
     python scripts/gsas2_insitu_crosscheck.py prepare \
-        --data ~/Desktop/lmfpdata \
+        --data ~/Data/XRD/lmfpdata \
         --mask outputs/masks/lmfp1_lab6_mask.npy \
         --batch-csv outputs/insitu/insitu_fit.csv \
         --outdir /tmp/xrd_gsas2_insitu
@@ -55,7 +55,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 # 注意：本项目（XRD env）的导入只放在 prepare 里。refine 要在只装了
 # GSAS-II 的 conda 环境跑，那里没有 fabio/pyFAI/pymatgen，顶层导入会直接崩。
-DEFAULT_DATA = Path.home() / "Desktop" / "lmfpdata"
+DEFAULT_DATA = Path.home() / "Data" / "XRD" / "lmfpdata"
 DEFAULT_RICH = ROOT / "data/structures/LiMn0.6Fe0.4PO4_olivine.cif"
 DEFAULT_POOR = ROOT / "data/structures/Mn0.6Fe0.4PO4_heterosite_rich_axis.cif"
 

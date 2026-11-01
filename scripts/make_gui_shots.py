@@ -80,7 +80,7 @@ OUT = ROOT / "showcase" / "gui"
 
 # 数据自动找（不写死路径）：先看项目 data/，再看用户那份原始数据目录
 # （真数据不入仓库，换机器要自己拷——见 scripts/check_env.py）
-DATA_DIRS = (ROOT / "data", Path.home() / "Desktop" / "lmfpdata")
+DATA_DIRS = (ROOT / "data", Path.home() / "Data" / "XRD" / "lmfpdata")
 
 
 def find_data(pattern: str, count: int) -> list:

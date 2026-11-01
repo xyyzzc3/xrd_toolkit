@@ -10,7 +10,7 @@
   * 每个场景量两样：整段墙钟耗时 + 最大卡顿（> 1 秒的卡顿还会打印
     当时主线程在干什么——从最大间隔处抓的调用栈）。
 
-场景（真数据；默认取 ~/Desktop/lmfpdata 的 LMFP 系列）：
+场景（真数据；默认取 ~/Data/XRD/lmfpdata 的 LMFP 系列）：
   ① 启动：窗口建出来为止
   ② 开 1 张 1D：冷缓存（真积分）与热缓存各一次
   ③ 批量处理 N 个文件（后台算 + 落产物 + 文件栏重建）
@@ -22,7 +22,7 @@
 用法：
     python scripts/measure_perf.py               # 默认 24 个文件
     python scripts/measure_perf.py --n 81        # 全部
-    python scripts/measure_perf.py --data ~/Desktop/lmfpdata
+    python scripts/measure_perf.py --data ~/Data/XRD/lmfpdata
 """
 import argparse
 import faulthandler
@@ -54,7 +54,7 @@ from xrd_toolkit.gui import sources as gui_sources       # noqa: E402
 
 _IMPORT_S = time.perf_counter() - _T_IMPORT
 
-DEFAULT_DATA = Path.home() / "Desktop" / "lmfpdata"
+DEFAULT_DATA = Path.home() / "Data" / "XRD" / "lmfpdata"
 
 
 class Jank:

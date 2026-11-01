@@ -23,7 +23,7 @@
 
 用法：
     python scripts/check_insitu_peaks.py \
-        --data ~/Desktop/lmfpdata \
+        --data ~/Data/XRD/lmfpdata \
         --mask outputs/masks/lmfp1_lab6_mask.npy \
         --batch-csv outputs/insitu/insitu_fit.csv \
         --outdir outputs/insitu
@@ -99,7 +99,7 @@ def _batch_rows(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--data", default=str(Path.home() / "Desktop" / "lmfpdata"))
+    ap.add_argument("--data", default=str(Path.home() / "Data" / "XRD" / "lmfpdata"))
     ap.add_argument("--mask",
                     default="outputs/masks/lmfp1_lab6_mask.npy")
     ap.add_argument("--config", default="lmfp1_lab6")
