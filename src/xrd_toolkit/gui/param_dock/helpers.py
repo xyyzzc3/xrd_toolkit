@@ -229,7 +229,7 @@ def _save_recipe_dialog(window: QMainWindow) -> None:
         return
     default = Path(path).stem
     name, ok = QInputDialog.getText(window, "存成配方",
-                                    "配方名（例如：LMFP 自动+锚点）：",
+                                    "配方名（例如：自动基线+锚点）：",
                                     text=f"{default} 配方")
     if not ok or not str(name).strip():
         return

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
+from xrd_toolkit.presets import PROJECT_PRESET
 
 _COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
             "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
@@ -84,7 +85,7 @@ class InSituWorkbench(QWidget):
             LAB6_TIF = None
             self._frames_in_dir = lambda *a, **k: []
 
-        default_data = Path.home() / "Desktop" / "lmfpdata"
+        default_data = Path(PROJECT_PRESET["insitu_dir"]).expanduser()
         if not default_data.is_dir():
             repo_data = paths.ROOT / "data"
             default_data = (repo_data if repo_data.is_dir()
@@ -94,11 +95,12 @@ class InSituWorkbench(QWidget):
         self.lab6_path = (Path(LAB6_TIF)
                           if LAB6_TIF is not None and Path(LAB6_TIF).is_file()
                           else None)
-        # 与命令行同一个默认 mask（只在 LMFP 几何下自动带；其它配置按不遮）
+        # 与命令行同一个默认 mask（只在项目预设的几何下自动带；其它配置按不遮）
         default_mask = (paths.default_outputs_dir() / "masks"
-                        / "lmfp1_lab6_mask.npy")
+                        / PROJECT_PRESET["insitu_mask_name"])
         self.mask_path = (default_mask
-                          if (self.main.config_name == "lmfp1_lab6"
+                          if (self.main.config_name
+                              == PROJECT_PRESET["geometry"]
                               and default_mask.is_file()) else None)
         self.phase_paths = {
             "rich": Path(DEFAULT_RICH) if DEFAULT_RICH else None,
@@ -271,7 +273,7 @@ class InSituWorkbench(QWidget):
         left_lay.addWidget(self.save_btn)
         hint = QLabel("f_rich 是相对散射强度分数，看趋势用；wt rich% / "
                       "wt poor% 是晶态相的 Rietveld 重量分数（Al 单列、"
-                      "不进 LMFP 分母）。")
+                      "不进两相分母）。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         hint.setMinimumWidth(0)

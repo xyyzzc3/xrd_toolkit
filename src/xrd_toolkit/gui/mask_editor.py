@@ -286,7 +286,7 @@ class MaskWorkbench(QWidget):
         self.btn_radial = QPushButton("整环离群（实验性，勿遮真实环）")
         self.btn_radial.setToolTip(
             "按径向环带找离群像素（与 GSAS-II 的自动 spot mask 同一思路）；"
-            "真实衍射环的强弧段/织构（如 Al 基片）会被误标，只作参考")
+            "真实衍射环的强弧段/织构（如强织构基片）会被误标，只作参考")
         self.btn_radial.clicked.connect(self._auto_radial)
         row3.addWidget(self.btn_radial)
         self.n_sigma_label = QLabel("nσ（仅整环离群）")
@@ -317,7 +317,7 @@ class MaskWorkbench(QWidget):
         self.btn_adv.setCheckable(True)
         self.btn_adv.setToolTip(
             "中值窗口 / 亮斑倍数 / 面积上限 / 峰值下限 / 扩张 px；"
-            "默认值按当前 LMFP 面板调过")
+            "默认值按当前数据面板调过")
         adv_toggle.addWidget(self.btn_adv)
         adv_toggle.addStretch(1)
         root.addLayout(adv_toggle)
@@ -1422,8 +1422,8 @@ class MaskWorkbench(QWidget):
         ans = QMessageBox.question(
             self, "整环离群（实验性）",
             "这个方法按径向环带找离群像素（与 GSAS-II 的自动 spot mask\n"
-            "同一思路）；真实衍射环的强弧段/织构（如 Al 基片）会被误标\n"
-            "（实测 LMFP 上约 18k px）。\n\n"
+            "同一思路）；真实衍射环的强弧段/织构（如强织构基片）会被误标\n"
+            "（实测当前数据上约 18k px）。\n\n"
             "不要用它去遮真实峰；跑完用 [查看改动] 和 1D 预览逐处确认，\n"
             "误标用 [撤销] 或橡皮擦掉。继续？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)

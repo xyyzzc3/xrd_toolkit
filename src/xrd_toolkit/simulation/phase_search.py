@@ -21,10 +21,11 @@ from pathlib import Path
 
 import numpy as np
 
+from xrd_toolkit.presets import PROJECT_PRESET
 from xrd_toolkit.simulation import core
 from xrd_toolkit.simulation.core import load_structure
 
-AL_CIF_NAME = "Al_metal.cif"
+AL_CIF_NAME = PROJECT_PRESET["second_phase_cif"]
 # 粗扫晶胞缩放：固溶体、温度/成分导致的小幅晶胞变化都落在这个范围
 DEFAULT_SCALE_RANGE = (0.96, 1.05)
 DEFAULT_N_SCALES = 91

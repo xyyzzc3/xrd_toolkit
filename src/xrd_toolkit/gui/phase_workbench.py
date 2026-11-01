@@ -38,6 +38,7 @@ from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
+from xrd_toolkit.presets import PROJECT_PRESET
 
 _OBS_COLOR = "#333333"
 # 多相叠加时按选中顺序轮换；与精修图的布拉格刻度同一套色系
@@ -186,7 +187,7 @@ class PhaseWorkbench(QWidget):
         row2.setSpacing(6)
         row2.addWidget(QLabel("元素"))
         self.elements_edit = QLineEdit()
-        self.elements_edit.setPlaceholderText("Li Mn Fe P O（留空不筛）")
+        self.elements_edit.setPlaceholderText("例如 Fe Co Ni（留空不筛）")
         self.elements_edit.setToolTip(
             "只保留元素全在这张表里的相；留空 = 相库里全部参与")
         row2.addWidget(self.elements_edit, 1)
@@ -258,8 +259,9 @@ class PhaseWorkbench(QWidget):
             "把候选表写成 CSV（含相库、元素、波长），方便贴进报告")
         self.export_btn.clicked.connect(self._export_results)
         left_lay.addWidget(self.export_btn)
-        hint = QLabel("相库里的 Al_metal.cif 不参与主相候选：它只作集流体"
-                      "第二相，由精修工作台按额外相处理。")
+        hint = QLabel(
+            f"当前项目预设：{PROJECT_PRESET['second_phase_cif']} 视为第二相，"
+            "不参与主相候选，由精修工作台按额外相处理。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         left_lay.addWidget(hint)
@@ -452,8 +454,9 @@ class PhaseWorkbench(QWidget):
         except OSError:
             cifs = []
         if cifs:
-            tail = ("，Al 只作第二相"
-                    if any(p.name == "Al_metal.cif" for p in cifs) else "")
+            tail = ("，第二相按项目预设排除"
+                    if any(p.name == PROJECT_PRESET["second_phase_cif"]
+                           for p in cifs) else "")
             self.lib_label.setText(
                 f"{self.lib_dir.name}（{len(cifs)} 张 CIF{tail}）")
         else:

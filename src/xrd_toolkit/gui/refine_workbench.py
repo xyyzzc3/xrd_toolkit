@@ -278,7 +278,7 @@ class RefineWorkbench(QWidget):
         left_lay.addWidget(_section("额外相"))
         self.extra_list = QListWidget()
         self.extra_list.setMaximumHeight(72)
-        self.extra_list.setToolTip("额外相（如 Al 集流体）：峰位与峰形跟随"
+        self.extra_list.setToolTip("额外相（如基片/集流体）：峰位与峰形跟随"
                                    "主相，强度默认逐反射自由")
         left_lay.addWidget(self.extra_list)
         extra_row = QHBoxLayout()
@@ -293,7 +293,7 @@ class RefineWorkbench(QWidget):
         self.chk_extra_lebail = QCheckBox("额外相强度自由（Le Bail）")
         self.chk_extra_lebail.setChecked(True)
         self.chk_extra_lebail.setToolTip(
-            "第二相（如 Al 箔）织构强时，峰强交给数据逐反射解出")
+            "第二相（如箔材/基片）织构强时，峰强交给数据逐反射解出")
         left_lay.addWidget(self.chk_extra_lebail)
 
         self.run_btn = QPushButton("开始精修")
