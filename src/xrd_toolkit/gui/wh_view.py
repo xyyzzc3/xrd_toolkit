@@ -22,7 +22,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QPushButton, QVBoxLayout)
+    QApplication, QDialog, QFileDialog, QHBoxLayout, QPushButton,
+    QVBoxLayout)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log, _panel_param
@@ -229,6 +230,7 @@ def compute_wh(window, dock):
         total = len(getattr(dock, "fit_results", None) or [])
         dock.wh_result = None
         dock.wh_instrument = instrument
+        dock.wh_inst_note = inst_note
         _set_labels(window, None, "再拟合几根峰（至少 3 根）")
         return None
     try:
@@ -242,6 +244,7 @@ def compute_wh(window, dock):
         return None
     dock.wh_result = result
     dock.wh_instrument = instrument
+    dock.wh_inst_note = inst_note
     _set_labels(window, result, total=len(dock.fit_results or []),
                 inst_note=inst_note)
     return result
@@ -281,6 +284,65 @@ def _r2(result):
     if ss_tot <= 0:
         return float("nan")
     return 1.0 - ss_res / ss_tot
+
+
+def wh_result_text(dock):
+    """W-H 结果 → 可粘贴的文本（右键 [复制 W-H 结果]）。"""
+    result = getattr(dock, "wh_result", None)
+    if result is None:
+        return ""
+    entries = [e for e in (getattr(dock, "fit_results", None) or [])
+               if getattr(e, "wh", True)
+               and getattr(e, "fit", None) is not None]
+    total = len(getattr(dock, "fit_results", None) or [])
+    size = result.size_nm
+    strain = result.strain
+    d_text = ("不可辨识" if not np.isfinite(size)
+              else f"{size:.2f} nm")
+    e_text = ("不可辨识" if not np.isfinite(strain)
+              else f"{strain:.3e}（{strain * 100:.4f}%）")
+    r2 = _r2(result)
+    r2_text = "—" if not np.isfinite(r2) else f"{r2:.4f}"
+    inst = getattr(dock, "wh_inst_note", "") or "未扣仪器"
+    lines = [
+        "===== Williamson–Hall =====",
+        f"D (nm)\t{d_text}",
+        f"ε\t{e_text}",
+        f"参与\t{len(result.beta_sample_deg)}/{total} 根",
+        f"仪器\t{inst}",
+        f"R²\t{r2_text}",
+    ]
+    if result.warning:
+        lines.append(f"警告\t{result.warning}")
+    lines.append("")
+    lines.append("2θ (°)\tFWHM (°)\tsin²θ\t(βcosθ)²\t面积\tRwp (%)")
+    for entry, x, y in zip(entries, result.x, result.y):
+        fit = entry.fit
+        lines.append(
+            f"{float(fit.center):.4f}\t{float(fit.fwhm):.4f}\t"
+            f"{float(x):.6f}\t{float(y):.3e}\t"
+            f"{float(fit.area):.2f}\t{float(fit.rwp):.2f}")
+    return "\n".join(lines)
+
+
+def copy_wh_result(window, dock):
+    """把 W-H 结果复制到剪贴板；返回参与的峰数（0 = 没复制）。"""
+    if dock is None:
+        _log(window, "复制 W-H 结果：先点开一张 1D 图")
+        return 0
+    result = getattr(dock, "wh_result", None)
+    if result is None:
+        result = compute_wh(window, dock)
+    if result is None:
+        _log(window, "复制 W-H 结果：还没有结果（至少 3 根勾选峰）")
+        return 0
+    text = wh_result_text(dock)
+    if not text:
+        return 0
+    QApplication.clipboard().setText(text)
+    n = int(len(result.beta_sample_deg))
+    _log(window, f"已复制 W-H 结果（{n} 根参与峰）")
+    return n
 
 
 def _excluded_points(window, dock):

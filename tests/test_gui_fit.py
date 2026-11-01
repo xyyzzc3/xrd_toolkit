@@ -212,6 +212,40 @@ class TestFitView(unittest.TestCase):
         self.assertFalse(self.dock.fit_results[0].wh)
         self.assertIn("3/4 根参与", self.w.wh_note_label.text())
 
+    def test_wh_result_text_has_summary_and_peak_table(self):
+        """右键 [复制 W-H 结果] 的文本：摘要 + 参与峰表（2026-11-01）。"""
+        import math
+
+        from xrd_toolkit.gui.wh_view import wh_result_text
+        from xrd_toolkit.simulation.microstructure import williamson_hall
+
+        lam = 1.5406
+        d_nm, eps = 30.0, 1.0e-3
+        centers = [10.0, 20.0, 30.0, 40.0]
+        intercept = (0.9 * lam / (d_nm * 10.0)) ** 2
+        slope = (4.0 * eps) ** 2
+        fwhms = []
+        for center in centers:
+            theta = math.radians(center / 2.0)
+            y = intercept + slope * math.sin(theta) ** 2
+            fwhms.append(math.degrees(math.sqrt(y) / math.cos(theta)))
+        result = williamson_hall(centers, fwhms, wavelength=lam)
+        entries = [SimpleNamespace(
+            wh=True,
+            fit=SimpleNamespace(center=c, fwhm=f, area=100.0, rwp=1.0))
+            for c, f in zip(centers, fwhms)]
+        dock = SimpleNamespace(wh_result=result, fit_results=entries,
+                               wh_inst_note="仪器 0.01°")
+        text = wh_result_text(dock)
+        self.assertIn("Williamson–Hall", text)
+        self.assertIn("D (nm)", text)
+        self.assertIn("30.00 nm", text)
+        self.assertIn("参与\t4/4 根", text)
+        self.assertIn("仪器\t仪器 0.01°", text)
+        self.assertIn("2θ (°)\tFWHM (°)", text)
+        for center in centers:
+            self.assertIn(f"{center:.4f}", text)
+
     def test_delete_fit_row(self):
         self._open_panel()
         self._fit_all()

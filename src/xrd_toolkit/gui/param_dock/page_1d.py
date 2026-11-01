@@ -19,7 +19,7 @@ from xrd_toolkit.gui.plot_views import (
     _apply_params, _plot_view, _refresh_1d_display)
 from xrd_toolkit.gui.wh_view import (
     WH_INSTRUMENT_KEY, WH_SOURCE_CONSTANT, WH_SOURCE_KEY, WH_SOURCE_LAB6,
-    dock_for_wh, refresh_wh, save_wh_plot, show_wh_dialog)
+    copy_wh_result, dock_for_wh, refresh_wh, save_wh_plot, show_wh_dialog)
 
 
 def build_1d_page(window, form_1d, btns_1d):
@@ -454,9 +454,14 @@ def build_1d_page(window, form_1d, btns_1d):
         menu.addSeparator()
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
+        menu.addSeparator()
+        act_wh = menu.addAction("复制 W-H 结果")
         chosen = menu.exec(fit_table.viewport().mapToGlobal(pos))
         if chosen is act_del:
             delete_fit_rows(window)
+            return
+        if chosen is act_wh:
+            copy_wh_result(window, dock_for_wh(window))
             return
         if chosen is act_sel:
             n = copy_fit_table(window, True)
