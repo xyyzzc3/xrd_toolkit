@@ -14,7 +14,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
+from xrd_toolkit.services.hot_pixels import (  # noqa: E402
+    mask_hot_pixels, mask_suspicion)
 
 
 def _synthetic():
@@ -63,6 +64,46 @@ class TestHotPixelMask(unittest.TestCase):
         _c2, m2, _ = mask_hot_pixels(img, downsample=2)
         self.assertTrue(m1[150, 50])
         self.assertTrue(m2[150, 50])
+
+
+class TestMaskSuspicion(unittest.TestCase):
+    """结果护栏：斑点状衍射（标样）不该被静默当成坏点。"""
+
+    def test_lmfp_result_is_fine(self):
+        ok, why = mask_suspicion(
+            {"masked_components": 24, "masked_pixels": 2824}, (2048, 2048))
+        self.assertFalse(ok)
+        self.assertEqual(why, "")
+
+    def test_lab6_result_is_flagged(self):
+        ok, why = mask_suspicion(
+            {"masked_components": 2219, "masked_pixels": 217390},
+            (2048, 2048))
+        self.assertTrue(ok)
+        self.assertIn("2219", why)
+        self.assertIn("LaB₆", why)
+        self.assertIn("斑点", why)
+
+    def test_component_count_alone_flags(self):
+        ok, _why = mask_suspicion(
+            {"masked_components": 201, "masked_pixels": 10}, (2048, 2048))
+        self.assertTrue(ok)
+
+    def test_pixel_fraction_alone_flags(self):
+        # 2048² 的 0.5% = 20971.5 px
+        ok, _why = mask_suspicion(
+            {"masked_components": 10, "masked_pixels": 20972}, (2048, 2048))
+        self.assertTrue(ok)
+
+    def test_boundaries_are_inclusive(self):
+        ok, _why = mask_suspicion(
+            {"masked_components": 200, "masked_pixels": 20971}, (2048, 2048))
+        self.assertFalse(ok)
+
+    def test_missing_info_is_fine(self):
+        ok, why = mask_suspicion({}, (2048, 2048))
+        self.assertFalse(ok)
+        self.assertEqual(why, "")
 
 
 if __name__ == "__main__":

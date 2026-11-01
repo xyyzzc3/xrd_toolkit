@@ -28,6 +28,32 @@ DEFAULT_MAX_AREA = 300
 DEFAULT_MIN_PEAK = 20000.0
 DEFAULT_DOWNSAMPLE = 2
 
+# 结果合理性护栏（2026-11-01）：判据找的是“孤立亮团”，但斑点状衍射
+# （典型是 LaB₆ 标样的大晶粒斑点）每一颗真实斑点都又小又亮，单张图里
+# 和坏点无法区分。实测 LaB₆：2219 团 / 21.7 万 px（占全图 5.2%）；
+# LMFP 只有 24 团 / 2824 px（0.07%）。所以不在单帧里硬猜，只在结果
+# “大得离谱”时叫停，由用户决定继续还是改用共享坏点坐标。
+SUSPICIOUS_COMPONENTS = 200
+SUSPICIOUS_FRACTION = 0.005
+
+
+def mask_suspicion(info, shape):
+    """这次自动检测的结果是否大得离谱；返回 (可疑?, 说明)。
+
+    只判断、不改 mask：GUI 用它弹确认框，命令行用它打印警告，
+    是否继续由调用方决定（有些探测器确实有大量坏点）。
+    """
+    comps = int(info.get("masked_components", 0) or 0)
+    px = int(info.get("masked_pixels", 0) or 0)
+    total = int(shape[0]) * int(shape[1]) if len(shape) >= 2 else 0
+    frac = (px / total) if total else 0.0
+    if comps <= SUSPICIOUS_COMPONENTS and frac <= SUSPICIOUS_FRACTION:
+        return False, ""
+    return True, (
+        f"这次检测标出了 {comps} 团 / {px} px（占全图 {frac:.1%}）。"
+        "斑点状衍射（例如 LaB₆ 标样）的真实斑点会被当成坏点，"
+        "把真实峰一起遮掉。")
+
 
 def _local_median(img, window, downsample):
     """局部中值（downsample ≥2 时先在 2×2 均值图上算，再放大）。

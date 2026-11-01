@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from xrd_toolkit.config import get_config  # noqa: E402
 from xrd_toolkit.services.background import estimate_baseline_sliding  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
-from xrd_toolkit.services.hot_pixels import mask_hot_pixels  # noqa: E402
+from xrd_toolkit.services.hot_pixels import (  # noqa: E402
+    mask_hot_pixels, mask_suspicion)
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.simulation import (  # noqa: E402
     b_iso_from_cif, fit_entries, fit_pattern, load_structure, plot_fit,
@@ -64,6 +65,10 @@ def load_1d(path, geom, tmin=1.0, tmax=8.0, npt=3000, hot_mask=False):
         img, _mask, info = mask_hot_pixels(img)
         print(f"  坏点掩膜：{info['masked_components']} 团 / "
               f"{info['masked_pixels']} px（候选 {info['candidates']}）")
+        suspicious, why = mask_suspicion(info, img.shape)
+        if suspicious:
+            print(f"  警告：{why}")
+            print("  标样请共享样品帧的坏点坐标，不要重新自动检测。")
     return integrate_1d(img, npt=npt, tth_min_deg=tmin, tth_max_deg=tmax,
                         **geom)
 

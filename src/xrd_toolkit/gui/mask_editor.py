@@ -51,7 +51,7 @@ from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
 from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
-from xrd_toolkit.services.hot_pixels import mask_hot_pixels
+from xrd_toolkit.services.hot_pixels import mask_hot_pixels, mask_suspicion
 from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services import masked2d
 from xrd_toolkit.services.mask import (
@@ -1377,6 +1377,20 @@ class MaskWorkbench(QWidget):
             if hot.shape != self.mask.shape:
                 self._say("Mask 孤立坏点：图像已换，结果丢弃")
                 return
+            suspicious, why = mask_suspicion(info, hot.shape)
+            if suspicious:
+                ans = QMessageBox.question(
+                    self, "孤立坏点：结果异常",
+                    f"{why}\n\n"
+                    "建议先取消，改用样品帧的 mask 配方：在样品上"
+                    "[导出配方…]，再在这张图上 [导入配方…]，共享探测器"
+                    "固定坏点坐标；或者用手动画笔只遮坏点。\n\n"
+                    "仍然应用这次结果吗？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ans != QMessageBox.Yes:
+                    self._say("Mask 孤立坏点：已取消（标出的像素太多，"
+                              "疑似真实衍射斑点）")
+                    return
             self._push_undo()
             new = hot & ~self.mask          # 只给新标出的上色，别覆盖手动
             self.mask = combine_masks(self.mask, hot)

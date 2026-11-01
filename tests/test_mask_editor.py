@@ -301,6 +301,38 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(self.ed.btn_hot.isEnabled())
         self.assertGreater(int(self.ed.mask.sum()), 0)
 
+    def test_auto_hot_suspicious_result_is_cancelled_by_default(self):
+        """斑点状衍射（标样）误标一大片时，默认不应用（2026-11-01）。"""
+        self._open()
+        self.ed.load_image(self.img_path)
+        hot = np.zeros(self.ed.image.shape, dtype=bool)
+        hot[10:40, 10:40] = True                 # 900 px，超过 200×200 的 0.5%
+        fake = (self.ed.image, hot, {"masked_components": 201,
+                                     "masked_pixels": int(hot.sum())})
+        with mock.patch.object(gui_mask_editor, "mask_hot_pixels",
+                               return_value=fake), \
+                mock.patch.object(gui_mask_editor.QMessageBox, "question",
+                                  return_value=gui_mask_editor.QMessageBox.No):
+            self.ed._auto_hot()
+            _wait_task(self.ed)
+        self.assertEqual(0, int(self.ed.mask.sum()))
+        self.assertIn("取消", self.ed.lbl_hint.text())
+
+    def test_auto_hot_suspicious_result_can_be_forced(self):
+        self._open()
+        self.ed.load_image(self.img_path)
+        hot = np.zeros(self.ed.image.shape, dtype=bool)
+        hot[10:40, 10:40] = True
+        fake = (self.ed.image, hot, {"masked_components": 201,
+                                     "masked_pixels": int(hot.sum())})
+        with mock.patch.object(gui_mask_editor, "mask_hot_pixels",
+                               return_value=fake), \
+                mock.patch.object(gui_mask_editor.QMessageBox, "question",
+                                  return_value=gui_mask_editor.QMessageBox.Yes):
+            self.ed._auto_hot()
+            _wait_task(self.ed)
+        self.assertGreater(int(self.ed.mask.sum()), 0)
+
     def test_downsample_helpers_keep_hot_pixels(self):
         img = np.zeros((5, 6), dtype=float)
         img[3, 4] = 9.0
