@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget)
 
 from xrd_toolkit import paths
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 
@@ -141,6 +142,7 @@ class PhaseWorkbench(QWidget):
         self.obs_t = None
         self._task = None
         self._loaded_curves = {}       # {"file:路径": {"tth", "intensity", "label"}}
+        self._product_sources = {}     # {"product:ID": Source}（文件栏 1D 产物）
         self._last_wavelength = None
 
         self._build_ui()
@@ -300,17 +302,34 @@ class PhaseWorkbench(QWidget):
 
     # ── 曲线与相库 ──────────────────────────────────────────
     def refresh_curves(self):
-        """把当前打开、已经算完的 1D 面板列进下拉框（保留原选择）。"""
+        """列出可用的 1D 曲线：打开的面板 + 文件栏里的 1D 产物。
+
+        2026-11-02 用户："物相为什么选不了 1D……必须这样吗，很不顺手"——
+        以前只列打开的面板；现在文件栏里的「1D 产物」也直接可读（选中时
+        读缓存，不重新积分），不需要先双击打开面板。
+        """
         keep = self.curve_combo.currentData()
         self.curve_combo.blockSignals(True)
         self.curve_combo.clear()
-        for key, dock in getattr(self.main, "plot_docks", {}).items():
+        self._product_sources = {}
+        docks = getattr(self.main, "plot_docks", {}) or {}
+        for key, dock in docks.items():
             if not str(key).startswith("1D|"):
                 continue
             if getattr(dock, "last_tth", None) is None:
                 continue
             title = dock.windowTitle() or str(key).split("|", 1)[-1]
             self.curve_combo.addItem(title, key)
+        for source in gui_sources.all_sources(self.main):
+            if source.kind != gui_sources.ONED:
+                continue
+            panel_key = f"1D|{gui_sources.source_id(source)}"
+            if panel_key in docks:
+                continue                      # 已有面板，上面列过了
+            key = f"product:{gui_sources.source_id(source)}"
+            self._product_sources[key] = source
+            self.curve_combo.addItem(
+                f"{source.display}（1D 产物）", key)
         for key, entry in self._loaded_curves.items():
             self.curve_combo.addItem(entry["label"], key)
         self.curve_combo.blockSignals(False)
@@ -328,6 +347,8 @@ class PhaseWorkbench(QWidget):
             tth = np.asarray(tth, dtype=float)
             self.status.setText(
                 f"曲线 {tth.size} 点，2θ {tth.min():.3f}–{tth.max():.3f}°")
+        elif str(self.curve_combo.currentData() or "").startswith("product:"):
+            self.status.setText("这条 1D 产物读不到了（被删了？）")
         if clear:
             # 换曲线后旧候选不再对应这条曲线（[送去精修] 会送错配对），
             # 清空结果等用户重新筛；进入工作台时的 refresh 不清（状态保留）
@@ -363,6 +384,11 @@ class PhaseWorkbench(QWidget):
             if entry is None:
                 return None
             return entry["tth"], entry["intensity"]
+        if str(key).startswith("product:"):
+            source = self._product_sources.get(key)
+            if source is None:
+                return None
+            return gui_sources.load_product(source)
         dock = getattr(self.main, "plot_docks", {}).get(key)
         if dock is None or getattr(dock, "last_tth", None) is None:
             return None
@@ -397,8 +423,11 @@ class PhaseWorkbench(QWidget):
     def _use_focus_curve(self):
         key = getattr(self.main, "focus_panel", None)
         idx = self.curve_combo.findData(key)
+        if idx < 0 and self.curve_combo.count() == 1:
+            idx = 0
+            self._set_status("当前焦点不是 1D 图；已选下拉里唯一的曲线")
         if idx < 0:
-            self._set_status("当前焦点不是 1D 图；先在文件栏双击一张 1D 产物")
+            self._set_status("当前焦点不是 1D 图；请在下拉里选一条 1D 曲线")
             return
         self.curve_combo.setCurrentIndex(idx)
 
@@ -707,6 +736,22 @@ class PhaseWorkbench(QWidget):
             self._set_status("先在候选表里点一行")
             return
         curve_key = self.curve_combo.currentData()
+        if str(curve_key or "").startswith("product:"):
+            # 文件栏的 1D 产物：先读缓存开一张 1D 面板，再交给精修。
+            source = self._product_sources.get(curve_key)
+            if source is None:
+                self._set_status("这条 1D 产物已失效，请重新选曲线")
+                return
+            from xrd_toolkit.gui.plot_views import _open_product_panel
+            panel_key = _open_product_panel(self.main, source)
+            if panel_key not in self.main.plot_docks:
+                self._set_status("这条 1D 产物读不到了（被删了？）")
+                return
+            self.refresh_curves()
+            idx = self.curve_combo.findData(panel_key)
+            if idx >= 0:
+                self.curve_combo.setCurrentIndex(idx)
+            curve_key = panel_key
         if str(curve_key or "").startswith("file:") or self._selected_dock() is None:
             self._set_status("文件曲线没有对应的 1D 面板，不能直接送去精修")
             return

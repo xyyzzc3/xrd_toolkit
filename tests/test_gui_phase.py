@@ -138,6 +138,31 @@ class TestPhaseWorkbench(unittest.TestCase):
                         "选中候选相后应画出理论峰位")
         self.assertTrue(editor.send_btn.isEnabled())
 
+    def test_curve_list_includes_file_bar_products(self):
+        """文件栏里的 1D 产物不打开面板也能选（2026-11-02）。"""
+        import types
+
+        from xrd_toolkit.gui import phase_workbench as gui_phase
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        editor = self.w.phase_editor
+        source = types.SimpleNamespace(
+            kind=gui_phase.gui_sources.ONED, display="fake_phase.tif",
+            path=PANEL_PATH, key="deadbeef")
+        curve = (np.linspace(1.0, 8.0, 500), np.ones(500))
+        key = f"product:{gui_phase.gui_sources.source_id(source)}"
+        with mock.patch.object(gui_phase.gui_sources, "all_sources",
+                               return_value=[source]), \
+                mock.patch.object(gui_phase.gui_sources, "load_product",
+                                  return_value=curve):
+            editor.refresh_curves()
+            keys = [editor.curve_combo.itemData(i)
+                    for i in range(editor.curve_combo.count())]
+            self.assertIn(key, keys)
+            editor.curve_combo.setCurrentIndex(
+                editor.curve_combo.findData(key))
+            self.assertIsNotNone(editor._selected_curve())
+
     def test_refine_cell_dialog(self):
         self._screen()
         editor = self.w.phase_editor
