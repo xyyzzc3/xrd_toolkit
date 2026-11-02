@@ -30,11 +30,8 @@
 """
 import argparse
 import csv
-import math
 import sys
 from pathlib import Path
-
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -45,38 +42,14 @@ from xrd_toolkit.services.background import (  # noqa: E402
 from xrd_toolkit.services.data_loader import load_diffraction_image  # noqa: E402
 from xrd_toolkit.services.integrator import integrate_1d  # noqa: E402
 from xrd_toolkit.services.mask import load_mask  # noqa: E402
-
-# (200) 双峰窗口；两侧平带避开 rich/poor (200)
-WIN_LO, WIN_HI = 1.18, 1.55
-SIDE_LO = (1.18, 1.28)
-SIDE_HI = (1.50, 1.56)
+from xrd_toolkit.simulation.insitu_plots import (  # noqa: E402
+    _doublet_stats, draw_model_independent)
 
 
 def _tag(path):
     import re
     m = re.search(r"(\d+)$", Path(path).stem)
     return int(m.group(1)) if m else 0
-
-
-def _doublet_stats(tth, y, lo=WIN_LO, hi=WIN_HI):
-    """局部线性背景 + 双峰面积/强度加权质心。"""
-    t = np.asarray(tth, dtype=float)
-    y = np.asarray(y, dtype=float)
-    m = (t >= lo) & (t <= hi)
-    if np.count_nonzero(m) < 8:
-        return float("nan"), float("nan")
-    side = (((t >= SIDE_LO[0]) & (t <= SIDE_LO[1]))
-            | ((t >= SIDE_HI[0]) & (t <= SIDE_HI[1])))
-    if np.count_nonzero(side) >= 4:
-        coef = np.polyfit(t[side], y[side], 1)
-        yy = y[m] - np.polyval(coef, t[m])
-    else:
-        yy = y[m] - float(np.median(y[side])) if np.any(side) else y[m]
-    area = float(np.trapezoid(yy, t[m]))
-    if not math.isfinite(area) or area <= 0:
-        return area, float("nan")
-    centroid = float(np.trapezoid(t[m] * yy, t[m]) / area)
-    return area, centroid
 
 
 def _batch_rows(path):
@@ -152,69 +125,8 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    frames = [r["frame"] for r in rows]
-    cen = np.array([r["centroid"] for r in rows], dtype=float)
-    area = np.array([r["doublet_area"] for r in rows], dtype=float)
-    fpoor = np.array([r["f_poor"] for r in rows], dtype=float)
-    finite = [r for r in rows if math.isfinite(r["f_poor"])]
-    trans = (max(finite, key=lambda r: r["f_poor"])["frame"]
-             if finite else frames[0])
-    lo, hi = frames[0] - 0.5, frames[-1] + 0.5
-    ok = np.array([r["status"] == "ok" for r in rows])
-    bad = ~ok
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
-    ax = axes[0]
-    ax.axvspan(lo, trans + 0.5, color="tab:blue", alpha=0.06, lw=0)
-    ax.axvspan(trans + 0.5, hi, color="tab:orange", alpha=0.06, lw=0)
-    ax.plot(frames, cen, "-", lw=1.0, color="tab:green", label="(200) centroid")
-    ax.plot(np.array(frames)[bad], cen[bad], "o", mfc="none",
-            mec="tab:orange", ms=4, label="not_converged/cell_jump")
-    ax.set_xlim(lo, hi); ax.set_xlabel("frame")
-    ax.set_ylabel("centroid 2θ (°)")
-    ax.set_title("(a) (200) doublet centroid", fontsize=10)
-    ax.grid(alpha=0.25, linestyle=":")
-    ax2 = ax.twinx()
-    ax2.plot(frames, fpoor, ":", lw=1.0, color="0.35", label="f_poor (batch)")
-    ax2.set_ylabel("f_poor (batch)")
-    ax2.set_ylim(-0.02, 1.02)
-    lines = ax.get_lines() + ax2.get_lines()
-    ax.legend(lines, [ln.get_label() for ln in lines],
-              fontsize=7, loc="center right")
-
-    ax = axes[1]
-    ax.axvspan(lo, trans + 0.5, color="tab:blue", alpha=0.06, lw=0)
-    ax.axvspan(trans + 0.5, hi, color="tab:orange", alpha=0.06, lw=0)
-    ax.plot(frames, area / np.nanmedian(area), "-", lw=1.0, color="tab:purple")
-    ax.plot(np.array(frames)[bad],
-            (area / np.nanmedian(area))[bad], "o", mfc="none",
-            mec="tab:orange", ms=4)
-    ax.set_xlim(lo, hi); ax.set_xlabel("frame")
-    ax.set_ylabel("area / median")
-    ax.set_title("(b) (200) doublet total area (phase-dependent)",
-                 fontsize=10)
-    ax.grid(alpha=0.25, linestyle=":")
-
-    ax = axes[2]
-    good = np.isfinite(cen) & np.isfinite(fpoor)
-    ax.plot(fpoor[good], cen[good], "o", ms=3, color="tab:green")
-    if np.count_nonzero(good) >= 3:
-        p = np.polyfit(fpoor[good], cen[good], 1)
-        xs = np.linspace(np.nanmin(fpoor[good]), np.nanmax(fpoor[good]), 20)
-        ax.plot(xs, np.polyval(p, xs), "--", lw=0.9, color="0.4")
-        pred = np.polyval(p, fpoor[good])
-        ss = np.sum((cen[good] - np.mean(cen[good])) ** 2)
-        r2 = 1.0 - np.sum((cen[good] - pred) ** 2) / ss if ss > 0 else 0.0
-        ax.text(0.04, 0.94, f"R² = {r2:.3f}", transform=ax.transAxes,
-                va="top", fontsize=9)
-    ax.set_xlabel("f_poor (batch)")
-    ax.set_ylabel("(200) centroid 2θ (°)")
-    ax.set_title("(c) centroid vs batch f_poor", fontsize=10)
-    ax.grid(alpha=0.25, linestyle=":")
-
-    fig.suptitle("Model-independent check: (200) doublet centroid follows "
-                 "the batch phase fraction", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig = plt.figure(figsize=(15, 4.6))
+    draw_model_independent(fig, rows)
     png = outdir / "model_independent.png"
     fig.savefig(png, dpi=160)
     plt.close(fig)

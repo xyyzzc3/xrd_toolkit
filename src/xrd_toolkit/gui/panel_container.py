@@ -223,6 +223,11 @@ def _close_panel(window: QMainWindow, key: str, quiet: bool = False) -> None:
     if grip_filter is not None:
         grip_filter._release_cursor()
     if isinstance(dock, QMdiSubWindow):
+        # 最大化状态下直接 removeSubWindow/deleteLater，在 macOS 上会把
+        # 前台交回桌面（用户 2026-11-03 实测：1D 图双击占满中央区再关
+        # → 弹回 Mac 桌面）。先 showNormal 还原，再走原来的摘除路径。
+        if dock.isMaximized():
+            dock.showNormal()
         if dock in window.mdi.subWindowList():
             window.mdi.removeSubWindow(dock)
         dock.deleteLater()

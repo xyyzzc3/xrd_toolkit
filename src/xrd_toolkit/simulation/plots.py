@@ -175,22 +175,8 @@ def _thin_bragg(pos, tol=_BRAGG_MERGE_DEG):
     return np.asarray(keep)
 
 
-def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
-             bragg="auto"):
-    """拟合结果图（论文式布局，2026-10-23 起为默认画法）。
-
-    三栏：观测点 / 计算线 / 背景虚线 → obs−calc 差值 → 布拉格峰位刻度
-    （每相一行）。`result` 是 `FitResult`（鸭子类型即可：tth / y_obs /
-    y_calc / background / residual / rwp / rp / peak_tth）。
-    zoom 给 (lo, hi) 时在上图里嵌放大窗；exclude_ranges 把排除区画灰带。
-
-    bragg：
-        "auto"（默认）= 用 `result.peak_tth`（主相，`phase_label` 命名）
-            和 `result.extra_peak_tth`（第二相）自动生成刻度行；
-        None = 不画刻度，回到旧的两栏布局；
-        [(label, positions, color), …] = 手工指定刻度行。
-    """
-    import matplotlib.pyplot as plt
+def _fit_bragg_rows(result, bragg):
+    """`plot_fit` / `draw_fit` 共用的布拉格刻度行。"""
     rows = []
     if bragg == "auto":
         if result.peak_tth is not None and len(result.peak_tth):
@@ -203,9 +189,19 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
     elif bragg:
         rows = [(str(label), np.asarray(pos, dtype=float), color)
                 for label, pos, color in bragg]
+    return rows
 
+
+def draw_fit(fig, result, title, zoom=None, exclude_ranges=None,
+             bragg="auto"):
+    """在已有 `Figure` 上画论文式拟合图（GUI 与 `plot_fit` 共用）。
+
+    与 `plot_fit` 的布局和标注完全一致；区别只是不新建 figure、不保存、
+    不关闭——调用方（Qt 画布）自己决定何时重画/存盘。
+    """
+    rows = _fit_bragg_rows(result, bragg)
+    fig.clear()
     if rows:
-        fig = plt.figure(figsize=(11.5, 7.6))
         gs = fig.add_gridspec(3, 1, height_ratios=[3.2, 0.95, 0.55],
                               hspace=0.07)
         ax = fig.add_subplot(gs[0])
@@ -214,7 +210,6 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         ax.tick_params(labelbottom=False)
         axr.tick_params(labelbottom=False)
     else:
-        fig = plt.figure(figsize=(11.5, 6.5))
         gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 0.95],
                               hspace=0.07)
         ax = fig.add_subplot(gs[0])
@@ -295,7 +290,29 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         ins.set_title(f"zoom {lo:g}–{hi:g}°", fontsize=7.5, pad=3)
         for side in ins.spines.values():
             side.set_color("0.7")
+    return fig
 
+
+def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
+             bragg="auto"):
+    """拟合结果图（论文式布局，2026-10-23 起为默认画法）。
+
+    三栏：观测点 / 计算线 / 背景虚线 → obs−calc 差值 → 布拉格峰位刻度
+    （每相一行）。`result` 是 `FitResult`（鸭子类型即可：tth / y_obs /
+    y_calc / background / residual / rwp / rp / peak_tth）。
+    zoom 给 (lo, hi) 时在上图里嵌放大窗；exclude_ranges 把排除区画灰带。
+
+    bragg：
+        "auto"（默认）= 用 `result.peak_tth`（主相，`phase_label` 命名）
+            和 `result.extra_peak_tth`（第二相）自动生成刻度行；
+        None = 不画刻度，回到旧的两栏布局；
+        [(label, positions, color), …] = 手工指定刻度行。
+    """
+    import matplotlib.pyplot as plt
+    rows = _fit_bragg_rows(result, bragg)
+    fig = plt.figure(figsize=(11.5, 7.6 if rows else 6.5))
+    draw_fit(fig, result, title, zoom=zoom,
+             exclude_ranges=exclude_ranges, bragg=bragg)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
     return out_path

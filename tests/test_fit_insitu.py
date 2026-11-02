@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import fit_insitu as fi  # noqa: E402
 
 
-def _result(*, success=True, rwp=2.0, rich_a=10.35):
+def _result(*, success=True, rwp=2.0, rich_a=10.35, poor_a=10.17):
     return SimpleNamespace(
         success=success, rwp=rwp,
         scale=2.0, rp=1.0,
@@ -29,7 +29,7 @@ def _result(*, success=True, rwp=2.0, rich_a=10.35):
         peak_table_norm=250.0,
         params={"LMFP_poor:scale": 1.0,
                 "a": rich_a, "b": 6.02, "c": 4.70,
-                "LMFP_poor:a": 10.17, "LMFP_poor:b": 5.82,
+                "LMFP_poor:a": poor_a, "LMFP_poor:b": 5.82,
                 "LMFP_poor:c": 4.78, "Al:a": 4.061},
         stderr={"a": 0.001, "b": 0.002, "c": 0.003,
                 "LMFP_poor:a": 0.01, "LMFP_poor:b": 0.02,
@@ -160,6 +160,27 @@ class TestInSituBatch(unittest.TestCase):
         self.assertAlmostEqual(batch.seed["rich"][0], 10.35,
                                msg="坏帧不许改下一帧的种子")
 
+    def test_seed_relocks_after_two_consistent_jumps(self):
+        """晶胞跳变后连续 2 帧一致 → 接受新种子（两相区死锁修复）。"""
+        from unittest import mock
+        from xrd_toolkit.simulation import insitu
+        batch = self._batch()
+        timers = {"load": 0.1, "integrate": 0.2, "bg": 0.0,
+                  "fit": 1.0, "total": 1.3}
+        # 帧 1 与旧种子一致；帧 2/3 都是新晶胞 9.87
+        seq = [(_result(poor_a=10.17), timers),
+               (_result(poor_a=9.87), timers),
+               (_result(poor_a=9.87), timers)]
+        with mock.patch.object(insitu, "_fit_one", side_effect=seq):
+            batch.fit_frame(Path("frame_001.tif"))
+            batch.fit_frame(Path("frame_002.tif"))
+            self.assertAlmostEqual(batch.seed["poor"][0], 10.17,
+                                   msg="单帧跳变不立刻接受")
+            batch.fit_frame(Path("frame_003.tif"))
+        self.assertAlmostEqual(batch.seed["poor"][0], 9.87)
+        self.assertIsNone(batch.pending_seed)
+        self.assertEqual(batch.pending_count, 0)
+
 
 class TestStatus(unittest.TestCase):
     def setUp(self):
@@ -194,6 +215,46 @@ class TestStatus(unittest.TestCase):
                          "cell_jump")
         self.assertEqual(self._status(_result(), rich_cell=moved,
                                       check_cells=False), "ok")
+
+    def test_cell_jump_wins_over_ok_soft(self):
+        """两相区 exit flag=False 且晶胞跳了：应该报 cell_jump。"""
+        moved = (10.55, 6.02, 4.70)
+        self.assertEqual(
+            self._status(_result(success=False), rich_cell=moved),
+            "cell_jump")
+
+
+class TestCompoundStarts(unittest.TestCase):
+    def setUp(self):
+        from xrd_toolkit.simulation import insitu
+        self.insitu = insitu
+
+    def _res(self, rwp, rich_a, poor_a):
+        return SimpleNamespace(
+            rwp=rwp,
+            params={"a": rich_a, "b": 6.0, "c": 4.71,
+                    "LMFP_poor:a": poor_a,
+                    "LMFP_poor:b": 5.81,
+                    "LMFP_poor:c": 4.78})
+
+    def test_lower_rwp_wins(self):
+        seed = {"rich": (10.30, 6.0, 4.71),
+                "poor": (10.10, 5.81, 4.78)}
+        biased = self._res(2.62, 10.28, 10.13)
+        physical = self._res(2.30, 10.25, 9.87)
+        self.assertIs(self.insitu._choose_fit(biased, physical, seed),
+                      physical)
+        self.assertIs(self.insitu._choose_fit(physical, biased, seed),
+                      physical)
+
+    def test_tie_prefers_smaller_cell_change(self):
+        # 76 帧：Rwp 差不多（2.28 vs 2.30），取离上一帧种子更近的解
+        seed = {"rich": (10.26, 6.0, 4.72),
+                "poor": (9.85, 5.81, 4.79)}
+        old = self._res(2.28, 10.28, 10.09)
+        smoother = self._res(2.30, 10.27, 10.04)
+        self.assertIs(self.insitu._choose_fit(old, smoother, seed),
+                      smoother)
 
 
 class TestExtraPhases(unittest.TestCase):

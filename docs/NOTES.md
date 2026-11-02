@@ -296,27 +296,40 @@ Quick start: the Mask chapter of `docs/使用说明.html` (section 8). Tests: `t
 `Al` (a=4.061 Å fixed, per-reflection intensities). The instrument is fixed
 from a LaB₆ Le Bail fit; the background is a sliding baseline + 0.25°
 piecewise correction + curvature penalty. max_nfev is 120 for the first
-frame and 40 afterwards; each frame inherits the previous usable seed.
+frame and 40 afterwards. Since 2026-11-03 each frame runs **two starts**
+(previous seed + CIF end-member) and keeps the lower Rwp; when the two are
+within 0.05% it keeps the solution with the smaller cell change. After a
+cell jump, two consecutive frames on the same new cell re-lock the seed
+(this removes the spurious 44/46/48/49 jumps).
 
 - Fraction: `A_p = scale_p × ΣI_p × norm_p / 100`, `f_rich = A_r/(A_r+A_p)`;
   this is a **relative scattering intensity**, not wt%.
-- Results: 81/81 usable; Rwp 2.10–2.62%; f_rich 0.917 (first) → 0.042
-  (frame 45) → 0.707 (last); strict ok 32, `ok_soft` 45, `cell_jump` 4.
+- Results (2026-11-03 two-start run): 81/81 usable; Rwp 2.10–2.35%; f_rich
+  0.917 (first) → 0.042 (frame 45) → 0.707 (last); strict ok 32,
+  `ok_soft` 47, `cell_jump` 2 (frames 27/28, the first poor-cell correction;
+  the old frame-35 step is gone). poor_a is 10.16 before frame 27 and
+  9.88→9.85 afterwards.
 - Fraction esd (linear block): ±0.008/±0.036/±0.015 at frames 1/45/81; at
   frame 45 the rich phase sits on its cell lower bound, so only a ~4–13%
   interval is quoted.
 - Model-independent check: the low-angle (200) doublet centroid moves
-  1.352→1.419→1.359°, R²=0.967 against f_poor
+  1.352→1.420→1.360°, R²=0.978 against f_poor
   (`scripts/check_insitu_peaks.py`).
-- GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`): wt% trend
-  agrees (0.900/0.178/0.818 vs 0.917/0.042/0.707); majority-phase a/c within
-  ~2 esd; minority-phase cells can stay near the seed. Refining cells on the
-  shipped P1-expanded CIFs crashes GSAS-II's profile code, so the script
-  restores Pnma with pymatgen and verifies peaks first.
-- Efficiency: 685.5 s (11.4 min) for 81 frames; fit 8.34 s (98.6%); ~2.4 h
-  for 1000 frames.
+- GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`): phase-fraction
+  trend agrees (0.900/0.178/0.818 vs 0.917/0.042/0.707); **majority-phase**
+  cells agree within ~2 esd (rich at frame 1, poor at frame 45), but
+  **minority-phase** (<50%) cells are still pulled toward the majority
+  (ours poor_a 10.17/10.12 at frames 1/81 vs GSAS-II 9.845/9.815). The
+  trend/summary plots therefore draw solid cell markers only when that
+  phase is ≥50%; faded markers are minority estimates, not structural
+  evidence. Refining cells on the shipped P1-expanded CIFs crashes GSAS-II's
+  profile code, so the script restores Pnma with pymatgen and verifies peaks
+  first.
+- Efficiency: 1384.5 s (23.1 min) for 81 frames; fit 16.97 s (two starts);
+  ~4.8 h for 1000 frames.
 - Plot: the 4-panel from `scripts/plot_insitu_summary.py`
-  (`outputs/insitu/`).
+  (`outputs/insitu/`); solid cell markers = phase ≥50%, faded = minority
+  estimate.
 
 ## Batches, products and the file bar
 
@@ -390,7 +403,7 @@ No processing is stated too (`chain: none` + `cut: 0 points removed`) — there 
 - **Cell refinement for all seven crystal systems** (2026-10-31) — `simulation/cell_refine.py` and `scripts/refine_cell.py`: enumerate hkl, match observed peaks to unique d values (Hungarian + coarse scale scan), then least-squares under the crystal-system constraints (cubic a; tetragonal/hexagonal a,c; rhombohedral a,α; orthorhombic a,b,c; monoclinic one angle; triclinic all six) with an optional 2θ zero. The phase workbench `[精修晶胞]` runs it on the selected CIF and shows a copyable report (cell, esd, RMS, per-peak hkl).
 - **Refinement workbench in the GUI** (2026-10-30) — the toolbar `[精修]` opens a central MDI workbench (same pattern as the Mask editor): pick one finished 1D panel and one CIF from `data/structures` (or open any CIF), choose what to refine (cell a/b/c, instrument U/V/W/X/Y, Size/Mustrain, temperature factor B, or Le Bail with free intensities) plus the background, and run the same `simulation.fit.fit_pattern` engine the CLI uses on a background thread. The result is an observed/calculated/background plot with an obs−calc residual and Bragg ticks, an Rwp/Rp readout, a parameter table with initial/fitted/esd columns and the full report; the figure can be saved as PNG/PDF and the report copied. Cell refinement is trimmed to the crystal system automatically (cubic → a only; non-orthogonal → skipped, with a note in the status line). Closing the workbench only hides it, so the curve, CIF and last result survive; it is mutually exclusive with calibration, Mask and the phase workbench. Extra-phase CIFs (e.g. an Al substrate) can be added on the left with free per-reflection intensities, which adds a Bragg row and an `Al:scale` parameter. After refining a LaB₆ pattern, `[存为仪器基线]` stores the fitted instrument profile; a later sample fit can tick 「固定仪器」 to fix zero/U/V/W/X/Y (a wavelength mismatch is refused with a status note). `[采纳为图面板]` turns the fit into an ordinary 1D panel (observed + calculated + background, processing off, overlaid by curve fingerprint) that participates in saving and comparison.
 - **Phase-identification workbench in the GUI** (2026-10-30) — the toolbar `[物相]` opens a central workbench: pick a finished 1D panel and a CIF library directory (default `data/structures`, or any folder), optionally list allowed elements (e.g. `Li Mn Fe P O`) to prune the chemistry, and run the screen on a background thread. It finds the observed peaks, scans every CIF in the library with a 0.96–1.05 cell-scale sweep and ranks them by coverage + 0.2 × purity (the same scoring as `scripts/analyze_pattern.py`, now shared through `simulation.phase_search`); selecting a row overlays that phase's calculated peak positions on the observed curve, and `[送去精修]` carries the curve and CIF into the refinement workbench with both drop-downs preselected. `Al_metal.cif` is excluded from the primary-phase pool and only handled as the substrate phase. The candidate table supports multi-select (each selected phase overlays in its own colour), `[打开 1D…]` loads a two-column text curve directly, and `[导出到默认位置]` writes the ranking to CSV with the library, element filter and wavelength, straight to the default output directory (no save dialog, 2026-11-02).
-- **In-situ batch workbench in the GUI** (2026-10-30) — toolbar `[原位]` brings the 81-frame three-phase batch into the GUI: pick the frame folder (default `~/Data/XRD/lmfpdata`), mask (default `outputs/masks/lmfp1_lab6_mask.npy`), the rich/poor/Al CIFs, 2θ range and points, iteration budgets and a frame limit. Preparation (LaB₆ instrument + structures) runs in the background, then each frame is fitted in a chained background task; rows land in a table (Rwp, f_rich, both cells, timing), the trend plot shows phase fractions (with esd) over Rwp, the CSV is rewritten after each frame, and `fit_summary.txt` is written at the end. Stop finishes the current frame and keeps completed rows. Fractions remain relative scattering-intensity fractions, not wt%. The engine lives in `simulation.insitu` and is shared with `scripts/fit_insitu.py`.
+- **In-situ batch workbench in the GUI** (2026-10-30; four views added 2026-11-02) — toolbar `[原位]` brings the 81-frame three-phase batch into the GUI: pick the frame folder (default `~/Data/XRD/lmfpdata`), mask (default `outputs/masks/lmfp1_lab6_mask.npy`), the rich/poor/Al CIFs, 2θ range and points, iteration budgets and a frame limit. Preparation (LaB₆ instrument + structures) runs in the background, then each frame is fitted in a chained background task; rows land in a table (Rwp, f_rich, both cells, timing). The right side now has four views: trends (fractions / rich cell / poor cell / Rwp), summary (status markers + cell esd + charge/discharge shading), single-frame fit (double-click a row for observed/calculated/background + residual + Bragg ticks; copy report), and model-independent ((200) doublet centroid/area vs f_poor). `[保存当前图…]` redraws at the script figure size before saving. The CSV is rewritten after each frame, and `fit_summary.txt` is written at the end. Stop finishes the current frame and keeps completed rows. Fractions remain relative scattering-intensity fractions, not wt%. The engine lives in `simulation.insitu` and is shared with `scripts/fit_insitu.py`; the four views live in `simulation.insitu_plots`.
 - **Geometric calibration on a standard sample** — pyFAI `GeometryRefinement` against the selected pyFAI calibrant (LaB₆ by default, pyFAI values, certificate not recorded; CeO₂, Si, α-Al₂O₃ and other common standards are built in), starting from an FFT cross-correlation estimate of the direct-beam position (accuracy < 1 px). Example result: distance refined to 1595.80 mm (`lmfp1_lab6`). Every run reports **engine metrics the fit residual cannot**: median ring-position deviation, how many of the selected rings came out complete, and the dispersion of the standard's d values back-solved ring by ring — a run can report a 0.0000° residual while the rings sit 10 px off the real ones.
 - **Automatic 2θ range** — `--range auto` (default) takes the lower bound from the material's standard and finds the upper bound where the data starts failing, judged by *relative arc coverage* (the ring's fraction of azimuth inside the detector falling below 50 % of its own maximum ≈ 7.9° for a centred beam) rather than a fixed threshold, so one criterion adapts to any beam placement.
 - **Sector-wise waterfall** — N azimuthal sectors (default 36) integrated separately; the stacked raw-intensity plot reveals preferred orientation and large-grain spotiness, and visualises the detector-clipping geometry. Every row shares one height (the overall peak × 0.7 — no per-sector rescaling, so a taller peak really is a stronger sector), and the GUI version runs the processing chain per sector: cut the giant peak that squashes everything else and the weak sectors become readable.

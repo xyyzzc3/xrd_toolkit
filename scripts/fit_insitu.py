@@ -12,7 +12,9 @@
 流程：
   1. LaB6 标样定 zero/U/V/W/X/Y（之后固定，逐帧不再精修峰形）；
   2. 每帧：读图 → mask → 1D 积分 → 自动基线；
-  3. 第一帧用较多迭代充分收敛；后续帧继承前一帧的 zero 与两相晶胞；
+  3. 第一帧用较多迭代充分收敛；后续帧从「上一帧种子」和「CIF 端元」
+     各跑一次（2026-11-03 双起点），取 Rwp 更低者；晶胞跳变后连续
+     2 帧落在同一个新晶胞时重锁种子；
   4. 不收敛/高 Rwp/晶胞跳变的帧标异常，**不中断**，下一帧仍用上一个
      好种子；
   5. 输出 CSV（帧号、相分数、两相晶胞、Rwp/Rp、状态、分段耗时）、
@@ -63,31 +65,10 @@ def _trend_figure(outdir, rows):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    x = [r["frame"] for r in good]
-    fig, axes = plt.subplots(2, 2, figsize=(11, 7))
-    ax = axes[0, 0]
-    ax.plot(x, [r["f_rich"] for r in good], "o-", ms=2.5, label="LMFP rich")
-    ax.plot(x, [r["f_poor"] for r in good], "s-", ms=2.5, label="LMFP poor")
-    ax.set_ylabel("relative fraction")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.25, linestyle=":")
-    for i, key in enumerate(("rich", "poor")):
-        ax = axes[0, 1] if i == 0 else axes[1, 0]
-        for j, axis in enumerate(("a", "b", "c")):
-            ax.plot(x, [r[f"{key}_{axis}"] for r in good], "o-", ms=2.0,
-                    label=axis)
-        ax.set_ylabel(f"{key} cell (Å)")
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.25, linestyle=":")
-    ax = axes[1, 1]
-    ax.plot(x, [r["rwp"] for r in good], "o-", ms=2.5, color="tab:red")
-    ax.set_ylabel("Rwp (%)")
-    ax.set_xlabel("frame")
-    ax.grid(alpha=0.25, linestyle=":")
-    for ax in axes.ravel():
-        ax.tick_params(labelsize=7)
-    fig.suptitle("LMFP in-situ three-phase fit trends", fontsize=11)
-    fig.tight_layout()
+    from xrd_toolkit.simulation.insitu_plots import draw_trends
+
+    fig = plt.figure(figsize=(11, 7))
+    draw_trends(fig, rows)
     path = outdir / "insitu_trends.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)

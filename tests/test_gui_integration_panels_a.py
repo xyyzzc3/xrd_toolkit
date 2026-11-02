@@ -1616,6 +1616,31 @@ class TestSlimPanelChrome(unittest.TestCase):
         finally:
             w.close()
 
+    def test_close_maximized_panel_keeps_main_window(self):
+        """最大化后关闭：先还原再摘除，主窗口保持可见/非最小化。
+
+        2026-11-03 用户实测：1D 图双击占满中央区再关，会弹回 Mac 桌面。
+        offscreen 看不到 Space，但先把“关闭前必须先 showNormal”钉住。
+        """
+        w = create_window()
+        try:
+            w.show()
+            w.resize(1400, 900)
+            dock = self._open_1d(w)
+            dock.showMaximized()
+            QApplication.processEvents()
+            self.assertTrue(dock.isMaximized())
+            content = gui_panel_state._content(dock)
+            content.bar_close_btn.click()
+            QApplication.processEvents()
+            self.assertNotIn("1D|" + self.PATH, w.plot_docks)
+            self.assertTrue(w.isVisible())
+            self.assertFalse(w.isMinimized())
+            self.assertFalse(w.isFullScreen())
+        finally:
+            w.hide()
+            w.close()
+
     def test_pop_out_keeps_native_frame_and_retract_restores(self):
         """弹出 = 系统窗口（保留原生边框管窗口管理），收回 = 再 frameless。"""
         w = create_window()

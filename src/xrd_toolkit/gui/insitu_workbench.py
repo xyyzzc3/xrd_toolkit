@@ -8,8 +8,14 @@
 
     选帧目录与 mask → [开始]
     → 后台准备（读三相 CIF + LaB₆ 定仪器，数秒）
-    → 逐帧后台精修：读图 → 积分 → 三相拟合 → 结果进表/趋势图
+    → 逐帧后台精修：读图 → 积分 → 三相拟合 → 结果进表
+    → 右侧四个视图：趋势 / 汇总 / 单帧拟合 / 模型无关
     → 结束写 CSV 与 fit_summary.txt
+
+    单帧拟合（2026-11-02）：双击表格行看这一帧的观测/计算/背景 +
+    残差 + 布拉格刻度；[复制这一帧报告] 调 FitResult.report()。
+    [保存当前图…] 会按脚本同尺寸重画一张再存（Qt 画布会被拉成窗口
+    大小，直接存画布会低分辨率、挤在一起）。
 
 相分数口径：f_rich = A_rich / (A_rich + A_poor)，A_p = scale_p ×
 Σ(table.inten_p) × norm_p / 100，是**相对散射强度分数**；表里另有
@@ -28,8 +34,8 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow, QMenu, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget)
+    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log
@@ -39,9 +45,6 @@ from xrd_toolkit.presets import PROJECT_PRESET
 _COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
             "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
             "poor c", "拟合 s")
-_RICH_COLOR = "#1f5fa8"
-_POOR_COLOR = "#e08a1e"
-_RWP_COLOR = "#c0392b"
 
 
 def _fmt(value, digits=3):
@@ -113,6 +116,16 @@ class InSituWorkbench(QWidget):
         self._task = None
         self._stop = False
         self._index = 0
+        # 单帧拟合视图（2026-11-02）：double-click 表格行时填；只在当前
+        # 会话有效（FitResult 曲线没有持久化）
+        self._fit_frame = None
+        self._fit_res = None
+        self._fit_status = ""
+        self._fit_file = ""
+        self._fit_frich = float("nan")
+        # 模型无关视图的按帧缓存：每次新帧/新批次清空
+        self._mi_rows = None
+        self._mi_len = -1
 
         self._build_ui()
         if self.mask_path is not None:
@@ -267,13 +280,22 @@ class InSituWorkbench(QWidget):
         self.stop_btn.setToolTip("当前帧算完后停，已完成的帧保留")
         self.stop_btn.clicked.connect(self._stop_run)
         left_lay.addWidget(self.stop_btn)
-        self.save_btn = QPushButton("保存趋势图…")
+        self.save_btn = QPushButton("保存当前图…")
+        self.save_btn.setToolTip(
+            "保存当前标签页的图（趋势 / 汇总 / 单帧拟合 / 模型无关）")
         self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self._save_trend)
+        self.save_btn.clicked.connect(self._save_view)
         left_lay.addWidget(self.save_btn)
-        hint = QLabel("f_rich 是相对散射强度分数，看趋势用；wt rich% / "
-                      "wt poor% 是晶态相的 Rietveld 重量分数（Al 单列、"
-                      "不进两相分母）。")
+        self.copy_report_btn = QPushButton("复制这一帧报告")
+        self.copy_report_btn.setToolTip(
+            "复制单帧拟合的完整参数报告（先在表格里双击一帧）")
+        self.copy_report_btn.setEnabled(False)
+        self.copy_report_btn.clicked.connect(self._copy_fit_report)
+        left_lay.addWidget(self.copy_report_btn)
+        hint = QLabel("双击表格行看单帧拟合；f_rich 是相对散射强度分数，"
+                      "看趋势用；wt rich% / wt poor% 是晶态相的 Rietveld "
+                      "重量分数（Al 单列、不进两相分母）。每帧双起点，"
+                      "约 15–20 s/帧；晶胞只在相占多数时可信。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         hint.setMinimumWidth(0)
@@ -284,10 +306,29 @@ class InSituWorkbench(QWidget):
         split.addWidget(left_scroll)
 
         right = QSplitter(Qt.Vertical)
-        self.fig = Figure(figsize=(6.8, 4.2))
+        self.view_tabs = QTabWidget()
+        self.view_tabs.setObjectName("insitu_view_tabs")
+        # figsize 与脚本产物一致：画布缩小显示，[保存当前图…] 仍按
+        # 同一套尺寸/字体出报告图（2026-11-02）。
+        self.fig = Figure(figsize=(11.0, 7.0))
         self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        right.addWidget(self.canvas)
+        self.summary_fig = Figure(figsize=(12.5, 8.0))
+        self.summary_canvas = FigureCanvasQTAgg(self.summary_fig)
+        self.fit_fig = Figure(figsize=(11.5, 7.6))
+        self.fit_canvas = FigureCanvasQTAgg(self.fit_fig)
+        self.mi_fig = Figure(figsize=(15.0, 4.6))
+        self.mi_canvas = FigureCanvasQTAgg(self.mi_fig)
+        for canvas in (self.canvas, self.summary_canvas,
+                       self.fit_canvas, self.mi_canvas):
+            canvas.setSizePolicy(QSizePolicy.Expanding,
+                                 QSizePolicy.Expanding)
+        self.view_tabs.addTab(self.canvas, "趋势")
+        self.view_tabs.addTab(self.summary_canvas, "汇总")
+        self.view_tabs.addTab(self.fit_canvas, "单帧拟合")
+        self.view_tabs.addTab(self.mi_canvas, "模型无关")
+        self.view_tabs.setCurrentIndex(0)
+        self.view_tabs.currentChanged.connect(self._on_view_changed)
+        right.addWidget(self.view_tabs)
 
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(list(_COLUMNS))
@@ -300,6 +341,8 @@ class InSituWorkbench(QWidget):
         self.table.setFrameShape(QFrame.NoFrame)
         self.table.horizontalHeader().setSectionResizeMode(
             QHeaderView.Stretch)
+        self.table.setToolTip("双击一行看这一帧的三相拟合")
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
         right.addWidget(self.table)
@@ -417,6 +460,11 @@ class InSituWorkbench(QWidget):
         self._index = 0
         self.batch = None
         self.table.setRowCount(0)
+        self._clear_fit_view()
+        self._mi_rows = None
+        self._mi_len = -1
+        self.copy_report_btn.setEnabled(False)
+        self.view_tabs.setCurrentIndex(0)
         self._draw_trends()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -492,7 +540,12 @@ class InSituWorkbench(QWidget):
     def _on_frame(self, row):
         self._index += 1
         self._append_row(row)
+        # 任意新帧都会让模型无关缓存失效；趋势图始终跟着更新
+        self._mi_rows = None
+        self._mi_len = -1
         self._draw_trends()
+        if self.view_tabs.currentIndex() != 0:
+            self._refresh_active_view()
         self._write_csv()
         self._set_status(
             f"第 {row['frame']}/{len(self.frames)} 帧：{row['status']}  "
@@ -551,56 +604,113 @@ class InSituWorkbench(QWidget):
             table.setItem(i, col, item)
         table.scrollToBottom()
 
-    def _draw_trends(self):
-        rows = (self.batch.rows if self.batch is not None else [])
-        self.fig.clear()
-        if not rows:
-            ax = self.fig.add_subplot(111)
-            ax.set_axis_off()
-            ax.text(0.5, 0.55, "原位三相批量", ha="center", va="center",
-                    fontsize=15, color="#666666", transform=ax.transAxes)
-            ax.text(0.5, 0.44, "选帧目录，点 [开始]",
-                    ha="center", va="center", fontsize=10, color="#888888",
-                    transform=ax.transAxes)
-            self.canvas.draw_idle()
-            return
-        good = [r for r in rows
-                if np.isfinite(r["f_rich"]) and np.isfinite(r["rwp"])]
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[1.25, 1.0],
-                                   hspace=0.16)
-        ax1 = self.fig.add_subplot(gs[0])
-        ax2 = self.fig.add_subplot(gs[1], sharex=ax1)
-        ax1.tick_params(labelbottom=False)
-        if good:
-            x = [r["frame"] for r in good]
-            ax1.plot(x, [r["f_rich"] for r in good], "o-", ms=2.5,
-                     color=_RICH_COLOR, label="富锂相")
-            ax1.plot(x, [r["f_poor"] for r in good], "s-", ms=2.5,
-                     color=_POOR_COLOR, label="贫锂相")
-            yerr = [r["f_rich_esd"] if np.isfinite(r["f_rich_esd"]) else 0.0
-                    for r in good]
-            if any(yerr):
-                ax1.errorbar(x, [r["f_rich"] for r in good], yerr=yerr,
-                             fmt="none", ecolor=_RICH_COLOR, capsize=2,
-                             alpha=0.6)
-            ax2.plot(x, [r["rwp"] for r in good], "o-", ms=2.5,
-                     color=_RWP_COLOR)
-            if len(x) == 1:
-                # 单帧时 matplotlib 会把 x 轴缩到 1±0.04，看起来像刻度坏了
-                ax2.set_xlim(x[0] - 0.5, x[0] + 0.5)
+    # ── 四个视图：趋势 / 汇总 / 单帧拟合 / 模型无关 ──────────
+    def _on_view_changed(self, _index):
+        self._refresh_active_view()
+
+    def _refresh_active_view(self):
+        index = self.view_tabs.currentIndex()
+        if index == 0:
+            self._draw_trends()
+        elif index == 1:
+            self._draw_summary()
+        elif index == 2:
+            self._draw_fit()
         else:
-            ax1.text(0.5, 0.5, "还没有可用帧", ha="center", va="center",
-                     fontsize=10, color="#888888", transform=ax1.transAxes)
-        ax1.set_ylabel("relative fraction", fontsize=8)
-        ax1.legend(fontsize=8, loc="best")
-        ax1.grid(alpha=0.25, linestyle=":")
-        ax2.set_ylabel("Rwp (%)", fontsize=8)
-        ax2.set_xlabel("frame", fontsize=8)
-        ax2.grid(alpha=0.25, linestyle=":")
-        ax1.tick_params(labelsize=7)
-        ax2.tick_params(labelsize=7)
-        self.fig.subplots_adjust(left=0.10, right=0.98, top=0.95, bottom=0.10)
+            self._draw_model_independent()
+
+    def _draw_trends(self):
+        from xrd_toolkit.simulation.insitu_plots import draw_trends
+        rows = (self.batch.rows if self.batch is not None else [])
+        draw_trends(self.fig, rows)
         self.canvas.draw_idle()
+
+    def _draw_summary(self):
+        from xrd_toolkit.simulation.insitu_plots import draw_summary
+        rows = (self.batch.rows if self.batch is not None else [])
+        draw_summary(self.summary_fig, rows)
+        self.summary_canvas.draw_idle()
+
+    def _fit_title(self):
+        total = len(self.frames) or self._fit_frame
+        return (f"{self._fit_file} — frame {self._fit_frame}/{total}, "
+                f"f_rich={_fmt(self._fit_frich)}, "
+                f"Rwp={self._fit_res.rwp:.2f}% ({self._fit_status})")
+
+    def _draw_fit(self):
+        from xrd_toolkit.simulation.plots import draw_fit
+        self.fit_fig.clear()
+        if self._fit_res is None:
+            ax = self.fit_fig.add_subplot(111)
+            ax.set_axis_off()
+            ax.text(0.5, 0.55, "单帧拟合", ha="center", va="center",
+                    fontsize=15, color="#666666", transform=ax.transAxes)
+            ax.text(0.5, 0.44, "双击表格里的一行看这一帧的拟合",
+                    ha="center", va="center", fontsize=10,
+                    color="#888888", transform=ax.transAxes)
+        else:
+            draw_fit(self.fit_fig, self._fit_res, self._fit_title(),
+                     bragg="auto")
+        self.fit_canvas.draw_idle()
+
+    def _draw_model_independent(self):
+        from xrd_toolkit.simulation.insitu_plots import (
+            draw_model_independent, model_independent_rows)
+        fitted = (self.batch.fitted if self.batch is not None else [])
+        if self._mi_rows is None or self._mi_len != len(fitted):
+            self._mi_rows = model_independent_rows(fitted)
+            self._mi_len = len(fitted)
+        draw_model_independent(self.mi_fig, self._mi_rows)
+        self.mi_canvas.draw_idle()
+
+    def _clear_fit_view(self):
+        self._fit_frame = None
+        self._fit_res = None
+        self._fit_status = ""
+        self._fit_file = ""
+        self._fit_frich = float("nan")
+        self.copy_report_btn.setEnabled(False)
+        self._draw_fit()
+
+    def _frame_entry(self, frame):
+        if self.batch is None:
+            return None
+        # 快照：后台线程可能正往 fitted 追加当前帧
+        for entry in list(self.batch.fitted):
+            if entry[0] == frame:
+                return entry
+        return None
+
+    def _show_frame_fit(self, frame):
+        entry = self._frame_entry(frame)
+        if entry is None:
+            self._set_status(f"第 {frame} 帧没有拟合结果（看状态列）")
+            return
+        i, path, res, f_rich, status = entry
+        self._fit_frame = i
+        self._fit_res = res
+        self._fit_status = status
+        self._fit_file = Path(path).name
+        self._fit_frich = float(f_rich)
+        self.copy_report_btn.setEnabled(True)
+        self.view_tabs.setCurrentWidget(self.fit_canvas)
+        self._draw_fit()
+        self._set_status(
+            f"第 {i} 帧：{status}  Rwp {res.rwp:.2f}%  "
+            f"f_rich {_fmt(f_rich)}")
+
+    def _on_cell_double_clicked(self, row, _col):
+        if self.batch is None or row < 0 or row >= len(self.batch.rows):
+            return
+        self._show_frame_fit(self.batch.rows[row]["frame"])
+
+    def _copy_fit_report(self):
+        if self._fit_res is None:
+            self._set_status("先在表格里双击一帧")
+            return
+        QApplication.clipboard().setText(self._fit_res.report())
+        self._set_status("已复制单帧拟合报告")
+        _log(self.main, f"已复制第 {self._fit_frame} 帧拟合报告")
 
     # ── 导出与复制 ──────────────────────────────────────────
     @property
@@ -621,23 +731,60 @@ class InSituWorkbench(QWidget):
         except OSError as err:                     # noqa: BLE001
             _log(self.main, f"CSV 写入失败：{user_error_text(err)}")
 
-    def _save_trend(self):
-        if self.batch is None or not self.batch.rows:
-            self._set_status("还没有趋势图")
-            return
+    def _save_view(self):
+        """按脚本同尺寸/同布局重画一张再存——画布会被 Qt 拉成窗口大小，
+        直接存画布会得到低分辨率、挤在一起的图（2026-11-02 实测）。"""
+        from xrd_toolkit.simulation.insitu_plots import (
+            draw_model_independent, draw_summary, draw_trends,
+            model_independent_rows)
+        from xrd_toolkit.simulation.plots import draw_fit
+
+        index = self.view_tabs.currentIndex()
+        if index == 0:
+            if self.batch is None or not self.batch.rows:
+                self._set_status("还没有趋势图")
+                return
+            fig = Figure(figsize=(11.0, 7.0))
+            draw_trends(fig, self.batch.rows)
+            name = "insitu_trends"
+        elif index == 1:
+            if self.batch is None or not self.batch.rows:
+                self._set_status("还没有汇总图")
+                return
+            fig = Figure(figsize=(12.5, 8.0))
+            draw_summary(fig, self.batch.rows)
+            name = "insitu_summary"
+        elif index == 2:
+            if self._fit_res is None:
+                self._set_status("先在表格里双击一帧")
+                return
+            fig = Figure(figsize=(11.5, 7.6))
+            draw_fit(fig, self._fit_res, self._fit_title(), bragg="auto")
+            name = f"insitu_fit_frame_{self._fit_frame:03d}"
+        else:
+            if self.batch is None or not self.batch.fitted:
+                self._set_status("还没有模型无关数据")
+                return
+            if self._mi_rows is None:
+                self._mi_rows = model_independent_rows(self.batch.fitted)
+                self._mi_len = len(self.batch.fitted)
+            fig = Figure(figsize=(15.0, 4.6))
+            draw_model_independent(fig, self._mi_rows)
+            name = "insitu_model_independent"
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        default = Path(self.outdir) / f"insitu_trends_{stamp}.png"
+        default = Path(self.outdir) / f"{name}_{stamp}.png"
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存趋势图", str(default), "PNG (*.png);;PDF (*.pdf)")
+            self, "保存当前图", str(default), "PNG (*.png);;PDF (*.pdf)",
+            options=QFileDialog.DontUseNativeDialog)
         if not path:
             return
         try:
-            self.fig.savefig(path, dpi=200)
+            fig.savefig(path, dpi=200)
         except Exception as err:                   # noqa: BLE001
             self._set_status(f"保存失败：{user_error_text(err)}")
             return
         self._set_status(f"已保存 {Path(path).name}")
-        _log(self.main, f"原位趋势图已保存：{path}")
+        _log(self.main, f"原位当前图已保存：{path}")
 
     def _table_tsv(self, selected_only=False):
         model = self.table.selectionModel()
@@ -664,11 +811,35 @@ class InSituWorkbench(QWidget):
         return n
 
     def _table_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            row = self.table.currentRow()
+        frame = None
+        if (self.batch is not None and 0 <= row < len(self.batch.rows)):
+            frame = self.batch.rows[row]["frame"]
+        has_fit = frame is not None and self._frame_entry(frame) is not None
+
         menu = QMenu(self.table)
+        act_view = menu.addAction("查看这一帧拟合")
+        act_save = menu.addAction("保存这一帧拟合图…")
+        act_report = menu.addAction("复制这一帧报告")
+        act_view.setEnabled(has_fit)
+        act_save.setEnabled(has_fit)
+        act_report.setEnabled(has_fit)
+        menu.addSeparator()
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if chosen is act_sel:
+        if chosen is act_view:
+            self._show_frame_fit(frame)
+        elif chosen is act_save:
+            self._show_frame_fit(frame)
+            if self._fit_res is not None:
+                self._save_view()
+        elif chosen is act_report:
+            self._show_frame_fit(frame)
+            self._copy_fit_report()
+        elif chosen is act_sel:
             self._copy_table(True)
         elif chosen is act_all:
             self._copy_table(False)

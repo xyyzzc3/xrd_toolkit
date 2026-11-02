@@ -59,6 +59,37 @@ class TestInsituSummary(unittest.TestCase):
                 import matplotlib.pyplot as plt
                 plt.close(fig)
 
+    def test_two_frames_do_not_collapse_axes(self):
+        """只有 2 帧时标注点容易跑到 x 范围外，tight_layout 会把坐标轴
+        压成一条缝（2026-11-02 在 GUI 2 帧预览里发现）。"""
+        rows = []
+        for i, fr in ((1, 0.91), (2, 0.90)):
+            rows.append({
+                "frame": i, "status": "ok", "usable": "True",
+                "rwp": 2.1, "rp": 1.2, "f_rich": fr, "f_poor": 1.0 - fr,
+                "rich_a": 10.35, "rich_b": 6.02, "rich_c": 4.70,
+                "rich_a_esd": 0.001, "rich_b_esd": 0.001,
+                "rich_c_esd": 0.001,
+                "poor_a": 10.0, "poor_b": 5.85, "poor_c": 4.78,
+                "poor_a_esd": 0.01, "poor_b_esd": 0.01,
+                "poor_c_esd": 0.01,
+            })
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = Path(td) / "fit.csv"
+            with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, fieldnames=FIELDS)
+                w.writeheader()
+                w.writerows(rows)
+            fig, axes = ps.plot_summary(
+                csv_path, Path(td) / "summary.png", dpi=80)
+            try:
+                widths = [ax.get_position().width for ax in axes]
+                self.assertGreater(min(widths), 0.2,
+                                   f"坐标轴被压扁了：{widths}")
+            finally:
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,8 +8,10 @@
   * Al         集流体参考相（立方，a 固定 4.061 Å；峰强逐反射自由）
 
 每帧：读图 → mask → 1D 积分 → 自动基线 → 三相结构精修。
-第一帧用较多迭代充分收敛；后续帧继承前一帧的零点和两相晶胞；不收敛/
-高 Rwp/晶胞跳变的帧标异常，不中断，下一帧仍用上一个好种子。
+第一帧用较多迭代充分收敛；后续帧从上一帧种子和 CIF 端元各跑一次
+（2026-11-03 双起点），取 Rwp 更低者；Rwp 打平时取晶胞变化小的解。
+不收敛/高 Rwp/晶胞跳变的帧标异常，不中断；晶胞跳变后连续 2 帧
+落在同一个新晶胞时重锁种子，避免两相区一跳就永远用旧种子。
 
 相分数口径（2026-10-27 与用户定的第一版）：
   A_p = scale_p × Σ(table.inten_p) × table.norm_p / 100
@@ -50,6 +52,13 @@ FRAME_NFEV = 40
 # 异常判据：晶胞相对上一好种子跳超过这么多 Å 就标记（不中止）
 CELL_JUMP_RICH = 0.12
 CELL_JUMP_POOR = 0.25
+# 双起点（2026-11-03）：种子起点 + CIF 端元起点。Rwp 差在这以内时，
+# 取晶胞变化更小的解（避免为了 0.01% 的 Rwp 去追一个跳变解）。
+ROBUST_TIE_RWP = 0.05
+# 连续 N 帧落在同一个新晶胞（容差 Å）时接受为新种子。原来只认“和旧种子
+# 差 < CELL_JUMP_*”，两相区一跳就永远不更新，44/46/48/49 会重复报假跳。
+PENDING_CELL_TOL = 0.02
+PENDING_FRAMES = 2
 # 物理晶胞边界：贫锂相不能漂到比富锂还大（pilot 里 b 曾冲到 6.83）
 CELL_BOUNDS = {
     "a": (10.20, 10.50), "b": (5.90, 6.15), "c": (4.65, 4.76),
@@ -184,9 +193,71 @@ def _cell(result, label=None):
         return (float("nan"),) * 3
 
 
+def _fit_initial(inst, rich_cell, poor_cell):
+    """一帧的初值：仪器 zero/U/V/W/X/Y + 两相晶胞。"""
+    return {
+        "zero": float(inst.params["zero"]),
+        "u": float(inst.params["u"]), "v": float(inst.params["v"]),
+        "w": float(inst.params["w"]), "x": float(inst.params["x"]),
+        "y": float(inst.params["y"]),
+        "a": float(rich_cell[0]), "b": float(rich_cell[1]),
+        "c": float(rich_cell[2]),
+        "size_um": 0.093, "mustrain": 0.0, "b_iso": 0.0,
+        "LMFP_poor:a": float(poor_cell[0]),
+        "LMFP_poor:b": float(poor_cell[1]),
+        "LMFP_poor:c": float(poor_cell[2]),
+    }
+
+
+def _cells_close(a, b, tol):
+    return all(abs(float(x) - float(y)) <= tol for x, y in zip(a, b))
+
+
+def _cell_change(res, seed):
+    """相对上一帧种子的晶胞变化（只用于 Rwp 打平时的取舍）。"""
+    rich_cell = _cell(res)
+    poor_cell = _cell(res, "LMFP_poor")
+    return (sum(abs(a - b) for a, b in zip(rich_cell, seed["rich"]))
+            + sum(abs(a - b) for a, b in zip(poor_cell, seed["poor"])))
+
+
+def _choose_fit(res_seed, res_cif, seed):
+    """双起点选择：Rwp 优先；差 ≤ ROBUST_TIE_RWP 时取晶胞变化小的。"""
+    candidates = [r for r in (res_seed, res_cif)
+                  if r is not None and math.isfinite(float(r.rwp))]
+    if not candidates:
+        return res_seed if res_seed is not None else res_cif
+    best = min(candidates, key=lambda r: float(r.rwp))
+    if (len(candidates) == 2
+            and abs(float(res_seed.rwp) - float(res_cif.rwp))
+            <= ROBUST_TIE_RWP):
+        best = min(candidates, key=lambda r: _cell_change(r, seed))
+    return best
+
+
+def _fit_once(t, y, bg, rich, poor, al, lam, inst, rich_cell, poor_cell,
+              max_nfev):
+    """从一个晶胞起点跑一次三相结构精修。"""
+    return fit_pattern(
+        rich, t, y, wavelength=lam, b_iso=0.0, background=bg,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        weights="poisson", cell_refine=True, intensity_poly=2,
+        extra_phases=_extra_phases(poor, al, poor_cell),
+        phase_label="LMFP_rich", free=("zero", "a", "b", "c"),
+        initial=_fit_initial(inst, rich_cell, poor_cell),
+        stages=[("zero", "a", "b", "c",
+                 "LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")],
+        bounds=CELL_BOUNDS, max_nfev=max_nfev)
+
+
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
              max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
-    """一帧：读图/积分/背景/三相结构精修 + 计时。"""
+    """一帧：读图/积分/背景 + **双起点**三相精修 + 计时。
+
+    2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
+    拉偏”的局部极小（frame 34 实测 Rwp 2.62 / poor_a 10.13；从 CIF 端元
+    再起一次是 2.30 / 9.87）。两个起点都跑，按 `_choose_fit` 取更好的。
+    """
     timers = {}
     t0 = time.perf_counter()
     img = load_diffraction_image(str(path))
@@ -198,29 +269,22 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     t2 = time.perf_counter()
     bg = estimate_baseline_sliding(t, y, 0.2)
     timers["bg"] = time.perf_counter() - t2
-    init = {
-        "zero": float(inst.params["zero"]),
-        "u": float(inst.params["u"]), "v": float(inst.params["v"]),
-        "w": float(inst.params["w"]), "x": float(inst.params["x"]),
-        "y": float(inst.params["y"]),
-        "a": float(seed["rich"][0]), "b": float(seed["rich"][1]),
-        "c": float(seed["rich"][2]),
-        "size_um": 0.093, "mustrain": 0.0, "b_iso": 0.0,
-        "LMFP_poor:a": float(seed["poor"][0]),
-        "LMFP_poor:b": float(seed["poor"][1]),
-        "LMFP_poor:c": float(seed["poor"][2]),
-    }
+
+    seed_rich = tuple(float(x) for x in seed["rich"])
+    seed_poor = tuple(float(x) for x in seed["poor"])
+    cif_rich = tuple(float(x) for x in rich.lattice.abc)
+    cif_poor = tuple(float(x) for x in poor.lattice.abc)
+
     t3 = time.perf_counter()
-    res = fit_pattern(
-        rich, t, y, wavelength=lam, b_iso=0.0, background=bg,
-        background_knots=0.25, background_smooth=BG_SMOOTH,
-        weights="poisson", cell_refine=True, intensity_poly=2,
-        extra_phases=_extra_phases(poor, al, seed["poor"]),
-        phase_label="LMFP_rich", free=("zero", "a", "b", "c"),
-        initial=init,
-        stages=[("zero", "a", "b", "c",
-                 "LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")],
-        bounds=CELL_BOUNDS, max_nfev=max_nfev)
+    res_seed = _fit_once(t, y, bg, rich, poor, al, lam, inst,
+                         seed_rich, seed_poor, max_nfev)
+    res_cif = None
+    # 第一帧种子就是 CIF，不用白跑一遍；其余帧都跑双起点。
+    if not (_cells_close(seed_rich, cif_rich, 1e-4)
+            and _cells_close(seed_poor, cif_poor, 1e-4)):
+        res_cif = _fit_once(t, y, bg, rich, poor, al, lam, inst,
+                            cif_rich, cif_poor, max_nfev)
+    res = _choose_fit(res_seed, res_cif, seed)
     timers["fit"] = time.perf_counter() - t3
     timers["total"] = time.perf_counter() - t0
     return res, timers
@@ -233,7 +297,9 @@ def _status(res, f_rich, rich_cell, poor_cell, seed, max_rwp,
     2026-10-28：`least_squares` 的 success=False 只说明优化器退出标志
     （相变/放电段 max_nfev 撞上限），不等于结果不可用。Rwp 和相分数
     都合格时改标 `ok_soft`，把「严格收敛」和「可用」分开报；真正发散
-    （高 Rwp/无相信号）仍标异常。
+    （高 Rwp/无相信号）仍标异常。2026-11-03：晶胞跳变检查放在
+    `not res.success` 之前——两相区 exit flag=False 的帧如果晶胞也跳了，
+    应该报 `cell_jump`，不能被 `ok_soft` 盖掉。
     """
     if res is None:
         return "error"
@@ -241,13 +307,15 @@ def _status(res, f_rich, rich_cell, poor_cell, seed, max_rwp,
         return f"high_rwp({res.rwp:.1f}%)"
     if not math.isfinite(f_rich):
         return "no_phase_signal"
-    if not res.success:
-        return "ok_soft"
+    # 先判晶胞跳变，再判优化器退出标志：exit flag=False 的两相区帧
+    # 如果晶胞也跳了，应该报 cell_jump 而不是被 ok_soft 盖掉。
     if check_cells:
         for got, want, lim in ((rich_cell, seed["rich"], CELL_JUMP_RICH),
                                (poor_cell, seed["poor"], CELL_JUMP_POOR)):
             if any(abs(a - b) > lim for a, b in zip(got, want)):
                 return "cell_jump"
+    if not res.success:
+        return "ok_soft"
     return "ok"
 
 
@@ -371,9 +439,10 @@ _write_summary = write_summary
 class InSituBatch:
     """一批评分的状态机：种子继承、异常标记、逐帧结果。
 
-    `fit_frame` 是纯计算（可在后台线程调用）：读图、积分、三相精修，
-    把结果追加到 `rows`/`fitted`，并在可用帧上更新下一帧的种子。
-    同一批只能串行调用（GUI 逐帧链式跑，不会并发）。
+    `fit_frame` 是纯计算（可在后台线程调用）：读图、积分、三相精修
+    （双起点），把结果追加到 `rows`/`fitted`，并在可用帧上更新下一帧的
+    种子；晶胞跳变后连续 2 帧一致时重锁。同一批只能串行调用（GUI 逐帧
+    链式跑，不会并发）。
     """
 
     def __init__(self, *, rich, poor, al, geom, lam, instrument, mask,
@@ -400,6 +469,9 @@ class InSituBatch:
         self.rows = []
         self.fitted = []
         self.frame_no = 0
+        # 新晶胞连续出现 PENDING_FRAMES 帧才接受为种子（两相区重锁）
+        self.pending_seed = None
+        self.pending_count = 0
 
     def fit_frame(self, path):
         """跑一帧，返回 row dict（异常也返回 error 行，不抛出）。"""
@@ -441,11 +513,32 @@ class InSituBatch:
                   and not status.startswith("error")
                   and not status.startswith("high_rwp")
                   and status != "no_phase_signal")
-        seed_ok = usable and cell_ok
         row = _row(i, path, res, f_rich, timers, status, usable=usable)
         self.rows.append(row)
-        if seed_ok:
-            self.seed = {"rich": rich_cell, "poor": poor_cell}
+        # 种子更新：晶胞正常就立刻接；跳变后若连续 PENDING_FRAMES 帧
+        # 都落在同一个新晶胞，也接受——避免两相区一跳就永远用旧种子。
+        if usable:
+            new_seed = {"rich": rich_cell, "poor": poor_cell}
+            if cell_ok:
+                self.seed = new_seed
+                self.pending_seed = None
+                self.pending_count = 0
+            else:
+                if (self.pending_seed is not None
+                        and _cells_close(rich_cell,
+                                         self.pending_seed["rich"],
+                                         PENDING_CELL_TOL)
+                        and _cells_close(poor_cell,
+                                         self.pending_seed["poor"],
+                                         PENDING_CELL_TOL)):
+                    self.pending_count += 1
+                else:
+                    self.pending_seed = new_seed
+                    self.pending_count = 1
+                if self.pending_count >= PENDING_FRAMES:
+                    self.seed = new_seed
+                    self.pending_seed = None
+                    self.pending_count = 0
         if (res is not None and math.isfinite(f_rich)
                 and not status.startswith("error")):
             self.fitted.append((i, path, res, f_rich, status))

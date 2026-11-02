@@ -19,18 +19,15 @@
 """
 import argparse
 import csv
-import math
+import sys
 from pathlib import Path
 
 import numpy as np
 
-MARKERS = {
-    "ok": dict(marker="o", mfc="tab:blue", mec="tab:blue", ms=3.2),
-    "ok_soft": dict(marker="o", mfc="none", mec="tab:blue", ms=3.6),
-    "not_converged": dict(marker="o", mfc="none", mec="tab:orange", ms=4.2),
-    "cell_jump": dict(marker="x", mfc="none", mec="tab:red", ms=4.2),
-}
-OTHER = dict(marker="s", mfc="none", mec="0.4", ms=4.0)
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from xrd_toolkit.simulation.insitu_plots import draw_summary  # noqa: E402
 
 
 def _read_rows(path):
@@ -68,43 +65,6 @@ def _read_rows(path):
     return out
 
 
-def _finite_pairs(rows, key, esd=None):
-    x, y, e = [], [], []
-    for r in rows:
-        v = r.get(key, float("nan"))
-        if not math.isfinite(v):
-            continue
-        x.append(r["frame"])
-        y.append(v)
-        if esd is not None:
-            ev = r.get(esd, float("nan"))
-            e.append(ev if math.isfinite(ev) else 0.0)
-    return np.asarray(x), np.asarray(y), np.asarray(e)
-
-
-def _status_markers(ax, rows, key, color=None):
-    for group, style in list(MARKERS.items()) + [("other", OTHER)]:
-        sel = [r for r in rows
-               if (r["group"] == group if group != "other"
-                   else r["group"] not in MARKERS)
-               and math.isfinite(r.get(key, float("nan")))]
-        if not sel:
-            continue
-        kw = dict(style)
-        if color is not None:
-            kw["mec"] = color
-            if kw.get("mfc") != "none":
-                kw["mfc"] = color
-        ax.plot([r["frame"] for r in sel], [r[key] for r in sel],
-                linestyle="none", label=group, **kw)
-
-
-def _shade(ax, lo, hi, trans):
-    ax.axvspan(lo, trans + 0.5, color="tab:blue", alpha=0.06, lw=0)
-    ax.axvspan(trans + 0.5, hi, color="tab:orange", alpha=0.06, lw=0)
-    ax.axvline(trans + 0.5, color="0.55", lw=0.8, ls="--")
-
-
 def plot_summary(csv_path, out_path, *, title=None, dpi=160):
     """读 CSV 画 4-panel；返回 (figure, axes)。"""
     import matplotlib
@@ -114,92 +74,12 @@ def plot_summary(csv_path, out_path, *, title=None, dpi=160):
     rows = _read_rows(csv_path)
     if not rows:
         raise ValueError(f"CSV 没有数据：{csv_path}")
-    frames = [r["frame"] for r in rows]
-    lo, hi = min(frames) - 0.5, max(frames) + 0.5
-    finite_f = [r for r in rows if math.isfinite(r["f_rich"])]
-    trans = (min(finite_f, key=lambda r: r["f_rich"])["frame"]
-             if finite_f else frames[0])
-    n_ok = sum(1 for r in rows if r["group"] == "ok")
-    n_use = sum(1 for r in rows if r["usable"])
-
-    fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.0))
-    ax = axes[0, 0]
-    _shade(ax, lo, hi, trans)
-    ax.plot([r["frame"] for r in rows], [r["f_rich"] for r in rows],
-            "-", lw=1.0, color="tab:blue", label="f_rich")
-    ax.plot([r["frame"] for r in rows], [r["f_poor"] for r in rows],
-            "-", lw=1.0, color="tab:orange", label="f_poor")
-    fx, fy, fe = _finite_pairs(rows, "f_rich", esd="f_rich_esd")
-    if len(fx) and np.any(fe > 0):
-        ax.fill_between(fx, fy - fe, fy + fe, color="tab:blue",
-                        alpha=0.18, lw=0)
-    _status_markers(ax, rows, "f_rich")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(-0.02, 1.02)
-    ax.set_ylabel("relative fraction")
-    ax.set_title("(a) Phase fractions (relative scattering, not wt%)",
-                 fontsize=10)
-    ax.grid(alpha=0.25, linestyle=":")
-    ax.legend(fontsize=7.5, loc="center right", ncol=1)
-    ax.text(trans + 2.0, 0.20,
-            f"f_rich min {min(r['f_rich'] for r in finite_f):.3f}\n"
-            f"@ frame {trans}", fontsize=7.5, color="0.4")
-
-    for i, (phase, title_i) in enumerate(
-            (("rich", "(b) rich cell (Li-rich LMFP)"),
-             ("poor", "(c) poor cell (heterosite)"))):
-        ax = axes[0, 1] if i == 0 else axes[1, 0]
-        _shade(ax, lo, hi, trans)
-        for axis, color in (("a", "tab:blue"), ("b", "tab:orange"),
-                            ("c", "tab:green")):
-            x, y, e = _finite_pairs(rows, f"{phase}_{axis}",
-                                    f"{phase}_{axis}_esd")
-            if len(x):
-                ax.errorbar(x, y, yerr=e, fmt="o-", ms=2.2, lw=0.8,
-                            capsize=1.3, elinewidth=0.7, color=color,
-                            label=axis)
-        ax.set_xlim(lo, hi)
-        ax.set_ylabel(f"{phase} cell (Å)")
-        ax.set_title(title_i, fontsize=10)
-        ax.grid(alpha=0.25, linestyle=":")
-        ax.legend(fontsize=8, loc="best")
-
-    ax = axes[1, 1]
-    _shade(ax, lo, hi, trans)
-    ax.plot([r["frame"] for r in rows], [r["rwp"] for r in rows],
-            "-", lw=1.0, color="tab:red", label="Rwp")
-    ax.plot([r["frame"] for r in rows], [r["rp"] for r in rows],
-            "-", lw=0.9, color="0.4", label="Rp")
-    _status_markers(ax, rows, "rwp")
-    ax.set_xlim(lo, hi)
-    ax.set_xlabel("frame")
-    ax.set_ylabel("%")
-    ax.set_title("(d) Rwp / Rp and anomaly status", fontsize=10)
-    ax.grid(alpha=0.25, linestyle=":")
-    ax.legend(fontsize=7.5, loc="lower left")
-    rwp_vals = [r["rwp"] for r in rows if math.isfinite(r["rwp"])]
-    if rwp_vals:
-        ax.annotate(f"max Rwp {max(rwp_vals):.2f}%",
-                    xy=(trans, max(rwp_vals)),
-                    xytext=(trans + 3, max(rwp_vals) + 0.03),
-                    fontsize=7.5, color="0.35",
-                    arrowprops=dict(arrowstyle="-", lw=0.6,
-                                    color="0.55"))
-
-    fig.suptitle(
-        title or (f"LMFP in-situ three-phase batch — "
-                  f"{len(rows)} frames, strict ok {n_ok}/{len(rows)}, "
-                  f"usable {n_use}/{len(rows)}"),
-        fontsize=12)
-    fig.text(0.5, 0.005,
-             "charge/discharge shading inferred from the f_rich minimum; "
-             "phase fractions are relative scattering intensity, not wt%",
-             ha="center", fontsize=7.5, color="0.4")
-    fig.tight_layout(rect=(0, 0.02, 1, 0.96))
+    fig = plt.figure(figsize=(12.5, 8.0))
+    draw_summary(fig, rows, title=title)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=dpi)
-    return fig, axes
+    return fig, np.asarray(fig.axes)
 
 
 def main():

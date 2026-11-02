@@ -9,6 +9,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -48,6 +51,29 @@ def _fake_row(i):
     }
 
 
+def _fake_result(i):
+    """够 draw_fit / 模型无关检查用的鸭子类型 FitResult。"""
+    tth = np.linspace(1.0, 8.0, 500)
+    base = 100.0 + 5.0 * (tth - 1.0)
+    y = base.copy()
+    rich_amp = 220.0 * (1.0 - 0.15 * i)
+    poor_amp = 40.0 + 30.0 * i
+    for amp, center, width in ((rich_amp, 1.355, 0.014),
+                               (poor_amp, 1.430, 0.014),
+                               (300.0, 3.0, 0.02)):
+        y += amp * np.exp(-0.5 * ((tth - center) / width) ** 2)
+    y_calc = y * 0.98
+    return SimpleNamespace(
+        tth=tth, y_obs=y, y_calc=y_calc, background=base,
+        residual=y - y_calc, rwp=2.0 + 0.1 * i, rp=1.5,
+        peak_tth=np.array([1.355, 1.430, 3.0]),
+        extra_peak_tth={"LMFP_poor": np.array([1.430, 3.2]),
+                        "Al": np.array([2.0, 4.0])},
+        phase_label="LMFP_rich",
+        report=lambda: f"frame {i} report",
+    )
+
+
 class _FakeBatch:
     def __init__(self):
         self.rows = []
@@ -55,9 +81,12 @@ class _FakeBatch:
         self.mask = None
 
     def fit_frame(self, path):
-        row = _fake_row(len(self.rows) + 1)
+        i = len(self.rows) + 1
+        row = _fake_row(i)
         row["file"] = Path(path).name
         self.rows.append(row)
+        self.fitted.append((i, Path(path), _fake_result(i),
+                            row["f_rich"], row["status"]))
         return row
 
 
@@ -155,6 +184,73 @@ class TestInSituWorkbench(unittest.TestCase):
             self.assertTrue(
                 (folder / "out" / "fit_summary.txt").is_file())
             self.assertGreaterEqual(len(editor.fig.axes), 2)
+
+    def _run_fake_batch(self, editor, folder):
+        data = folder / "data"
+        data.mkdir()
+        for i in (1, 2, 3):
+            (data / f"frame_{i:03d}.tif").write_bytes(b"")
+        editor.data_dir = data
+        editor.outdir = folder / "out"
+        editor.limit.setValue(3)
+        editor._refresh_data_label()
+        with mock.patch.object(insitu_gui, "_prepare_worker",
+                               lambda *a, **k: _FakeBatch()):
+            editor.start_btn.click()
+            ok = _wait_until(
+                lambda: editor.start_btn.isEnabled()
+                and editor.table.rowCount() == 3, timeout_ms=10000)
+        self.assertTrue(ok, "批量没有在 10 秒内完成")
+
+    def test_four_views_and_single_frame_fit(self):
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            self._run_fake_batch(editor, folder)
+            self.assertEqual(editor.view_tabs.count(), 4)
+            self.assertEqual(len(editor.fig.axes), 4)
+
+            editor.view_tabs.setCurrentIndex(1)
+            QApplication.processEvents()
+            self.assertEqual(len(editor.summary_fig.axes), 4)
+
+            editor.view_tabs.setCurrentIndex(3)
+            QApplication.processEvents()
+            # 3 个 panel + twinx 的右轴
+            self.assertEqual(len(editor.mi_fig.axes), 4)
+
+            editor.table.cellDoubleClicked.emit(0, 0)
+            QApplication.processEvents()
+            self.assertIs(editor.view_tabs.currentWidget(),
+                          editor.fit_canvas)
+            self.assertEqual(len(editor.fit_fig.axes), 3)
+            self.assertTrue(editor.copy_report_btn.isEnabled())
+            editor._copy_fit_report()
+            self.assertIn("frame 1 report",
+                          QApplication.clipboard().text())
+
+            out = folder / "fit.png"
+            with mock.patch.object(insitu_gui.QFileDialog,
+                                   "getSaveFileName",
+                                   return_value=(str(out), "PNG (*.png)")):
+                editor.save_btn.click()
+            self.assertTrue(out.is_file())
+            self.assertGreater(out.stat().st_size, 1000)
+
+    def test_frame_without_fit_shows_message(self):
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            self._run_fake_batch(editor, folder)
+            editor.batch.fitted.clear()
+            editor.table.cellDoubleClicked.emit(0, 0)
+            QApplication.processEvents()
+            self.assertIn("没有拟合结果", editor.status.text())
+            self.assertFalse(editor.copy_report_btn.isEnabled())
 
 
 if __name__ == "__main__":
