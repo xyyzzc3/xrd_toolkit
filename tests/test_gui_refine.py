@@ -107,6 +107,13 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertIsNone(editor.result)
         self.assertGreater(len(editor.fig.axes[0].lines), 0)
         self.assertIn("观测曲线", editor.fig.axes[0].get_title())
+        # 隐藏再显示（切走再回来）：showEvent 要补画，不能变空白
+        self.w.refine_dock.hide()
+        QApplication.processEvents()
+        self.w.refine_dock.show()
+        QApplication.processEvents()
+        self.assertGreater(len(editor.fig.axes[0].lines), 0)
+        self.assertIn("观测曲线", editor.fig.axes[0].get_title())
 
     def test_mutual_exclusion_with_mask_and_calibration(self):
         self._enter()

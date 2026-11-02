@@ -181,6 +181,12 @@ class TestPhaseWorkbench(unittest.TestCase):
         editor = self.w.phase_editor
         self.assertIsNotNone(editor.curve)
         self.assertGreater(len(editor.fig.axes[0].lines), 0)
+        # 隐藏再显示（切走再回来）：showEvent 要补画，不能变空白
+        self.w.phase_dock.hide()
+        QApplication.processEvents()
+        self.w.phase_dock.show()
+        QApplication.processEvents()
+        self.assertGreater(len(editor.fig.axes[0].lines), 0)
 
     def test_refine_cell_dialog(self):
         self._screen()
