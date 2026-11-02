@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XRD Toolkit — 二维 XRD 数据处理工具箱</title>
-<meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting and full-pattern refinement.">
+<meta name="description" content="XRD Toolkit: 2D X-ray diffraction images to calibrated 1D powder patterns — calibration, azimuthal integration, peak finding, profile fitting (Scherrer/W-H), full-pattern refinement and a four-view in-situ workbench.">
 <meta name="theme-color" content="#0e1b37">
 <link rel="canonical" href="https://xyyzzc3.github.io/xrd_toolkit/">
 <link rel="icon" href="assets/icon-32.png" sizes="32x32" type="image/png">
@@ -15,7 +15,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="XRD Toolkit">
 <meta property="og:title" content="XRD Toolkit — 二维 XRD 数据处理工具箱">
-<meta property="og:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合与全谱精修。支持 Windows / macOS 下载。">
+<meta property="og:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合（Scherrer/W-H）、全谱精修与四视图原位工作台。支持 Windows / macOS 下载。">
 <meta property="og:url" content="https://xyyzzc3.github.io/xrd_toolkit/">
 <meta property="og:image" content="https://xyyzzc3.github.io/xrd_toolkit/assets/og-preview.png">
 <meta property="og:image:width" content="1280">
@@ -24,7 +24,7 @@
 <meta property="og:locale" content="zh_CN">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="XRD Toolkit — 二维 XRD 数据处理工具箱">
-<meta name="twitter:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合与全谱精修。">
+<meta name="twitter:description" content="从二维衍射图像到一维粉末谱：校准、积分、背景扣除、寻峰、峰形拟合（Scherrer/W-H）、全谱精修与四视图原位工作台。">
 <meta name="twitter:image" content="https://xyyzzc3.github.io/xrd_toolkit/assets/og-preview.png">
 
 <style>
@@ -276,12 +276,12 @@
       <p class="hero-lead">把二维 XRD 图像变成可分析的一维粉末谱：几何校准、方位角积分、背景扣除、寻峰、峰形拟合与全谱精修。</p>
       <p class="hero-lead-en">2D X-ray diffraction images to calibrated 1D powder patterns — calibration, integration, peak finding, profile fitting and full-pattern refinement.</p>
       <div class="actions">
-        <a class="btn primary" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest">下载试用版</a>
+        <a class="btn primary" href="https://github.com/xyyzzc3/xrd_toolkit/releases/latest">下载 v0.2.0</a>
         <a class="btn ghost" href="使用说明.html">使用说明</a>
         <a class="btn ghost" href="https://github.com/xyyzzc3/xrd_toolkit">GitHub 仓库</a>
       </div>
       <div class="trust">
-        <span>1,100 tests</span>
+        <span>1,178 tests</span>
         <span>CI green</span>
         <span>Windows / macOS</span>
         <span>MIT</span>
@@ -325,12 +325,12 @@
         <div class="feature">
           <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18l5-7 4 4 4-9 5 12"/></svg></div>
           <h3>寻峰与单峰拟合</h3>
-          <p>稳健噪声估计自动寻峰；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 拟合，附 Scherrer 与 Williamson–Hall 分析。</p>
+          <p>稳健噪声估计自动寻峰；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 拟合，附 Scherrer 与 Williamson–Hall 分析；W-H 卡片常显，没峰时一键去寻峰。</p>
         </div>
         <div class="feature">
           <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18c3 0 4-10 7-10s3 7 5 7 3-4 6-4"/><path d="M3 21h18" opacity=".45"/></svg></div>
           <h3>全谱拟合</h3>
-          <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜与逐帧原位批处理。</p>
+          <p>Thompson–Cox–Hastings 峰形，Le Bail 或结构精修，支持额外相、原子坐标与位点占位精修、坏点掩膜与逐帧原位批处理；原位工作台另有趋势 / 汇总 / 单帧拟合 / 模型无关四视图，双起点稳健拟合。</p>
         </div>
         <div class="feature">
           <div class="ico"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></div>
@@ -346,7 +346,7 @@
       <div class="section-head">
         <div class="kicker">Showcase</div>
         <h2>实际跑出来的样子</h2>
-        <p>真数据截图，不是示意图：校准、背景、批量对比、全谱拟合、Mask 工作台与 81 帧原位精修。</p>
+        <p>真数据截图，不是示意图：校准、背景、批量对比、全谱拟合、Mask 工作台、W-H 与 81 帧原位四视图。</p>
       </div>
       <div class="gallery">
         <figure class="shot">
@@ -356,6 +356,10 @@
         <figure class="shot">
           <div class="img"><img src="assets/shot_background.webp" width="1200" height="750" loading="lazy" decoding="async" alt="真 LMFP 图谱上的背景扣除"></div>
           <figcaption><b>背景扣除</b>真 LMFP 图谱上的自动基线与扣完的曲线，原始、基线、结果同框。</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="img"><img src="assets/shot_wh.webp" width="1600" height="1000" loading="lazy" decoding="async" alt="W-H 常显卡片与拟合结果"></div>
+          <figcaption><b>W-H 常显卡片</b>没峰时 [去寻峰] 直达峰表；≥3 根峰自动出 D / ε / Scherrer，可查看与保存 W-H 图。</figcaption>
         </figure>
         <figure class="shot">
           <div class="img"><img src="assets/shot_compare_heat.webp" width="1200" height="750" loading="lazy" decoding="async" alt="批量对比与 2θ × 样品热图"></div>
@@ -370,8 +374,8 @@
           <figcaption><b>Mask 工作台</b>画笔 / 矩形 / 孤立坏点检测，按来源配色；下方对比掩膜前后的 1D 谱，2.8° 的伪峰被去掉。</figcaption>
         </figure>
         <figure class="shot">
-          <div class="img"><img src="assets/shot_insitu.webp" width="1650" height="1050" loading="lazy" decoding="async" alt="LMFP 81 帧原位三相精修趋势"></div>
-          <figcaption><b>81 帧原位三相精修</b>LMFP 充放电序列：富锂 / 贫锂相分数、两相晶胞与 Rwp 随帧号变化，GSAS-II 交叉验证。</figcaption>
+          <div class="img"><img src="assets/shot_insitu.webp" width="1600" height="1000" loading="lazy" decoding="async" alt="LMFP 81 帧原位三相精修趋势"></div>
+          <figcaption><b>81 帧原位三相精修</b>LMFP 充放电序列：趋势 / 汇总 / 单帧拟合 / 模型无关四视图；双起点稳健拟合，GSAS-II 交叉验证。</figcaption>
         </figure>
       </div>
     </div>
@@ -398,7 +402,7 @@
           <span><strong>Mac（Intel）</strong><span>XRD-Toolkit-macos-intel.zip</span></span>
         </a>
       </div>
-      <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。安装包约 110 MB，包含完整计算环境。如果无法访问 GitHub，请直接联系把本页发给你的人获取安装包。</p>
+      <p class="note">应用未做系统签名，第一次打开会被系统拦截一次：Windows 点「更多信息 → 仍要运行」；macOS 右键 →「打开」。下载约 150 MB，解压约 340 MB，包含完整计算环境。如果无法访问 GitHub，请直接联系把本页发给你的人获取安装包。</p>
     </div>
   </section>
 

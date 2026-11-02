@@ -6,7 +6,7 @@ English: [README.md](../README.md) · 试用者上手图文：[使用说明.html
 
 ## 下载即用（不用装 Python）
 
-**最新试用版**——GitHub Actions 从本仓库构建的三平台独立应用（链接自动指向最新 Release）：
+**最新版本**——GitHub Actions 从本仓库构建的三平台独立应用（链接自动指向最新 Release）：
 
 | 你的电脑 | 下载 |
 |---|---|
@@ -16,7 +16,7 @@ English: [README.md](../README.md) · 试用者上手图文：[使用说明.html
 
 解压 → 双击。应用没做系统签名，第一次打开会被系统拦一下（Windows：更多信息
 → 仍要运行；Mac：右键 → 打开），详细步骤见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
-macOS 13 起 / Windows 10 起，下载约 110 MB。zip 里还带《使用说明.html》（程序内 帮助 → 使用说明，快捷键 F1）和第三方许可声明 `THIRD_PARTY_NOTICES.txt`（程序内 帮助 → 关于）。
+macOS 13 起 / Windows 10 起，下载约 150 MB（解压约 340 MB）。zip 里还带《使用说明.html》（程序内 帮助 → 使用说明，快捷键 F1）和第三方许可声明 `THIRD_PARTY_NOTICES.txt`（程序内 帮助 → 关于）。
 
 ## 三步上手
 
@@ -166,7 +166,7 @@ python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个
 
 ## Mask + 原位三相批量
 
-工具栏 `[校准]` 旁新增 `[Mask]` 中央工作台（进入时收起参数坞和日志坞，退出恢复）：打开时自动载入文件栏勾选的第一张原始图（顶部下拉可换图），画笔/橡皮/矩形画遮罩，`[孤立坏点（局部）]` 抓坏点簇、`[整环离群（实验性）]` 只作参考；`[放大镜]` 与主图面板同语义（点亮 = 滚轮缩放 + 左键框选）；`[导出配方…]` 保存 `.mask.npz`（含来源分层），`[导出通用掩膜…]` 另存 `.npy/.edf`；`[预览效果]` 只画 mask 前后 1D，`[生成 Mask 2D]` 按范围（当前图像 / 勾选文件）建产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，顺序继承、异常帧标记、CSV 与分段计时；`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的操作步骤见《使用说明》第 8 节；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
+工具栏 `[校准]` 旁新增 `[Mask]` 中央工作台（进入时收起参数坞和日志坞，退出恢复）：打开时自动载入文件栏勾选的第一张原始图（顶部下拉可换图），画笔/橡皮/矩形画遮罩，`[孤立坏点（局部）]` 抓坏点簇、`[整环离群（实验性）]` 只作参考；`[放大镜]` 与主图面板同语义（点亮 = 滚轮缩放 + 左键框选）；`[导出配方…]` 保存 `.mask.npz`（含来源分层），`[导出通用掩膜…]` 另存 `.npy/.edf`；`[预览效果]` 只画 mask 前后 1D，`[生成 Mask 2D]` 按范围（当前图像 / 勾选文件）建产物（原始图 + mask manifest），双击看 2D、也可按它做 1D；遮罩/未遮罩的 1D 是两个来源，可并排对比。`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，双起点稳健拟合（上一帧种子 + CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台提供趋势 / 汇总 / 单帧拟合 / 模型无关四视图，少数相晶胞淡化显示。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。Mask 的操作步骤见《使用说明》第 8 节；mask 策略、原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「Mask」与「LMFP 原位三相批量」两节。
 
 ## 路线图
 

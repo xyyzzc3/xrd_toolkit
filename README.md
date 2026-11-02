@@ -11,7 +11,7 @@ A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as
 
 ## Download & run (no Python needed)
 
-**Latest trial builds** — self-contained apps built from this repo by GitHub
+**Latest release** — self-contained apps built from this repo by GitHub
 Actions (the links below always point to the newest release):
 
 | Your machine | Download |
@@ -23,7 +23,7 @@ Actions (the links below always point to the newest release):
 Unzip → double-click. The builds are unsigned, so the system blocks the first
 launch once: Windows *More info → Run anyway*; macOS *right-click → Open*.
 Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) — the zip also carries a Chinese quick-start (`使用说明.html`, also under Help → 使用说明, F1) and third-party license notices (`THIRD_PARTY_NOTICES.txt`, also under Help → 关于).
-Requires macOS 13+ / Windows 10+; ~110 MB download.
+Requires macOS 13+ / Windows 10+; ~150 MB download, ~340 MB installed.
 
 ## Three steps
 
@@ -156,8 +156,11 @@ view, or integrate it to 1D. Masked and unmasked 1D results are distinct
 sources that can be compared side by side.
 
 `scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases
-(Li-rich LMFP, Li-poor heterosite, Al reference), sequential seeding, anomaly
-flags, a CSV summary and split timings. A three-frame GSAS-II cross-check
+(Li-rich LMFP, Li-poor heterosite, Al reference), two-start robust fitting
+(previous seed + CIF end-member), seed re-locking, anomaly flags, a CSV
+summary and split timings; the GUI in-situ workbench shows trends, a summary,
+single-frame fits and a model-independent check, with minority-phase cells
+faded. A three-frame GSAS-II cross-check
 (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
 trends against our fit. **Mask quick start:** the Mask chapter of the Chinese manual
 (`docs/使用说明.html`, section 8). Fit parameters, the in-situ

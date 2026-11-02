@@ -6,8 +6,8 @@ authors:
   - family-names: Bian
     given-names: Chenze
     affiliation: "City University of Hong Kong"
-version: 0.2.0rc1
-date-released: 2026-10-30
+version: 0.2.0
+date-released: 2026-11-03
 license: MIT
 repository-code: "https://github.com/xyyzzc3/xrd_toolkit"
 keywords:
