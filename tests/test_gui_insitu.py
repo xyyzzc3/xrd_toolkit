@@ -239,6 +239,28 @@ class TestInSituWorkbench(unittest.TestCase):
             self.assertTrue(out.is_file())
             self.assertGreater(out.stat().st_size, 1000)
 
+    def test_top_row_labels_are_not_covered(self):
+        """长数据路径不能把右上角的 mask 灰字压到按钮底下（2026-11-03）。"""
+        self.w.resize(1600, 1000)
+        self.w.show()
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        editor.data_label.setText(
+            "/Users/bryan/Data/XRD/lmfpdata（81 帧）")
+        editor.mask_label.setText("mask：lmfp1_lab6_mask.npy")
+        QApplication.processEvents()
+        self.assertGreaterEqual(editor.mask_label.width(), 150)
+        self.assertLessEqual(editor.data_label.width(), 420)
+        self.assertFalse(
+            editor.mask_label.geometry().intersects(
+                editor.mask_btn.geometry()),
+            "mask 灰字不能被『选 mask…』按钮遮住")
+        self.assertFalse(
+            editor.mask_label.geometry().intersects(
+                editor.mask_clear_btn.geometry()),
+            "mask 灰字不能被『清除』按钮遮住")
+
     def test_frame_without_fit_shows_message(self):
         self.w.insitu_btn.click()
         QApplication.processEvents()

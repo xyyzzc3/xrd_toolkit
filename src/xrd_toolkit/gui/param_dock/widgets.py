@@ -38,6 +38,7 @@ def make_page():
     # 页面构建函数通过这两个属性把可伸缩块挂到表单下面
     form._outer_layout = outer
     form._host_widget = host
+    form._scroll = scroll          # “去寻峰/去峰表”之类按钮滚动定位用
     scroll.setWidget(fields)
     pv.addWidget(scroll, 1)
     return page, form, pv
@@ -56,11 +57,13 @@ def add_caption(form, text):
     line = QFrame()
     line.setFixedHeight(1)
     # 裸 QFrame 上给 color 画不出来（实测）——固定 1px 高 + 背景色
-    line.setStyleSheet("background-color: #d5dae0;")
+    line.setStyleSheet("background-color: #e3e8ee;")
     row = QWidget()
     box = QVBoxLayout(row)
-    box.setContentsMargins(0, 3, 0, 1)
-    box.setSpacing(3)
+    # 2026-11-03：小节之间多留一点呼吸；线只有这一条（1D 页的
+    # peak/fit/WH 双横线一并撤掉，换成卡片/留白）。
+    box.setContentsMargins(0, 9, 0, 2)
+    box.setSpacing(4)
     box.addWidget(line)
     box.addWidget(cap)
     form.addRow(row)

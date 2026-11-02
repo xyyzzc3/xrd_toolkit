@@ -155,6 +155,28 @@ class TestGuiPeakFinding(unittest.TestCase):
         finally:
             w.close()
 
+    def test_wh_card_visible_before_peaks_and_guide(self):
+        """W-H 卡片常显；[去寻峰] 把用户带到峰表（2026-11-03）。"""
+        w = create_window()
+        try:
+            _open_1d(w)
+            w.entrance_buttons["1D"].click()
+            QApplication.processEvents()
+            self.assertTrue(w.peak_box.isHidden())
+            self.assertFalse(w.wh_guide_btn.isHidden())
+            self.assertEqual(w.wh_d_label.text(), "D = —")
+            self.assertIn("去寻峰", w.wh_guide_btn.text())
+            self.assertIn("去寻峰", w.wh_note_label.text())
+
+            w.wh_guide_btn.click()
+            QApplication.processEvents()
+            self.assertTrue(w.params["显示峰位"].isChecked())
+            self.assertFalse(w.peak_box.isHidden())
+            self.assertIn("去峰表选峰", w.wh_guide_btn.text())
+            self.assertIn("已寻峰", w.wh_note_label.text())
+        finally:
+            w.close()
+
     def test_uncheck_hides_markers_and_table(self):
         w = create_window()
         try:

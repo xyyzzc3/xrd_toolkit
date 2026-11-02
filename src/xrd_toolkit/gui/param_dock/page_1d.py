@@ -4,9 +4,9 @@
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSizePolicy,
-    QSpinBox, QTableWidget, QTabWidget, QVBoxLayout)
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
+    QSizePolicy, QSpinBox, QTableWidget, QTabWidget, QVBoxLayout)
 
 from xrd_toolkit.gui.fit_view import (
     FIT_COLUMNS, clear_fit_results, copy_fit_table, delete_fit_rows,
@@ -192,12 +192,14 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_box = QFrame()
     peak_box.setObjectName("peak_section")
     peak_box.setFrameShape(QFrame.NoFrame)
+    # 卡片式分组：浅底 + 细边 + 圆角；不再用横线（用户 2026-11-03：
+    # “双横线分割改好看一点”）。横线只留给 add_caption 的小节标题。
+    peak_box.setStyleSheet(
+        "QFrame#peak_section { background: #fbfcfd;"
+        " border: 1px solid #e3e8ee; border-radius: 6px; }")
     peak_lay = QVBoxLayout(peak_box)
-    peak_lay.setContentsMargins(2, 8, 2, 0)
-    peak_lay.setSpacing(4)
-    peak_line = QFrame()
-    peak_line.setFixedHeight(1)
-    peak_line.setStyleSheet("background-color: #d5dae0;")
+    peak_lay.setContentsMargins(8, 8, 8, 8)
+    peak_lay.setSpacing(6)
     peak_tabs = QTabWidget()
     peak_tabs.setObjectName("peak_tabs")
     peak_tabs.setDocumentMode(True)
@@ -251,15 +253,11 @@ def build_1d_page(window, form_1d, btns_1d):
 
     peak_table.setContextMenuPolicy(Qt.CustomContextMenu)
     peak_table.customContextMenuRequested.connect(_peak_menu)
-    peak_lay.addWidget(peak_line)
     peak_tabs.addTab(peak_table, "峰表")
 
     # ── 峰形拟合（2026-10-30）：峰表给峰位，这里逐个拟合 ─────────
-    fit_line = QFrame()
-    fit_line.setFixedHeight(1)
-    fit_line.setStyleSheet("background-color: #d5dae0;")
     fit_title = QLabel("峰形拟合")
-    fit_title.setStyleSheet("color: gray; font-weight: 600;")
+    fit_title.setStyleSheet("color: #33475b; font-weight: 600;")
     shape_combo = QComboBox()
     for text, key in (("伪 Voigt", "pseudovoigt"),
                       ("高斯", "gaussian"),
@@ -353,7 +351,7 @@ def build_1d_page(window, form_1d, btns_1d):
 
     fit_table.itemChanged.connect(_fit_item_changed)
 
-    peak_lay.addWidget(fit_line)
+    peak_lay.addSpacing(8)
     peak_lay.addWidget(fit_title)
     peak_lay.addLayout(fit_row1)
     peak_lay.addLayout(fit_row2)
@@ -363,11 +361,18 @@ def build_1d_page(window, form_1d, btns_1d):
     # 跟着 fit_results 自动重算（见 wh_view.refresh_wh）。仪器展宽两种：
     # 常数 FWHM，或 [精修] 工作台存下的 LaB₆ 基线（按角度逐峰算，
     # 2026-10-31）；基线缺失/波长不符时自动退回常数并写明原因。
-    wh_line = QFrame()
-    wh_line.setFixedHeight(1)
-    wh_line.setStyleSheet("background-color: #d5dae0;")
+    # 2026-11-03：W-H 独立成常显卡片，不再被 peak_box 的“没峰就整块
+    # 隐藏”带走；空态给三步引导，[去寻峰] 直接把用户带到第一步。
+    wh_card = QFrame()
+    wh_card.setObjectName("wh_section")
+    wh_card.setStyleSheet(
+        "QFrame#wh_section { background: #f7f9fb;"
+        " border: 1px solid #e3e8ee; border-radius: 6px; }")
+    wh_lay = QVBoxLayout(wh_card)
+    wh_lay.setContentsMargins(8, 8, 8, 8)
+    wh_lay.setSpacing(5)
     wh_title = QLabel("Williamson–Hall")
-    wh_title.setStyleSheet("color: gray; font-weight: 600;")
+    wh_title.setStyleSheet("color: #33475b; font-weight: 600;")
     wh_instr = QDoubleSpinBox()
     wh_instr.setRange(0.0, 1.0)
     wh_instr.setDecimals(3)
@@ -425,12 +430,31 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_save.setEnabled(False)
     wh_save.clicked.connect(
         lambda: save_wh_plot(window, dock_for_wh(window)))
+    wh_guide = QPushButton("去寻峰")
+    wh_guide.setToolTip(
+        "① 去寻峰 → ② 在峰表里选峰 → ③ [拟合选中]（至少 3 根才能算 W-H）")
+
+    def _go_find_peaks():
+        if not str(window.focus_panel or "").startswith("1D|"):
+            _log(window, "W-H：先点开一张 1D 图（或双击文件栏的「1D 产物」）")
+            return
+        if not show_peaks.isChecked():
+            show_peaks.setChecked(True)      # 触发寻峰并建峰表
+        QApplication.processEvents()
+        scroll = getattr(form_1d, "_scroll", None)
+        if scroll is not None:
+            scroll.ensureWidgetVisible(peak_box)
+        peak_table.setFocus()
+        _log(window, "W-H：已显示峰表；选峰 → [拟合选中]（至少 3 根）")
+
+    wh_guide.clicked.connect(_go_find_peaks)
     window.wh_d_label = wh_d_label
     window.wh_e_label = wh_e_label
     window.wh_scherrer_label = wh_scherrer
     window.wh_note_label = wh_note
     window.wh_view_btn = wh_view
     window.wh_save_btn = wh_save
+    window.wh_guide_btn = wh_guide
     def _wh_instrument_changed(_v=0.0):
         # 仪器值按面板各记各的：先写回焦点面板的快照，再重算 W-H。
         # 只连 refresh_wh 的话，_panel_param 会一直读到开图时快照里的
@@ -454,19 +478,20 @@ def build_1d_page(window, form_1d, btns_1d):
 
     wh_instr.valueChanged.connect(_wh_instrument_changed)
     wh_source.currentIndexChanged.connect(_wh_source_changed)
-    peak_lay.addWidget(wh_line)
-    peak_lay.addWidget(wh_title)
-    peak_lay.addLayout(wh_row)
-    peak_lay.addLayout(wh_instr_row)
-    peak_lay.addLayout(wh_vals)
-    peak_lay.addWidget(wh_scherrer)
-    peak_lay.addWidget(wh_note)
+    wh_lay.addWidget(wh_title)
+    wh_lay.addLayout(wh_row)
+    wh_lay.addLayout(wh_instr_row)
+    wh_lay.addLayout(wh_vals)
+    wh_lay.addWidget(wh_scherrer)
+    wh_lay.addWidget(wh_note)
+    wh_lay.addWidget(wh_guide)
     wh_btns = QHBoxLayout()
     wh_btns.setContentsMargins(0, 0, 0, 0)
     wh_btns.setSpacing(4)
     wh_btns.addWidget(wh_view, 1)
     wh_btns.addWidget(wh_save, 1)
-    peak_lay.addLayout(wh_btns)
+    wh_lay.addLayout(wh_btns)
+    form_1d.addRow(wh_card)
 
     # 标签页放最后并吃掉剩余高度：拟合按钮留在上方，不会被表格挤到
     # 滚动区外面（2026-10-30 实测：先放表格时 [拟合全部] 要滚动才看得见）。

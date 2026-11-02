@@ -300,6 +300,8 @@ def fill_peak_table(window, dock, peaks):
         hook = getattr(window, "_peak_table_stretch", None)
         if hook is not None:
             hook(False)
+        from xrd_toolkit.gui.wh_view import refresh_wh   # 破循环
+        refresh_wh(window, dock)
         return
     if tabs is not None:
         # 窄坞：标签只留「峰表 · N 根」；双击提示放进表格 tooltip
@@ -341,6 +343,8 @@ def fill_peak_table(window, dock, peaks):
     if sort_col >= 0:
         table.sortItems(sort_col, sort_order)
     box.setVisible(True)
+    from xrd_toolkit.gui.wh_view import refresh_wh       # 破循环
+    refresh_wh(window, dock)
 
 
 def refresh_peak_table(window):

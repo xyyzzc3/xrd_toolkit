@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log
+from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import PROJECT_PRESET
 
@@ -145,19 +146,24 @@ class InSituWorkbench(QWidget):
         top = QHBoxLayout()
         top.setSpacing(6)
         top.addWidget(QLabel("数据"))
-        self.data_label = QLabel("")
+        # 长路径用省略号标签，并给数据/掩膜各留上限；否则长路径会把
+        # 右上角的 mask 灰字压到按钮底下（2026-11-03 用户报“遮盖灰字”）。
+        self.data_label = _ElideLabel("", Qt.ElideMiddle)
         self.data_label.setStyleSheet("color: gray;")
         self.data_label.setMinimumWidth(0)
-        self.data_label.setSizePolicy(QSizePolicy.Ignored,
-                                      QSizePolicy.Preferred)
+        self.data_label.setMaximumWidth(420)
         top.addWidget(self.data_label, 1)
         self.data_btn = QPushButton("选文件夹…")
         self.data_btn.clicked.connect(self._choose_data)
         top.addWidget(self.data_btn)
-        self.mask_label = QLabel("mask：不遮")
+        top.addStretch(1)
+        self.mask_label = _ElideLabel("mask：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
         self.mask_label.setMinimumWidth(170)
-        self.mask_label.setSizePolicy(QSizePolicy.Ignored,
+        self.mask_label.setMaximumWidth(260)
+        # 必须用 Preferred：_ElideLabel 默认 Ignored，布局会把它的宽度
+        # 算成 0，再被 minimumWidth 撑回 170，压到后面的按钮底下。
+        self.mask_label.setSizePolicy(QSizePolicy.Preferred,
                                       QSizePolicy.Preferred)
         top.addWidget(self.mask_label)
         self.mask_btn = QPushButton("选 mask…")

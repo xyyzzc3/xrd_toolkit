@@ -255,10 +255,19 @@ def refresh_wh(window, dock):
     _sync_source_combo(window, dock)
     save_btn = getattr(window, "wh_save_btn", None)
     view_btn = getattr(window, "wh_view_btn", None)
+    guide_btn = getattr(window, "wh_guide_btn", None)
+    peaks = list(getattr(dock, "detected_peaks", None) or [])
+    if guide_btn is not None:
+        guide_btn.setText("去寻峰" if not peaks else "去峰表选峰")
     if dock is None or not getattr(dock, "fit_results", None):
         if dock is not None:
             dock.wh_result = None
-        _set_labels(window, None, "再拟合几根峰（至少 3 根）")
+            note = ("① 去寻峰 → ② 选峰 → ③ 拟合选中（至少 3 根）"
+                    if not peaks
+                    else "已寻峰；在峰表里选峰 → [拟合选中]（至少 3 根）")
+        else:
+            note = "先点开一张 1D 图"
+        _set_labels(window, None, note)
         _set_scherrer_label(window, "Scherrer：—")
         if save_btn is not None:
             save_btn.setEnabled(False)
