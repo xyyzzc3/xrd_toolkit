@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from xrd_toolkit import __version__, paths
 
@@ -34,6 +37,24 @@ class TestShippedFiles(unittest.TestCase):
 
     def test_missing_returns_none(self):
         self.assertIsNone(paths.shipped_file("不存在.html", "也不存在.html"))
+
+    def test_structures_dir_falls_back_to_cwd(self):
+        """非 editable 安装（CI）在仓库根跑时，参考 CIF 仍要找到。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            data = root / "data" / "structures"
+            data.mkdir(parents=True)
+            (data / "LaB6_NIST660c.cif").write_text(
+                "data_LaB6\n", encoding="utf-8")
+            old = Path.cwd()
+            try:
+                os.chdir(root)
+                with mock.patch.object(paths, "ROOT",
+                                       root / "not-the-repo"):
+                    got = paths.structures_dir()
+                self.assertEqual(got.resolve(), data.resolve())
+            finally:
+                os.chdir(old)
 
 
 class TestBundledInApp(unittest.TestCase):

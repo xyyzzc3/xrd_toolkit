@@ -32,10 +32,17 @@ def structures_dir() -> Path:
 
     2026-10-30：精修/物相/原位三个工作台默认要读这些 CIF，所以它们
     必须随包（spec 把它们放到 xrd_toolkit/data/structures）。
+    2026-11-03：和 shipped_file 一样加“当前目录”兜底——CI 是
+    `pip install .`（非 editable）后从仓库根跑快测试，ROOT 指到
+    site-packages，`data/structures` 不在包里会 FileNotFoundError。
     """
     packaged = Path(__file__).resolve().parent / "data" / "structures"
     if packaged.is_dir():
         return packaged
+    for base in (ROOT, Path.cwd()):
+        candidate = base / "data" / "structures"
+        if candidate.is_dir():
+            return candidate
     return ROOT / "data" / "structures"
 
 
