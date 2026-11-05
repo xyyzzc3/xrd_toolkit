@@ -85,16 +85,47 @@ class _CoordReadout(_ElideLabel):
     按钮挤着左右跳（宽度只由剩余空间决定，与文本无关）。
     """
 
+    # 空态提示（2026-11-05）：以前悬停离开只 setText("")，读数格是一块
+    # 带框的空白；现在空着时显示灰字提示。`text()` 仍返回空串（程序与
+    # 测试读的是"有没有读数"，不是提示文案），只有实际显示的 QLabel
+    # 文本带提示。
+    PLACEHOLDER = "悬停曲线看坐标"
+
     def __init__(self, parent=None):
         super().__init__("", parent=parent)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.setMinimumWidth(_COORD_MIN_W)
+        self._placeholder_on = None
+        self._refresh()
 
     def sizeHint(self):
         return QSize(_COORD_SLOT_W, super().sizeHint().height())
 
     def minimumSizeHint(self):
         return QSize(_COORD_MIN_W, super().minimumSizeHint().height())
+
+    def _set_placeholder(self, on: bool) -> None:
+        """切换空态样式（灰字）；只在状态真的变了时重刷样式。"""
+        if self._placeholder_on == on:
+            return
+        self._placeholder_on = on
+        self.setProperty("coord_placeholder", on)
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+
+    def _refresh(self) -> None:
+        if self._full:
+            self._set_placeholder(False)
+            super()._refresh()
+            return
+        self._set_placeholder(True)
+        text = self.PLACEHOLDER
+        if self.width() <= 0:
+            QLabel.setText(self, text)
+        else:
+            QLabel.setText(self, self.fontMetrics().elidedText(
+                text, self._mode, self.width()))
 
 class _FocusElideLabel(_ElideLabel):
     """坞顶"编辑对象"那一行用的省略号标签：minimumSizeHint 封顶 160。

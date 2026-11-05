@@ -7,6 +7,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,17 @@ def _synth(path, geom, npt):
 class TestRefineWorkbench(unittest.TestCase):
     def setUp(self):
         self._old_root = _support.stage_cache.CACHE_ROOT
+        # 仪器基线落盘（2026-11-05）：每个测试独占临时文件，别把
+        # 开发机的真实基线读进测试，也别把测试写的落进仓库。
+        self._baseline_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._baseline_tmp.cleanup)
+        self._baseline_path = (
+            Path(self._baseline_tmp.name) / "instrument_baseline.json")
+        self._baseline_env = mock.patch.dict(
+            os.environ,
+            {"XRD_INSTRUMENT_BASELINE": str(self._baseline_path)})
+        self._baseline_env.start()
+        self.addCleanup(self._baseline_env.stop)
         self.w = create_window()
         self.w.show()
         QApplication.processEvents()
@@ -82,6 +94,8 @@ class TestRefineWorkbench(unittest.TestCase):
     def test_enter_exit_restores_docks(self):
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
+        self.assertFalse(self.w._bottom_strip.isHidden(),
+                         "分析页底部横带应可见")
 
         self._enter()
         self.assertEqual(self.w.refine_btn.text(), "退出精修")
@@ -89,6 +103,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(self.w.refine_dock.isVisible())
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
+        self.assertTrue(self.w._bottom_strip.isHidden(),
+                        "工作台里底部横带（坐标/排列/缩放/全关）应隐藏")
 
         self.w.refine_btn.click()
         QApplication.processEvents()
@@ -98,6 +114,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertEqual(self.w.mode_label.text(), "分析模式")
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
+        self.assertFalse(self.w._bottom_strip.isHidden(),
+                         "退出工作台应恢复底部横带")
 
     def test_curve_shows_before_fitting(self):
         """进入精修工作台就该看到观测曲线，而不是空白（2026-11-02）。"""
@@ -242,6 +260,16 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertFalse(editor.chk_instr.isEnabled(),
                          "固定仪器后不再单独精修仪器峰形")
 
+        # 2026-11-05：基线要落盘（临时文件；W-H/下次启动会读回）
+        from xrd_toolkit.services.instrument_baseline import (
+            baseline_path, load_baseline)
+        self.assertEqual(Path(baseline_path()), self._baseline_path)
+        self.assertTrue(self._baseline_path.is_file())
+        saved = load_baseline()
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved["params"], baseline)
+        self.assertEqual(saved["source"], LAB6_CIF.name)
+
         editor.run_btn.click()
         ok = _wait_until(lambda: editor.run_btn.isEnabled()
                          and editor._task is None, timeout_ms=30000)
@@ -249,6 +277,44 @@ class TestRefineWorkbench(unittest.TestCase):
         for name, value in baseline.items():
             self.assertAlmostEqual(editor.result.initial[name], value,
                                    places=6, msg=name)
+
+    def test_saved_baseline_loads_in_new_window(self):
+        """落盘的基线在下次 create_window 时自动读回（2026-11-05）。"""
+        from xrd_toolkit.services.instrument_baseline import save_baseline
+        save_baseline({
+            "params": {"zero": 0.0, "u": 0.0, "v": 0.0,
+                       "w": 1.8, "x": 0.0, "y": 0.0},
+            "wavelength": 0.1223,
+            "source": "LaB6_NIST660c.cif",
+        }, path=self._baseline_path)
+
+        self.w.close()
+        QApplication.processEvents()
+        self.w = create_window()
+        self.w.show()
+        QApplication.processEvents()
+        self.assertIsNotNone(self.w.instrument_baseline)
+        self.assertAlmostEqual(
+            self.w.instrument_baseline["params"]["w"], 1.8)
+        self._enter()
+        editor = self.w.refine_editor
+        self.assertIsNotNone(editor._instrument)
+        self.assertIn("仪器基线：", editor.instrument_label.text())
+        self.assertTrue(editor.chk_fix_instrument.isEnabled())
+
+    def test_window_baseline_reaches_workbench(self):
+        """窗口属性里的基线（启动读回/别的窗口）在进工作台时显示出来。"""
+        self.w.instrument_baseline = {
+            "params": {"zero": 0.0, "u": 0.1, "v": 0.0,
+                       "w": 1.9, "x": 0.0, "y": 0.0},
+            "wavelength": 0.1223,
+            "source": "LaB6_NIST660c.cif",
+        }
+        self._enter()
+        editor = self.w.refine_editor
+        self.assertIsNotNone(editor._instrument)
+        self.assertIn("1.9", editor.instrument_label.text())
+        self.assertTrue(editor.chk_fix_instrument.isEnabled())
 
 
 if __name__ == "__main__":

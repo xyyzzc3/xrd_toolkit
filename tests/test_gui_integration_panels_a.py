@@ -1426,12 +1426,16 @@ class TestArrangeModeClose(unittest.TestCase):
             self.assertIn("校准模式", w.mode_label.text())
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["校准"])
+            self.assertTrue(w._bottom_strip.isHidden(),
+                            "校准工作台里底部横带应隐藏")
             w.entrance_buttons["对比"].click()
             self.assertIn("回到分析模式", w.log_text.toPlainText())
             self.assertIn("分析模式", w.mode_label.text())
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["对比"])
             self.assertFalse(w.calib_btn.isChecked())
+            self.assertFalse(w._bottom_strip.isHidden(),
+                             "退出校准应恢复底部横带")
         finally:
             w.close()
 

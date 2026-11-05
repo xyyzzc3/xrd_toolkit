@@ -525,12 +525,16 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(self.w.file_dock.isVisible())
         self.assertEqual(self.w.mode_label.text(), "Mask 模式")
         self.assertEqual(self.w.mask_btn.text(), "退出 Mask")
+        self.assertTrue(self.w._bottom_strip.isHidden(),
+                        "工作台里底部横带应隐藏")
         self.w.mask_btn.click()
         QApplication.processEvents()
         self.assertTrue(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
         self.assertEqual(self.w.mode_label.text(), "分析模式")
         self.assertEqual(self.w.mask_btn.text(), "Mask")
+        self.assertFalse(self.w._bottom_strip.isHidden(),
+                         "退出工作台应恢复底部横带")
 
     def test_mask_and_calibration_are_mutually_exclusive(self):
         self.w.calib_btn.setChecked(True)

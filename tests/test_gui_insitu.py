@@ -112,6 +112,8 @@ class TestInSituWorkbench(unittest.TestCase):
         self.assertTrue(self.w.insitu_dock.isVisible())
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
+        self.assertTrue(self.w._bottom_strip.isHidden(),
+                        "工作台里底部横带应隐藏")
 
         self.w.refine_btn.click()
         QApplication.processEvents()
@@ -119,6 +121,8 @@ class TestInSituWorkbench(unittest.TestCase):
         self.assertTrue(self.w._refine_active)
         self.w.refine_btn.click()
         QApplication.processEvents()
+        self.assertFalse(self.w._bottom_strip.isHidden(),
+                         "退出工作台应恢复底部横带")
 
         self.w.insitu_btn.click()
         QApplication.processEvents()

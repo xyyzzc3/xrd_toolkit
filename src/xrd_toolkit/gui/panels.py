@@ -41,6 +41,6 @@ from xrd_toolkit.gui.panel_grip import (
     _on_canvas_resized, _panel_extra)
 # 布局（2026-10-21 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.panel_layout import (
-    _AreaZoomFilter, _apply_area_zoom, _arrange, _build_center, _settle,
-    _tile_panels, _toggle_pop_out)
+    _AreaZoomFilter, _apply_area_zoom, _arrange, _build_center,
+    _set_bottom_strip_visible, _settle, _tile_panels, _toggle_pop_out)
 

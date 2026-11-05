@@ -44,6 +44,7 @@ from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _data_snapshot, _log, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
+from xrd_toolkit.services.instrument_baseline import save_baseline
 
 # 图配色与 simulation.plots.plot_fit 一致：观测灰、计算蓝、背景红、
 # 布拉格刻度按相轮换。
@@ -162,10 +163,16 @@ class RefineWorkbench(QWidget):
         self._task = None
         self._extra_cifs = []
         self._extra_phase_paths = []
-        self._instrument = None          # {"params": {...}, "wavelength": Å}
+        # {"params": {...}, "wavelength": Å, ...}：启动时从落盘文件读回
+        # （app.create_window 的 window.instrument_baseline），保存时再
+        # 写回磁盘；W-H 页读同一份。
+        self._instrument = getattr(main_window, "instrument_baseline", None)
         self._last_wavelength = None
 
         self._build_ui()
+        if self._instrument is not None:
+            self._update_instrument_label()
+            self.chk_fix_instrument.setEnabled(True)
         self.refresh_curves()
         self.refresh_cifs()
 
@@ -487,6 +494,7 @@ class RefineWorkbench(QWidget):
     def _update_instrument_label(self):
         if self._instrument is None:
             self.instrument_label.setText("仪器基线：未保存")
+            self.instrument_label.setToolTip("")
             return
         p = self._instrument["params"]
         self.instrument_label.setText(
@@ -498,7 +506,14 @@ class RefineWorkbench(QWidget):
                 w=p.get("w", float("nan")),
                 x=p.get("x", float("nan")),
                 y=p.get("y", float("nan")),
-                lam=self._instrument["wavelength"]))
+                lam=self._instrument.get("wavelength", 0.0)))
+        # 落盘的基线带来源/时间；悬停看全，免得挤在状态行里
+        bits = []
+        if self._instrument.get("source"):
+            bits.append(f"来源：{self._instrument['source']}")
+        if self._instrument.get("saved_at"):
+            bits.append(f"保存时间：{self._instrument['saved_at']}")
+        self.instrument_label.setToolTip("\n".join(bits))
 
     def _save_instrument_baseline(self):
         """把这次 LaB₆ 精修的仪器峰形参数存成基线。"""
@@ -512,16 +527,26 @@ class RefineWorkbench(QWidget):
         names = ("zero", "u", "v", "w", "x", "y")
         params = {name: float(self.result.params[name]) for name in names
                   if name in self.result.params}
-        self._instrument = {
+        record = {
             "params": params,
             "wavelength": float(self._last_wavelength or 0.0),
+            "source": Path(cif).name,
         }
         # 1D 页的 W-H 也读这份基线（工作台关掉后窗口属性还在）
-        self.main.instrument_baseline = self._instrument
+        self._instrument = record
+        self.main.instrument_baseline = record
         self._update_instrument_label()
         self.chk_fix_instrument.setEnabled(True)
         self.chk_fix_instrument.setChecked(True)
-        self._set_status("仪器基线已保存，下次精修样品可用「固定仪器」")
+        # 落盘：下一次启动自动读回；写失败不影响本次运行，但要在
+        # 状态行说清楚，不能假装保存成功。
+        try:
+            saved = save_baseline(record)
+        except (OSError, ValueError) as err:
+            self._set_status(
+                f"仪器基线已用于本次运行，但写入失败：{user_error_text(err)}")
+        else:
+            self._set_status(f"仪器基线已保存：{saved}")
 
     def _fixed_instrument(self, wavelength):
         """勾了「固定仪器」就返回参数字典；波长不符返回 "mismatch"。"""

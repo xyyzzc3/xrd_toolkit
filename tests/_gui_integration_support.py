@@ -156,11 +156,17 @@ _app = QApplication.instance() or QApplication([])
 # 断言被缓存命中悄悄改掉（隔离不能依赖真目录内容，同 TestSaveCalibConfig
 # 对 config_user.json 的做法）
 _CACHE_TMP = tempfile.mkdtemp(prefix="xrd_stage_cache_")
+# 仪器基线落盘（2026-11-05）：GUI 测试统一指到临时文件，别把开发机
+# 真实的 instrument_baseline.json 读进来（W-H/精修测试会看到）。
+_BASELINE_TMP = tempfile.mkdtemp(prefix="xrd_instrument_baseline_")
 
 
 def setUpModule():
     from xrd_toolkit.services import stage_cache
     stage_cache.CACHE_ROOT = Path(_CACHE_TMP)
+    os.environ.setdefault(
+        "XRD_INSTRUMENT_BASELINE",
+        str(Path(_BASELINE_TMP) / "instrument_baseline.json"))
 
 
 def _wait_until(predicate, timeout_ms=5000):

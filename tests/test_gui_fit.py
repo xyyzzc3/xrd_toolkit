@@ -167,6 +167,28 @@ class TestFitView(unittest.TestCase):
         self.assertFalse(combo.model().item(1).isEnabled())
         self.assertEqual(combo.currentData(), "constant")
 
+    def test_wh_reads_window_baseline_without_refine_editor(self):
+        """启动时落盘读回的 window.instrument_baseline 也能喂 W-H。"""
+        self._open_panel()
+        self._fit_all()
+        from xrd_toolkit.gui.peak_view import _wavelength_for
+        from xrd_toolkit.gui.wh_view import refresh_wh
+        lam = _wavelength_for(self.dock)
+        self.w.refine_editor = None
+        self.w.instrument_baseline = {
+            "params": {"zero": 0.0, "u": 0.0, "v": 0.0,
+                       "w": 1.8, "x": 0.0, "y": 0.0},
+            "wavelength": lam,
+        }
+        refresh_wh(self.w, self.dock)
+        QApplication.processEvents()
+        combo = self.w.params["W-H 仪器来源"]
+        self.assertTrue(combo.model().item(1).isEnabled(),
+                        "窗口里的基线应让 LaB₆ 项可选")
+        combo.setCurrentIndex(1)
+        QApplication.processEvents()
+        self.assertIn("LaB₆ 基线", self.w.wh_note_label.text())
+
     def test_overlay_all_draws_every_fit(self):
         self._open_panel()
         self._fit_all()

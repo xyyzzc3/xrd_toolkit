@@ -429,6 +429,23 @@ def _hover_label(dock, name: str, x: float, y: float, peak=None) -> str:
                 f"FWHM {peak.fwhm:.4f}°，峰高 {peak.height:.0f}")
     return f"{prefix}2θ {x:.4g}°，强度 {y:.4g}"
 
+def _set_coord_text(window: QMainWindow, text: str) -> None:
+    """安全写底部坐标读数（2026-11-05）。
+
+    matplotlib 的悬停/离开回调可能在窗口关闭、C++ 对象已销毁之后才
+    投递；直接 setText 会抛 "Internal C++ object already deleted"。
+    测试收尾时偶尔能看到，真实使用只是偶发——吞掉即可，读数本来就
+    跟着窗口一起没了。
+    """
+    label = getattr(window, "coord_label", None)
+    if label is None:
+        return
+    try:
+        label.setText(text)
+    except RuntimeError:
+        pass
+
+
 def _hover_motion(window: QMainWindow, key: str, event) -> None:
     """鼠标在曲线上移动时：选最近的那条线、吸附最近的真实数据点，
     画一个白边圆点，状态栏右侧实时显示该点坐标。
@@ -516,7 +533,7 @@ def _hover_motion(window: QMainWindow, key: str, event) -> None:
     name = line.get_label()
     if not name or name.startswith("_child"):
         name = ""
-    window.coord_label.setText(_hover_label(dock, name, x, y, peak))
+    _set_coord_text(window, _hover_label(dock, name, x, y, peak))
 
 def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
     """鼠标离开曲线/坐标轴：藏起圆点、清空坐标标签（常驻标签留空）。"""
@@ -531,5 +548,5 @@ def _hover_leave(window: QMainWindow, key: str, event=None) -> None:
                 # ax.clear() 后标记已与轴断开；只有真的画过才需要擦
                 # （贴回背景 = 擦掉圆点，同 _hover_motion 的贴图路径）
                 _blit_box(dock, marker.axes, marker)
-    window.coord_label.setText("")
+    _set_coord_text(window, "")
 

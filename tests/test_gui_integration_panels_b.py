@@ -449,12 +449,17 @@ class TestHoverDot(unittest.TestCase):
             dock = self._open_1d(w)
             key = "1D|data/fake_b.tif"
             ax = _axes(w, "1D", "data/fake_b.tif")
+            # 2026-11-05：空态显示灰字提示，但 text() 仍返回空串
+            self.assertEqual(w.coord_label.text(), "")
+            self.assertIn("悬停曲线看坐标", QLabel.text(w.coord_label))
             gui_plot_panels._hover_motion(w, key, _hover_event(ax, 0.6))
+            self.assertNotIn("悬停曲线看坐标", QLabel.text(w.coord_label))
             gui_plot_panels._hover_leave(w, key)
             self.assertFalse(dock.hover_marker.get_visible(),
                              "离开后取点标记应藏起来")
             self.assertEqual(w.coord_label.text(), "",
                              "离开后坐标标签应清空（标签本身常驻）")
+            self.assertIn("悬停曲线看坐标", QLabel.text(w.coord_label))
         finally:
             w.close()
 

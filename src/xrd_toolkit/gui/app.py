@@ -105,7 +105,8 @@ from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
 from xrd_toolkit.gui.panels import (
     _apply_area_zoom, _build_center, _close_panel, _ElideLabel,
-    _FloatedWindow, _FocusElideLabel, _PlotSubWindow, _toggle_pop_out)
+    _FloatedWindow, _FocusElideLabel, _PlotSubWindow,
+    _set_bottom_strip_visible, _toggle_pop_out)
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
@@ -133,6 +134,7 @@ from xrd_toolkit.gui.plot_views import (
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import watchdog
 from xrd_toolkit.services import recipes as recipe_store
+from xrd_toolkit.services.instrument_baseline import load_baseline
 # 自动基线窗口的**默认值**（0.2°，见 background 里的来历）：控件初始值、
 # 悬停提示都读它，免得"引擎默认 / 面板默认 / 恢复默认 / 控件初始值"四处
 # 各写一个字面量、改一个漏一个（2026-09-28 之前控件就是写死的 1.0）
@@ -488,6 +490,7 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     # 五个分析入口熄灯（参数页不动，退出时按 _mask_prev_entrance 复原）
     _highlight_entrance(window, None)
     window.mode_label.setText("Mask 模式")
+    _set_bottom_strip_visible(window, False)
     _open_mask_workbench(window)
     # Home 键：工作台自己的 [复位视图] 接管；主窗口那条先让开，
     # 否则两个 WindowShortcut 同键 = Qt 判定歧义、两条都不触发
@@ -524,6 +527,7 @@ def _exit_mask_mode(window: QMainWindow) -> None:
     if prev is not None:
         _highlight_entrance(window, prev)
     window.mode_label.setText("分析模式")
+    _set_bottom_strip_visible(window, True)
     window.mask_btn.setText("Mask")
     window.mask_btn.setToolTip(_MASK_TIP)
     _log(window, "退出 Mask 模式")
@@ -585,6 +589,7 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     _resync_docks(window)
     _highlight_entrance(window, None)
     window.mode_label.setText("精修模式")
+    _set_bottom_strip_visible(window, False)
     _open_refine_workbench(window)
     window.refine_btn.setText("退出精修")
     window.refine_btn.setToolTip("退出精修工作台，回到分析模式")
@@ -608,6 +613,7 @@ def _exit_refine_mode(window: QMainWindow) -> None:
     if prev is not None:
         _highlight_entrance(window, prev)
     window.mode_label.setText("分析模式")
+    _set_bottom_strip_visible(window, True)
     window.refine_btn.setText("精修")
     window.refine_btn.setToolTip(_REFINE_TIP)
     _log(window, "退出精修模式")
@@ -662,6 +668,7 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     _resync_docks(window)
     _highlight_entrance(window, None)
     window.mode_label.setText("物相模式")
+    _set_bottom_strip_visible(window, False)
     _open_phase_workbench(window)
     window.phase_btn.setText("退出物相")
     window.phase_btn.setToolTip("退出物相工作台，回到分析模式")
@@ -685,6 +692,7 @@ def _exit_phase_mode(window: QMainWindow) -> None:
     if prev is not None:
         _highlight_entrance(window, prev)
     window.mode_label.setText("分析模式")
+    _set_bottom_strip_visible(window, True)
     window.phase_btn.setText("物相")
     window.phase_btn.setToolTip(_PHASE_TIP)
     _log(window, "退出物相模式")
@@ -738,6 +746,7 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
     _resync_docks(window)
     _highlight_entrance(window, None)
     window.mode_label.setText("原位模式")
+    _set_bottom_strip_visible(window, False)
     _open_insitu_workbench(window)
     window.insitu_btn.setText("退出原位")
     window.insitu_btn.setToolTip("退出原位工作台，回到分析模式")
@@ -761,6 +770,7 @@ def _exit_insitu_mode(window: QMainWindow) -> None:
     if prev is not None:
         _highlight_entrance(window, prev)
     window.mode_label.setText("分析模式")
+    _set_bottom_strip_visible(window, True)
     window.insitu_btn.setText("原位")
     window.insitu_btn.setToolTip(_INSITU_TIP)
     _log(window, "退出原位模式")
@@ -1147,6 +1157,10 @@ def create_window() -> QMainWindow:
     window.phase_dock = None
     window.insitu_editor = None
     window.insitu_dock = None
+    # LaB₆ 仪器基线（2026-11-05 起落盘）：精修工作台保存时写 JSON，
+    # 启动时读回。W-H 页和精修工作台都读这份窗口属性；文件不存在/
+    # 损坏时 load_baseline() 返回 None，按"还没存过基线"处理。
+    window.instrument_baseline = load_baseline()
 
     # 背景扣除的窗级数据（不是快照参数，所以不随面板走、免疫面板
     # 弹出/收回——panels.py 的 _PANEL_ATTRS 白名单只搬少量 dock 属性）：

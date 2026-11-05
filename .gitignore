@@ -23,6 +23,10 @@ WEEKLY_REPORT.md
 # config.py 的内置条目仍走 CLI 模板人工复核登记）
 src/xrd_toolkit/config_user.json
 
+# 精修工作台 [存为仪器基线] 的落盘文件（2026-11-05；个人仪器参数，
+# 本地保留，默认与 config_user.json 同目录）
+src/xrd_toolkit/instrument_baseline.json
+
 # PyInstaller 打包中间产物与成品（成品走 GitHub Release 附件，不进仓库）
 build/
 dist/

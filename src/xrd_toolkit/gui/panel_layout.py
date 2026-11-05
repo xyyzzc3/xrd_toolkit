@@ -106,7 +106,8 @@ def _build_center(window: QMainWindow) -> None:
     window.coord_label.setFrameShape(QFrame.Shape.StyledPanel)
     window.coord_label.setStyleSheet(
         "font-family: Menlo, Consolas, 'Microsoft YaHei', "
-        "'PingFang SC', monospace; padding: 1px 4px;")
+        "'PingFang SC', monospace; padding: 1px 4px;"
+        "QLabel[coord_placeholder=\"true\"] { color: #888888; }")
 
     strip = QWidget()
     srow = QHBoxLayout(strip)
@@ -129,7 +130,23 @@ def _build_center(window: QMainWindow) -> None:
     lay.setSpacing(0)
     lay.addWidget(mdi, 1)
     lay.addWidget(strip)
+    window._bottom_strip = strip
     window.setCentralWidget(center)
+
+
+def _set_bottom_strip_visible(window: QMainWindow, visible: bool) -> None:
+    """分析页底部横带的显隐（2026-11-05）。
+
+    进五种工作台（校准 / Mask / 物相 / 精修 / 原位）时整条隐藏：
+    坐标读数没有曲线可悬停，横排/缩放/全部关闭也只对普通图面板有
+    意义，留着只是占位（2026-11-03 记下的底栏占位问题）。退出工作
+    台回到分析页时恢复。测试里用 isHidden() 判定——窗口本身没
+    show() 时 isVisible() 也是 False，会把"隐藏"和"没显示"混在一起。
+    """
+    strip = getattr(window, "_bottom_strip", None)
+    if strip is not None:
+        strip.setVisible(bool(visible))
+
 
 def _apply_area_zoom(window: QMainWindow, new: float) -> None:
     """总缩放：绘图区所有子窗口围绕视口中心整体同比缩放（50%–200%）。

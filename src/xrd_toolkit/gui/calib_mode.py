@@ -14,6 +14,7 @@ from xrd_toolkit.gui.calib_model import CALIB_PANEL_RESERVE_PX
 from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _close_calib_panel, _open_calib_panel)
 from xrd_toolkit.gui.config_ops import _suggest_config_key
+from xrd_toolkit.gui.panel_layout import _set_bottom_strip_visible
 from xrd_toolkit.gui.panel_state import _log
 
 
@@ -58,6 +59,10 @@ def _enter_calib(window: QMainWindow) -> None:
     # （[校准] 的 toggled 先于 clicked 触发，所以不能指望入口那边先
     # 露坞——2026-09-26 实测：以前量出来 327 px，远没到该有的宽度）
     window.param_dock.setVisible(True)
+    # 校准也是工作台：底部坐标/横排/缩放/全部关闭对校准页没有意义，
+    # 整条隐藏（2026-11-05，与四个中央工作台同一口径）。放在"没勾文件"
+    # 提前返回之前——没文件也要能退出，退出时统一恢复。
+    _set_bottom_strip_visible(window, False)
     # 进校准露坞同理记意图（见 app._switch_entrance 的同款记账）：不记的话
     # 意图还停在开局的 False，窗口状态一变（全屏/最小化恢复）就会被
     # _resync_docks 收回去
@@ -79,6 +84,7 @@ def _exit_calib(window: QMainWindow) -> None:
     window.calib_exit_btn.setVisible(False)
     _close_calib_panel(window)
     _restore_dock_width(window)
+    _set_bottom_strip_visible(window, True)
 
 def _widen_dock_for_calib(window: QMainWindow) -> None:
     """校准模式下把参数坞拉宽到"放下校准页所有内容"（不超过窗口上限）。"""
