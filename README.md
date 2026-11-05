@@ -170,10 +170,13 @@ results and the cross-check: [docs/NOTES.md](docs/NOTES.md)
 ## Roadmap
 
 Peak finding, profile fitting and full-pattern (Le Bail/structural) fitting
-landed in v0.2.0, together with the four analysis workbenches. The remaining items are:
+landed in v0.2.0, together with the four analysis workbenches. The remaining item is:
 
 - Machine learning: clustering for phase identification and CNN peak-shape classification
-- Experimental validation on laboratory-source data and an Si standard
+  (deliberately last, not scheduled)
+
+Experimental validation is covered by the synchrotron LaB₆ + LMFP work in v0.2.0;
+laboratory-source data and an Si standard are not a separate open task.
 
 ## Project structure
 
