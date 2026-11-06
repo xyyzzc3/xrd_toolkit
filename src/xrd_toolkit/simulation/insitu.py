@@ -20,6 +20,7 @@
 `wt_rich` / `wt_poor` / `wt_al`（`FitResult.phase_weights`），只对晶态相，
 Al 仍单列、不进 LMFP 的归一化分母。
 """
+import csv
 import math
 import re
 import time
@@ -68,6 +69,18 @@ CELL_BOUNDS = {
 }
 # 背景曲率罚项（同 fit_lmfp.py）
 BG_SMOOTH = 0.1
+# 背景模型（2026-11-06 A 验证）：
+#   "estimated" = 滑动基线 + 0.25° 分段修正 + 曲率罚（**生产默认**）
+#   "chebyshev" = 背景多项式与峰联合拟合（仅保留给实验/脚本）
+# 合成回收里 chebyshev 10 阶把 40 wt% 偏差从 −4.9 收到 +0.9，但真实
+# 10 帧上 Rwp 反而更差（3.5 vs 2.1）、wt 对阶数敏感（82–95），所以
+# 真实数据否决了这个改进；生产背景保持不变。
+BG_MODEL = "estimated"
+BG_CHEBYSHEV_ORDER = 10
+# 主相平滑强度修正阶数（2026-11-06 定论）：2 阶与"rich 相比例"在两相
+# 拟合里几乎简并——真实 10 帧上中间的 rich wt 最多比 GSAS 低 19 wt%；
+# 0 阶把平均绝对偏差从 13.5 降到 4.2 wt%，Rwp 只 +0.04~0.10。生产默认 0。
+INTENSITY_POLY = 0
 # 积分口径（与脚本一致）
 NPT = 3000
 TTH_MIN = 1.0
@@ -91,6 +104,33 @@ def frames_in_dir(data_dir, limit=0, stride=1):
 
 # 脚本里叫 _frames；保留这个名字给旧调用点/测试
 _frames = frames_in_dir
+
+
+def load_seed_cells(path):
+    """读生产批次 CSV，返回 {帧号: {"rich": (a,b,c), "poor": (a,b,c)}}。
+
+    给"只跑指定帧"的验证批次做种子：第 n 帧用生产 CSV 里第 n−1 帧的
+    晶胞起步，避免跳帧后种子断链。
+    """
+    if not path:
+        return {}
+    path = Path(path).expanduser()
+    if not path.exists():
+        return {}
+    out = {}
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            try:
+                frame = int(float(row["frame"]))
+                out[frame] = {
+                    "rich": tuple(float(row[f"rich_{axis}"])
+                                  for axis in "abc"),
+                    "poor": tuple(float(row[f"poor_{axis}"])
+                                  for axis in "abc"),
+                }
+            except (KeyError, ValueError):
+                continue
+    return out
 
 
 def _instrument(geom, lam, *, lab6_tif=None, lab6_cif=None):
@@ -240,13 +280,38 @@ def _choose_fit(res_seed, res_cif, seed):
     return best
 
 
+def _background_kwargs(bg, background_model=None, background_order=None):
+    """按背景模型给 fit_pattern 组装背景参数（生产/回收实验共用）。
+
+    "estimated" 用调用方传进来的滑动基线数组 + 0.25° 分段修正；
+    "chebyshev" 忽略该数组，背景系数与峰一起线性求解。
+    """
+    model = BG_MODEL if background_model is None else str(background_model)
+    if model == "chebyshev":
+        order = (BG_CHEBYSHEV_ORDER if background_order is None
+                 else int(background_order))
+        return {"background": int(order)}, 0.0
+    if model == "estimated":
+        return {"background": bg, "background_knots": 0.25}, BG_SMOOTH
+    raise ValueError(f"未知背景模型：{model}")
+
+
 def _fit_once(t, y, bg, rich, poor, al, lam, inst, rich_cell, poor_cell,
-              max_nfev):
-    """从一个晶胞起点跑一次三相结构精修。"""
+              max_nfev, *, background_model=None, background_order=None,
+              intensity_poly=None):
+    """从一个晶胞起点跑一次三相结构精修。
+
+    `background_model` 缺省用模块常量 BG_MODEL（现为 estimated）；
+    改成 "chebyshev" 时背景不再冻结，而是和两相 scale 一起解。
+    """
+    bg_kwargs, bg_smooth = _background_kwargs(
+        bg, background_model, background_order)
+    ipoly = (INTENSITY_POLY if intensity_poly is None
+             else int(intensity_poly))
     return fit_pattern(
-        rich, t, y, wavelength=lam, b_iso=0.0, background=bg,
-        background_knots=0.25, background_smooth=BG_SMOOTH,
-        weights="poisson", cell_refine=True, intensity_poly=2,
+        rich, t, y, wavelength=lam, b_iso=0.0, **bg_kwargs,
+        background_smooth=bg_smooth,
+        weights="poisson", cell_refine=True, intensity_poly=ipoly,
         extra_phases=_extra_phases(poor, al, poor_cell),
         phase_label="LMFP_rich", free=("zero", "a", "b", "c"),
         initial=_fit_initial(inst, rich_cell, poor_cell),
@@ -277,7 +342,8 @@ def load_frame(path, geom, mask, *, npt=NPT, tth_min=TTH_MIN,
 
 
 def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
-                      max_nfev=FRAME_NFEV):
+                      max_nfev=FRAME_NFEV, background_model=None,
+                      background_order=None, intensity_poly=None):
     """少数相两段拟合的第二段：固定多数相晶胞，只放开少数相晶胞。
 
     `f_rich` 是相对散射分数（与图上实心/淡色同一口径）：≥0.5 时 rich
@@ -306,17 +372,23 @@ def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
         init["zero"] = float(res.params["zero"])
     except (KeyError, TypeError):
         pass
+    bg_kwargs, bg_smooth = _background_kwargs(
+        bg, background_model, background_order)
+    ipoly = (INTENSITY_POLY if intensity_poly is None
+             else int(intensity_poly))
     return fit_pattern(
-        rich, t, y, wavelength=lam, b_iso=0.0, background=bg,
-        background_knots=0.25, background_smooth=BG_SMOOTH,
-        weights="poisson", cell_refine=True, intensity_poly=2,
+        rich, t, y, wavelength=lam, b_iso=0.0, **bg_kwargs,
+        background_smooth=bg_smooth,
+        weights="poisson", cell_refine=True, intensity_poly=ipoly,
         extra_phases=extra, phase_label="LMFP_rich", free=free,
         initial=init, stages=[stage_names], bounds=CELL_BOUNDS,
         max_nfev=max_nfev)
 
 
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
-             max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
+             max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
+             background_model=None, background_order=None,
+             intensity_poly=None):
     """一帧：读图/积分/背景 + **双起点**三相精修 + 计时。
 
     2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
@@ -334,13 +406,19 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
 
     t3 = time.perf_counter()
     res_seed = _fit_once(t, y, bg, rich, poor, al, lam, inst,
-                         seed_rich, seed_poor, max_nfev)
+                         seed_rich, seed_poor, max_nfev,
+                         background_model=background_model,
+                         background_order=background_order,
+                         intensity_poly=intensity_poly)
     res_cif = None
     # 第一帧种子就是 CIF，不用白跑一遍；其余帧都跑双起点。
     if not (_cells_close(seed_rich, cif_rich, 1e-4)
             and _cells_close(seed_poor, cif_poor, 1e-4)):
         res_cif = _fit_once(t, y, bg, rich, poor, al, lam, inst,
-                            cif_rich, cif_poor, max_nfev)
+                            cif_rich, cif_poor, max_nfev,
+                            background_model=background_model,
+                            background_order=background_order,
+                            intensity_poly=intensity_poly)
     res = _choose_fit(res_seed, res_cif, seed)
     timers["fit"] = time.perf_counter() - t3
     timers["total"] = time.perf_counter() - t0
@@ -505,12 +583,18 @@ class InSituBatch:
     def __init__(self, *, rich, poor, al, geom, lam, instrument, mask,
                  max_rwp=20.0, first_nfev=FIRST_NFEV,
                  frame_nfev=FRAME_NFEV, npt=NPT,
-                 tth_min=TTH_MIN, tth_max=TTH_MAX):
+                 tth_min=TTH_MIN, tth_max=TTH_MAX,
+                 background_model=BG_MODEL,
+                 background_order=BG_CHEBYSHEV_ORDER,
+                 intensity_poly=INTENSITY_POLY):
         self.rich = rich
         self.poor = poor
         self.al = al
         self.geom = dict(geom)
         self.lam = float(lam)
+        self.background_model = str(background_model)
+        self.background_order = int(background_order)
+        self.intensity_poly = int(intensity_poly)
         self.instrument = instrument
         self.mask = mask
         self.max_rwp = float(max_rwp)
@@ -544,7 +628,10 @@ class InSituBatch:
                 path, self.rich, self.poor, self.al, self.geom, self.lam,
                 self.instrument, self.mask, self.seed,
                 max_nfev=(self.first_nfev if i == 1 else self.frame_nfev),
-                npt=self.npt, tth_min=self.tth_min, tth_max=self.tth_max)
+                npt=self.npt, tth_min=self.tth_min, tth_max=self.tth_max,
+                background_model=self.background_model,
+                background_order=self.background_order,
+                intensity_poly=self.intensity_poly)
             _a, _p, _al, f_rich = _fractions(res)
             rich_cell = _cell(res)
             poor_cell = _cell(res, "LMFP_poor")
@@ -606,7 +693,10 @@ def prepare_setup(config_name="lmfp1_lab6", *, rich_path=None, poor_path=None,
                   al_path=None, mask_path=None, lab6_tif=None,
                   lab6_cif=None, max_rwp=20.0,
                   first_nfev=FIRST_NFEV, frame_nfev=FRAME_NFEV,
-                  npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
+                  npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
+                  background_model=BG_MODEL,
+                  background_order=BG_CHEBYSHEV_ORDER,
+                  intensity_poly=INTENSITY_POLY):
     """GUI [原位] 的准备步骤：读结构、定仪器、读 mask，返回 InSituBatch。
 
     lab6_tif 是用户的 LaB₆ 标样帧（打包后仓库样例不带）；None 时退回
@@ -628,4 +718,6 @@ def prepare_setup(config_name="lmfp1_lab6", *, rich_path=None, poor_path=None,
         rich=rich, poor=poor, al=al, geom=geom, lam=lam,
         instrument=inst, mask=mask, max_rwp=max_rwp,
         first_nfev=first_nfev, frame_nfev=frame_nfev,
-        npt=npt, tth_min=tth_min, tth_max=tth_max)
+        npt=npt, tth_min=tth_min, tth_max=tth_max,
+        background_model=background_model, background_order=background_order,
+        intensity_poly=intensity_poly)

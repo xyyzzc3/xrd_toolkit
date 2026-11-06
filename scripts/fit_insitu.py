@@ -50,7 +50,8 @@ from xrd_toolkit.simulation.insitu import (  # noqa: E402
     DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, FIRST_NFEV, FRAME_NFEV,
     LAB6_CIF, LAB6_TIF, InSituBatch, _cell, _extra_phases, _fractions,
     _fraction_esd, _frames, _instrument, _row, _status, _tag,
-    _write_summary, frames_in_dir, prepare_setup)
+    _write_summary, frames_in_dir, load_seed_cells, prepare_setup,
+    INTENSITY_POLY)
 
 DEFAULT_DATA = Path.home() / "Data" / "XRD" / "lmfpdata"
 DEFAULT_MASK = Path("outputs") / "masks" / "lmfp1_lab6_mask.npy"
@@ -94,17 +95,44 @@ def main():
     ap.add_argument("--limit", type=int, default=0,
                     help="只跑前 N 帧（0 = 全部）")
     ap.add_argument("--stride", type=int, default=1)
+    ap.add_argument("--frames", default="",
+                    help="只跑指定帧（1 起的序号，逗号分隔；"
+                         "给定时忽略 --limit/--stride）")
+    ap.add_argument("--seed-csv", default="",
+                    help="生产批次 insitu_fit.csv；跳帧时用上一帧晶胞作种子")
     ap.add_argument("--max-rwp", type=float, default=20.0)
     ap.add_argument("--first-nfev", type=int, default=FIRST_NFEV)
     ap.add_argument("--frame-nfev", type=int, default=FRAME_NFEV)
+    ap.add_argument("--background-model",
+                    choices=("estimated", "chebyshev"), default="estimated",
+                    help="estimated = 滑动基线（生产默认）；"
+                         "chebyshev = 背景与峰联合拟合")
+    ap.add_argument("--background-order", type=int, default=10,
+                    help="chebyshev 背景阶数")
+    ap.add_argument("--intensity-poly", type=int, default=INTENSITY_POLY,
+                    help="主相平滑强度修正阶数；与相比例简并，"
+                         "定量验证建议 0")
     args = ap.parse_args()
 
     data_dir = Path(args.data).expanduser()
     if not data_dir.is_dir():
         ap.error(f"数据目录不存在：{data_dir}")
-    frames = frames_in_dir(data_dir, args.limit, args.stride)
+    if args.frames:
+        ordered = frames_in_dir(data_dir)
+        index = {i + 1: p for i, p in enumerate(ordered)}
+        wanted = sorted({int(x) for x in args.frames.split(",")
+                         if x.strip()})
+        missing = [n for n in wanted if n not in index]
+        if missing:
+            ap.error(f"帧不存在：{missing}（共 {len(index)} 帧）")
+        frames = [index[n] for n in wanted]
+        frame_numbers = wanted
+    else:
+        frames = frames_in_dir(data_dir, args.limit, args.stride)
+        frame_numbers = list(range(1, len(frames) + 1))
     if not frames:
         ap.error(f"目录里没有 .tif：{data_dir}")
+    seeds = load_seed_cells(args.seed_csv) if args.seed_csv else {}
     outdir = Path(args.outdir).expanduser()
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +152,10 @@ def main():
             al_path=args.al, mask_path=mask_path,
             lab6_tif=args.lab6, lab6_cif=args.lab6_cif,
             max_rwp=args.max_rwp,
-            first_nfev=args.first_nfev, frame_nfev=args.frame_nfev)
+            first_nfev=args.first_nfev, frame_nfev=args.frame_nfev,
+            background_model=args.background_model,
+            background_order=args.background_order,
+            intensity_poly=args.intensity_poly)
     except Exception as err:                       # noqa: BLE001
         ap.error(f"准备失败：{err}")
 
@@ -136,12 +167,22 @@ def main():
     if batch.mask is not None:
         import numpy as np
         print(f"mask: {mask_path} ({int(np.sum(batch.mask))} px)")
+    print(f"background: {batch.background_model}"
+          + (f" (order {batch.background_order})"
+             if batch.background_model == "chebyshev" else "")
+          + f"; intensity_poly={batch.intensity_poly}")
 
     csv_path = outdir / "insitu_fit.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as fh:
         writer = None
         for i, path in enumerate(frames, start=1):
-            print(f"[{i}/{len(frames)}] {path.name}", flush=True)
+            number = frame_numbers[i - 1]
+            print(f"[{i}/{len(frames)}] frame {number}: {path.name}",
+                  flush=True)
+            # 真实帧号写进 CSV；跳帧时用生产 CSV 上一帧的晶胞作种子。
+            batch.frame_no = number - 1
+            if (number - 1) in seeds:
+                batch.seed = seeds[number - 1]
             row = batch.fit_frame(path)
             if writer is None:
                 writer = csv.DictWriter(fh, fieldnames=list(row))

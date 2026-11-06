@@ -9,6 +9,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -20,6 +21,7 @@ from xrd_toolkit.simulation import (  # noqa: E402
     simulate_pattern_gsas, summarize_recovery, weight_percent_esd)
 from xrd_toolkit.simulation.quantitative import (  # noqa: E402
     PhaseQuantity, phase_mass_factor, phase_weight_percent)
+from xrd_toolkit.simulation import recovery as recovery_mod  # noqa: E402
 from xrd_toolkit.simulation.recovery import phase_curve  # noqa: E402
 
 STRUCT_DIR = ROOT / "data" / "structures"
@@ -115,6 +117,39 @@ class TestWeightPercentEsd(unittest.TestCase):
         got = weight_percent_esd(result)
         self.assertTrue(math.isnan(got["Lb"]))
         self.assertTrue(math.isfinite(got["main"]))
+
+
+class TestBackgroundRouting(unittest.TestCase):
+    """recovery_fit 的背景参数必须按模型转发给 fit_pattern。"""
+
+    def _phase(self):
+        lattice = types.SimpleNamespace(abc=(10.0, 6.0, 4.7))
+        return types.SimpleNamespace(lattice=lattice)
+
+    def _call(self, **kwargs):
+        main = self._phase()
+        extra = self._phase()
+        grid = np.linspace(10.0, 12.0, 50)
+        with mock.patch.object(recovery_mod, "fit_pattern") as fit:
+            recovery_mod.recovery_fit(
+                main, extra, grid, np.ones_like(grid),
+                wavelength=CU_KA,
+                instrument={key: 0.0 for key in
+                            ("zero", "u", "v", "w", "x", "y")},
+                main_cell=(10.0, 6.0, 4.7), extra_cell=(10.0, 6.0, 4.7),
+                background="estimated", **kwargs)
+            return fit.call_args.kwargs
+
+    def test_estimated_forwards_frozen_baseline(self):
+        kw = self._call(background_model="estimated")
+        self.assertEqual(kw["background_knots"], 0.25)
+        self.assertEqual(kw["background_smooth"], 0.1)
+
+    def test_chebyshev_forwards_order_only(self):
+        kw = self._call(background_model="chebyshev", background_order=8)
+        self.assertEqual(kw["background"], 8)
+        self.assertNotIn("background_knots", kw)
+        self.assertEqual(kw["background_smooth"], 0.0)
 
 
 class TestSummarize(unittest.TestCase):

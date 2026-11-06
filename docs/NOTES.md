@@ -304,32 +304,42 @@ cell jump, two consecutive frames on the same new cell re-lock the seed
 
 - Fraction: `A_p = scale_p × ΣI_p × norm_p / 100`, `f_rich = A_r/(A_r+A_p)`;
   this is a **relative scattering intensity**, not wt%.
-- Results (2026-11-03 two-start run): 81/81 usable; Rwp 2.10–2.35%; f_rich
-  0.917 (first) → 0.042 (frame 45) → 0.707 (last); strict ok 32,
-  `ok_soft` 47, `cell_jump` 2 (frames 27/28, the first poor-cell correction;
-  the old frame-35 step is gone). poor_a is 10.16 before frame 27 and
+- **Since 2026-11-06 the default is `INTENSITY_POLY=0`** (no smooth
+  intensity correction on the rich phase). Reason: the 2nd-order correction
+  is nearly degenerate with the rich phase fraction — on the real 10
+  frames it pushes the middle-frame rich wt down by up to 19 wt% vs
+  GSAS-II; order 0 cuts the mean absolute deviation from 13.5 to 4.2 wt%
+  at a 0.04–0.10 Rwp cost. The 2026-11-03 run (ipoly2) is kept as the
+  historical reference; see the *Quantitative validation* section.
+- Results (2026-11-06 default, ipoly0): 81/81 usable; Rwp 2.15–2.45%
+  (mean 2.28); f_rich 0.929 (first) → 0.158 (45) → 0.750 (last);
+  `wt_rich` (LMFP-normalized) 90.3→11.9→67.8; ok 28 / ok_soft 53 /
+  cell_jump 0; 22.9 min. poor_a is 10.13→10.10 before frame 27 and
   9.88→9.85 afterwards.
-- Fraction esd (linear block): ±0.008/±0.036/±0.015 at frames 1/45/81; at
-  frame 45 the rich phase sits on its cell lower bound, so only a ~4–13%
-  interval is quoted.
-- Model-independent check: the low-angle (200) doublet centroid moves
-  1.352→1.420→1.360°, R²=0.978 against f_poor
+- Results (2026-11-03 archived run, ipoly2): Rwp 2.10–2.35%; f_rich
+  0.917→0.042→0.707; ok 32 / ok_soft 47 / cell_jump 2; poor_a 10.16
+  before frame 27 and 9.88→9.85 afterwards.
+- Fraction esd (linear block, ipoly0): ±0.006/±0.011/±0.008 at frames
+  1/45/81; at frame 45 the rich phase still sits on its cell lower bound
+  (a=10.20), and the esd remains a lower bound.
+- Model-independent check (ipoly0): the low-angle (200) doublet centroid
+  moves 1.352→1.420→1.360°, R²=0.937 against f_poor
   (`scripts/check_insitu_peaks.py`).
 - GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`): phase-fraction
-  trend agrees (0.900/0.178/0.818 vs 0.917/0.042/0.707); **majority-phase**
-  cells agree within ~2 esd (rich at frame 1, poor at frame 45), but
-  **minority-phase** (<50%) cells are still pulled toward the majority
-  (ours poor_a 10.17/10.12 at frames 1/81 vs GSAS-II 9.845/9.815). The
-  trend/summary plots therefore draw solid cell markers only when that
+  trend agrees (0.900/0.178/0.818 vs 0.929/0.158/0.750);
+  **majority-phase** cells agree within ~2 esd (rich at frame 1, poor at
+  frame 45), but **minority-phase** (<50%) cells are still pulled toward
+  the majority (poor_a 10.13/10.18 at frames 1/81 vs GSAS-II 9.845/9.815).
+  The trend/summary plots therefore draw solid cell markers only when that
   phase is ≥50%; faded markers are minority estimates, not structural
   evidence. Refining cells on the shipped P1-expanded CIFs crashes GSAS-II's
   profile code, so the script restores Pnma with pymatgen and verifies peaks
   first.
-- Efficiency: 1384.5 s (23.1 min) for 81 frames; fit 16.97 s (two starts);
+- Efficiency: 1376.1 s (22.9 min) for 81 frames; fit 17.0 s (two starts);
   ~4.8 h for 1000 frames.
 - Plot: the 4-panel from `scripts/plot_insitu_summary.py`
-  (`outputs/insitu/`); solid cell markers = phase ≥50%, faded = minority
-  estimate.
+  (`outputs/insitu_ipoly0_81/`); solid cell markers = phase ≥50%, faded =
+  minority estimate.
 
 ## Quantitative validation (2026-11-06, A)
 
@@ -402,6 +412,42 @@ Artifacts in `outputs/gsas2_insitu10/`.
 - The 10 frames refine the earlier 3-frame statement: **minority deviations
   concentrate at the two ends** (early/late frames where rich and poor swap
   roles); the middle of the two-phase region is actually closer.
+
+### Intensity correction and phase fractions (2026-11-06 addendum)
+
+The old production fit applied a 2nd-order smooth intensity correction
+(`intensity_poly=2`) to the rich phase. In a two-phase fit this is nearly
+degenerate with the rich phase fraction: Rwp barely moves, but the fraction
+can be shifted silently.
+
+LMFP-normalized rich wt% on the real 10 frames (GSAS-II is a development
+reference only):
+
+| frame | ipoly2 (old production) | ipoly0 | ipoly1 | GSAS-II |
+|---|---|---|---|---|
+| 1 | 88.8 | 90.3 | 95.2 | 90.1 |
+| 15 | 73.1 | 79.2 | 73.2 | 80.7 |
+| 27 | 52.9 | 66.8 | 49.5 | 63.0 |
+| 35 | 25.6 | 49.1 | 20.3 | 44.8 |
+| 45 | 3.1 | 11.9 | 2.9 | 17.8 |
+| 55 | 6.6 | 20.6 | 4.8 | 24.9 |
+| 81 | 62.9 | 67.9 | 63.4 | 81.8 |
+
+Mean absolute deviation: ipoly2 **13.5**, ipoly0 **4.2**, ipoly1 15.7 wt%;
+the Rwp cost is only 0.04–0.10.
+
+Full 81-frame validation (ipoly0): Rwp 2.15–2.45 (mean 2.28), ok 28 /
+ok_soft 53 / cell_jump 0, 22.9 min; f_rich 0.929→0.158→0.750, wt_rich
+90.3→11.9→67.8. The old ipoly2 run is kept in `outputs/insitu/`; the new
+result is in `outputs/insitu_ipoly0_81/`.
+
+Controlled synthetic check: adding a +30% smooth intensity tilt to the
+rich phase, ipoly2 absorbs the tilt (Rwp stays 0.53) but biases wt by
++2.6; ipoly0 biases −2.5 with Rwp 1.43. **Rwp cannot tell which
+interpretation is correct.**
+
+**Decision**: turn the main-phase smooth intensity correction off (default
+0) for quantitative phase fractions; the minority-cell issue is unaffected.
 
 ### Minority two-stage fit
 

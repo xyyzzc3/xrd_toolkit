@@ -130,26 +130,42 @@ def recovery_fit(main, extra, tth, intensity, *, wavelength, instrument,
                  background_window=0.2, main_label="LMFP_rich",
                  extra_label="LMFP_poor", main_b_iso=0.0,
                  extra_b_iso=0.5, main_size_um=0.093, extra_size_um=0.1,
-                 intensity_poly=2, background_knots=0.25,
-                 background_smooth=0.1, cell_bounds=None, max_nfev=120):
+                 intensity_poly=0, background_knots=0.25,
+                 background_smooth=0.1, cell_bounds=None, max_nfev=120,
+                 background_model="estimated", background_order=10):
     """按原位生产口径拟合两相混合物（仪器固定，zero + 两相晶胞自由）。
 
     与 `insitu._fit_once` 的差异只有 Al 相（回收实验先做两相；Al 是参考
     相、不进 LMFP 分母）。`background` 可以是 "estimated"（生产背景）、
     "none"（无背景）或一个与观测等长的背景数组（验证公式时给已知背景）。
+
+    `background_model="chebyshev"` 时忽略上面的 `background`，改用
+    与峰联合拟合的 Chebyshev 背景（阶数 `background_order`）；这是
+    2026-11-06 定量验证里的候选改进，默认仍是生产口径 "estimated"。
     """
-    if isinstance(background, str):
-        if background == "estimated":
-            from xrd_toolkit.services.background import (
-                estimate_baseline_sliding)
-            bg = estimate_baseline_sliding(tth, intensity,
-                                           background_window)
-        elif background == "none":
-            bg = None
+    model = str(background_model)
+    if model == "chebyshev":
+        bg_kwargs = {"background": int(background_order)}
+        bg_smooth = 0.0
+    elif model == "estimated":
+        if isinstance(background, str):
+            if background == "estimated":
+                from xrd_toolkit.services.background import (
+                    estimate_baseline_sliding)
+                bg = estimate_baseline_sliding(tth, intensity,
+                                               background_window)
+            elif background == "none":
+                bg = None
+            else:
+                raise ValueError(f"未知 background 模式：{background}")
         else:
-            raise ValueError(f"未知 background 模式：{background}")
+            bg = np.asarray(background, dtype=float)
+        bg_kwargs = {"background": bg}
+        if bg is not None:
+            bg_kwargs["background_knots"] = background_knots
+        bg_smooth = background_smooth
     else:
-        bg = np.asarray(background, dtype=float)
+        raise ValueError(f"未知背景模型：{model}")
     instrument = dict(instrument)
     main_abc = tuple(float(v) for v in main.lattice.abc)
     extra_abc = tuple(float(v) for v in extra.lattice.abc)
@@ -179,9 +195,8 @@ def recovery_fit(main, extra, tth, intensity, *, wavelength, instrument,
     }
     return fit_pattern(
         main, tth, intensity, wavelength=wavelength,
-        b_iso=float(main_b_iso), background=bg,
-        background_knots=background_knots,
-        background_smooth=background_smooth, weights="poisson",
+        b_iso=float(main_b_iso), **bg_kwargs,
+        background_smooth=bg_smooth, weights="poisson",
         cell_refine=True, intensity_poly=intensity_poly,
         extra_phases=[extra_spec], phase_label=main_label,
         free=("zero",) + main_keys,

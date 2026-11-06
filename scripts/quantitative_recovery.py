@@ -39,7 +39,7 @@ from xrd_toolkit.simulation import (  # noqa: E402
     MixturePhase, load_structure, recovery_fit, simulate_mixture,
     summarize_recovery, weight_percent_esd)
 from xrd_toolkit.simulation.insitu import (  # noqa: E402
-    CELL_BOUNDS, DEFAULT_POOR, DEFAULT_RICH, _instrument)
+    CELL_BOUNDS, DEFAULT_POOR, DEFAULT_RICH, INTENSITY_POLY, _instrument)
 
 
 def _fractions(text):
@@ -107,6 +107,10 @@ def _run(args):
                     extra_cell=poor.lattice.abc,
                     background=(bg if mode == "oracle" else "estimated"),
                     background_window=args.fit_background_window,
+                    background_model=("estimated" if mode == "oracle"
+                                      else args.background_model),
+                    background_order=args.background_order,
+                    intensity_poly=args.intensity_poly,
                     cell_bounds=CELL_BOUNDS, max_nfev=args.max_nfev)
                 weights = {row.label: row for row in res.phase_weights}
                 main_row = weights.get("LMFP_rich")
@@ -115,6 +119,10 @@ def _run(args):
                        if main_row is not None else float("nan"))
                 rows.append({
                     "mode": mode,
+                    "background_model": ("oracle" if mode == "oracle"
+                                         else args.background_model),
+                    "background_order": int(args.background_order),
+                    "intensity_poly": int(args.intensity_poly),
                     "target_wt": float(target),
                     "seed": int(seed),
                     "recovered_wt": got,
@@ -142,6 +150,9 @@ def _write_csv(outdir, rows):
 def _write_summary(outdir, rows, args):
     lines = ["=== known-mixture wt% recovery ===",
              f"frame: {args.frame}",
+             f"background model: {args.background_model} "
+             f"(order {args.background_order})",
+             f"intensity_poly: {args.intensity_poly}",
              f"noise: {args.noise_scale} x sqrt(N) "
              "(1.0 = Poisson; this batch's real data is ~0.15)",
              f"peak max: {args.peak_max} counts",
@@ -198,10 +209,14 @@ def _write_figure(outdir, rows):
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
+    est = next((r for r in rows if r["mode"] == "estimated"), None)
+    if est and est.get("background_model") == "chebyshev":
+        est_label = f"estimated background (Chebyshev {est['background_order']})"
+    else:
+        est_label = "estimated background (production)"
     styles = {"oracle": ("#0072B2", "o",
                          "known background (formula check)"),
-              "estimated": ("#D55E00", "s",
-                            "estimated background (production)")}
+              "estimated": ("#D55E00", "s", est_label)}
     lo, hi = 0.0, 100.0
     ax.plot([lo, hi], [lo, hi], color="0.35", lw=1.0, ls="--",
             label="1:1")
@@ -249,6 +264,13 @@ def main(argv=None):
     ap.add_argument("--fit-background-window", type=float, default=0.2,
                     help="拟合时重新估背景的滑动窗宽（度）；只影响 "
                          "estimated 档")
+    ap.add_argument("--background-model",
+                    choices=("estimated", "chebyshev"), default="estimated",
+                    help="estimated = 生产背景；chebyshev = 背景与峰联合拟合")
+    ap.add_argument("--background-order", type=int, default=10,
+                    help="chebyshev 背景阶数")
+    ap.add_argument("--intensity-poly", type=int, default=INTENSITY_POLY,
+                    help="主相平滑强度修正阶数；与相比例简并，定量验证建议 0")
     ap.add_argument("--peak-max", type=float, default=2500.0)
     ap.add_argument("--mode", choices=("both", "oracle", "estimated"),
                     default="both")

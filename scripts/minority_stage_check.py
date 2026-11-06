@@ -28,8 +28,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import fit_pattern  # noqa: E402
 from xrd_toolkit.simulation.insitu import (  # noqa: E402
-    BG_SMOOTH, CELL_BOUNDS, FRAME_NFEV, _cell, _extra_phases,
-    _fit_initial, _fit_second_stage, frames_in_dir, load_frame,
+    BG_MODEL, BG_CHEBYSHEV_ORDER, CELL_BOUNDS, FRAME_NFEV, INTENSITY_POLY,
+    _background_kwargs, _cell, _extra_phases, _fit_initial,
+    _fit_second_stage, frames_in_dir, load_frame, load_seed_cells,
     prepare_setup)
 
 
@@ -45,30 +46,6 @@ def _cells(res):
     return {**{f"rich_{axis}": _value(res, axis) for axis in "abc"},
             **{f"poor_{axis}": _value(res, f"LMFP_poor:{axis}")
                for axis in "abc"}}
-
-
-def _load_seeds(path):
-    """从生产批次 CSV 取每帧的晶胞，作为下一帧的起点（贴近生产种子链）。"""
-    if not path:
-        return {}
-    path = Path(path).expanduser()
-    if not path.exists():
-        print(f"（种子 CSV 不存在，退回 CIF 起点：{path}）")
-        return {}
-    out = {}
-    with path.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            frame = int(float(row["frame"]))
-            try:
-                out[frame] = {
-                    "rich": tuple(float(row[f"rich_{axis}"])
-                                  for axis in "abc"),
-                    "poor": tuple(float(row[f"poor_{axis}"])
-                                  for axis in "abc"),
-                }
-            except (KeyError, ValueError):
-                continue
-    return out
 
 
 def _load_gsas(path):
@@ -121,10 +98,13 @@ def _fit_fixed_minority(batch, t, y, bg, res1, f_rich, endmember_cell):
                               refine_poor_cell=True)
         free = ()
         stages = [("LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")]
+    bg_kwargs, bg_smooth = _background_kwargs(
+        bg, batch.background_model, batch.background_order)
     return fit_pattern(
-        batch.rich, t, y, wavelength=batch.lam, b_iso=0.0, background=bg,
-        background_knots=0.25, background_smooth=BG_SMOOTH,
-        weights="poisson", cell_refine=True, intensity_poly=2,
+        batch.rich, t, y, wavelength=batch.lam, b_iso=0.0, **bg_kwargs,
+        background_smooth=bg_smooth,
+        weights="poisson", cell_refine=True,
+        intensity_poly=batch.intensity_poly,
         extra_phases=extra, phase_label="LMFP_rich", free=free,
         initial=init, stages=stages, bounds=CELL_BOUNDS,
         max_nfev=FRAME_NFEV)
@@ -140,8 +120,13 @@ def _run(args):
         raise SystemExit(f"这些帧不存在：{missing}")
     batch = prepare_setup(
         args.config, mask_path=args.mask, lab6_tif=args.lab6_tif,
-        lab6_cif=args.lab6_cif, frame_nfev=args.max_nfev)
-    seeds = _load_seeds(args.seed_csv)
+        lab6_cif=args.lab6_cif, frame_nfev=args.max_nfev,
+        background_model=args.background_model,
+        background_order=args.background_order,
+        intensity_poly=args.intensity_poly)
+    seeds = load_seed_cells(args.seed_csv)
+    if args.seed_csv and not seeds:
+        print(f"（种子 CSV 不存在，退回 CIF 起点：{args.seed_csv}）")
     gsas = _load_gsas(args.gsas_csv)
     rows, data, results = [], {}, {}
     for frame in frames:
@@ -161,7 +146,10 @@ def _run(args):
         results[frame] = res1
         res2 = _fit_second_stage(
             t, y, bg, batch.rich, batch.poor, batch.al, batch.lam,
-            batch.instrument, res1, f_rich, max_nfev=args.max_nfev)
+            batch.instrument, res1, f_rich, max_nfev=args.max_nfev,
+            background_model=batch.background_model,
+            background_order=batch.background_order,
+            intensity_poly=batch.intensity_poly)
         cells1 = _cells(res1)
         cells2 = _cells(res2)
         minority = "poor" if f_rich >= 0.5 else "rich"
@@ -322,6 +310,11 @@ def main(argv=None):
                     help="生产批次 CSV；用上一帧的晶胞作本帧起点")
     ap.add_argument("--outdir", default=str(ROOT / "outputs/minority_stage"))
     ap.add_argument("--max-nfev", type=int, default=FRAME_NFEV)
+    ap.add_argument("--background-model",
+                    choices=("estimated", "chebyshev"), default=BG_MODEL)
+    ap.add_argument("--background-order", type=int,
+                    default=BG_CHEBYSHEV_ORDER)
+    ap.add_argument("--intensity-poly", type=int, default=INTENSITY_POLY)
     args = ap.parse_args(argv)
     outdir = Path(args.outdir).expanduser()
     outdir.mkdir(parents=True, exist_ok=True)

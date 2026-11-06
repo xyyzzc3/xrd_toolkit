@@ -129,6 +129,47 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertIn("strict convergence: 50.0%", text)
 
 
+class TestBackgroundModel(unittest.TestCase):
+    """背景模型路由（2026-11-06）：默认仍是 estimated，chebyshev 可选。"""
+
+    def test_estimated_uses_frozen_baseline(self):
+        bg = np.arange(5.0)
+        kw, smooth = insitu._background_kwargs(bg, "estimated")
+        self.assertIs(kw["background"], bg)
+        self.assertEqual(kw["background_knots"], 0.25)
+        self.assertEqual(smooth, insitu.BG_SMOOTH)
+
+    def test_chebyshev_uses_joint_polynomial(self):
+        bg = np.arange(5.0)
+        kw, smooth = insitu._background_kwargs(bg, "chebyshev", 12)
+        self.assertEqual(kw, {"background": 12})
+        self.assertNotIn("background_knots", kw)
+        self.assertEqual(smooth, 0.0)
+
+    def test_unknown_model_raises(self):
+        with self.assertRaises(ValueError):
+            insitu._background_kwargs(np.arange(5.0), "nope")
+
+    def test_intensity_poly_override(self):
+        inst = SimpleNamespace(params={key: 0.0 for key in
+                                      ("zero", "u", "v", "w", "x", "y")})
+        st = SimpleNamespace()
+        captured = {}
+
+        def fake_fit(structure, t, y, **kwargs):
+            captured.update(kwargs)
+            return "res"
+
+        with mock.patch.object(insitu, "fit_pattern",
+                               side_effect=fake_fit):
+            got = insitu._fit_once(
+                np.arange(3.0), np.ones(3), np.ones(3), st, st, st,
+                0.1223, inst, (10.0, 6.0, 4.7), (9.8, 5.8, 4.7), 10,
+                intensity_poly=0)
+        self.assertEqual(got, "res")
+        self.assertEqual(captured["intensity_poly"], 0)
+
+
 class TestSecondStage(unittest.TestCase):
     """少数相两段拟合：固定多数相、只放开少数相（2026-11-06）。"""
 
@@ -176,6 +217,20 @@ class TestSecondStage(unittest.TestCase):
         self.assertEqual(kw["free"], ("a", "b", "c"))
         self.assertEqual(kw["stages"], [("a", "b", "c")])
         self.assertFalse(kw["extra_phases"][0]["refine_cell"])
+
+
+class TestSeedCsv(unittest.TestCase):
+    def test_reads_previous_frame_cells(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "insitu_fit.csv"
+            path.write_text(
+                "frame,rich_a,rich_b,rich_c,poor_a,poor_b,poor_c\n"
+                "1,10.3,6.0,4.7,9.8,5.8,4.8\n"
+                "2,bad,row,here,1,2,3\n", encoding="utf-8")
+            got = insitu.load_seed_cells(path)
+        self.assertEqual(got[1]["rich"], (10.3, 6.0, 4.7))
+        self.assertEqual(got[1]["poor"], (9.8, 5.8, 4.8))
+        self.assertNotIn(2, got)          # 坏行跳过，不污染种子
 
 
 class TestInSituBatch(unittest.TestCase):
