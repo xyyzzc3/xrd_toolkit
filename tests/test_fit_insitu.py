@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import fit_insitu as fi  # noqa: E402
+from xrd_toolkit.simulation import insitu  # noqa: E402
 
 
 def _result(*, success=True, rwp=2.0, rich_a=10.35, poor_a=10.17):
@@ -125,6 +127,55 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertIn("usable: 2/2", text)
         self.assertIn("strict ok: 1  ok_soft: 1", text)
         self.assertIn("strict convergence: 50.0%", text)
+
+
+class TestSecondStage(unittest.TestCase):
+    """少数相两段拟合：固定多数相、只放开少数相（2026-11-06）。"""
+
+    def _inst(self):
+        return SimpleNamespace(params={key: 0.0 for key in (
+            "zero", "u", "v", "w", "x", "y")})
+
+    def _structures(self):
+        lattice = SimpleNamespace(abc=(10.38, 6.05, 4.71))
+        return (SimpleNamespace(lattice=lattice),
+                SimpleNamespace(lattice=SimpleNamespace(
+                    abc=(9.79, 5.83, 4.77))),
+                SimpleNamespace(lattice=SimpleNamespace(
+                    abc=(4.061, 4.061, 4.061))))
+
+    def _run_stage(self, f_rich):
+        rich, poor, al = self._structures()
+        captured = {}
+
+        def fake_fit(structure, t, y, **kwargs):
+            captured.update(kwargs)
+            return "stage2"
+
+        with mock.patch.object(insitu, "fit_pattern",
+                               side_effect=fake_fit):
+            got = insitu._fit_second_stage(
+                np.arange(3.0), np.ones(3), np.ones(3),
+                rich, poor, al, 0.1223, self._inst(), _result(), f_rich)
+        return got, captured
+
+    def test_rich_majority_freezes_rich(self):
+        got, kw = self._run_stage(0.9)
+        self.assertEqual(got, "stage2")
+        # 主相晶胞不在 free；额外相晶胞由 refine_cell 自动加入
+        self.assertEqual(kw["free"], ())
+        self.assertEqual(kw["stages"],
+                         [("LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")])
+        self.assertTrue(kw["extra_phases"][0]["refine_cell"])
+        self.assertAlmostEqual(kw["initial"]["a"], 10.35)
+        self.assertAlmostEqual(kw["initial"]["LMFP_poor:a"], 10.17)
+
+    def test_poor_majority_freezes_poor(self):
+        got, kw = self._run_stage(0.2)
+        self.assertEqual(got, "stage2")
+        self.assertEqual(kw["free"], ("a", "b", "c"))
+        self.assertEqual(kw["stages"], [("a", "b", "c")])
+        self.assertFalse(kw["extra_phases"][0]["refine_cell"])
 
 
 class TestInSituBatch(unittest.TestCase):

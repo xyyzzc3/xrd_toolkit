@@ -69,6 +69,14 @@ from xrd_toolkit.simulation.quantitative import (
     phase_mass_factor,
     phase_weight_percent,
 )
+from xrd_toolkit.simulation.recovery import (
+    MixturePhase,
+    phase_curve,
+    recovery_fit,
+    simulate_mixture,
+    summarize_recovery,
+    weight_percent_esd,
+)
 from xrd_toolkit.simulation.profile import (
     caglioti_fwhm_deg,
     lorentz_fwhm_deg,
@@ -112,5 +120,7 @@ __all__ = [
     "format_strain", "summary_block",
     "WT_NOTE", "PhaseQuantity", "PhaseWeight", "cell_volume",
     "phase_mass_factor", "phase_weight_percent",
+    "MixturePhase", "phase_curve", "simulate_mixture", "recovery_fit",
+    "weight_percent_esd", "summarize_recovery",
     "CellMatch", "CellRefineResult", "crystal_system", "refine_cell",
 ]

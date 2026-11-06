@@ -331,6 +331,115 @@ cell jump, two consecutive frames on the same new cell re-lock the seed
   (`outputs/insitu/`); solid cell markers = phase ≥50%, faded = minority
   estimate.
 
+## Quantitative validation (2026-11-06, A)
+
+**Goal**: answer "how accurate is the wt%?" and "can the minority cell be
+rescued?" — without adding GUI features. GSAS-II is a development reference
+only; it is **never shown in the interface**. Artifacts live under `outputs/`
+(local workspace, not uploaded).
+
+### Known-mixture wt% recovery
+
+`scripts/quantitative_recovery.py` takes the 2θ grid, background shape and
+instrument profile from a real frame, synthesizes mixtures with known
+ratios, and recovers wt% through the production fitting recipe.
+
+| mode | n | bias | RMS | max\|err\| | slope |
+|---|---|---|---|---|---|
+| oracle (background known) | 22 | +0.02 | 0.03 | 0.05 | 1.000 |
+| estimated (production background) | 22 | −1.80 | 2.83 | 5.02 | 1.036 |
+
+Estimated-mode bias per true ratio (mean of two noise seeds):
+
+| true rich wt% | 5 | 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 | 90 | 95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bias wt% | −0.1 | −1.6 | −3.1 | −4.3 | −4.9 | −4.4 | −2.9 | −1.5 | +0.1 | +1.2 | +1.6 |
+
+**Scope note**: oracle's "known background" is the production baseline of a
+real frame; estimated re-estimates the background on top of the same shape.
+This measures the self-consistency error of "background shape known, peaks
+added, re-estimate", not the absolute error against an unknown truth. It is
+enough to locate the error source in the background treatment rather than in
+the wt% formula.
+
+Findings:
+
+1. **The formula and its implementation are correct**: with a known
+   background, 5–95 wt% recovers to within 0.05 wt%.
+2. **The dominant error source is the background treatment**: the sliding
+   baseline + 0.25° correction + curvature penalty biases the 20–70 wt%
+   range by −1.5 to −4.9 wt%, and the ends by +1 to +2 wt%.
+3. **The linear esd is a lower bound**: mean esd 0.35 wt% vs mean absolute
+   error 2.33 wt% (ratio ≈ 0.15). Do not quote it as a total uncertainty.
+4. **Background-window sensitivity** (50% mixture, single seed):
+   0.1° → 43.0, 0.2° → 45.6, 0.35° → 46.6, 0.5° → 46.9 (truth 50).
+   A wider window reduces but does not remove the bias.
+5. **Al spot check**: adding Al (Le Bail) with a known background gives
+   LMFP-normalized recovery 10→10.9, 50→50.4, 90→90.3 (≤1 wt% error).
+
+### GSAS-II 10-frame cross-check (development reference)
+
+```bash
+python scripts/gsas2_insitu_crosscheck.py prepare \
+  --data ~/Data/XRD/lmfpdata \
+  --mask outputs/masks/lmfp1_lab6_mask.npy \
+  --batch-csv outputs/insitu/insitu_fit.csv \
+  --frames 1,15,25,27,35,45,55,65,75,81 \
+  --outdir outputs/gsas2_insitu10
+conda run -n gsas2 python scripts/gsas2_insitu_crosscheck.py refine \
+  --workdir outputs/gsas2_insitu10
+python scripts/gsas2_insitu_crosscheck.py compare \
+  --workdir outputs/gsas2_insitu10
+```
+
+Artifacts in `outputs/gsas2_insitu10/`.
+
+- Minority cells: `poor_a` at frames 1/15/25/81 differs by −0.30 to −0.35 Å
+  (12–32 esd); `rich_a` at frames 35/65/75 by +0.06 to +0.07 Å (7–11 esd).
+- Majority cells sit within a few esd (`rich_b` has a 3–8 esd systematic).
+- Phase fractions use different definitions (relative scattering vs wt%);
+  only trends are comparable.
+- The 10 frames refine the earlier 3-frame statement: **minority deviations
+  concentrate at the two ends** (early/late frames where rich and poor swap
+  roles); the middle of the two-phase region is actually closer.
+
+### Minority two-stage fit
+
+`scripts/minority_stage_check.py` compares three routes on 10 frames
+(artifacts in `outputs/minority_stage/`):
+
+1. **stage 1**: production double-start, both cells free;
+2. **stage 2**: freeze the majority cell, free only the minority cell,
+   starting from the stage-1 solution;
+3. **endmember**: pin the minority cell to the value measured when that
+   phase was the majority (poor from frame 45, rich from frame 1) and refine
+   only the majority cell.
+
+| minority | metric | stage 1 | stage 2 | endmember |
+|---|---|---|---|---|
+| poor (6 frames) | mean \|Δa\| vs GSAS | 0.237 Å | 0.237 Å | **0.011 Å** |
+| poor (6 frames) | mean Rwp | 2.25% | 2.25% | 2.32% |
+| rich (4 frames) | mean \|Δa\| vs GSAS | 0.039 Å | 0.039 Å | 0.087 Å |
+| rich (4 frames) | mean Rwp | 2.24% | 2.24% | 2.35% |
+
+Findings:
+
+- **Stage 2 is a no-op**: the joint solution already sits at the minority
+  phase's conditional optimum, so freezing the majority cell and re-freeing
+  the minority cell moves nothing. The literal two-stage recipe does not
+  rescue the minority cell.
+- **The endmember constraint works for poor**: the minority `a` deviation
+  drops from 0.24 Å to 0.011 Å at a mean Rwp cost of 0.07 percentage points
+  (0.15 worst frame). Heterosite's cell is nearly constant at the
+  delithiated end, so the majority-regime value is a sensible prior.
+- **It fails/hurts for rich**: the rich cell changes continuously with Li
+  content; pinning it to the frame-1 lithiated endmember pushes `a` farther
+  from GSAS (0.039 → 0.087 Å). Rich-minority frames should keep the joint
+  value or use a frame-dependent trend constraint.
+- The **faded-marker rule stays**: minority cells are not identifiable from
+  weak-peak frames. Any structural number must be labelled as an
+  "endmember-constrained value (prior)", not a free-fit result.
+
 ## Batches, products and the file bar
 
 **Batching.** [打开文件夹] imports a whole folder (every .tif/.tiff/.edf/.cbf inside, duplicates skipped automatically — or just drag a folder onto the window), and any view button processes all checked files at once, with a live progress counter in the log and in a status-bar progress bar (completion lines end in （k/n）; opening the panels themselves reports progress every 8 panels and keeps the window responsive). Check more than **25** files and the batch draws **none** of them (the user's rule, 2026-09-26, "防爆图"; the line itself was 24 plot / 25 refuse until the user moved it to **25 / 26** on 2026-10-09): opening a panel is the one cost that grows with the count (136 ms for the first, 287 ms for the hundredth) and each costs ≈ 15 MB, so instead the whole batch is integrated in the background and stored, and the results land in the file bar's 1D 产物 group — **double-click an entry to open that one, or right-click the group for [打开整组]** (which asks first when the group is larger than the cap). Batches of 25 or fewer draw every panel as before. Large batches merge their log lines (one line for the openings, a progress line every 8, one summary with the elapsed time and how many came from the cache) — 81 files used to print 162 lines. [导出数据] saves each file's 1D product as a two-column txt / `.chi`: **a single dataset = one flat file**, **two or more = one folder**; the export name defaults to `<data type>-<sample>-<timestamp>` (e.g. `处理产物-LMFP_1-2026-10-23_235500`; the standard stays in the file header) and can be typed in the dialog (2026-10-23). The folder holds `<name>_全部数据.csv` plus a `txt/` subfolder with one file per curve (user, 2026-10-02). The collection is optional (checked by default; when 2θ grids differ, a dialog offers the common intersection with re-interpolation, skipping the mismatched files, or cancelling). A single failed file never aborts the batch, and the log gets a start line and a completion line carrying the elapsed time and the full path.
@@ -451,7 +560,9 @@ index representatives and layout / the two implementations agreeing).
 | `scripts/analyze_pattern.py` | Automatic phase screening over every CIF in `--lib` (optional `--elements` filter) + full-pattern fit/report from a TIFF + config |
 | `scripts/simulate_study.py` | Teaching/simulation studies: basic / instrument / microstructure / compare / fit / keys |
 | `scripts/gsas2_crosscheck.py` | GSAS-II cross-check simulations (run inside the separate `gsas2` env) |
-| `scripts/gsas2_insitu_crosscheck.py` | Three-frame GSAS-II cross-check of the in-situ batch (`prepare` → `refine` in the `gsas2` env → `compare`) |
+| `scripts/gsas2_insitu_crosscheck.py` | GSAS-II cross-check of the in-situ batch (`prepare` → `refine` in the `gsas2` env → `compare`; `--frames` picks any frames) |
+| `scripts/quantitative_recovery.py` | Known-mixture wt% recovery: true background (formula check) vs production background (bias), CSV/figure/summary |
+| `scripts/minority_stage_check.py` | Minority two-stage fit: fix the majority cell, free only the minority; compare against the GSAS-II development reference |
 | `scripts/fit_peaks.py` | Automatic peak finding (`services/peak_finding.py`) + single-peak fits (Gaussian/Lorentzian/pseudo-Voigt/split-Pearson VII) + per-peak Scherrer/Williamson–Hall with instrument correction from a LaB6 standard |
 | `scripts/refine_cell.py` | Peak-position cell refinement for all seven crystal systems (optional zero shift), matching observed 2θ peaks to hkl/d and reporting the matched-peak table |
 | `scripts/check_env.py` | Environment self-check — run this first when something "just won't run" |

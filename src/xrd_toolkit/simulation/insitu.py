@@ -112,14 +112,19 @@ def _instrument(geom, lam, *, lab6_tif=None, lab6_cif=None):
         max_nfev=200)
 
 
-def _extra_phases(poor, al, poor_cell):
-    """三相里的两个额外相：poor 结构 scale + 晶胞；Al 逐反射。"""
+def _extra_phases(poor, al, poor_cell, *, refine_poor_cell=True):
+    """三相里的两个额外相：poor 结构 scale + 晶胞；Al 逐反射。
+
+    `refine_poor_cell=False` 给少数相两段拟合用：第二段固定多数相
+    （poor 为多数时 poor 就是多数相），poor 晶胞不再动。
+    """
     return [
         {"structure": poor, "label": "LMFP_poor",
          "a": float(poor_cell[0]), "b": float(poor_cell[1]),
          "c": float(poor_cell[2]),
          "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5,
-         "refine_cell": True, "refine_intensities": False},
+         "refine_cell": bool(refine_poor_cell),
+         "refine_intensities": False},
         {"structure": al, "label": "Al",
          "a": AL_A, "b": AL_A, "c": AL_A,
          "size_um": 0.1, "mustrain": 0.0, "b_iso": 0.5,
@@ -250,13 +255,12 @@ def _fit_once(t, y, bg, rich, poor, al, lam, inst, rich_cell, poor_cell,
         bounds=CELL_BOUNDS, max_nfev=max_nfev)
 
 
-def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
-             max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
-    """一帧：读图/积分/背景 + **双起点**三相精修 + 计时。
+def load_frame(path, geom, mask, *, npt=NPT, tth_min=TTH_MIN,
+               tth_max=TTH_MAX):
+    """读一帧 → (t, y, bg, timers)：读图、1D 积分、自动基线。
 
-    2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
-    拉偏”的局部极小（frame 34 实测 Rwp 2.62 / poor_a 10.13；从 CIF 端元
-    再起一次是 2.30 / 9.87）。两个起点都跑，按 `_choose_fit` 取更好的。
+    单独抽出来给少数相两段拟合实验复用（第二段要用同一份 t/y/bg，
+    重新积分一次虽便宜，但口径必须逐点一致）。
     """
     timers = {}
     t0 = time.perf_counter()
@@ -269,6 +273,59 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     t2 = time.perf_counter()
     bg = estimate_baseline_sliding(t, y, 0.2)
     timers["bg"] = time.perf_counter() - t2
+    return t, y, bg, timers
+
+
+def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
+                      max_nfev=FRAME_NFEV):
+    """少数相两段拟合的第二段：固定多数相晶胞，只放开少数相晶胞。
+
+    `f_rich` 是相对散射分数（与图上实心/淡色同一口径）：≥0.5 时 rich
+    为多数相，固定 rich 晶胞、放开 poor；否则反过来。第二段从第一段
+    解出发，只动少数相的 a/b/c，zero 和仪器峰形保持第一段的解。
+
+    2026-11-06 实测：从联合解出发时这一段**不会移动少数相**——联合解
+    对少数相已经是条件极值。它只在少数相从端元值重新起步时才有意义；
+    `scripts/minority_stage_check.py` 里另做了端元约束版本。
+    """
+    rich_cell = _cell(res)
+    poor_cell = _cell(res, "LMFP_poor")
+    rich_majority = (not math.isfinite(f_rich)) or f_rich >= 0.5
+    if rich_majority:
+        # 额外相晶胞名由 refine_cell=True 自动加进 free（不能显式写；
+        # fit_pattern 的顶层校验只认主相参数名）。
+        free = ()
+        stage_names = ("LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")
+        extra = _extra_phases(poor, al, poor_cell)
+    else:
+        free = ("a", "b", "c")
+        stage_names = ("a", "b", "c")
+        extra = _extra_phases(poor, al, poor_cell, refine_poor_cell=False)
+    init = _fit_initial(inst, rich_cell, poor_cell)
+    try:
+        init["zero"] = float(res.params["zero"])
+    except (KeyError, TypeError):
+        pass
+    return fit_pattern(
+        rich, t, y, wavelength=lam, b_iso=0.0, background=bg,
+        background_knots=0.25, background_smooth=BG_SMOOTH,
+        weights="poisson", cell_refine=True, intensity_poly=2,
+        extra_phases=extra, phase_label="LMFP_rich", free=free,
+        initial=init, stages=[stage_names], bounds=CELL_BOUNDS,
+        max_nfev=max_nfev)
+
+
+def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
+             max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX):
+    """一帧：读图/积分/背景 + **双起点**三相精修 + 计时。
+
+    2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
+    拉偏”的局部极小（frame 34 实测 Rwp 2.62 / poor_a 10.13；从 CIF 端元
+    再起一次是 2.30 / 9.87）。两个起点都跑，按 `_choose_fit` 取更好的。
+    """
+    t0 = time.perf_counter()
+    t, y, bg, timers = load_frame(
+        path, geom, mask, npt=npt, tth_min=tth_min, tth_max=tth_max)
 
     seed_rich = tuple(float(x) for x in seed["rich"])
     seed_poor = tuple(float(x) for x in seed["poor"])

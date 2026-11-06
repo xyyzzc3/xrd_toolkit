@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""GSAS-II 独立对照：原位三相批量的 3 帧逐帧精修（Week 9，2026-10-28）。
+"""GSAS-II 独立对照：原位三相批量的逐帧精修（Week 9，2026-10-28）。
+
+默认 3 帧（1,45,81）；`prepare --frames` 可选任意帧（2026-11-06 的
+定量验证用过 10 帧）。GSAS-II 只作开发参考，产物不进 GUI。
 
 分三步、跨两个环境跑（GSAS-II 装在一个单独的 conda 环境里）：
 
@@ -375,7 +378,7 @@ def refine(args):
         writer.writerows(rows)
     total = sum(r["t_total_s"] for r in rows)
     lines = [
-        "=== GSAS-II in-situ crosscheck (3 frames) ===",
+        f"=== GSAS-II in-situ crosscheck ({len(rows)} frames) ===",
         f"order: {order} (anchored: poor-majority -> rich-majority -> rest)",
         f"frames: {len(rows)}  total: {total:.1f} s",
         "phase fractions: GSAS-II mass fractions (wt%), "
@@ -504,7 +507,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("prepare", help="积分 3 帧、写 xye/仪器文件/对称化 CIF")
+    p = sub.add_parser("prepare", help="积分所选帧、写 xye/仪器文件/对称化 CIF")
     p.add_argument("--data", default=str(DEFAULT_DATA))
     p.add_argument("--mask", default="outputs/masks/lmfp1_lab6_mask.npy")
     p.add_argument("--config", default="lmfp1_lab6")
