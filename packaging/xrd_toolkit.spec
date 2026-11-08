@@ -84,6 +84,8 @@ hiddenimports += ["xrd_toolkit.gui.refine_workbench",
                   "xrd_toolkit.gui.phase_workbench",
                   "xrd_toolkit.gui.insitu_workbench",
                   "xrd_toolkit.gui.wh_view",
+                  "xrd_toolkit.gui.report_export",
+                  "xrd_toolkit.services.analysis_report",
                   "xrd_toolkit.simulation.insitu",
                   "xrd_toolkit.simulation.phase_search"]
 

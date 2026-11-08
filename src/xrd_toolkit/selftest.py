@@ -154,17 +154,19 @@ def run() -> int:
     except Exception as err:                            # noqa: BLE001
         _report(False, "pymatgen + 参考 CIF", repr(err))
 
-    # ⑨ 四个分析工作台的模块（函数内延迟导入，打包最容易漏）
+    # ⑨ 分析工作台与报告的模块（函数内延迟导入，打包最容易漏）
     try:
         import xrd_toolkit.gui.refine_workbench    # noqa: F401
         import xrd_toolkit.gui.phase_workbench     # noqa: F401
         import xrd_toolkit.gui.insitu_workbench    # noqa: F401
         import xrd_toolkit.gui.wh_view             # noqa: F401
+        import xrd_toolkit.gui.report_export       # noqa: F401
+        import xrd_toolkit.services.analysis_report  # noqa: F401
         import xrd_toolkit.simulation.insitu       # noqa: F401
         import xrd_toolkit.simulation.phase_search  # noqa: F401
-        _report(True, "分析工作台模块（精修/物相/原位/W-H）")
+        _report(True, "分析工作台模块（精修/物相/原位/W-H/报告）")
     except Exception as err:                            # noqa: BLE001
-        _report(False, "分析工作台模块（精修/物相/原位/W-H）", repr(err))
+        _report(False, "分析工作台模块（精修/物相/原位/W-H/报告）", repr(err))
 
     return _finish()
 

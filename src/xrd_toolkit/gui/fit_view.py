@@ -52,6 +52,9 @@ class FitEntry:
     half_window: float
     fit: object                    # SinglePeakFit
     wh: bool = True                # 勾选参与 Williamson–Hall（默认参与）
+    # 拟合时用的局部背景（none/linear/quadratic）；报告的方法表要写清楚，
+    # 不能拿"当前面板设置"顶替（拟合完改过设置就串了）
+    background: str = "linear"
 
 
 def _settings(window, dock):
@@ -89,7 +92,8 @@ def fit_series(tth, intensity, centers, *, shape="pseudovoigt",
         except Exception as err:                   # noqa: BLE001
             failures.append((float(center), str(err)))
             continue
-        entries.append(FitEntry(float(center), float(half_window), fit))
+        entries.append(FitEntry(float(center), float(half_window), fit,
+                                background=background))
     return entries, failures
 
 
