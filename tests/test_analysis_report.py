@@ -46,6 +46,57 @@ def _curve(**overrides):
     return curve
 
 
+def _profile(title="Whole-pattern refinement — LMFP"):
+    x = np.linspace(1.0, 8.0, 400)
+    y = (100.0
+         + 1200.0 * np.exp(-4.0 * np.log(2.0) * ((x - 2.0) / 0.06) ** 2))
+    return ar.ReportProfileFit(
+        tth=x, y_obs=y, y_calc=y - 0.5,
+        residual=np.full_like(x, 0.5), rwp=2.34, rp=1.82,
+        title=title, background=np.full_like(x, 100.0),
+        bragg=[("LMFP", np.array([2.0, 3.0, 4.5])),
+               ("Al", np.array([3.8]))])
+
+
+def _refine():
+    return ar.ReportRefine(
+        phase_label="LMFP", cif="/data/LiMn0.6Fe0.4PO4_olivine.cif",
+        rwp=2.34, rp=1.82,
+        reduced_chi2=1.2, n_obs=400, n_params=12, success=True,
+        message="ok", lebail=False, profile=_profile(),
+        params=[("a", 4.70, 4.701, 0.001),
+                ("zero", 0.0, 0.01, 0.002)],
+        weights=[ar.ReportPhaseWeight("LMFP", 96.2, 123.4, 4.0, 158.0,
+                                      289.0),
+                 ar.ReportPhaseWeight("Al", 3.8, 8.0, 4.0, 27.0, 66.0,
+                                      source="le_bail")],
+        weight_note="wt% 只对晶态相",
+        site_coords=[("Fe1", "4c", 0.5, 0.5, 0.5)],
+        methods=[("结构", "LMFP.cif"), ("模式", "结构精修")],
+        note="立方晶胞只精修 a")
+
+
+def _insitu():
+    rows = []
+    for i in range(1, 6):
+        rows.append({
+            "frame": i, "file": f"f{i}.tif",
+            "status": "ok_soft" if i == 3 else "ok", "usable": True,
+            "rwp": 2.0 + 0.05 * i, "rp": 1.6 + 0.04 * i,
+            "f_rich": 0.92 - 0.05 * i, "f_poor": 0.08 + 0.05 * i,
+            "wt_rich": 90 - 5 * i, "wt_poor": 10 + 5 * i,
+            "rich_a": 10.4, "rich_b": 6.0, "rich_c": 4.7,
+            "poor_a": 9.9, "poor_b": 5.8, "poor_c": 4.75,
+        })
+    mi_rows = [{"frame": i, "doublet_area": 100 + i,
+                "centroid": 1.3 + 0.01 * i,
+                "f_poor": 0.08 + 0.05 * i, "status": "ok"}
+               for i in range(1, 6)]
+    return ar.ReportInSitu(
+        rows=rows, methods=[("帧数", "5")],
+        frame_fit=_profile("In-situ frame 2 — f2.tif"), mi_rows=mi_rows)
+
+
 def _snapshot(**overrides):
     kwargs = dict(
         title="XRD 分析报告", sample="LMFP_1",
@@ -89,10 +140,58 @@ class TestReportHtml(unittest.TestCase):
         self.assertIn("class=\"status-skip\"", html)
         self.assertIn("结果说明与限制", html)
 
+    def test_refine_section_tables_and_figure(self):
+        html = ar.build_report_html(_snapshot(refine=_refine()))
+        self.assertIn("全谱精修", html)
+        self.assertIn("2.34", html)              # Rwp
+        self.assertIn("96.20", html)             # wt%
+        self.assertIn("Fe1", html)               # 位点
+        self.assertIn("精修参数", html)
+        self.assertIn("定量相分数", html)
+        self.assertIn("立方晶胞只精修 a", html)
+        self.assertIn("whole-pattern refinement", html)   # 图的 alt
+
+    def test_insitu_section_summary_frames_and_figures(self):
+        html = ar.build_report_html(_snapshot(insitu=_insitu()))
+        self.assertIn("原位三相批量", html)
+        self.assertIn("5/5", html)
+        self.assertIn("0.870", html)             # f_rich 起点
+        self.assertIn("ok_soft=1", html)
+        self.assertIn("逐帧结果（完整）", html)
+        self.assertIn("模型无关检查", html)
+        self.assertIn("in-situ single frame fit", html)
+
+    def test_missing_refine_and_insitu_are_marked(self):
+        html = ar.build_report_html(_snapshot(
+            sections=("curve", "refine", "insitu")))
+        self.assertIn("本次未做全谱精修", html)
+        self.assertIn("本次未跑原位批量", html)
+        self.assertIn("本次未做：全谱精修、原位三相批量", html)
+
+    def test_insitu_all_error_batch_still_renders(self):
+        insitu = ar.ReportInSitu(rows=[{
+            "frame": 1, "status": "error: boom", "usable": False,
+            "rwp": "nan", "f_rich": "nan"}])
+        html = ar.build_report_html(_snapshot(insitu=insitu))
+        self.assertIn("error=1", html)
+        self.assertIn("Rwp —", html)
+        self.assertIn("0/1", html)
+
+    def test_insitu_stats_accepts_csv_strings(self):
+        rows = [{"frame": "1", "status": "ok", "usable": "True",
+                 "rwp": "2.1", "f_rich": "0.9"},
+                {"frame": "2", "status": "error", "usable": "False",
+                 "rwp": "bad", "f_rich": "nan"}]
+        stats = ar._insitu_stats(rows)
+        self.assertEqual(stats["total"], 2)
+        self.assertEqual(stats["usable"], 1)
+        self.assertAlmostEqual(stats["rwp_max"], 2.1)
+        self.assertAlmostEqual(stats["f_start"], 0.9)
+
     def test_unselected_sections_are_absent(self):
         html = ar.build_report_html(_snapshot(sections=("curve",)))
         for title in ("峰表", "单峰拟合", "Williamson–Hall / Scherrer",
-                      "物相筛选"):
+                      "物相筛选", "全谱精修", "原位三相批量"):
             self.assertNotIn(f"{title}</h3>", html)
         # 结果说明与限制始终保留（它不是可勾选节）
         self.assertIn("结果说明与限制", html)

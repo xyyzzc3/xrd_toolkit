@@ -178,6 +178,9 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(ok, "精修没有在 30 秒内完成")
 
         self.assertLess(editor.result.rwp, 15.0)
+        # 报告用的拟合参数快照：CIF 与自由参数要跟这次拟合一致
+        self.assertEqual(editor._fit_meta["cif"], str(LAB6_CIF))
+        self.assertIn("a", editor._fit_meta["free"])
         self.assertGreater(editor.param_table.rowCount(), 0)
         self.assertIn("Rwp", editor.report_view.toPlainText())
         self.assertIn("Rwp", editor.rwp_label.text())

@@ -361,7 +361,7 @@ def _open_manual(window: QMainWindow) -> None:
 
 
 def _open_report(window: QMainWindow) -> None:
-    """[报告]：把当前会话的 1D/峰/拟合/W-H/物相汇成自包含 HTML。
+    """[报告]：把当前会话的 1D/峰/拟合/W-H/物相/精修/原位汇成 HTML。
 
     模块级延迟导入（同 Mask/精修等入口）：report_export 会 import
     panel_state/peak_view，放在模块顶部容易绕成 app ↔ 这些模块的环。
@@ -805,7 +805,8 @@ def _build_toolbar(window: QMainWindow) -> None:
     （直接看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→
     **处理**（链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
     （物相 → 精修 → 原位），与 Mask 一样开中央子窗口，不占参数页；
-    [报告]（2026-11-08）把当前会话的结果汇成一份自包含 HTML。
+    [报告]（2026-11-08，v1.1 起含精修/原位）把当前会话的结果汇成
+    一份自包含 HTML。
 
     入口（位置 A = 窗口顶部，用户 2026-09-24 定稿）：点一个 = 参数坞翻到
     那一页（见 _switch_entrance）；出图动作由各页底部的产出按钮负责
@@ -897,15 +898,15 @@ def _build_toolbar(window: QMainWindow) -> None:
     window.calib_btn = window.entrance_buttons["校准"]
     window.calib_btn.toggled.connect(lambda on: _on_mode(window, on))
 
-    # [报告]：把当前会话的 1D / 峰表 / 拟合 / W-H / 物相汇成一份自包含
-    # HTML（2026-11-08）。普通动作按钮，不进工作台模式——它只读当前结果，
-    # 不改变任何面板状态。
+    # [报告]：把当前会话的 1D / 峰表 / 拟合 / W-H / 物相 / 精修 / 原位
+    # 汇成一份自包含 HTML（2026-11-08；v1.1 加精修/原位）。普通动作按钮，
+    # 不进工作台模式——它只读当前结果，不改变任何面板状态。
     tb.addSeparator()
     btn_report = QPushButton("报告")
     btn_report.setObjectName("report_btn")
     btn_report.setToolTip(
-        "把当前会话的 1D / 峰表 / 拟合 / W-H / 物相汇成一份自包含 HTML"
-        "（浏览器可打印 PDF）")
+        "把当前会话的 1D / 峰表 / 拟合 / W-H / 物相 / 精修 / 原位"
+        "汇成一份自包含 HTML（浏览器可打印 PDF）")
     btn_report.clicked.connect(lambda: _open_report(window))
     tb.addWidget(btn_report)
     window.report_btn = btn_report

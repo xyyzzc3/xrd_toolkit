@@ -114,6 +114,8 @@ class InSituWorkbench(QWidget):
         self.outdir = paths.default_outputs_dir() / "insitu"
         self.frames = []
         self.batch = None
+        # 批次开始那一刻的输入快照：报告用（跑完再改下拉框也不会写错）
+        self._batch_meta = None
         self._task = None
         self._stop = False
         self._index = 0
@@ -465,6 +467,13 @@ class InSituWorkbench(QWidget):
         self._stop = False
         self._index = 0
         self.batch = None
+        self._batch_meta = {
+            "data_dir": str(self.data_dir),
+            "mask": str(self.mask_path) if self.mask_path else "",
+            "phases": {key: str(path)
+                       for key, path in self.phase_paths.items() if path},
+            "lab6": str(self.lab6_path) if self.lab6_path else "",
+        }
         self.table.setRowCount(0)
         self._clear_fit_view()
         self._mi_rows = None

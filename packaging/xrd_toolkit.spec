@@ -87,6 +87,7 @@ hiddenimports += ["xrd_toolkit.gui.refine_workbench",
                   "xrd_toolkit.gui.report_export",
                   "xrd_toolkit.services.analysis_report",
                   "xrd_toolkit.simulation.insitu",
+                  "xrd_toolkit.simulation.insitu_plots",
                   "xrd_toolkit.simulation.phase_search"]
 
 # 明确不要的：装不下也用不到的大件/开发件（tkinter 是 PyInstaller 经典

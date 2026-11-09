@@ -5,7 +5,8 @@
   * 本模块只做"从当前会话读快照 + 弹窗 + 写文件"，不重新积分、不重跑
     拟合。1D 曲线与处理链走 `panel_state._proc_curve`（与屏幕同一个口径），
     峰表按该面板的寻峰参数重算（与 [显示峰位] 同一套参数），单峰拟合与
-    W-H 直接读面板上已经算好的结果。
+    W-H 直接读面板上已经算好的结果；精修读 `refine_editor.result`，
+    原位读 `insitu_editor.batch`（都只复制快照，不重跑）。
 
 入口：工具栏 [报告]，默认导出到 `outputs/reports/`。
 """
@@ -38,6 +39,8 @@ _SECTION_CHOICES = (
     ("fits", "单峰拟合"),
     ("wh", "W-H / Scherrer"),
     ("phases", "物相筛选"),
+    ("refine", "全谱精修"),
+    ("insitu", "原位三相批量"),
 )
 
 
@@ -138,6 +141,224 @@ def _wavelength(window, config_name=None):
         return float(geom["wavelength_m"]) * 1e10
     except (KeyError, TypeError, ValueError):
         return None
+
+
+# ══ 精修 / 原位快照 ═══════════════════════════════════════
+def _safe_float(value, default=float("nan")) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if np.isfinite(number) else default
+
+
+def _bragg_rows(result) -> list:
+    """FitResult 的布拉格峰位 → [(标签, 数组)]（主相 + 额外相）。"""
+    rows = []
+    peak_tth = getattr(result, "peak_tth", None)
+    if peak_tth is not None and len(peak_tth):
+        rows.append((str(getattr(result, "phase_label", "") or "主相"),
+                     np.asarray(peak_tth, dtype=float).copy()))
+    for label, pos in (getattr(result, "extra_peak_tth", None) or {}).items():
+        rows.append((str(label), np.asarray(pos, dtype=float).copy()))
+    return rows
+
+
+def _profile_from_result(result, title):
+    """FitResult → 报告里的全谱拟合图快照（只复制数组）。"""
+    if result is None or getattr(result, "tth", None) is None:
+        return None
+    background = getattr(result, "background", None)
+    return report.ReportProfileFit(
+        tth=np.asarray(result.tth, dtype=float).copy(),
+        y_obs=np.asarray(result.y_obs, dtype=float).copy(),
+        y_calc=np.asarray(result.y_calc, dtype=float).copy(),
+        residual=np.asarray(result.residual, dtype=float).copy(),
+        rwp=_safe_float(getattr(result, "rwp", float("nan"))),
+        rp=_safe_float(getattr(result, "rp", float("nan"))),
+        title=str(title),
+        background=(None if background is None
+                    else np.asarray(background, dtype=float).copy()),
+        bragg=_bragg_rows(result))
+
+
+def _refine_snapshot(window):
+    """精修工作台的当前结果 → ReportRefine；没结果返回 None。
+
+    参数与方法优先读 `_fit_meta`（拟合开始那一刻的快照），避免用户拟合
+    完又改了下拉框/勾选项，报告把"当时用的参数"写错。
+    """
+    editor = getattr(window, "refine_editor", None)
+    result = getattr(editor, "result", None) if editor is not None else None
+    if editor is None or result is None:
+        return None
+    meta = dict(getattr(editor, "_fit_meta", None) or {})
+    cif = str(meta.get("cif") or editor.cif_combo.currentData() or "")
+    phase = (str(getattr(result, "phase_label", "") or "")
+             or (Path(cif).stem if cif else "主相"))
+
+    params = []
+    initial = getattr(result, "initial", None) or {}
+    stderr = getattr(result, "stderr", None) or {}
+    skip = {"scale", "size_mix", "strain_mix"}
+    for name, value in (getattr(result, "params", None) or {}).items():
+        if name in skip or name.startswith("intensity_a"):
+            continue
+        # 额外相只保留 scale（Al:scale）；逐反射强度/微结构不进表
+        if ":" in name and not name.endswith(":scale"):
+            continue
+        params.append((str(name), _safe_float(initial.get(name)),
+                       _safe_float(value), _safe_float(stderr.get(name))))
+
+    weights = []
+    for row in (getattr(result, "phase_weights", None) or []):
+        weights.append(report.ReportPhaseWeight(
+            label=str(row.label),
+            weight_percent=_safe_float(row.weight_percent),
+            scale=_safe_float(row.scale), z=_safe_float(row.z),
+            molar_mass=_safe_float(row.molar_mass),
+            volume=_safe_float(row.volume),
+            source=str(getattr(row, "source", "structure")),
+            warning=str(getattr(row, "warning", "") or "")))
+
+    sites = []
+    for label, values in (getattr(result, "site_coords", None) or {}).items():
+        try:
+            wyckoff, x, y, z = values
+            sites.append((str(label), str(wyckoff), float(x), float(y),
+                          float(z)))
+        except (TypeError, ValueError):
+            continue
+
+    free = list(meta.get("free") or [])
+    extra_paths = list(meta.get("extra_paths") or [])
+    wavelength = _safe_float(meta.get("wavelength"))
+    methods = [
+        ("分析曲线", str(meta.get("curve_title")
+                       or editor.curve_combo.currentText() or "—")),
+        ("结构", Path(cif).name if cif else "—"),
+        ("模式", ("Le Bail（强度自由）" if meta.get("lebail")
+                  else "结构精修")),
+        ("自由参数", "、".join(free) if free else "—"),
+        ("背景", (f"自动基线 {float(meta.get('bg_window') or 0):g}°"
+                  if meta.get("bg_mode") == "auto" else "无")),
+        ("额外相", "、".join(Path(path).name for path in extra_paths)
+         or "无"),
+        ("额外相强度", ("逐反射自由（Le Bail）"
+                       if meta.get("extra_lebail") else "结构因子")),
+        ("仪器", ("固定 LaB₆ 基线" if meta.get("fixed")
+                  else "精修 zero/U/V/W/X/Y")),
+        ("波长", (f"{wavelength:.4f} Å"
+                  if np.isfinite(wavelength) else "—")),
+    ]
+    title = f"Whole-pattern refinement — {phase}"
+    return report.ReportRefine(
+        phase_label=phase, cif=cif,
+        rwp=_safe_float(getattr(result, "rwp", float("nan"))),
+        rp=_safe_float(getattr(result, "rp", float("nan"))),
+        reduced_chi2=_safe_float(getattr(result, "reduced_chi2",
+                                         float("nan"))),
+        n_obs=int(getattr(result, "n_obs", 0) or 0),
+        n_params=int(getattr(result, "n_params", 0) or 0),
+        success=bool(getattr(result, "success", True)),
+        message=str(getattr(result, "message", "") or ""),
+        lebail=bool(meta.get("lebail")),
+        profile=_profile_from_result(result, title),
+        params=params, weights=weights,
+        weight_note=str(getattr(result, "phase_weight_note", "") or ""),
+        site_coords=sites, methods=methods,
+        note=str(getattr(editor, "_fit_result_note", "") or ""))
+
+
+def _insitu_snapshot(window):
+    """原位工作台的当前批次 → ReportInSitu；没跑过/没结果返回 None。"""
+    editor = getattr(window, "insitu_editor", None)
+    batch = getattr(editor, "batch", None) if editor is not None else None
+    rows = [dict(row) for row in (getattr(batch, "rows", None) or [])]
+    if editor is None or batch is None or not rows:
+        return None
+    meta = dict(getattr(editor, "_batch_meta", None) or {})
+    phase_paths = dict(meta.get("phases")
+                       or getattr(editor, "phase_paths", {}) or {})
+
+    mask_path = str(meta.get("mask") or "")
+    if not mask_path:
+        current_mask = getattr(editor, "mask_path", None)
+        mask_path = str(current_mask) if current_mask else ""
+    mask_note = (f"已应用：{Path(mask_path).name}" if mask_path
+                 else ("已应用" if getattr(batch, "mask", None) is not None
+                       else "未使用"))
+
+    methods = [
+        ("数据目录", str(meta.get("data_dir")
+                       or getattr(editor, "data_dir", "") or "—")),
+        ("帧数", str(len(rows))),
+        ("mask", mask_note),
+    ]
+    for key, label in (("rich", "富锂相"), ("poor", "贫锂相"),
+                       ("al", "Al 参考相")):
+        path = phase_paths.get(key)
+        methods.append((label, Path(path).stem if path else "—"))
+    lab6 = str(meta.get("lab6") or "")
+    if lab6:
+        methods.append(("LaB₆ 标样", Path(lab6).name))
+    methods += [
+        ("2θ 范围", f"{batch.tth_min:g}–{batch.tth_max:g}°"),
+        ("输出点数", str(batch.npt)),
+        ("最大 Rwp", f"{batch.max_rwp:g}%"),
+        ("背景模型", str(batch.background_model)),
+        ("强度修正阶数", str(batch.intensity_poly)),
+        ("迭代上限", f"首帧 {batch.first_nfev} / 后续 {batch.frame_nfev}"),
+        ("双起点", "每帧（上一帧种子 + CIF 端元）"),
+    ]
+    instrument = getattr(batch, "instrument", None)
+    if instrument is not None:
+        rwp_text = report._num(getattr(instrument, "rwp", float("nan")),
+                               "{:.2f}")
+        methods.append(("仪器标样", f"LaB₆ 精修 Rwp {rwp_text}%"))
+        params = getattr(instrument, "params", None) or {}
+        bits = [f"{name} {report._num(params.get(name), '{:.4g}')}"
+                for name in ("zero", "u", "v", "w", "x", "y")
+                if name in params]
+        if bits:
+            methods.append(("仪器参数", "、".join(bits)))
+
+    frame_fit = None
+    current = getattr(editor, "_fit_res", None)
+    if current is not None:
+        frame_no = getattr(editor, "_fit_frame", None)
+        frame_file = Path(str(getattr(editor, "_fit_file", "") or "")).name
+        frame_fit = _profile_from_result(
+            current, f"In-situ frame {frame_no} — {frame_file}")
+    else:
+        candidates = [entry for entry in (getattr(batch, "fitted", None) or [])
+                      if str(entry[4]) in ("ok", "ok_soft")
+                      and entry[2] is not None]
+        if candidates:
+            entry = min(candidates, key=lambda item: _safe_float(
+                getattr(item[2], "rwp", float("inf")), float("inf")))
+            frame_no, path, result, _f_rich, _status = entry
+            frame_fit = _profile_from_result(
+                result, f"In-situ frame {frame_no} — {Path(path).name}")
+
+    mi_rows = []
+    fitted = list(getattr(batch, "fitted", None) or [])
+    if len(fitted) >= 3:
+        cached = getattr(editor, "_mi_rows", None)
+        if cached:
+            mi_rows = [dict(row) for row in cached]
+        else:
+            try:
+                from xrd_toolkit.simulation.insitu_plots import (
+                    model_independent_rows)
+                mi_rows = model_independent_rows(fitted)
+            except Exception as err:             # noqa: BLE001
+                mi_rows = []
+                methods.append(("模型无关检查",
+                                f"未收录：{user_error_text(err)}"))
+
+    return report.ReportInSitu(
+        rows=rows, methods=methods, frame_fit=frame_fit, mi_rows=mi_rows)
 
 
 # ══ 收集快照 ═════════════════════════════════════════════
@@ -307,6 +528,9 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
                 ("寻峰最小峰距", f"{editor.min_distance.value():g}°"),
             ]
 
+    refine = _refine_snapshot(window) if "refine" in sections else None
+    insitu = _insitu_snapshot(window) if "insitu" in sections else None
+
     return report.ReportSnapshot(
         title=str(title).strip() or "XRD 分析报告",
         sample=str(sample).strip(),
@@ -314,6 +538,7 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
         version=str(__version__),
         curve=curve, phases=phases, phase_tth=phase_tth,
         phase_intensity=phase_y, phase_source=phase_source,
+        refine=refine, insitu=insitu,
         sections=sections, phase_methods=phase_methods)
 
 

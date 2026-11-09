@@ -6,8 +6,9 @@ Matplotlib 的 Agg 画布按脚本尺寸重画（不抓 Qt 屏幕），base64 �
 浏览器打开即可阅读、可直接打印成 PDF。
 
 为什么单独放 services（2026-11-08）：生成器要能被单测直接调用，不依赖
-窗口；GUI 只负责"收集快照 + 选路径"。以后要加精修/原位节，也只在
-`ReportSnapshot` 上加字段，不动生成器的主干。
+窗口；GUI 只负责"收集快照 + 选路径"。v1.1（2026-11-09）加了精修与
+原位两节：精修读 `refine_editor.result`，原位读 `insitu_editor.batch`，
+仍然只汇总已经算好的数组，不重新积分、不重跑拟合。
 
 口径（与 docs/ROADMAP.zh-CN.md 的计划 1 一致）：
   * 缺的节跳过，并在"本次报告范围"里写清楚为什么没做；
@@ -49,6 +50,8 @@ SECTIONS = (
     ("fits", "单峰拟合"),
     ("wh", "W-H / Scherrer"),
     ("phases", "物相筛选"),
+    ("refine", "全谱精修"),
+    ("insitu", "原位三相批量"),
 )
 _ALL_KEYS = tuple(key for key, _title in SECTIONS)
 
@@ -125,6 +128,78 @@ class ReportPhase:
 
 
 @dataclass
+class ReportProfileFit:
+    """一条全谱拟合的绘图快照（精修或原位单帧）。
+
+    字段名与 `simulation.fit.FitResult` 对齐，可以直接交给
+    `simulation.plots.draw_fit`（只读，不重跑拟合）。
+    """
+
+    tth: np.ndarray
+    y_obs: np.ndarray
+    y_calc: np.ndarray
+    residual: np.ndarray
+    rwp: float
+    rp: float
+    title: str = ""
+    background: Optional[np.ndarray] = None
+    bragg: list[tuple[str, np.ndarray]] = field(default_factory=list)
+
+
+@dataclass
+class ReportPhaseWeight:
+    """Rietveld 定量的一行（simulation.quantitative.PhaseWeight 快照）。"""
+
+    label: str
+    weight_percent: float
+    scale: float
+    z: float
+    molar_mass: float
+    volume: float
+    source: str = "structure"
+    warning: str = ""
+
+
+@dataclass
+class ReportRefine:
+    """全谱精修的一次结果（`refine_editor.result` 的报告快照）。"""
+
+    phase_label: str
+    cif: str
+    rwp: float = float("nan")
+    rp: float = float("nan")
+    reduced_chi2: float = float("nan")
+    n_obs: int = 0
+    n_params: int = 0
+    success: bool = True
+    message: str = ""
+    lebail: bool = False
+    profile: Optional[ReportProfileFit] = None
+    # (参数名, 初值, 拟合值, esd)，已按工作台参数表的过滤规则筛过
+    params: list[tuple[str, float, float, float]] = field(
+        default_factory=list)
+    weights: list[ReportPhaseWeight] = field(default_factory=list)
+    weight_note: str = ""
+    # (位点标签, Wyckoff, x, y, z)
+    site_coords: list[tuple[str, str, float, float, float]] = field(
+        default_factory=list)
+    methods: list[tuple[str, str]] = field(default_factory=list)
+    note: str = ""
+
+
+@dataclass
+class ReportInSitu:
+    """原位三相批量的报告快照（`insitu_editor.batch` 的只读副本）。"""
+
+    rows: list[dict] = field(default_factory=list)
+    methods: list[tuple[str, str]] = field(default_factory=list)
+    # 代表性单帧拟合（当前查看的帧，或 Rwp 最低的可用帧）
+    frame_fit: Optional[ReportProfileFit] = None
+    # 模型无关检查（(200) 双峰质心）；由 GUI 从已算好的拟合曲线导出
+    mi_rows: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class ReportCurve:
     """一条 1D 曲线的完整快照（处理后的曲线 + 峰/拟合/W-H）。"""
 
@@ -158,6 +233,8 @@ class ReportSnapshot:
     phase_tth: Optional[np.ndarray] = None
     phase_intensity: Optional[np.ndarray] = None
     phase_source: str = ""
+    refine: Optional[ReportRefine] = None
+    insitu: Optional[ReportInSitu] = None
     sections: tuple[str, ...] = _ALL_KEYS
     notes: list[str] = field(default_factory=list)
     # 物相筛选的方法参数（相库/元素/容差/寻峰），同样用于方法表
@@ -179,6 +256,67 @@ def _num(value, fmt="{:.4f}", dash="—") -> str:
     if not math.isfinite(number):
         return dash
     return fmt.format(number)
+
+
+def _as_float(value, default=float("nan")) -> float:
+    """宽松转 float：读 CSV/行字典时字符串也能用；非有限值给默认。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _truthy(value) -> bool:
+    """行字典里的 usable 可能是 bool，也可能是 CSV 读回的字符串。"""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+def _insitu_stats(rows) -> dict:
+    """原位批量行的摘要数字（范围表 / 摘要 / KPI / 正文共用）。"""
+    rows = list(rows or [])
+    status = {}
+    for row in rows:
+        key = str(row.get("status", "")).split("(", 1)[0] or "unknown"
+        if key.startswith("error"):
+            key = "error"
+        status[key] = status.get(key, 0) + 1
+    usable = sum(1 for row in rows if _truthy(row.get("usable")))
+    rwp = np.asarray([_as_float(row.get("rwp")) for row in rows],
+                     dtype=float)
+    rwp = rwp[np.isfinite(rwp)]
+    f_values = [(row.get("frame"), _as_float(row.get("f_rich")))
+                for row in rows]
+    f_values = [(frame, value) for frame, value in f_values
+                if math.isfinite(value)]
+    if f_values:
+        f_min = min(f_values, key=lambda pair: pair[1])
+    else:
+        f_min = (None, float("nan"))
+    return {
+        "total": len(rows),
+        "usable": usable,
+        "status": status,
+        "rwp_min": float(rwp.min()) if rwp.size else float("nan"),
+        "rwp_max": float(rwp.max()) if rwp.size else float("nan"),
+        "rwp_med": float(np.median(rwp)) if rwp.size else float("nan"),
+        "f_start": f_values[0][1] if f_values else float("nan"),
+        "f_end": f_values[-1][1] if f_values else float("nan"),
+        "f_min": f_min[1],
+        "f_min_frame": f_min[0],
+        "has_f": bool(f_values),
+    }
+
+
+def _range_text(values, fmt="{:.2f}") -> str:
+    """一串数字的 min–max 文本；没有有限值时给破折号。"""
+    finite = [float(value) for value in values
+              if math.isfinite(_as_float(value))]
+    if not finite:
+        return "—"
+    return f"{fmt.format(min(finite))}–{fmt.format(max(finite))}"
 
 
 def _rwp_quality(rwp):
@@ -433,6 +571,118 @@ def _fig_phases(snapshot: ReportSnapshot) -> str:
     if selected:
         ax.legend(fontsize=7, loc="best")
     fig.tight_layout()
+    return _data_uri(fig)
+
+
+def _thin_positions(values, tol=0.05) -> np.ndarray:
+    """把显示上挨得太近的布拉格峰位合并成一个刻度。"""
+    values = np.asarray(values, dtype=float)
+    if values.size < 2:
+        return values
+    keep = [values[0]]
+    for value in values[1:]:
+        if value - keep[-1] > tol:
+            keep.append(value)
+    return np.asarray(keep)
+
+
+def _fig_profile(profile: Optional[ReportProfileFit]) -> str:
+    """全谱拟合图（精修或原位单帧）：obs/calc/背景 + 差值 + 布拉格刻度。
+
+    不直接复用 `simulation.plots.draw_fit`：它的 "Bragg positions" 竖排
+    轴标签在报告这种较矮的画布里会压到残差轴（2026-11-09 实拍），这里
+    用相名作刻度标签、去掉竖排轴名，布局按报告宽度固定。
+    """
+    if profile is None:
+        return ""
+    tth = np.asarray(profile.tth, dtype=float)
+    if tth.size == 0:
+        return ""
+    y_obs = np.asarray(profile.y_obs, dtype=float)
+    y_calc = np.asarray(profile.y_calc, dtype=float)
+    residual = np.asarray(profile.residual, dtype=float)
+    bragg = [(str(label), np.asarray(pos, dtype=float))
+             for label, pos in profile.bragg
+             if np.asarray(pos, dtype=float).size]
+    fig = _new_figure(7.4, 5.2)
+    gs = fig.add_gridspec(3, 1, height_ratios=[3.1, 0.9, 0.55],
+                          hspace=0.08)
+    ax = fig.add_subplot(gs[0])
+    axr = fig.add_subplot(gs[1], sharex=ax)
+    axb = fig.add_subplot(gs[2], sharex=ax)
+    ax.tick_params(labelbottom=False, labelsize=8)
+    axr.tick_params(labelbottom=False, labelsize=8)
+    ax.plot(tth, y_obs, ".", ms=1.7, color=_OBS_COLOR, alpha=0.85,
+            label="observed")
+    ax.plot(tth, y_calc, "-", lw=1.1, color=_FIT_COLOR,
+            label="calculated")
+    background = profile.background
+    if background is not None and np.size(background):
+        ax.plot(tth, background, "--", lw=0.9, color="#8a8f98",
+                label="background")
+    ax.set_ylabel("intensity (counts)", fontsize=9)
+    ax.grid(alpha=0.22, linestyle=":")
+    ax.legend(fontsize=7.5, loc="upper right", frameon=True,
+              framealpha=0.9, edgecolor="0.85")
+    ax.set_title(
+        f"{profile.title}   Rwp = {_num(profile.rwp, '{:.2f}')}%"
+        f"   Rp = {_num(profile.rp, '{:.2f}')}%", fontsize=10)
+    ax.set_xlim(float(tth.min()), float(tth.max()))
+
+    axr.plot(tth, residual, "-", lw=0.8, color="#555555")
+    axr.axhline(0.0, color="#999999", lw=0.7)
+    axr.set_ylabel("obs − calc", fontsize=8.5)
+    axr.grid(alpha=0.22, linestyle=":")
+    finite = residual[np.isfinite(residual)]
+    if finite.size:
+        lim = float(np.percentile(np.abs(finite), 99.8))
+        if lim > 0:
+            axr.set_ylim(-1.15 * lim, 1.15 * lim)
+
+    if bragg:
+        axb.set_yticks(range(len(bragg)))
+        axb.set_yticklabels([label for label, _pos in bragg], fontsize=7.5)
+        axb.set_ylim(-0.6, len(bragg) - 0.4)
+        for i, (_label, pos) in enumerate(bragg):
+            inside = pos[(pos >= tth.min()) & (pos <= tth.max())]
+            inside = _thin_positions(inside)
+            if inside.size:
+                axb.plot(inside, np.full(inside.size, float(i)),
+                         "|", ms=9, mew=1.0,
+                         color=_PHASE_COLORS[i % len(_PHASE_COLORS)])
+        axb.tick_params(axis="y", length=0, pad=3)
+    else:
+        axb.set_yticks([])
+        axb.tick_params(axis="y", length=0)
+    axb.tick_params(axis="x", labelsize=8)
+    axb.set_xlabel("2θ (°)", fontsize=9)
+    fig.subplots_adjust(left=0.13, right=0.98, top=0.91, bottom=0.10)
+    return _data_uri(fig)
+
+
+def _fig_insitu_summary(insitu: ReportInSitu) -> str:
+    """原位批量汇总图（四栏：相分数 / 两相晶胞 / Rwp）。"""
+    if not insitu.rows:
+        return ""
+    try:
+        from xrd_toolkit.simulation.insitu_plots import draw_summary
+    except ImportError:                            # pragma: no cover
+        return ""
+    fig = _new_figure(8.6, 5.8)
+    draw_summary(fig, insitu.rows)
+    return _data_uri(fig)
+
+
+def _fig_insitu_model_independent(insitu: ReportInSitu) -> str:
+    """模型无关检查图（(200) 双峰质心）；没有缓存行就跳过。"""
+    if not insitu.mi_rows:
+        return ""
+    try:
+        from xrd_toolkit.simulation.insitu_plots import draw_model_independent
+    except ImportError:                            # pragma: no cover
+        return ""
+    fig = _new_figure(9.6, 3.3)
+    draw_model_independent(fig, insitu.mi_rows)
     return _data_uri(fig)
 
 
@@ -817,6 +1067,10 @@ def _subtitle(snapshot: ReportSnapshot) -> str:
         parts.append("峰形与微结构")
     if snapshot.phases:
         parts.append("物相筛选")
+    if snapshot.refine is not None:
+        parts.append("全谱精修")
+    if snapshot.insitu is not None and snapshot.insitu.rows:
+        parts.append("原位三相")
     return " · ".join(parts)
 
 
@@ -882,6 +1136,11 @@ def _result_sections(snapshot: ReportSnapshot) -> list:
         out.append(("wh", "Williamson–Hall / Scherrer"))
     if "phases" in snapshot.sections and snapshot.phases:
         out.append(("phases", "物相筛选"))
+    if "refine" in snapshot.sections and snapshot.refine is not None:
+        out.append(("refine", "全谱精修"))
+    if ("insitu" in snapshot.sections and snapshot.insitu is not None
+            and snapshot.insitu.rows):
+        out.append(("insitu", "原位三相批量"))
     return out
 
 
@@ -936,11 +1195,29 @@ def _scope_rows(snapshot: ReportSnapshot):
                 detail = f"{len(snapshot.phases)} 个候选，{picked} 个叠加"
             else:
                 detail = "本次未筛相"
+        elif key == "refine":
+            refine = snapshot.refine
+            done = refine is not None
+            if done:
+                phase = (refine.phase_label
+                         or Path(refine.cif).stem or "主相")
+                detail = (f"{phase} · Rwp "
+                          f"{_num(refine.rwp, '{:.2f}')}%")
+            else:
+                detail = "本次未做全谱精修"
+        elif key == "insitu":
+            insitu = snapshot.insitu
+            done = bool(insitu is not None and insitu.rows)
+            if done:
+                stats = _insitu_stats(insitu.rows)
+                detail = (f"{stats['total']} 帧，可用 "
+                          f"{stats['usable']}/{stats['total']}")
+            else:
+                detail = "本次未跑原位批量"
         else:
             done, detail = False, "—"
         rows.append((title, done, detail))
     rows.append(("结果说明与限制", True, "固定说明"))
-    rows.append(("精修 / 原位", False, "报告 v1 范围外，后续版本补"))
     return rows
 
 
@@ -998,6 +1275,26 @@ def _kpis(snapshot: ReportSnapshot) -> str:
             f"最佳 {best.name} · score {_num(best.score, '{:.3f}')}"))
     else:
         cards.append(_kpi("物相候选", "—", "本次未做"))
+    if "refine" in snapshot.sections:
+        refine = snapshot.refine
+        if refine is not None:
+            cards.append(_kpi(
+                "全谱精修", f"Rwp {_num(refine.rwp, '{:.2f}')}%",
+                f"{refine.phase_label or Path(refine.cif).stem or '主相'}"
+                f" · Rp {_num(refine.rp, '{:.2f}')}%"))
+        else:
+            cards.append(_kpi("全谱精修", "—", "本次未做"))
+    if "insitu" in snapshot.sections:
+        insitu = snapshot.insitu
+        if insitu is not None and insitu.rows:
+            stats = _insitu_stats(insitu.rows)
+            cards.append(_kpi(
+                "原位三相批量",
+                f"{stats['usable']}/{stats['total']} 帧",
+                f"f_rich {_num(stats['f_start'], '{:.2f}')} → "
+                f"{_num(stats['f_end'], '{:.2f}')}"))
+        else:
+            cards.append(_kpi("原位三相批量", "—", "本次未做"))
     return "<div class=\"kpis\">" + "".join(cards) + "</div>"
 
 
@@ -1049,13 +1346,30 @@ def _summary_text(snapshot: ReportSnapshot) -> str:
             f"物相筛选中得到 <b>{len(snapshot.phases)}</b> 个候选，最高分为 "
             f"<b>{_esc(best.name)}</b>（score "
             f"{_num(best.score, '{:.3f}')}）；叠加图展示 {picked} 个选中的相。")
+    if snapshot.refine is not None:
+        refine = snapshot.refine
+        phase = refine.phase_label or Path(refine.cif).stem or "主相"
+        parts.append(
+            f"全谱精修（<b>{_esc(phase)}</b>）得到 Rwp = "
+            f"<b>{_num(refine.rwp, '{:.2f}')}%</b>、Rp = "
+            f"{_num(refine.rp, '{:.2f}')}%；定量相分数表含 "
+            f"<b>{len(refine.weights)}</b> 个晶态相。")
+    if snapshot.insitu is not None and snapshot.insitu.rows:
+        stats = _insitu_stats(snapshot.insitu.rows)
+        parts.append(
+            f"原位三相批量共 <b>{stats['total']}</b> 帧，可用 "
+            f"<b>{stats['usable']}</b> 帧；f_rich 从 "
+            f"{_num(stats['f_start'], '{:.2f}')} 变到 "
+            f"{_num(stats['f_end'], '{:.2f}')}（相对散射强度，不是 wt%）。")
     available = {"curve": curve is not None,
                  "peaks": bool(curve.peaks), "fits": bool(curve.fits),
                  "wh": curve.wh is not None,
-                 "phases": bool(snapshot.phases)}
+                 "phases": bool(snapshot.phases),
+                 "refine": snapshot.refine is not None,
+                 "insitu": bool(snapshot.insitu is not None
+                                and snapshot.insitu.rows)}
     missing = [title for key, title in SECTIONS
                if key in snapshot.sections and not available[key]]
-    missing.append("精修 / 原位（v1.1）")
     if missing:
         parts.append("本次未做：" + "、".join(missing) + "。")
     return "<p class=\"lead\">" + "".join(parts) + "</p>"
@@ -1098,6 +1412,16 @@ def _methods_table(snapshot: ReportSnapshot, number: int):
     if snapshot.phase_methods:
         rows.append("<tr class=\"group\"><th colspan=\"2\">物相筛选</th></tr>")
         for label, value in snapshot.phase_methods:
+            rows.append(f"<tr><td class=\"left\">{_esc(label)}</td>"
+                        f"<td class=\"left\">{_esc(value)}</td></tr>")
+    if snapshot.refine is not None and snapshot.refine.methods:
+        rows.append("<tr class=\"group\"><th colspan=\"2\">全谱精修</th></tr>")
+        for label, value in snapshot.refine.methods:
+            rows.append(f"<tr><td class=\"left\">{_esc(label)}</td>"
+                        f"<td class=\"left\">{_esc(value)}</td></tr>")
+    if snapshot.insitu is not None and snapshot.insitu.methods:
+        rows.append("<tr class=\"group\"><th colspan=\"2\">原位三相批量</th></tr>")
+        for label, value in snapshot.insitu.methods:
             rows.append(f"<tr><td class=\"left\">{_esc(label)}</td>"
                         f"<td class=\"left\">{_esc(value)}</td></tr>")
     if not rows:
@@ -1282,6 +1606,212 @@ def _section_phases(snapshot: ReportSnapshot, fig_no: int, number: int):
     return lead + block + figure, fig_no, number + 1
 
 
+def _section_refine(snapshot: ReportSnapshot, fig_no: int, number: int):
+    refine = snapshot.refine
+    if refine is None:
+        return "", fig_no, number
+    phase = refine.phase_label or Path(refine.cif).stem or "主相"
+    mode = "Le Bail " if refine.lebail else "结构"
+    lead = (f"<p class=\"lead\">对 <b>{refine.n_obs}</b> 个 2θ 点、"
+            f"<b>{refine.n_params}</b> 个参数做{mode}全谱精修"
+            f"（{_esc(phase)}，{_esc(Path(refine.cif).name or '—')}），"
+            f"Rwp = <b>{_num(refine.rwp, '{:.2f}')}%</b>、"
+            f"Rp = {_num(refine.rp, '{:.2f}')}%、"
+            f"reduced χ² = {_num(refine.reduced_chi2, '{:.3g}')}。</p>")
+    body = [lead]
+    if not refine.success:
+        body.append(
+            f"<p class=\"note\">优化器退出标志：{_esc(refine.message)}；"
+            "结果仍按当前解报告，请结合拟合图与参数 esd 判断。</p>")
+    img = _fig_profile(refine.profile)
+    if img:
+        body.append(
+            f"<figure><img src=\"{img}\" alt=\"whole-pattern refinement\">"
+            f"<figcaption>图 {fig_no}　全谱精修：观测 / 计算 / 背景与 "
+            f"obs − calc 差值（底部为布拉格峰位）</figcaption></figure>")
+        fig_no += 1
+    if refine.params:
+        head = ("<table class=\"data\"><thead><tr>"
+                "<th class=\"left\">参数</th><th>初值</th><th>拟合值</th>"
+                "<th>esd</th></tr></thead><tbody>")
+        rows = []
+        for name, initial, value, esd in refine.params:
+            rows.append(
+                f"<tr><td class=\"left\">{_esc(name)}</td>"
+                f"<td>{_num(initial, '{:.6g}')}</td>"
+                f"<td>{_num(value, '{:.6g}')}</td>"
+                f"<td>{_num(esd, '{:.3g}')}</td></tr>")
+        body.append(
+            f"<div class=\"table-block keep\">"
+            f"{_table_caption(number, '精修参数')}"
+            + head + "".join(rows) + "</tbody></table></div>")
+        number += 1
+    if refine.weights:
+        head = ("<table class=\"data\"><thead><tr>"
+                "<th class=\"left\">相</th><th>wt%</th><th>scale</th>"
+                "<th>Z</th><th>M (g/mol)</th><th>V (Å³)</th>"
+                "<th class=\"left\">来源</th>"
+                "<th class=\"left\">备注</th></tr></thead><tbody>")
+        source_names = {"structure": "结构模式", "le_bail": "Le Bail"}
+        rows = []
+        for weight in refine.weights:
+            rows.append(
+                f"<tr><td class=\"left\">{_esc(weight.label)}</td>"
+                f"<td>{_num(weight.weight_percent, '{:.2f}')}</td>"
+                f"<td>{_num(weight.scale, '{:.4g}')}</td>"
+                f"<td>{_num(weight.z, '{:.3g}')}</td>"
+                f"<td>{_num(weight.molar_mass, '{:.3f}')}</td>"
+                f"<td>{_num(weight.volume, '{:.3f}')}</td>"
+                f"<td class=\"left\">"
+                f"{_esc(source_names.get(weight.source, weight.source))}</td>"
+                f"<td class=\"left\">"
+                f"{_esc(weight.warning or '—')}</td></tr>")
+        body.append(
+            f"<div class=\"table-block keep\">"
+            f"{_table_caption(number, '定量相分数（wt%）')}"
+            + head + "".join(rows) + "</tbody></table></div>")
+        number += 1
+    if refine.site_coords:
+        head = ("<table class=\"data\"><thead><tr>"
+                "<th class=\"left\">位点</th><th>Wyckoff</th>"
+                "<th>x</th><th>y</th><th>z</th>"
+                "</tr></thead><tbody>")
+        rows = []
+        for label, wyckoff, x, y, z in refine.site_coords:
+            rows.append(
+                f"<tr><td class=\"left\">{_esc(label)}</td>"
+                f"<td>{_esc(wyckoff)}</td>"
+                f"<td>{_num(x, '{:.5f}')}</td>"
+                f"<td>{_num(y, '{:.5f}')}</td>"
+                f"<td>{_num(z, '{:.5f}')}</td></tr>")
+        body.append(
+            f"<div class=\"table-block keep\">"
+            f"{_table_caption(number, '精修后的位点坐标（分数坐标）')}"
+            + head + "".join(rows) + "</tbody></table></div>")
+        number += 1
+    if refine.note:
+        body.append(f"<p class=\"muted\">{_esc(refine.note)}</p>")
+    if refine.weight_note:
+        body.append(f"<p class=\"muted\">{_esc(refine.weight_note)}</p>")
+    return "".join(body), fig_no, number
+
+
+def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
+    insitu = snapshot.insitu
+    if insitu is None or not insitu.rows:
+        return "", fig_no, number
+    rows = list(insitu.rows)
+    stats = _insitu_stats(rows)
+    body = []
+    rwp_text = ("—" if not math.isfinite(stats["rwp_min"])
+                else f"{stats['rwp_min']:.2f}–{stats['rwp_max']:.2f}"
+                     f"（中位 {stats['rwp_med']:.2f}）")
+    rwp_phrase = ("Rwp —" if rwp_text == "—" else f"Rwp {rwp_text}%")
+    lead = (f"<p class=\"lead\">本次原位三相批量共 <b>{stats['total']}</b> 帧，"
+            f"可用 <b>{stats['usable']}</b> 帧；{rwp_phrase}。")
+    if stats["has_f"]:
+        lead += (f"f_rich 从 {_num(stats['f_start'], '{:.3f}')} 变到 "
+                 f"{_num(stats['f_end'], '{:.3f}')}，最低 "
+                 f"{_num(stats['f_min'], '{:.3f}')}（第 "
+                 f"{_esc(stats['f_min_frame'])} 帧）。")
+    lead += "</p>"
+    body.append(lead)
+
+    status_text = "、".join(
+        f"{key}={value}" for key, value in sorted(stats["status"].items()))
+    wt_rich = [row.get("wt_rich") for row in rows]
+    wt_poor = [row.get("wt_poor") for row in rows]
+    summary_rows = [
+        ("帧数", str(stats["total"])),
+        ("可用帧", f"{stats['usable']}/{stats['total']}"),
+        ("状态统计", status_text or "—"),
+        ("Rwp (%)", rwp_text),
+        ("f_rich", (f"{_num(stats['f_start'], '{:.3f}')} → "
+                    f"{_num(stats['f_end'], '{:.3f}')}"
+                    if stats["has_f"] else "—")),
+        ("wt_rich (%)", _range_text(wt_rich)),
+        ("wt_poor (%)", _range_text(wt_poor)),
+    ]
+    table = ("<table class=\"data\"><tbody>" + "".join(
+        f"<tr><td class=\"left\">{_esc(label)}</td>"
+        f"<td class=\"left\">{_esc(value)}</td></tr>"
+        for label, value in summary_rows) + "</tbody></table>")
+    body.append(
+        f"<div class=\"table-block keep\">"
+        f"{_table_caption(number, '原位批量摘要')}" + table + "</div>")
+    number += 1
+
+    img = _fig_insitu_summary(insitu)
+    if img:
+        body.append(
+            f"<figure><img src=\"{img}\" alt=\"in-situ batch summary\">"
+            f"<figcaption>图 {fig_no}　原位三相批量汇总：相分数、两相晶胞、"
+            f"Rwp / Rp 与异常状态（底色按 f_rich 极小值划分充/放电段）"
+            f"</figcaption></figure>")
+        fig_no += 1
+
+    img = _fig_profile(insitu.frame_fit)
+    if img:
+        title = insitu.frame_fit.title if insitu.frame_fit else ""
+        body.append(
+            f"<figure><img src=\"{img}\" alt=\"in-situ single frame fit\">"
+            f"<figcaption>图 {fig_no}　代表性单帧拟合"
+            f"{('：' + _esc(title)) if title else ''}</figcaption></figure>")
+        fig_no += 1
+
+    img = _fig_insitu_model_independent(insitu)
+    if img:
+        body.append(
+            f"<figure><img src=\"{img}\" alt=\"model-independent check\">"
+            f"<figcaption>图 {fig_no}　模型无关检查：(200) 双峰质心 / "
+            f"面积与批量相分数的一致性</figcaption></figure>")
+        fig_no += 1
+
+    head = ("<table class=\"data\"><thead><tr>"
+            "<th>帧</th><th class=\"left\">状态</th><th>Rwp (%)</th>"
+            "<th>f_rich</th><th>wt_rich (%)</th><th>wt_poor (%)</th>"
+            "<th>rich a</th><th>rich c</th>"
+            "<th>poor a</th><th>poor c</th>"
+            "</tr></thead><tbody>")
+    frame_rows = []
+    for row in rows:
+        status = str(row.get("status", ""))
+        if status.startswith(("error", "high_rwp")):
+            qcls = "q-bad"
+        elif status != "ok":
+            qcls = "q-warn"
+        else:
+            qcls = "q-ok"
+        # 异常状态可能带整段异常信息：表里截短，悬停看全，别把表撑爆
+        short_status = (status if len(status) <= 32
+                        else status[:29] + "…")
+        frame_rows.append(
+            f"<tr><td>{_esc(row.get('frame', '—'))}</td>"
+            f"<td class=\"left {qcls}\" title=\"{_esc(status)}\">"
+            f"{_esc(short_status or '—')}</td>"
+            f"<td>{_num(row.get('rwp'), '{:.2f}')}</td>"
+            f"<td>{_num(row.get('f_rich'), '{:.3f}')}</td>"
+            f"<td>{_num(row.get('wt_rich'), '{:.2f}')}</td>"
+            f"<td>{_num(row.get('wt_poor'), '{:.2f}')}</td>"
+            f"<td>{_num(row.get('rich_a'))}</td>"
+            f"<td>{_num(row.get('rich_c'))}</td>"
+            f"<td>{_num(row.get('poor_a'))}</td>"
+            f"<td>{_num(row.get('poor_c'))}</td></tr>")
+    body.append(
+        f"<div class=\"table-block long\">"
+        f"{_table_caption(number, '逐帧结果（完整）')}"
+        + head + "".join(frame_rows) + "</tbody></table></div>")
+    number += 1
+
+    note = ("<p class=\"muted\">可用 = Rwp 未超过阈值、晶胞有限且状态不是 "
+            "error / high_rwp；ok_soft = 优化器退出标志为 False，但 "
+            "Rwp 与相分数仍合格。f_rich 是 Le Bail 相对散射强度分数；"
+            "wt_rich / wt_poor 只在两个 LMFP 晶态相之间归一化，Al 参考相"
+            "单列、不参与分母。</p>")
+    body.append(note)
+    return "".join(body), fig_no, number
+
+
 def _limitations(snapshot: ReportSnapshot) -> str:
     notes = list(snapshot.notes)
     if snapshot.curve is not None:
@@ -1295,8 +1825,11 @@ def _limitations(snapshot: ReportSnapshot) -> str:
 <div class="limits">
   <h3><span class="num">4.1</span>定量说明</h3>
   <ul>
-    <li>精修 wt% 只对拟合模型里的晶态相有效；非晶或未计入的相不在分母里。</li>
-    <li>原位/物相的 f_rich 是 Le Bail 相对散射强度分数，不是 wt%。</li>
+    <li>精修的 wt% 只对拟合模型里的晶态相有效；非晶或未计入的相不在
+        分母里。Le Bail 相用逐反射强度的加权平均，精度低于结构模式。</li>
+    <li>原位的 f_rich 是 Le Bail 相对散射强度分数，不是 wt%；
+        wt_rich / wt_poor 只在两个 LMFP 晶态相之间归一化，Al 参考相
+        单列、不参与分母。</li>
     <li>背景用 estimated 模型时有系统偏差：合成已知配比回收的 bias
         −1.8 wt%、RMS 2.8 wt%；真实 LMFP 数据（ipoly0）对 GSAS-II 的
         平均绝对偏差约 4.2 wt%。</li>
@@ -1311,12 +1844,18 @@ def _limitations(snapshot: ReportSnapshot) -> str:
         是候选排序，不是相含量。</li>
     <li>少数相（&lt;50%）的晶胞在弱峰帧不可独立辨识；界面上以淡色显示，
         报告不把它当独立结论。</li>
+    <li>原位每帧从上一帧种子与 CIF 端元双起点拟合，Rwp 打平时取晶胞
+        变化小的解；not_converged / cell_jump 等状态照实收录，不中断
+        批次、也不把异常帧删掉。</li>
   </ul>
   <h3><span class="num">4.3</span>报告范围</h3>
   <ul>
     <li>本报告是当前会话的快照：精修/物相/原位的中间结果只保留在当前
         会话里，关程序后无法补做；1D 与批处理产物另有文件可追溯。</li>
-    <li>精修 / 原位两节留到后续版本（v1.1）；本次报告的范围表已注明。</li>
+    <li>报告只汇总已经算好的结果，不重新积分、不重跑拟合；精修 / 原位
+        两节也遵循同一口径。</li>
+    <li>报告里的 Rwp 有三种口径：单峰窗口局部 Rwp、全谱精修 Rwp、原位
+        逐帧 Rwp，数值不能互相比较。</li>
   </ul>
   {extra}
 </div>
@@ -1370,6 +1909,8 @@ def build_report_html(snapshot: ReportSnapshot) -> str:
             "fits": _section_fits,
             "wh": _section_wh,
             "phases": _section_phases,
+            "refine": _section_refine,
+            "insitu": _section_insitu,
         }
         for i, (key, title) in enumerate(result_sections, start=1):
             parts.append(

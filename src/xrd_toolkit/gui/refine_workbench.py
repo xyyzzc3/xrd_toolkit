@@ -168,6 +168,9 @@ class RefineWorkbench(QWidget):
         # 写回磁盘；W-H 页读同一份。
         self._instrument = getattr(main_window, "instrument_baseline", None)
         self._last_wavelength = None
+        # 拟合开始那一刻的参数快照：报告用（拟合完再改下拉框也不会写错）
+        self._fit_meta = None
+        self._fit_result_note = ""
 
         self._build_ui()
         if self._instrument is not None:
@@ -590,6 +593,8 @@ class RefineWorkbench(QWidget):
             # 换曲线：旧拟合结果作废，别让图和表对不上
             self._curve_key = key
             self.result = None
+            self._fit_meta = None
+            self._fit_result_note = ""
             self.rwp_label.setText("Rwp = —")
             self.report_view.clear()
             self.param_table.setRowCount(0)
@@ -652,6 +657,19 @@ class RefineWorkbench(QWidget):
         self._last_wavelength = wavelength
         extra_paths = tuple(self._extra_phase_paths)
         extra_lebail = self.chk_extra_lebail.isChecked()
+        meta = {
+            "curve_key": self.curve_combo.currentData(),
+            "curve_title": self.curve_combo.currentText(),
+            "cif": str(cif_path),
+            "free": list(free),
+            "lebail": bool(lebail),
+            "bg_mode": str(self.bg_combo.currentData()),
+            "bg_window": float(bg_window),
+            "extra_paths": [str(path) for path in extra_paths],
+            "extra_lebail": bool(extra_lebail),
+            "fixed": bool(fixed),
+            "wavelength": float(wavelength),
+        }
 
         self.run_btn.setEnabled(False)
         self._set_status("精修中，请稍候…")
@@ -665,7 +683,7 @@ class RefineWorkbench(QWidget):
             self._task = None
             self.run_btn.setEnabled(True)
             result, note = payload
-            self._on_fit_done(result, note)
+            self._on_fit_done(result, note, meta)
 
         def error(message):
             self.main._tasks.remove(task)
@@ -682,8 +700,11 @@ class RefineWorkbench(QWidget):
         self.main._tasks.append(task)
         task.start()
 
-    def _on_fit_done(self, result, note=None):
+    def _on_fit_done(self, result, note=None, meta=None):
         self.result = result
+        if meta is not None:
+            self._fit_meta = dict(meta)
+            self._fit_result_note = str(note or "")
         self._draw(result)
         self._fill_params(result)
         self.report_view.setPlainText(result.report())

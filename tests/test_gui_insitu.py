@@ -182,6 +182,7 @@ class TestInSituWorkbench(unittest.TestCase):
             self.assertTrue(ok, "批量没有在 10 秒内完成")
             self.assertIn("完成", editor.status.text())
             self.assertEqual(len(editor.batch.rows), 3)
+            self.assertEqual(editor._batch_meta["data_dir"], str(data))
             csv_text = (folder / "out" / "insitu_fit.csv").read_text(
                 encoding="utf-8")
             self.assertEqual(len(csv_text.splitlines()), 4)
