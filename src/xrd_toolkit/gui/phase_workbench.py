@@ -39,7 +39,7 @@ from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
-from xrd_toolkit.presets import PROJECT_PRESET
+from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 
 _OBS_COLOR = "#333333"
 # 多相叠加时按选中顺序轮换；与精修图的布拉格刻度同一套色系
@@ -86,11 +86,12 @@ class PhaseRow:
 
 
 def _screen_worker(tth, y, lib, elements, wavelength, tol,
-                   prominence, min_distance):
+                   prominence, min_distance, skip_names=None):
     """后台线程：寻峰 → 对相库打分 → 返回每相的理论峰位。
 
     不碰界面控件。pymatgen 是可选依赖，缺了要保留它自己的安装提示，
     所以 ImportError 转成 RuntimeError（否则会被当成内部 bug 包装掉）。
+    skip_names 是"不参与主相候选"的第二相文件名（预设给的）。
     """
     try:
         from xrd_toolkit.services.background import estimate_baseline_sliding
@@ -117,7 +118,8 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     lam = float(wavelength)
     tmin, tmax = float(tth.min()), float(tth.max())
     matches = ps.screen_phases(
-        obs_t, lib, lam, tmin, tmax, 0.0, elements=elements, tol=float(tol))
+        obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
+        tol=float(tol), skip_names=skip_names)
     rows = []
     for match in matches:
         d0, inten = ps.reflection_data(match.structure, lam, tmin, tmax)
@@ -138,7 +140,8 @@ class PhaseWorkbench(QWidget):
         self.main = main_window
         self.setObjectName("phase_workbench")
 
-        self.lib_dir = paths.structures_dir()
+        self.lib_dir = self._library_for_preset(
+            getattr(main_window, "preset", None) or PROJECT_PRESET)
         self.rows = []
         self.curve = None
         self.obs_t = None
@@ -150,6 +153,61 @@ class PhaseWorkbench(QWidget):
         self._build_ui()
         self.refresh_curves()
         self._refresh_lib_label()
+
+    # ── 项目预设 ─────────────────────────────────────────────
+    def _preset(self):
+        """当前窗口的项目预设（没设置时退回内置默认）。"""
+        return getattr(self.main, "preset", None) or PROJECT_PRESET
+
+    def _second_phase_cif(self):
+        return str(self._preset().get("second_phase_cif") or "").strip()
+
+    @staticmethod
+    def _library_for_preset(preset):
+        return preset_phase_library(preset or PROJECT_PRESET)
+
+    def apply_preset(self, preset):
+        """应用项目预设：换相库 + 更新第二相提示 + 清掉旧候选。"""
+        requested = str(preset.get("phase_library") or "").strip()
+        self.lib_dir = self._library_for_preset(preset)
+        self.rows = []
+        self.table.setRowCount(0)
+        self.send_btn.setEnabled(False)
+        self.best_label.setText("还没有筛相")
+        self.best_label.setStyleSheet("color: gray;")
+        self._refresh_lib_label()
+        status = (f"已应用预设「{preset.get('name', '')}」："
+                  f"相库 {self.lib_dir.name}")
+        if (requested and not Path(requested).expanduser().is_dir()):
+            status += f"（配置的相库 {requested} 不存在，先用默认）"
+        self._set_status(status)
+
+    def _refresh_lib_label(self):
+        try:
+            cifs = list(self.lib_dir.glob("*.cif"))
+        except OSError:
+            cifs = []
+        if cifs:
+            second = self._second_phase_cif()
+            tail = (f"，第二相 {second} 排除"
+                    if second and any(p.name == second for p in cifs) else "")
+            self.lib_label.setText(
+                f"{self.lib_dir.name}（{len(cifs)} 张 CIF{tail}）")
+        else:
+            self.lib_label.setText(f"{self.lib_dir}（没有 CIF）")
+        self.lib_label.setToolTip(str(self.lib_dir))
+        self._refresh_preset_hint()
+
+    def _refresh_preset_hint(self):
+        preset = self._preset()
+        second = self._second_phase_cif()
+        if second:
+            text = (f"当前预设「{preset.get('name', '')}」：{second} 视为"
+                    "第二相，不参与主相候选，由精修工作台按额外相处理。")
+        else:
+            text = (f"当前预设「{preset.get('name', '')}」：没有指定第二相，"
+                    "相库里所有 CIF 都参与主相候选。")
+        self.preset_hint.setText(text)
 
     # ── 界面组装 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -259,12 +317,10 @@ class PhaseWorkbench(QWidget):
             "把候选表写成 CSV，直接写到默认输出目录；先 [开始筛相] 出候选")
         self.export_default_btn.clicked.connect(self._export_default)
         left_lay.addWidget(self.export_default_btn)
-        hint = QLabel(
-            f"当前项目预设：{PROJECT_PRESET['second_phase_cif']} 视为第二相，"
-            "不参与主相候选，由精修工作台按额外相处理。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-        left_lay.addWidget(hint)
+        self.preset_hint = QLabel("")
+        self.preset_hint.setWordWrap(True)
+        self.preset_hint.setStyleSheet("color: gray;")
+        left_lay.addWidget(self.preset_hint)
         left_lay.addStretch(1)
         left_scroll.setWidget(left)
         split.addWidget(left_scroll)
@@ -465,21 +521,6 @@ class PhaseWorkbench(QWidget):
         self.best_label.setStyleSheet("color: gray;")
         self._set_status("相库已切换，点 [开始筛相]")
 
-    def _refresh_lib_label(self):
-        try:
-            cifs = list(self.lib_dir.glob("*.cif"))
-        except OSError:
-            cifs = []
-        if cifs:
-            tail = ("，第二相按项目预设排除"
-                    if any(p.name == PROJECT_PRESET["second_phase_cif"]
-                           for p in cifs) else "")
-            self.lib_label.setText(
-                f"{self.lib_dir.name}（{len(cifs)} 张 CIF{tail}）")
-        else:
-            self.lib_label.setText(f"{self.lib_dir}（没有 CIF）")
-        self.lib_label.setToolTip(str(self.lib_dir))
-
     # ── 筛相 ────────────────────────────────────────────────
     def _start_screen(self):
         if self._task is not None:
@@ -526,11 +567,13 @@ class PhaseWorkbench(QWidget):
             self._set_status(f"筛相失败：{message}")
             _log(self.main, f"物相筛选失败：{message}")
 
+        second = self._second_phase_cif()
         task = BackgroundTask(
             _screen_worker, tth, y, str(self.lib_dir),
             self.elements_edit.text(), wavelength,
             float(self.tolerance.value()), float(self.prominence.value()),
             float(self.min_distance.value()),
+            (second,) if second else (),
             on_done=done, on_error=error)
         self._task = task
         self.main._tasks.append(task)

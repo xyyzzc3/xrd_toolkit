@@ -38,20 +38,32 @@ def _element_set(elements):
     return {str(e).strip().capitalize() for e in elements if str(e).strip()}
 
 
-def phase_library(lib, skip_names=(AL_CIF_NAME,)):
-    """相库目录里的全部 CIF，按文件名排序；skip_names 里的不参与。"""
+def _skip_set(skip_names):
+    """None = 用默认第二相（CLI 老口径）；空元组 = 不排除任何相。"""
+    if skip_names is None:
+        skip_names = (AL_CIF_NAME,)
+    return {str(name) for name in skip_names}
+
+
+def phase_library(lib, skip_names=None):
+    """相库目录里的全部 CIF，按文件名排序；skip_names 里的不参与。
+
+    skip_names=None 时按项目默认跳过 Al_metal.cif（与旧口径一致）；
+    GUI 应用预设时显式传入预设里的第二相文件名，空元组 = 不排除。
+    """
     lib = Path(lib)
-    skip = {str(name) for name in skip_names}
+    skip = _skip_set(skip_names)
     return [p for p in sorted(lib.glob("*.cif"))
             if p.is_file() and p.name not in skip]
 
 
-def phase_candidates(lib, elements=(), preferred=(), skip_names=(AL_CIF_NAME,)):
+def phase_candidates(lib, elements=(), preferred=(), skip_names=None):
     """扫描相库并读结构，按元素集合剪枝；返回 [(path, Structure)]。
 
     elements 为空 = 不筛；给了集合时只保留**元素全部落在集合里**的相。
     读不出来的 CIF 跳过，不让一张坏卡片打断整批分析。preferred 里的
-    文件名排在最前（只影响同分时的先后，不参与打分）。
+    文件名排在最前（只影响同分时的先后，不参与打分）。skip_names 的
+    含义见 phase_library。
     """
     wanted = _element_set(elements)
     rank = {str(name): i for i, name in enumerate(preferred)}
@@ -130,14 +142,16 @@ class PhaseMatch:
 
 
 def screen_phases(obs_t, lib, lam, tmin, tmax, zero, elements=(),
-                  preferred=(), tol=0.04):
+                  preferred=(), tol=0.04, skip_names=None):
     """对整个相库打分，按分数从高到低返回 PhaseMatch 列表。
 
     同分时保持 `phase_candidates` 的先后（preferred 优先、其余按文件名）。
+    skip_names 传给 phase_candidates；None = 默认跳过 Al_metal.cif。
     """
     matches = []
     for path, structure in phase_candidates(
-            lib, elements=elements, preferred=preferred):
+            lib, elements=elements, preferred=preferred,
+            skip_names=skip_names):
         result = score_phase(obs_t, structure, lam, tmin, tmax, zero, tol=tol)
         if result is None:
             continue

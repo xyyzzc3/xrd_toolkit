@@ -30,6 +30,9 @@ src/xrd_toolkit/config_user.json
 # 本地保留，默认与 config_user.json 同目录）
 src/xrd_toolkit/instrument_baseline.json
 
+# 项目预设 [保存…] 的落盘文件（2026-11-10；个人项目路径/相库，本地保留）
+src/xrd_toolkit/presets_user.json
+
 # PyInstaller 打包中间产物与成品（成品走 GitHub Release 附件，不进仓库）
 build/
 dist/

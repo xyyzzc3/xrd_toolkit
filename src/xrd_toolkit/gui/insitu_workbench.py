@@ -41,7 +41,7 @@ from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
-from xrd_toolkit.presets import PROJECT_PRESET
+from xrd_toolkit.presets import DEFAULT_PRESET_NAME, PROJECT_PRESET
 
 _COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
             "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
@@ -89,8 +89,13 @@ class InSituWorkbench(QWidget):
             LAB6_TIF = None
             self._frames_in_dir = lambda *a, **k: []
 
-        default_data = Path(PROJECT_PRESET["insitu_dir"]).expanduser()
-        if not default_data.is_dir():
+        preset = getattr(main_window, "preset", None) or PROJECT_PRESET
+        default_data = Path(preset.get("insitu_dir")
+                            or PROJECT_PRESET["insitu_dir"]).expanduser()
+        # 内置默认目录不存在时退到仓库样例（保持"开箱能看到东西"）；
+        # 用户预设按 TA 写的路径显示，不存在就是 0 帧，别偷偷换目录。
+        if (not default_data.is_dir()
+                and preset.get("name") == DEFAULT_PRESET_NAME):
             repo_data = paths.ROOT / "data"
             default_data = (repo_data if repo_data.is_dir()
                             else Path.home())
@@ -99,13 +104,9 @@ class InSituWorkbench(QWidget):
         self.lab6_path = (Path(LAB6_TIF)
                           if LAB6_TIF is not None and Path(LAB6_TIF).is_file()
                           else None)
-        # 与命令行同一个默认 mask（只在项目预设的几何下自动带；其它配置按不遮）
-        default_mask = (paths.default_outputs_dir() / "masks"
-                        / PROJECT_PRESET["insitu_mask_name"])
-        self.mask_path = (default_mask
-                          if (self.main.config_name
-                              == PROJECT_PRESET["geometry"]
-                              and default_mask.is_file()) else None)
+        # 预设的 mask 只在预设自己的几何下自动带；其它配置按不遮
+        self.mask_path = self._mask_for_preset(
+            preset, self.main.config_name)
         self.phase_paths = {
             "rich": Path(DEFAULT_RICH) if DEFAULT_RICH else None,
             "poor": Path(DEFAULT_POOR) if DEFAULT_POOR else None,
@@ -131,13 +132,41 @@ class InSituWorkbench(QWidget):
         self._mi_len = -1
 
         self._build_ui()
-        if self.mask_path is not None:
-            self.mask_label.setText(f"mask：{self.mask_path.name}")
-            self.mask_label.setToolTip(str(self.mask_path))
+        self._refresh_mask_label()
         self._refresh_data_label()
         self._refresh_phase_labels()
         self._refresh_lab6_label()
         self._draw_trends()
+
+    # ── 项目预设 ─────────────────────────────────────────────
+    @staticmethod
+    def _mask_for_preset(preset, config_name):
+        """预设的 mask 只在预设几何下自动带；文件不存在 → 不遮。"""
+        name = str((preset or {}).get("insitu_mask_name") or "").strip()
+        if not name or config_name != (preset or {}).get("geometry"):
+            return None
+        path = paths.default_outputs_dir() / "masks" / name
+        return path if path.is_file() else None
+
+    def apply_preset(self, preset):
+        """应用项目预设：换帧目录与 mask（不动 rich/poor/Al 三相定义）。"""
+        self.data_dir = Path(preset.get("insitu_dir")
+                             or PROJECT_PRESET["insitu_dir"]).expanduser()
+        self.mask_path = self._mask_for_preset(
+            preset, self.main.config_name)
+        self._refresh_data_label()
+        self._refresh_mask_label()
+        self._set_status(
+            f"已应用预设「{preset.get('name', '')}」："
+            f"{len(self.frames)} 帧")
+
+    def _refresh_mask_label(self):
+        if self.mask_path is not None:
+            self.mask_label.setText(f"mask：{self.mask_path.name}")
+            self.mask_label.setToolTip(str(self.mask_path))
+        else:
+            self.mask_label.setText("mask：不遮")
+            self.mask_label.setToolTip("")
 
     # ── 界面组装 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -394,13 +423,11 @@ class InSituWorkbench(QWidget):
         if not path:
             return
         self.mask_path = Path(path)
-        self.mask_label.setText(f"mask：{self.mask_path.name}")
-        self.mask_label.setToolTip(str(self.mask_path))
+        self._refresh_mask_label()
 
     def _clear_mask(self):
         self.mask_path = None
-        self.mask_label.setText("mask：不遮")
-        self.mask_label.setToolTip("")
+        self._refresh_mask_label()
 
     def _choose_phase(self, key):
         start = paths.structures_dir()

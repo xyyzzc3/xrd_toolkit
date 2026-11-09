@@ -81,6 +81,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import config, paths
 from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
+from xrd_toolkit.presets import active_preset_name, get_preset
 # ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
 from xrd_toolkit.gui.plot_export import (
     _ask_save_options, _build_export_dialog, _checked_1d_results,
@@ -1236,6 +1237,10 @@ def create_window() -> QMainWindow:
         lambda source, name="1D": _open_source_view(window, name, source))
     window.open_view_group = (
         lambda sources, name="1D": _open_source_group(window, name, sources))
+    # 项目预设：先读出上次用的那份（几何/相库/原位目录都由它决定），
+    # 再建参数坞——预设下拉要用这个名字。
+    window.preset_name = active_preset_name()
+    window.preset = get_preset(window.preset_name)
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     # 日志"两边缩"（用户 2026-10-07）：两个底角归左右区 → 文件栏/参数栏
@@ -1287,11 +1292,19 @@ def create_window() -> QMainWindow:
         window.resizeDocks([d], [d.minimumSizeHint().width()], Qt.Horizontal)
     window.resizeDocks([window.log_dock], [140], Qt.Vertical)
 
-    # 启动即应用默认配置条目：参数坞初值来自注册表（如初始距离
-    # 1595.80 mm），而不是写死的占位默认值；[删除] 按钮随选中条目
-    # 同步置灰（默认条目是内置的 → 初始不可删）
+    # 启动即应用预设里的几何条目（没有预设时就是内置默认）：参数坞
+    # 初值来自注册表（如初始距离 1595.80 mm），而不是写死的占位默认值；
+    # [删除] 按钮随选中条目同步置灰（默认条目是内置的 → 初始不可删）。
+    preset_idx = window.config_combo.findData(window.preset["geometry"])
+    if preset_idx < 0:
+        preset_idx = window.config_combo.findData(DEFAULT_CONFIG)
+    window.config_combo.blockSignals(True)
+    window.config_combo.setCurrentIndex(max(0, preset_idx))
+    window.config_combo.blockSignals(False)
     _apply_config(window, window.config_combo.currentIndex())
     _sync_del_config_btn(window)
+    for warning in window.preset.get("warnings") or []:
+        _log(window, f"预设提示：{warning}")
     # 出图按钮上的"勾选 N 个"与原图页那句构成说明：开局填一次（此时一条
     # 都没勾），之后每次勾选变化由 _sync_select_label 刷新。放在最后：
     # 按钮与那句说明都归参数坞，要等它建好

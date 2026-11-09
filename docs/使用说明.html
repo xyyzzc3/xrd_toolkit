@@ -190,6 +190,28 @@
 <li><strong>这一步的"导出"＝<code>[保存几何…]</code></strong>：把当前几何存成 <code>.poni</code> 文件，
   可以发给别人、或用别的软件。</li>
 </ul>
+<h3>项目预设——换一个项目不用改代码</h3>
+<p><strong>它是什么</strong>：参数面板最上方有一行「预设」。一份预设打包五个输入：
+<strong>几何配置、第二相 CIF、原位帧目录、原位 mask 文件名、相库目录</strong>。
+切换预设 = 这五项一起换，不用再逐页手填。</p>
+<p><strong>内置预设</strong>：<code>LMFP 三相</code>（当前项目），只读；选中它时软件行为和以前
+完全一样。</p>
+<p><strong>保存自己的预设</strong>：</p>
+<ol>
+<li>先把当前项目调好：参数面板选几何；打开 <code>[物相]</code> 或 <code>[精修]</code> 选相库
+目录；打开 <code>[原位]</code> 选帧目录和 mask。</li>
+<li>回到分析模式（退出工作台），点「预设」右边的 <code>[保存…]</code>，起个名字；
+接着在「第二相 CIF」里选这项目要排除的相（没有就选「（无）」）。
+<strong>确认</strong>：预设下拉里出现新名字，并自动切过去。</li>
+<li><code>[管理…]</code> 可以查看五项内容、应用或删除用户预设。覆盖同名用户预设
+会先问一次；内置预设不能覆盖/删除。</li>
+</ol>
+<p><strong>存在哪</strong>：<code>presets_user.json</code>，与 <code>config_user.json</code> 同目录（开发模式
+在 <code>src/xrd_toolkit/</code>，打包后在个人文件夹的 <code>XRD_Toolkit/</code>）。软件会
+记住上次用的预设，下次启动自动接上。</p>
+<p><strong>边界</strong>：预设只换输入，不重跑任何结果；物相旧候选在切换后会清空
+（相库/第二相变了，旧候选不再对应）。原位三相模型仍是 rich/poor/Al，
+预设不会把它变成任意 N 相。</p>
 <h2>4. 原图（2D 二维图像 / 剖面 / 瀑布）</h2>
 <ol>
 <li>在文件栏勾选文件（第 2 节）。</li>

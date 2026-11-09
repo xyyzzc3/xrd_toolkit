@@ -44,6 +44,7 @@ from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _data_snapshot, _log, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
+from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 from xrd_toolkit.services.instrument_baseline import save_baseline
 
 # 图配色与 simulation.plots.plot_fit 一致：观测灰、计算蓝、背景红、
@@ -171,6 +172,9 @@ class RefineWorkbench(QWidget):
         # 拟合开始那一刻的参数快照：报告用（拟合完再改下拉框也不会写错）
         self._fit_meta = None
         self._fit_result_note = ""
+        # 结构下拉的默认相库（项目预设）
+        self.lib_dir = preset_phase_library(
+            getattr(main_window, "preset", None) or PROJECT_PRESET)
 
         self._build_ui()
         if self._instrument is not None:
@@ -417,7 +421,7 @@ class RefineWorkbench(QWidget):
             seen.append(path)
             self.cif_combo.addItem(path.stem, str(path))
 
-        base = paths.structures_dir()
+        base = self.lib_dir
         if base.is_dir():
             for path in sorted(base.glob("*.cif")):
                 add(path)
@@ -427,6 +431,13 @@ class RefineWorkbench(QWidget):
         idx = self.cif_combo.findData(keep) if keep else -1
         if idx >= 0:
             self.cif_combo.setCurrentIndex(idx)
+
+    def apply_preset(self, preset):
+        """应用项目预设：换结构下拉的相库目录（不动已有拟合结果）。"""
+        self.lib_dir = preset_phase_library(preset)
+        self.refresh_cifs()
+        self._set_status(
+            f"已应用预设「{preset.get('name', '')}」：相库 {self.lib_dir.name}")
 
     def set_source(self, curve_key=None, cif_path=None):
         """外部入口（物相工作台的 [送去精修]）预选曲线与 CIF。

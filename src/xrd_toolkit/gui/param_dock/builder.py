@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui.calib import _build_calib_form
 from xrd_toolkit.gui.config_ops import _sync_del_config_btn
+from xrd_toolkit.gui.preset_ops import (
+    _on_preset_combo, open_preset_manager, refresh_preset_combo,
+    save_preset_dialog)
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT, _apply_config)
 from xrd_toolkit.gui.panels import _FocusElideLabel
@@ -32,8 +35,8 @@ from xrd_toolkit.gui.param_dock.widgets import make_page
 # ══ 右侧：参数面板 ═════════════════════════════════════════
 
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
-    """参数坞：顶部两行固定件（"编辑对象"名 / "几何配置"条目）+ 五个
-    入口页（校准 │ 原图 / 1D / 处理 / 对比），翻页由工具栏那五个
+    """参数坞：顶部三行固定件（"编辑对象"名 / "项目预设" / "几何配置"
+    条目）+ 五个入口页（校准 │ 原图 / 1D / 处理 / 对比），翻页由工具栏那五个
     入口按钮负责。
 
     固定件不随页面滚动：
@@ -63,7 +66,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = 两行固定件（编辑对象 / 几何配置）+ **五个入口页**（校准 │
+    # 参数坞 = 三行固定件（编辑对象 / 项目预设 / 几何配置）+ **五个入口页**（校准 │
     # 原图 / 1D / 处理 / 对比）。工具栏那五个入口按钮翻页（位置 A =
     # 窗口顶部，见 _build_toolbar / _switch_entrance）。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
@@ -89,7 +92,35 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.focus_label.setStyleSheet("color: gray;")
     lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
 
-    # 几何配置：五个入口共用的第二行，同样固定在坞顶（不随页面滚动）。
+    # 项目预设（v0.3 B1，2026-11-10）：几何 + 第二相 + 原位目录/mask +
+    # 相库的一键切换。放在几何配置上方——它比单条几何更高一层。
+    window.preset_row = QWidget()
+    preset_lay = QHBoxLayout(window.preset_row)
+    preset_lay.setContentsMargins(0, 0, 0, 0)
+    preset_lay.setSpacing(4)
+    preset_lay.addWidget(QLabel("预设"))
+    window.preset_combo = QComboBox()
+    window.preset_combo.setObjectName("preset_combo")
+    window.preset_combo.setToolTip(
+        "项目预设：几何配置 + 第二相 CIF + 原位帧目录/mask + 相库目录")
+    preset_lay.addWidget(window.preset_combo, 1)
+    btn_preset_save = QPushButton("保存…")
+    btn_preset_save.setObjectName("preset_save_btn")
+    btn_preset_save.setToolTip(
+        "把当前几何 / 相库 / 原位目录 / mask 存成一份用户预设")
+    btn_preset_save.clicked.connect(lambda: save_preset_dialog(window))
+    preset_lay.addWidget(btn_preset_save)
+    btn_preset_manage = QPushButton("管理…")
+    btn_preset_manage.setObjectName("preset_manage_btn")
+    btn_preset_manage.setToolTip("查看、应用或删除项目预设")
+    btn_preset_manage.clicked.connect(lambda: open_preset_manager(window))
+    preset_lay.addWidget(btn_preset_manage)
+    refresh_preset_combo(window)
+    window.preset_combo.currentIndexChanged.connect(
+        lambda i: _on_preset_combo(window, i))
+    lay.addWidget(window.preset_row)
+
+    # 几何配置：五个入口共用的第三行，同样固定在坞顶（不随页面滚动）。
     # 分析/积分/出图一律用这条条目（_collect_geometry 取 window.config），
     # 所以它得在做分析的每一页都看得见——2026-09-26 之前它住在校准页
     # 顶部，还被挤进一个 88 px 高的内嵌滚动区（视口 88 / 内容 130），
@@ -250,10 +281,11 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     forms = (form_1d, form_bg, form_cmp, form_draw)
     form_min = max(f.parentWidget().minimumSizeHint().width()
                    for f in forms)   # 量装表单的部件，不是布局
-    # 坞顶那两行固定件也要放得下（编辑对象名 / 几何配置行）。几何行里
+    # 坞顶那三行固定件也要放得下（编辑对象名 / 项目预设 / 几何配置行）。几何行里
     # 的 [返回分析模式] 平时是隐藏的，而隐藏件不计入 minimumSize ——
     # 量出来会偏小，一到校准模式按钮现身就被裁，所以显式补上它的宽
     head_min = (max(window.focus_label.minimumSizeHint().width(),
+                    window.preset_row.minimumSize().width() + 8,
                     window.geom_row.minimumSize().width()
                     + window.calib_exit_btn.sizeHint().width() + 8,
                     window.data_row.minimumSize().width() + 8,

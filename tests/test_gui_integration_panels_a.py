@@ -26,13 +26,15 @@ class TestParamDockSplitLayout(unittest.TestCase):
     下方——在滚动区之外，滚动时按钮不跟着走。"""
 
     def test_pages_structure(self):
-        """参数坞 = 两行固定件（编辑对象 / 几何配置）+ 五个入口页
-        （校准/1D/扣背景/对比/绘图）。
+        """参数坞 = 四行固定件（编辑对象 / 项目预设 / 几何配置 / 数据
+        参数）+ 五个入口页（校准/1D/扣背景/对比/绘图）。
 
         2026-09-24 用户定稿：工具栏从 7 项收到 5 个入口，六个作图类型
         按钮住进了「原图」页（属性名不变：view_buttons / compare_btn /
         heat_btn）。2026-09-26 又加了一行固定件：几何配置（下拉框 +
         校准模式下的 [返回分析模式]）——它得在每一页都看得见。
+        2026-11-10（B1）：最上面再加一行项目预设（几何/第二相/原位
+        目录/mask/相库的打包切换），几何行因此下移一行。
         """
         w = create_window()
         try:
@@ -42,11 +44,13 @@ class TestParamDockSplitLayout(unittest.TestCase):
             lay = content.layout()
             self.assertIs(lay.itemAt(0).widget(), w.focus_label,
                           "编辑对象名固定最上方")
-            self.assertIs(lay.itemAt(1).widget(), w.geom_row,
-                          "几何配置行固定在第二行")
-            self.assertIs(lay.itemAt(2).widget(), w.data_row,
-                          "数据参数行（2θ 范围/点数）固定在第三行")
-            self.assertIs(lay.itemAt(3).widget(), w.param_stack)
+            self.assertIs(lay.itemAt(1).widget(), w.preset_row,
+                          "项目预设行固定在第二行")
+            self.assertIs(lay.itemAt(2).widget(), w.geom_row,
+                          "几何配置行固定在第三行")
+            self.assertIs(lay.itemAt(3).widget(), w.data_row,
+                          "数据参数行（2θ 范围/点数）固定在第四行")
+            self.assertIs(lay.itemAt(4).widget(), w.param_stack)
             self.assertEqual(w.param_stack.count(), 5)
             self.assertEqual(w.PARAM_PAGES,
                              {"校准": 0, "1D": 1, "处理": 2, "对比": 3,
