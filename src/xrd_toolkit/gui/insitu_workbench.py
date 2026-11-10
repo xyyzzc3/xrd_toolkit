@@ -90,16 +90,19 @@ class InSituWorkbench(QWidget):
             self._frames_in_dir = lambda *a, **k: []
 
         preset = getattr(main_window, "preset", None) or PROJECT_PRESET
-        default_data = Path(preset.get("insitu_dir")
-                            or PROJECT_PRESET["insitu_dir"]).expanduser()
-        # 内置默认目录不存在时退到仓库样例（保持"开箱能看到东西"）；
-        # 用户预设按 TA 写的路径显示，不存在就是 0 帧，别偷偷换目录。
-        if (not default_data.is_dir()
-                and preset.get("name") == DEFAULT_PRESET_NAME):
-            repo_data = paths.ROOT / "data"
-            default_data = (repo_data if repo_data.is_dir()
-                            else Path.home())
-        self.data_dir = default_data
+        # 预设没写帧目录 = 真的"未设置"（用户预设不再偷偷落回 LMFP 默认）；
+        # 内置预设自带目录，目录不存在时退到仓库样例（保持"开箱能看到东西"）。
+        preset_dir = str(preset.get("insitu_dir") or "").strip()
+        self._data_dir_set = bool(preset_dir)
+        if preset_dir:
+            self.data_dir = Path(preset_dir).expanduser()
+            if (not self.data_dir.is_dir()
+                    and preset.get("name") == DEFAULT_PRESET_NAME):
+                repo_data = paths.ROOT / "data"
+                self.data_dir = (repo_data if repo_data.is_dir()
+                                 else Path.home())
+        else:
+            self.data_dir = Path.home()
         # 仓库样例只在开发机有；打包后由用户选自己的 LaB₆ 标样帧
         self.lab6_path = (Path(LAB6_TIF)
                           if LAB6_TIF is not None and Path(LAB6_TIF).is_file()
@@ -150,8 +153,9 @@ class InSituWorkbench(QWidget):
 
     def apply_preset(self, preset):
         """应用项目预设：换帧目录与 mask（不动 rich/poor/Al 三相定义）。"""
-        self.data_dir = Path(preset.get("insitu_dir")
-                             or PROJECT_PRESET["insitu_dir"]).expanduser()
+        raw = str(preset.get("insitu_dir") or "").strip()
+        self._data_dir_set = bool(raw)
+        self.data_dir = (Path(raw).expanduser() if raw else Path.home())
         self.mask_path = self._mask_for_preset(
             preset, self.main.config_name)
         self._refresh_data_label()
@@ -397,6 +401,11 @@ class InSituWorkbench(QWidget):
 
     # ── 目录与文件 ──────────────────────────────────────────
     def _refresh_data_label(self):
+        if not self._data_dir_set:
+            self.frames = []
+            self.data_label.setText("（未选择帧目录）")
+            self.data_label.setToolTip("")
+            return
         limit = int(self.limit.value()) if hasattr(self, "limit") else 0
         try:
             self.frames = list(
@@ -409,10 +418,12 @@ class InSituWorkbench(QWidget):
 
     def _choose_data(self):
         chosen = QFileDialog.getExistingDirectory(
-            self, "选择原位帧目录", str(self.data_dir))
+            self, "选择原位帧目录",
+            str(self.data_dir) if self._data_dir_set else str(Path.home()))
         if not chosen:
             return
         self.data_dir = Path(chosen)
+        self._data_dir_set = True
         self._refresh_data_label()
         self._set_status(f"已选目录：{len(self.frames)} 帧")
 
@@ -495,7 +506,8 @@ class InSituWorkbench(QWidget):
         self._index = 0
         self.batch = None
         self._batch_meta = {
-            "data_dir": str(self.data_dir),
+            "data_dir": (str(self.data_dir)
+                         if self._data_dir_set else ""),
             "mask": str(self.mask_path) if self.mask_path else "",
             "phases": {key: str(path)
                        for key, path in self.phase_paths.items() if path},

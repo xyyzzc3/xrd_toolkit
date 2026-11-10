@@ -151,6 +151,10 @@ class TestPresetWindow(unittest.TestCase):
 
     def test_save_current_with_second_phase_override(self):
         values = preset_ops.current_preset_values(self.w)
+        # 诚实快照：没打开过工作台/没有第二相控件 → 留空，不借默认值
+        self.assertEqual(values["insitu_dir"], "")
+        self.assertEqual(values["phase_library"], "")
+        self.assertEqual(values["second_phase_cif"], "")
         values["second_phase_cif"] = "Si_9008565.cif"
         self.assertTrue(preset_ops.save_current_preset(
             self.w, "带第二相", values=values))
@@ -159,6 +163,20 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(
             presets.get_preset("带第二相")["second_phase_cif"],
             "Si_9008565.cif")
+
+    def test_empty_insitu_dir_stays_unset(self):
+        """预设没写帧目录时，原位工作台显示未设置，不落回 LMFP 默认。"""
+        presets.save_user_preset("无目录", {
+            "geometry": "lmfp1_lab6", "second_phase_cif": "",
+            "insitu_dir": "", "insitu_mask_name": "", "phase_library": "",
+        })
+        self.assertTrue(preset_ops.apply_preset(self.w, "无目录"))
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        self.assertFalse(editor._data_dir_set)
+        self.assertEqual(editor.frames, [])
+        self.assertEqual(editor.data_label.text(), "（未选择帧目录）")
 
     def test_manager_marks_builtin_read_only(self):
         dialog = preset_ops.PresetManagerDialog(self.w)
@@ -198,6 +216,10 @@ class TestPresetWindow(unittest.TestCase):
                 preset_ops.CURRENT_PRESET_TEXT))
             self.assertIn("未保存为预设", dialog.summary.text())
             self.assertIn("_test_drift_config", dialog.summary.text())
+            # 没打开过工作台 / 没有第二相控件：留空，不借用预设默认值
+            self.assertIn("相库目录：（未设置）", dialog.summary.text())
+            self.assertIn("原位帧目录：（未设置）", dialog.summary.text())
+            self.assertIn("第二相 CIF：（无）", dialog.summary.text())
             self.assertFalse(dialog.apply_btn.isEnabled())
             self.assertFalse(dialog.update_btn.isEnabled())
             self.assertFalse(dialog.delete_btn.isEnabled())

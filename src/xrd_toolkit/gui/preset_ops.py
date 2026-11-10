@@ -73,32 +73,39 @@ def _portable_dir(path) -> str:
 
 
 def current_preset_values(window, base_name=None) -> dict:
-    """把当前窗口实际生效的五项设置读成预设 dict。
+    """把当前窗口**实际设置过**的五项输入读成预设 dict。
 
-    相库优先取已打开的物相/精修工作台；原位目录/mask 取原位工作台的
-    当前值；第二相没有独立控件，沿用 base_name（默认当前预设）里的值。
-    更新别的用户预设时传 base_name=目标预设，没打开的工作台字段就
-    保留目标自己的值，而不是被当前预设顶掉。
+    默认（base_name=None）是"诚实快照"：没打开过的物相/精修/原位工作台
+    以及没有独立控件的第二相一律留空，不借用任何预设或内置默认值——
+    「（当前设置）」显示与 `[保存…]` 都按这个口径。
+
+    base_name 给定时（`[用当前设置更新]` 的目标预设），没打开的字段用
+    目标预设补齐：更新是合并，不是清空。
     """
-    base = get_preset(base_name or getattr(window, "preset_name",
-                                            DEFAULT_PRESET_NAME))
-    phase_lib = preset_phase_library(base)
+    base = get_preset(base_name) if base_name else {}
+    phase_lib = None
     editor = (getattr(window, "phase_editor", None)
               or getattr(window, "refine_editor", None))
     if editor is not None and getattr(editor, "lib_dir", None) is not None:
         phase_lib = Path(editor.lib_dir)
+    elif base:
+        phase_lib = preset_phase_library(base)
     values = {
-        "geometry": (getattr(window, "config_name", "")
-                     or base["geometry"]),
-        "second_phase_cif": base.get("second_phase_cif", ""),
-        "insitu_dir": base.get("insitu_dir", ""),
-        "insitu_mask_name": base.get("insitu_mask_name", ""),
-        "phase_library": ("" if phase_lib == paths.structures_dir()
-                          else _portable_dir(phase_lib)),
+        "geometry": (str(getattr(window, "config_name", "") or "")
+                     or str(base.get("geometry") or "")),
+        "second_phase_cif": str(base.get("second_phase_cif") or ""),
+        "insitu_dir": str(base.get("insitu_dir") or ""),
+        "insitu_mask_name": str(base.get("insitu_mask_name") or ""),
+        "phase_library": (
+            "" if phase_lib is None or phase_lib == paths.structures_dir()
+            else _portable_dir(phase_lib)),
     }
     insitu = getattr(window, "insitu_editor", None)
     if insitu is not None:
-        values["insitu_dir"] = _portable_dir(insitu.data_dir)
+        values["insitu_dir"] = (
+            _portable_dir(insitu.data_dir)
+            if getattr(insitu, "_data_dir_set", True) and insitu.data_dir
+            else "")
         values["insitu_mask_name"] = (insitu.mask_path.name
                                       if insitu.mask_path else "")
     return values
@@ -300,12 +307,18 @@ def save_preset_dialog(window) -> None:
     save_current_preset(window, name, values=values)
 
 
-def _fields_text(values) -> str:
-    """五项输入的摘要文本（预设与「当前设置」共用）。"""
-    geom = entry_display(values.get("geometry", ""),
-                         CONFIGS.get(values.get("geometry", ""), {}))
-    library = (values.get("phase_library")
-               or str(paths.structures_dir()))
+def _fields_text(values, *, empty_library=None) -> str:
+    """五项输入的摘要文本（预设与「当前设置」共用）。
+
+    empty_library：相库字段为空时显示什么。预设里空＝随包参考 CIF 目录
+    （显示实际路径）；「当前设置」里空＝这次没设置过（显示「（未设置）」）。
+    """
+    geometry = str(values.get("geometry") or "")
+    geom = (entry_display(geometry, CONFIGS.get(geometry, {}))
+            if geometry else "（未设置）")
+    library = values.get("phase_library") or (
+        empty_library if empty_library is not None
+        else str(paths.structures_dir()))
     return (
         f"几何配置：{geom}\n"
         f"第二相 CIF：{values.get('second_phase_cif') or '（无）'}\n"
@@ -319,9 +332,14 @@ def _summary_text(preset) -> str:
 
 
 def _current_summary_text(window) -> str:
-    """管理弹窗里「（当前设置）」虚拟行的说明 + 五项实际值。"""
-    return ("未保存为预设——当前窗口的实际设置：\n"
-            + _fields_text(current_preset_values(window))
+    """管理弹窗里「（当前设置）」虚拟行的说明 + 实际值。
+
+    只显示这次真正设置过的输入：没打开过的工作台、没有控件的第二相
+    留空（显示「（未设置）」/「（无）」），不借用预设或内置默认值。
+    """
+    return ("未保存为预设——当前窗口实际设置（没打开过的工作台留空）：\n"
+            + _fields_text(current_preset_values(window),
+                           empty_library="（未设置）")
             + "\n\n选中一个用户预设后，可用 [用当前设置更新] 写回。")
 
 
@@ -360,8 +378,8 @@ class PresetManagerDialog(QDialog):
         self.apply_btn.clicked.connect(self._apply)
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
-            "用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖选中的用户预设"
-            "（第二相保留预设里的值）")
+            "用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖选中的用户预设；"
+            "没打开的工作台与第二相保留该预设原值")
         self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除")
         self.delete_btn.clicked.connect(self._delete)
@@ -443,7 +461,7 @@ class PresetManagerDialog(QDialog):
         answer = QMessageBox.question(
             self, "更新预设",
             f"用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖用户预设"
-            f"「{name}」？\n第二相 CIF 保留预设里的值。",
+            f"「{name}」？\n没打开的工作台与第二相 CIF 保留该预设原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
