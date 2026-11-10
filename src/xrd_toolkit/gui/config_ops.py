@@ -95,6 +95,8 @@ def _import_poni(window: QMainWindow) -> None:
                  f"重启后仍在）；注意 .poni 不携带标样信息，校准时仍按"
                  f"当前「标样」选择（默认 LaB₆）")
     _calib_sync(window)
+    from xrd_toolkit.gui import preset_ops     # 破循环：见模块说明
+    preset_ops.hint_geometry_outside_preset(window)
 
 
 def _save_poni(window: QMainWindow) -> None:
@@ -349,3 +351,5 @@ def _save_calib_config(window: QMainWindow) -> None:
     else:
         _log(window, f"已覆盖配置条目 {config.entry_display(key, entry)} "
                      f"并自动选中")
+    from xrd_toolkit.gui import preset_ops         # 破循环：见模块说明
+    preset_ops.hint_geometry_outside_preset(window)

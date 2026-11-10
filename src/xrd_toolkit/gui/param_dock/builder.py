@@ -155,7 +155,10 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
         window.config_combo.findData(DEFAULT_CONFIG))
     window.config_combo.currentIndexChanged.connect(
         lambda i: (_apply_config(window, i),
-                   _sync_del_config_btn(window)))
+                   _sync_del_config_btn(window),
+                   # 几何换了 → 预设下拉检查是否已偏离，显示「（当前设置）」；
+                   # 放在 _apply_config 之后才读得到新的 config_name
+                   refresh_preset_combo(window)))
     geom_lay.addWidget(window.config_combo, 1)
     # 校准页的显式出口：固定在坞顶、永远可见。以前它在校准表单的最
     # 底部（窗口 1000 高时按钮落在内容 y=1236，要往下滚 434 px），

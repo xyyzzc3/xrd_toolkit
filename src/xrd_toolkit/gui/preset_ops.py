@@ -12,6 +12,8 @@
     已经退回默认；这里只按退回后的值应用。
   * 预设只改默认输入，不重跑任何计算；已有结果留着，物相旧候选会被
     清掉（相库/第二相变了，旧候选不再对应）。
+  * 当前几何偏离预设时，下拉顶部显示「（当前设置）」虚拟项（只提示、
+    不可应用）；校准/导入新几何后用日志提示怎么把它接回预设。
 """
 from pathlib import Path
 
@@ -28,6 +30,24 @@ from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, get_preset, is_builtin, preset_names,
     preset_phase_library, remove_user_preset, save_user_preset,
     set_active_preset)
+
+
+# 预设下拉里的虚拟项：当前几何已经偏离预设时显示，只作状态提示，不可"应用"。
+CURRENT_PRESET_TEXT = "（当前设置）"
+
+
+def preset_geometry_matches(window) -> bool:
+    """当前几何是否还是预设里的那一条（用于"预设已偏离"提示）。
+
+    启动早期（参数坞刚建、config_name 还没写入）按一致处理，避免闪一个
+    假提示；预设或当前几何为空也按一致处理。
+    """
+    preset = getattr(window, "preset", None) or {}
+    geometry = str(preset.get("geometry") or "")
+    current = str(getattr(window, "config_name", "") or "")
+    if not geometry or not current:
+        return True
+    return current == geometry
 
 
 def _busy_workbenches(window) -> list:
@@ -52,13 +72,16 @@ def _portable_dir(path) -> str:
     return "~" if str(rel) == "." else "~/" + str(rel)
 
 
-def current_preset_values(window) -> dict:
+def current_preset_values(window, base_name=None) -> dict:
     """把当前窗口实际生效的五项设置读成预设 dict。
 
     相库优先取已打开的物相/精修工作台；原位目录/mask 取原位工作台的
-    当前值；第二相没有独立控件，沿用当前预设里的值。
+    当前值；第二相没有独立控件，沿用 base_name（默认当前预设）里的值。
+    更新别的用户预设时传 base_name=目标预设，没打开的工作台字段就
+    保留目标自己的值，而不是被当前预设顶掉。
     """
-    base = get_preset(getattr(window, "preset_name", DEFAULT_PRESET_NAME))
+    base = get_preset(base_name or getattr(window, "preset_name",
+                                            DEFAULT_PRESET_NAME))
     phase_lib = preset_phase_library(base)
     editor = (getattr(window, "phase_editor", None)
               or getattr(window, "refine_editor", None))
@@ -82,22 +105,43 @@ def current_preset_values(window) -> dict:
 
 
 def refresh_preset_combo(window, select=None) -> None:
-    """重建预设下拉（内置在前、用户预设排序），并选中 select。"""
+    """重建预设下拉（内置在前、用户预设排序），并选中 select。
+
+    当前几何已经偏离预设时，在顶部插一个「（当前设置）」虚拟项并选中
+    它——让"预设名"不再假装等于实际输入；点回真实预设名即重新应用
+    （索引变化会走 _on_preset_combo，顺带修掉"重选同名项没反应"）。
+    `select` 给定时（应用/保存之后）总是选真实预设，不插虚拟项。
+    """
     combo = getattr(window, "preset_combo", None)
     if combo is None:
         return
-    current = str(select or getattr(window, "preset_name",
-                                   DEFAULT_PRESET_NAME))
+    select = str(select) if select else ""
+    current = select or str(getattr(window, "preset_name",
+                                    DEFAULT_PRESET_NAME))
+    dirty = not select and not preset_geometry_matches(window)
     combo.blockSignals(True)
     combo.clear()
+    if dirty:
+        preset = getattr(window, "preset", None) or {}
+        combo.addItem(CURRENT_PRESET_TEXT)
+        combo.setItemData(
+            0,
+            f"当前几何 {getattr(window, 'config_name', '')} 不在预设"
+            f"「{getattr(window, 'preset_name', DEFAULT_PRESET_NAME)}」里"
+            f"（预设是 {preset.get('geometry', '')}）；"
+            "选中一个预设可切回",
+            Qt.ToolTipRole)
     for name in preset_names():
         combo.addItem(name, name)
         combo.setItemData(
             combo.count() - 1,
             "内置预设（不可删除）" if is_builtin(name) else "用户预设",
             Qt.ToolTipRole)
-    idx = combo.findData(current)
-    combo.setCurrentIndex(idx if idx >= 0 else 0)
+    if dirty:
+        combo.setCurrentIndex(0)
+    else:
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
     combo.blockSignals(False)
 
 
@@ -147,17 +191,46 @@ def apply_preset(window, name, *, persist=True) -> bool:
     return True
 
 
+def hint_geometry_outside_preset(window) -> bool:
+    """校准/导入几何后提示：这条几何是否已经属于当前预设。
+
+    只写日志、不弹窗（校准保存本来就有自己的确认流程）。返回是否偏离，
+    便于调用方/测试判断。
+    """
+    if preset_geometry_matches(window):
+        return False
+    name = str(getattr(window, "preset_name", DEFAULT_PRESET_NAME))
+    preset = getattr(window, "preset", None) or {}
+    geometry = str(preset.get("geometry") or "")
+    key = str(getattr(window, "config_name", "") or "")
+    if is_builtin(name):
+        tail = ("内置预设不可改；要让下次启动自动接上，点预设行 [保存…] "
+                "另存为用户预设")
+    else:
+        tail = ("可在 [管理…] 里选中它点 [用当前设置更新]，"
+                "或 [保存…] 另存新预设")
+    _log(window, f"提示：几何配置 {key} 不在当前预设「{name}」里"
+                 f"（预设是 {geometry}）。{tail}。")
+    return True
+
+
 def _on_preset_combo(window, index) -> None:
-    """下拉换预设：应用失败就退回原选择。"""
+    """下拉换预设：应用失败就保持真实的"已偏离"状态。"""
     combo = getattr(window, "preset_combo", None)
     if combo is None:
         return
-    name = combo.itemData(index) or combo.currentText()
-    if not name or name == getattr(window, "preset_name", None):
+    # 虚拟项「（当前设置）」的 itemData 是 None——只显示，不应用
+    name = combo.itemData(index)
+    if not name:
+        return
+    # 同一个预设：只有在几何没偏离时才当作"没换"；偏离了要允许点回来
+    if (name == getattr(window, "preset_name", None)
+            and preset_geometry_matches(window)):
         return
     if not apply_preset(window, name):
-        refresh_preset_combo(window, getattr(window, "preset_name",
-                                             DEFAULT_PRESET_NAME))
+        # 应用失败（工作台忙等）时不能退回选中预设名——实际几何并没有
+        # 变回去，下拉要继续如实显示「（当前设置）」
+        refresh_preset_combo(window)
 
 
 def save_current_preset(window, name, values=None) -> bool:
@@ -175,11 +248,11 @@ def save_current_preset(window, name, values=None) -> bool:
     except (OSError, ValueError) as err:
         QMessageBox.warning(window, "项目预设", user_error_text(err))
         return False
-    refresh_preset_combo(window, name)
     _log(window, f"预设已{'新建' if is_new else '更新'}：{name}")
+    # apply_preset 成功时会刷新下拉；失败（工作台忙）时保持"已偏离"
+    # 的真实状态，不把下拉伪造成选中的预设名
     if not apply_preset(window, name):
-        refresh_preset_combo(window, getattr(window, "preset_name",
-                                             DEFAULT_PRESET_NAME))
+        refresh_preset_combo(window)
     return True
 
 
@@ -227,17 +300,29 @@ def save_preset_dialog(window) -> None:
     save_current_preset(window, name, values=values)
 
 
-def _summary_text(preset) -> str:
-    geom = entry_display(preset["geometry"],
-                         CONFIGS.get(preset["geometry"], {}))
-    library = (preset.get("phase_library")
+def _fields_text(values) -> str:
+    """五项输入的摘要文本（预设与「当前设置」共用）。"""
+    geom = entry_display(values.get("geometry", ""),
+                         CONFIGS.get(values.get("geometry", ""), {}))
+    library = (values.get("phase_library")
                or str(paths.structures_dir()))
     return (
         f"几何配置：{geom}\n"
-        f"第二相 CIF：{preset.get('second_phase_cif') or '（无）'}\n"
-        f"原位帧目录：{preset.get('insitu_dir') or '（未设置）'}\n"
-        f"原位 mask：{preset.get('insitu_mask_name') or '（不遮）'}\n"
+        f"第二相 CIF：{values.get('second_phase_cif') or '（无）'}\n"
+        f"原位帧目录：{values.get('insitu_dir') or '（未设置）'}\n"
+        f"原位 mask：{values.get('insitu_mask_name') or '（不遮）'}\n"
         f"相库目录：{library}")
+
+
+def _summary_text(preset) -> str:
+    return _fields_text(preset)
+
+
+def _current_summary_text(window) -> str:
+    """管理弹窗里「（当前设置）」虚拟行的说明 + 五项实际值。"""
+    return ("未保存为预设——当前窗口的实际设置：\n"
+            + _fields_text(current_preset_values(window))
+            + "\n\n选中一个用户预设后，可用 [用当前设置更新] 写回。")
 
 
 class PresetManagerDialog(QDialog):
@@ -273,6 +358,11 @@ class PresetManagerDialog(QDialog):
         buttons = QHBoxLayout()
         self.apply_btn = QPushButton("应用")
         self.apply_btn.clicked.connect(self._apply)
+        self.update_btn = QPushButton("用当前设置更新")
+        self.update_btn.setToolTip(
+            "用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖选中的用户预设"
+            "（第二相保留预设里的值）")
+        self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除")
         self.delete_btn.clicked.connect(self._delete)
         save_btn = QPushButton("保存当前…")
@@ -280,6 +370,7 @@ class PresetManagerDialog(QDialog):
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
         buttons.addWidget(self.apply_btn)
+        buttons.addWidget(self.update_btn)
         buttons.addWidget(self.delete_btn)
         buttons.addWidget(save_btn)
         buttons.addStretch(1)
@@ -288,21 +379,29 @@ class PresetManagerDialog(QDialog):
 
         self._refresh()
 
-    def _refresh(self):
-        current = getattr(self.window, "preset_name", DEFAULT_PRESET_NAME)
+    def _refresh(self, select=None):
+        current = (select
+                   or getattr(self.window, "preset_name", DEFAULT_PRESET_NAME))
+        dirty = not preset_geometry_matches(self.window)
         self.list.blockSignals(True)
         self.list.clear()
+        if dirty:
+            item = QListWidgetItem(CURRENT_PRESET_TEXT + "    （未保存）")
+            item.setData(Qt.UserRole, None)   # 虚拟行：不对应任何文件条目
+            item.setToolTip("当前窗口实际使用的五项输入；未保存为预设")
+            self.list.addItem(item)
         for name in preset_names():
             item = QListWidgetItem(
                 name + ("    （内置）" if is_builtin(name) else ""))
             item.setData(Qt.UserRole, name)
             self.list.addItem(item)
         self.list.blockSignals(False)
-        row = 0
-        for i in range(self.list.count()):
-            if self.list.item(i).data(Qt.UserRole) == current:
-                row = i
-                break
+        row = 0                           # 偏离时默认看「（当前设置）」
+        if select or not dirty:
+            for i in range(self.list.count()):
+                if self.list.item(i).data(Qt.UserRole) == current:
+                    row = i
+                    break
         self.list.setCurrentRow(row)
         if self.list.count() == 0:
             self._on_selected(-1)
@@ -312,15 +411,52 @@ class PresetManagerDialog(QDialog):
         return item.data(Qt.UserRole) if item is not None else None
 
     def _on_selected(self, _row):
-        name = self._selected_name()
+        item = self.list.currentItem()
+        name = item.data(Qt.UserRole) if item is not None else None
+        if item is not None and name is None:
+            # 虚拟行「（当前设置）」：显示实际值，但不能应用/更新/删除
+            self.summary.setText(_current_summary_text(self.window))
+            self.apply_btn.setEnabled(False)
+            self.update_btn.setEnabled(False)
+            self.delete_btn.setEnabled(False)
+            return
         if not name:
             self.summary.setText("")
             self.apply_btn.setEnabled(False)
+            self.update_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
             return
         self.summary.setText(_summary_text(get_preset(name)))
         self.apply_btn.setEnabled(True)
+        self.update_btn.setEnabled(not is_builtin(name))
         self.delete_btn.setEnabled(not is_builtin(name))
+
+    def _update(self):
+        """用当前窗口的五项输入覆盖选中的用户预设。
+
+        第二相没有独立控件，保留预设里原来的值；内置预设只读。若更新的
+        正是当前预设，顺手重新应用一遍（相库/原位目录等跟着刷新）。
+        """
+        name = self._selected_name()
+        if not name or is_builtin(name):
+            return
+        answer = QMessageBox.question(
+            self, "更新预设",
+            f"用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖用户预设"
+            f"「{name}」？\n第二相 CIF 保留预设里的值。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        values = current_preset_values(self.window, base_name=name)
+        try:
+            save_user_preset(name, values)
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "项目预设", user_error_text(err))
+            return
+        _log(self.window, f"预设已更新：{name}")
+        if getattr(self.window, "preset_name", None) == name:
+            apply_preset(self.window, name)
+        self._refresh(select=name)
 
     def _apply(self):
         name = self._selected_name()
