@@ -179,7 +179,7 @@ def prepare(args):
             mask = load_mask(mp)
             print(f"mask: {mp} ({mask_stats(mask)['masked_pixels']} px)")
         else:
-            print(f"警告：mask 不存在（{mp}），按不遮运行")
+            print(f"警告：掩膜文件不存在（{mp}），按不遮运行")
 
     files = frame_files(data_dir)
     frames = [int(x) for x in args.frames.split(",") if x.strip()]

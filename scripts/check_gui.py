@@ -768,11 +768,11 @@ def check_processing_chain(window, lab6: str) -> None:
 
 
 def check_mask_editor(window, lmfp: str) -> None:
-    """Mask 编辑器：工具栏 [Mask] → 载入真图 → 矩形遮 → 应用并预览。
+    """掩膜编辑器：工具栏 [掩膜] → 载入真图 → 矩形遮 → 应用并预览。
 
     走用户路径：按钮 click + 画布真鼠标事件；不直接改 `editor.mask`。
     """
-    print("\nI. Mask 工作台（真图 + 真画布事件）")
+    print("\nI. 掩膜工作台（真图 + 真画布事件）")
     # 工作台住在主窗口的 MDI 区：主窗口没 show 时子窗口不可见、
     # showEvent（自动载入勾选图）也不会发——探针必须走真实的显示路径
     window.show()
@@ -786,7 +786,7 @@ def check_mask_editor(window, lmfp: str) -> None:
     QApplication.processEvents()
     window.mask_btn.click()
     ok = wait_until(lambda: getattr(window, "mask_editor", None) is not None)
-    report(ok, "工具栏 [Mask] 打开中央工作台")
+    report(ok, "工具栏 [掩膜] 打开中央工作台")
     if not ok:
         return
     editor = window.mask_editor
@@ -796,7 +796,7 @@ def check_mask_editor(window, lmfp: str) -> None:
            "工作台住在中央 MDI 区（不是独立窗口）")
     report(not window.param_dock.isVisible()
            and not window.log_dock.isVisible(),
-           "进入 Mask 模式收起参数坞和日志坞")
+           "进入掩膜模式收起参数坞和日志坞")
     ok = wait_until(lambda: editor.image is not None, timeout_s=60)
     report(ok, "打开工作台自动载入勾选的第一张原始图",
            f"{Path(editor.image_path).name if editor.image_path else None}")
@@ -859,27 +859,27 @@ def check_mask_editor(window, lmfp: str) -> None:
 
     editor.btn_preview.click()
     ok = wait_until(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
-    report(ok, "[预览效果] 画出 mask 前/后两条 1D 曲线")
+    report(ok, "[预览效果] 画出掩膜前/后两条 1D 曲线")
     if ok:
         y0 = np.asarray(editor.ax_prev.lines[0].get_ydata())
         y1 = np.asarray(editor.ax_prev.lines[1].get_ydata())
         report(not np.allclose(y0, y1, equal_nan=True),
-               "mask 前后 1D 曲线有差异")
+               "掩膜前后 1D 曲线有差异")
 
     from xrd_toolkit.services import masked2d
     prods_before = len(masked2d.list_products())
     editor.btn_apply.click()
     ok = wait_until(
         lambda: len(masked2d.list_products()) > prods_before, timeout_s=180)
-    report(ok, "[生成 Mask 2D] 建立产物（预览是独立按钮）")
+    report(ok, "[生成掩膜 2D] 建立产物（预览是独立按钮）")
     prods = masked2d.list_products()
     report(len(prods) >= 1
            and int(prods[0].get("masked_pixels") or 0) == n_masked,
-           "生成 Mask 后的 2D 产物（manifest）",
+           "生成掩膜后的 2D 产物（manifest）",
            f"{len(prods)} 条")
     m2d = [s for s in gui_sources.all_sources(window)
            if s.kind == gui_sources.MASKED2D]
-    report(len(m2d) >= 1, "文件栏出现「Mask 后的 2D」条目")
+    report(len(m2d) >= 1, "文件栏出现「掩膜后的 2D」条目")
     if m2d:
         window.open_view_source(m2d[0], "2D")
         key2 = "2D|" + str(m2d[0].path)
@@ -890,20 +890,20 @@ def check_mask_editor(window, lmfp: str) -> None:
         img = (window.plot_docks[key2].last_image
                if key2 in window.plot_docks else None)
         report(ok2 and np.ma.isMaskedArray(img),
-               "Mask 2D 双击 → 2D 面板（MaskedArray，mask 随数据走）")
+               "掩膜 2D 双击 → 2D 面板（MaskedArray，mask 随数据走）")
         window.open_view_source(m2d[0], "1D")
         key1 = "1D|" + str(m2d[0].path)
         ok1 = wait_until(
             lambda: key1 in window.plot_docks
             and getattr(window.plot_docks[key1], "last_tth", None)
             is not None, timeout_s=180)
-        report(ok1, "Mask 2D → 1D 积分")
+        report(ok1, "掩膜 2D → 1D 积分")
     editor.btn_clear.click()
     QApplication.processEvents()
     report(int(editor.mask.sum()) == 0, "清空工作台（已生成的产物保留）")
     window.mask_btn.setChecked(False)
     QApplication.processEvents()
-    report(not window.mask_dock.isVisible(), "[退出 Mask] 关闭工作台")
+    report(not window.mask_dock.isVisible(), "[退出掩膜] 关闭工作台")
 
 
 def check_file_bar_sort(window, lab6: str, lmfp: str) -> None:

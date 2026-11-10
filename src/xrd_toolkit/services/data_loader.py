@@ -30,7 +30,7 @@ def load_diffraction_image(path: str) -> np.ndarray:
         base = load_diffraction_image(raw_path)
         if base.shape != mask.shape:
             raise ValueError(
-                f"masked 2D 的 mask 形状 {mask.shape} 与原始图 "
+                f"掩膜 2D 的掩膜形状 {mask.shape} 与原始图 "
                 f"{base.shape} 不一致：{path}")
         return np.ma.array(base, mask=mask)
     image = fabio.open(path)

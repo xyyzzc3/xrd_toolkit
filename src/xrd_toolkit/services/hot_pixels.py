@@ -40,7 +40,7 @@ SUSPICIOUS_FRACTION = 0.005
 def mask_suspicion(info, shape):
     """这次自动检测的结果是否大得离谱；返回 (可疑?, 说明)。
 
-    只判断、不改 mask：GUI 用它弹确认框，命令行用它打印警告，
+    只判断、不改掩膜：GUI 用它弹确认框，命令行用它打印警告，
     是否继续由调用方决定（有些探测器确实有大量坏点）。
     """
     comps = int(info.get("masked_components", 0) or 0)
@@ -103,7 +103,7 @@ def mask_hot_pixels(image, *, window=DEFAULT_WINDOW, ratio=DEFAULT_RATIO,
     """
     img = np.asarray(image, dtype=float)
     if img.ndim != 2:
-        raise ValueError("mask_hot_pixels 需要 2D 图像")
+        raise ValueError("自动掩膜需要 2D 图像")
     med = _local_median(img, window, downsample)
     cand = img > float(ratio) * np.maximum(med, 1.0)
     labels, n = ndimage.label(cand, structure=np.ones((3, 3)))

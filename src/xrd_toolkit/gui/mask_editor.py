@@ -1,24 +1,24 @@
-"""Mask 中央工作台（2026-10-27；2026-10-30 改为嵌入主窗口）。
+"""掩膜中央工作台（2026-10-27；2026-10-30 改为嵌入主窗口）。
 
-从工具栏 [校准] 旁边的 [Mask] 打开：内容装进中央 MDI 子窗口（不是
-独立窗口，也不是参数坞的一页）。它要同时看 2D 图、画遮罩、跑自动
+从工具栏 [校准] 旁边的 [掩膜] 打开：内容装进中央 MDI 子窗口（不是
+独立窗口，也不是参数坞的一页）。它要同时看 2D 图、画掩膜、跑自动
 检测、预览 mask 前后的 1D，塞进参数页会太挤；进入时参数坞和日志坞
 收起，工作台自带消息行/状态行。
 
 流程（对应 Week 9 任务一）：
   1. 先在文件栏勾选原始数据，再打开编辑器：自动载入勾选的第一张，
-     顶部下拉可以换图（Mask 只认文件栏里的原始数据）；
+     顶部下拉可以换图（掩膜只认文件栏里的原始数据）；
   2. 手动画：画笔、橡皮、矩形；或点 [孤立坏点（局部）]。
-     [整环离群（实验性）] 与 GSAS-II 的自动 spot mask 同一思路，
+     [整环离群（实验性）] 与 GSAS-II 的自动斑点掩膜（spot mask）同一思路，
      真实环可能被误标，只作参考（见 services/mask.py）；
   3. [导出配方…] 写 .mask.npz（mask + 来源分层 + 元数据）；
      [导入配方…] 读回来；[导出通用掩膜…] 另存 .npy/.edf 给外部工具；
-  4. [预览效果]：只画 mask 前/后的 1D，不建产物；
-     [生成 Mask 2D]：按范围（当前图像 / 勾选的 N 个文件）在 stage cache
-     写 manifest（原始图 + mask），文件栏出现「Mask 后的 2D」条目。
+  4. [预览效果]：只画掩膜前/后的 1D，不建产物；
+     [生成掩膜 2D]：按范围（当前图像 / 勾选的 N 个文件）在 stage cache
+     写 manifest（原始图 + mask），文件栏出现「掩膜后的 2D」条目。
 
 视图：点亮 [放大镜] = 滚轮以光标为中心缩放 + 左键拖 = 框选放大；
-熄灭 = 左键画 mask；中键（或 ⌥/Shift + 左键）拖动平移；
+熄灭 = 左键画掩膜；中键（或 ⌥/Shift + 左键）拖动平移；
 [复位视图]（Home 键同效）回全图。
 mask 永远是全分辨率；只有**显示**按视图降采样（块内取最大，来源数组按
 优先级取），所以缩到全图时孤立坏点也不会被平均掉。底图与 overlay 只画
@@ -97,11 +97,11 @@ def _preview_worker(image, mask, geom, npt, unmasked):
 
 
 class MaskWorkbench(QWidget):
-    """Mask 中央工作台的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
+    """掩膜中央工作台的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
 
-    不再是独立窗口：工具栏 [Mask] 把它开在中央绘图区，参数坞和日志坞
-    收起（工作台自带状态行/消息行）；退出/关闭只隐藏子窗口，mask 状态
-    留着，下次再点 [Mask] 继续。
+    不再是独立窗口：工具栏 [掩膜] 把它开在中央绘图区，参数坞和日志坞
+    收起（工作台自带状态行/消息行）；退出/关闭只隐藏子窗口，掩膜状态
+    留着，下次再点 [掩膜] 继续。
     """
 
     TOOL_BRUSH = "brush"
@@ -117,7 +117,7 @@ class MaskWorkbench(QWidget):
         self.image = None
         self.image_path = None
         self.mask = None
-        self._source = None          # uint8：每个 mask 像素的来源（只影响配色）
+        self._source = None          # uint8：每个掩膜像素的来源（只影响配色）
         self.mask_path = None
         self._undo = []
         self._tool = self.TOOL_BRUSH
@@ -180,7 +180,7 @@ class MaskWorkbench(QWidget):
         self.home_sc = QShortcut(QKeySequence(Qt.Key_Home), self)
         self.home_sc.setContext(Qt.WindowShortcut)
         self.home_sc.activated.connect(self._reset_view)
-        # 只有进入 Mask 模式时由主窗口打开：平时它和主窗口的 Home 同键，
+        # 只有进入掩膜模式时由主窗口打开：平时它和主窗口的 Home 同键，
         # 两个 WindowShortcut 同时启用会被 Qt 判成歧义、两条都不触发
         self.home_sc.setEnabled(False)
         self._update_status()
@@ -199,7 +199,7 @@ class MaskWorkbench(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
 
-        # ── 图像行：Mask 只认文件栏里的原始数据（2026-10-30 用户定）──
+        # ── 图像行：掩膜只认文件栏里的原始数据（2026-10-30 用户定）──
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("图像"))
         self.image_combo = QComboBox()
@@ -214,12 +214,12 @@ class MaskWorkbench(QWidget):
         row1.addStretch(1)
         self.btn_load = QPushButton("导入配方…")
         self.btn_load.setToolTip(
-            "读回 Mask 配方（.mask.npz，含来源分层）"
+            "读回掩膜配方（.mask.npz，含来源分层）"
             "或通用掩膜（.npy/.edf）")
         self.btn_load.clicked.connect(self._import_mask)
         row1.addWidget(self.btn_load)
         self.btn_save = QPushButton("导出配方…")
-        self.btn_save.setToolTip("保存 .mask.npz：mask、来源分层和参数一起存")
+        self.btn_save.setToolTip("保存 .mask.npz：掩膜、来源分层和参数一起存")
         self.btn_save.clicked.connect(self._save_recipe)
         row1.addWidget(self.btn_save)
         self.btn_save_generic = QPushButton("导出通用掩膜…")
@@ -240,7 +240,7 @@ class MaskWorkbench(QWidget):
         self.btn_zoom.setCheckable(True)
         self.btn_zoom.setToolTip(
             "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大；"
-            "熄灭 = 左键画 mask；中键或 ⌥/Shift + 左键平移")
+            "熄灭 = 左键画掩膜；中键或 ⌥/Shift + 左键平移")
         self.btn_zoom.toggled.connect(self._on_zoom_toggled)
         row2.addWidget(self.btn_zoom)
         row2.addSpacing(16)
@@ -268,8 +268,8 @@ class MaskWorkbench(QWidget):
         self.btn_undo.clicked.connect(self._undo_last)
         row2.addWidget(self.btn_undo)
         self.btn_clear = QPushButton("清空")
-        self.btn_clear.setToolTip("清空编辑器里的当前 mask（已生成的 "
-                                  "Mask 2D 产物不受影响）")
+        self.btn_clear.setToolTip("清空编辑器里的当前掩膜（已生成的 "
+                                  "掩膜 2D 产物不受影响）")
         self.btn_clear.clicked.connect(self._clear)
         row2.addWidget(self.btn_clear)
         row2.addStretch(1)
@@ -285,7 +285,7 @@ class MaskWorkbench(QWidget):
         row3.addWidget(self.btn_hot)
         self.btn_radial = QPushButton("整环离群（实验性，勿遮真实环）")
         self.btn_radial.setToolTip(
-            "按径向环带找离群像素（与 GSAS-II 的自动 spot mask 同一思路）；"
+            "按径向环带找离群像素（与 GSAS-II 的自动斑点掩膜（spot mask）同一思路）；"
             "真实衍射环的强弧段/织构（如强织构基片）会被误标，只作参考")
         self.btn_radial.clicked.connect(self._auto_radial)
         row3.addWidget(self.btn_radial)
@@ -415,7 +415,7 @@ class MaskWorkbench(QWidget):
         row4.addWidget(self.chk_preview)
         self.btn_preview = QPushButton("预览效果")
         self.btn_preview.setToolTip(
-            "立即重算 mask 前/后的 1D 对比；实时预览开着时会自动更新")
+            "立即重算掩膜前/后的 1D 对比；实时预览开着时会自动更新")
         self.btn_preview.clicked.connect(self._preview_effect)
         row4.addWidget(self.btn_preview)
         self.scope_combo = QComboBox()
@@ -423,13 +423,13 @@ class MaskWorkbench(QWidget):
         self.scope_combo.addItem("当前图像", "current")
         self.scope_combo.setCurrentIndex(0)      # 默认：勾选的文件
         self.scope_combo.setToolTip(
-            "生成 Mask 2D 的范围（默认勾选的文件；可换成当前图像）")
+            "生成掩膜 2D 的范围（默认勾选的文件；可换成当前图像）")
         self.scope_combo.currentIndexChanged.connect(
             lambda _i: self._update_generate_state())
         row4.addWidget(self.scope_combo)
-        self.btn_apply = QPushButton("生成 Mask 2D")
+        self.btn_apply = QPushButton("生成掩膜 2D")
         self.btn_apply.setToolTip(
-            "为选定范围生成「Mask 后的 2D」产物（原始像素 + mask）")
+            "为选定范围生成「掩膜后的 2D」产物（原始像素 + 掩膜）")
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self._generate_current)
         row4.addWidget(self.btn_apply)
@@ -453,14 +453,14 @@ class MaskWorkbench(QWidget):
             btn.setEnabled(not on)
         self.brush.setEnabled(not on)
         self.canvas.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
-        self._say("Mask 放大镜：开（滚轮缩放、左键框选放大）"
-             if on else "Mask 放大镜：关（左键画 mask）")
+        self._say("掩膜放大镜：开（滚轮缩放、左键框选放大）"
+             if on else "掩膜放大镜：关（左键画掩膜）")
         self._update_status()
 
     def _say(self, text):
         """工作台消息：显示在底部消息行，同时写主日志留档。
 
-        日志坞在 Mask 模式里是收起的，工作台必须自己看得见结果
+        日志坞在掩膜模式里是收起的，工作台必须自己看得见结果
         （自动检测抓了多少、配方存到哪、生成失败为什么）。
         """
         _log(self.main, text)
@@ -474,7 +474,7 @@ class MaskWorkbench(QWidget):
             st = mask_stats(self.mask)
             h, w = self.image.shape
             text = (f"{Path(self.image_path).name}  {h}×{w} px  |  "
-                    f"mask {st['masked_pixels']} px "
+                    f"掩膜 {st['masked_pixels']} px "
                     f"({st['fraction'] * 100:.2f}%)  |  "
                     f"{self.TOOL_NAMES.get(self._tool, self._tool)}")
             zoom = self._zoom_factor()
@@ -509,7 +509,7 @@ class MaskWorkbench(QWidget):
             self.btn_apply.setText("已生成（无改动）")
         else:
             self.btn_apply.setEnabled(has_mask and bool(targets))
-            self.btn_apply.setText("生成 Mask 2D")
+            self.btn_apply.setText("生成掩膜 2D")
 
     def _set_last_added(self, added):
         """记下自动检测新增的像素，[查看改动] 才有地方可去。"""
@@ -524,7 +524,7 @@ class MaskWorkbench(QWidget):
     def _locate_changes(self):
         """缩放到上一次自动检测新增的像素；重复点按依次看各处。"""
         if self._last_added is None:
-            self._say("Mask：没有可定位的自动检测改动")
+            self._say("掩膜：没有可定位的自动检测改动")
             return
         if not self._locate_order:
             labels, n = ndimage.label(self._last_added,
@@ -557,7 +557,7 @@ class MaskWorkbench(QWidget):
             lw=1.6, zorder=8)
         self.ax_img.add_patch(self._locate_patch)
         self.canvas.draw_idle()
-        self._say(f"Mask 改动：第 {k + 1}/{n} 处"
+        self._say(f"掩膜改动：第 {k + 1}/{n} 处"
                        f"（中心 行 {int(cy)}, 列 {int(cx)}；{int(ys.size)} px）")
 
     def _clear_locate_patch(self):
@@ -601,7 +601,7 @@ class MaskWorkbench(QWidget):
 
     def _undo_last(self):
         if not self._undo:
-            self._say("Mask：没有可撤销的操作")
+            self._say("掩膜：没有可撤销的操作")
             return
         self.mask, self._source = self._undo.pop()
         self._update_overlay()
@@ -660,7 +660,7 @@ class MaskWorkbench(QWidget):
     def _use_checked(self):
         path = self._first_checked_raw()
         if path is None:
-            self._say("Mask：文件栏没有勾选的原始数据")
+            self._say("掩膜：文件栏没有勾选的原始数据")
             return
         if (self.image_path is not None
                 and Path(path) == Path(self.image_path)):
@@ -682,7 +682,7 @@ class MaskWorkbench(QWidget):
             self._mask_cache.popitem(last=False)
 
     def _mask_for_image(self, path, shape):
-        """按图取 mask：本会话缓存 → 已保存配方 → 该图的 Mask 2D。"""
+        """按图取掩膜：本会话缓存 → 已保存配方 → 该图的掩膜 2D。"""
         key = str(Path(path).expanduser().resolve())
         cached = self._mask_cache.get(key)
         if cached is not None and cached[0].shape == tuple(shape):
@@ -746,7 +746,7 @@ class MaskWorkbench(QWidget):
             return
         self._stash_mask()                  # 换图前：把当前图的 mask 记下来
         if np.ma.isMaskedArray(img):
-            # 从 Mask 2D 产物打开：解析到原始图，并把它的 mask 载入编辑器
+            # 从掩膜 2D 产物打开：解析到原始图，并把它的掩膜载入编辑器
             raw_path, mask0, _meta = masked2d.load_manifest(path)
             self.image = np.asarray(np.ma.getdata(img))
             self.image_path = Path(raw_path)
@@ -772,7 +772,7 @@ class MaskWorkbench(QWidget):
         self._preview_cache = None
         self._refresh_preview()      # 一开始就显示无 mask 的 1D
         self._update_status()
-        self._say(f"Mask 编辑器：载入 {self.image_path.name}"
+        self._say(f"掩膜编辑器：载入 {self.image_path.name}"
                        f"（{img.shape[0]}×{img.shape[1]} px）")
 
     def _display_ds(self):
@@ -867,7 +867,7 @@ class MaskWorkbench(QWidget):
         self.ax_prev.tick_params(labelsize=7)
         self.ax_prev.grid(alpha=0.25, linestyle=":")
         self.ax_prev.text(
-            0.5, 0.5, "载入图像后这里显示 1D；画 mask 后自动叠加红色对照",
+            0.5, 0.5, "载入图像后这里显示 1D；画掩膜后自动叠加红色对照",
             transform=self.ax_prev.transAxes, ha="center", va="center",
             color="0.45", fontsize=9)
         self.canvas.draw_idle()
@@ -893,7 +893,7 @@ class MaskWorkbench(QWidget):
                       -0.5 + r0, -0.5 + r0 + hh * ds)
 
     def _sync_overlay(self):
-        """把当前 mask 压成 RGBA 挂到图上（不调度重绘）。"""
+        """把当前掩膜压成 RGBA 挂到图上（不调度重绘）。"""
         if (self.image is None or self.mask is None
                 or self._base_artist is None):
             return
@@ -1094,11 +1094,11 @@ class MaskWorkbench(QWidget):
             self._view_timer.start()
 
     def keyPressEvent(self, event):
-        """Esc：先取消正在拖的笔画/矩形，再按才退出 Mask 模式。
+        """Esc：先取消正在拖的笔画/矩形，再按才退出掩膜模式。
 
         用户 2026-10-28 报的"画着画着弹回主界面"：拖矩形时按 Esc 想取消，
         整个编辑器直接藏了。现在第一下只取消当前笔画；第二下才退出
-        Mask 模式（回到分析工作台，mask 状态保留）。焦点在画布上时
+        掩膜模式（回到分析工作台，掩膜状态保留）。焦点在画布上时
         mpl 会把 Esc 吃掉、这里收不到，所以画布另接一条
         （_on_canvas_key）。
         """
@@ -1110,7 +1110,7 @@ class MaskWorkbench(QWidget):
         super().keyPressEvent(event)
 
     def _exit_to_analysis(self):
-        """退出 Mask 模式（由主窗口的 [Mask] 开关统一收尾）。"""
+        """退出掩膜模式（由主窗口的 [掩膜] 开关统一收尾）。"""
         btn = getattr(self.main, "mask_btn", None)
         if btn is not None:
             btn.setChecked(False)
@@ -1361,7 +1361,7 @@ class MaskWorkbench(QWidget):
             self._auto_busy(False)
             self._update_status()
             QMessageBox.critical(self, f"{label}失败", msg)
-            self._say(f"Mask {label}失败：{msg}")
+            self._say(f"掩膜{label}失败：{msg}")
 
         self._auto_task = BackgroundTask(
             fn, *args, on_done=done, on_error=error)
@@ -1375,20 +1375,20 @@ class MaskWorkbench(QWidget):
         def apply(result):
             _clean, hot, info = result
             if hot.shape != self.mask.shape:
-                self._say("Mask 孤立坏点：图像已换，结果丢弃")
+                self._say("掩膜孤立坏点：图像已换，结果丢弃")
                 return
             suspicious, why = mask_suspicion(info, hot.shape)
             if suspicious:
                 ans = QMessageBox.question(
                     self, "孤立坏点：结果异常",
                     f"{why}\n\n"
-                    "建议先取消，改用样品帧的 mask 配方：在样品上"
+                    "建议先取消，改用样品帧的掩膜配方：在样品上"
                     "[导出配方…]，再在这张图上 [导入配方…]，共享探测器"
                     "固定坏点坐标；或者用手动画笔只遮坏点。\n\n"
                     "仍然应用这次结果吗？",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                 if ans != QMessageBox.Yes:
-                    self._say("Mask 孤立坏点：已取消（标出的像素太多，"
+                    self._say("掩膜孤立坏点：已取消（标出的像素太多，"
                               "疑似真实衍射斑点）")
                     return
             self._push_undo()
@@ -1402,7 +1402,7 @@ class MaskWorkbench(QWidget):
             hint = (f"（青色；扩张 {info.get('grown_pixels', 0)} px；"
                     "点 [查看改动] 定位）" if new.any()
                     else "（没有新增像素）")
-            self._say(f"Mask 孤立坏点："
+            self._say(f"掩膜孤立坏点："
                            f"{info.get('masked_components', '?')} 团 / "
                            f"{info.get('masked_pixels', int(hot.sum()))} px"
                            f"{hint}")
@@ -1421,7 +1421,7 @@ class MaskWorkbench(QWidget):
             return
         ans = QMessageBox.question(
             self, "整环离群（实验性）",
-            "这个方法按径向环带找离群像素（与 GSAS-II 的自动 spot mask\n"
+            "这个方法按径向环带找离群像素（与 GSAS-II 的自动斑点掩膜（spot mask）\n"
             "同一思路）；真实衍射环的强弧段/织构（如强织构基片）会被误标\n"
             "（实测当前数据上约 18k px）。\n\n"
             "不要用它去遮真实峰；跑完用 [查看改动] 和 1D 预览逐处确认，\n"
@@ -1437,7 +1437,7 @@ class MaskWorkbench(QWidget):
 
         def apply(radial):
             if radial.shape != self.mask.shape:
-                self._say("Mask 整环离群：图像已换，结果丢弃")
+                self._say("掩膜整环离群：图像已换，结果丢弃")
                 return
             self._push_undo()
             new = radial & ~self.mask
@@ -1450,7 +1450,7 @@ class MaskWorkbench(QWidget):
             hint = ("（nσ={:g}；绿色；点 [查看改动] 定位）".format(nsig)
                     if new.any()
                     else "（没有新增像素）")
-            self._say(f"Mask 整环离群（实验性）：{int(radial.sum())} px"
+            self._say(f"掩膜整环离群（实验性）：{int(radial.sum())} px"
                       f"{hint}")
 
         self._start_auto("整环离群", _radial_worker, (image, center, nsig),
@@ -1482,11 +1482,11 @@ class MaskWorkbench(QWidget):
 
     def _save_recipe(self):
         if self.mask is None or not self.mask.any():
-            self._say("Mask 为空：没有可导出的配方")
+            self._say("掩膜为空：没有可导出的配方")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出 Mask 配方", str(self._default_mask_path()),
-            f"Mask 配方 (*{RECIPE_SUFFIX})")
+            self, "导出掩膜配方", str(self._default_mask_path()),
+            f"掩膜配方 (*{RECIPE_SUFFIX})")
         if not path:
             return
         try:
@@ -1498,12 +1498,12 @@ class MaskWorkbench(QWidget):
             return
         self.mask_path = p
         self._update_status()
-        self._say(f"Mask 配方已导出：{p}"
-                       "（含来源分层；点 [生成 Mask 2D] 才会建产物）")
+        self._say(f"掩膜配方已导出：{p}"
+                       "（含来源分层；点 [生成掩膜 2D] 才会建产物）")
 
     def _export_generic(self):
         if self.mask is None or not self.mask.any():
-            self._say("Mask 为空：没有可导出的掩膜")
+            self._say("掩膜为空：没有可导出的掩膜")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "导出通用掩膜", str(self._default_generic_path()),
@@ -1519,18 +1519,18 @@ class MaskWorkbench(QWidget):
             QMessageBox.critical(self, "导出失败", str(err))
             return
         self._say(f"通用掩膜已导出：{p}"
-                       "（只有 mask，没有来源分层）")
+                       "（只有掩膜，没有来源分层）")
 
     def _import_mask(self):
         if self.image is None:
             QMessageBox.information(
                 self, "先载入图像",
-                "Mask 的形状要与积分图像一致；先在文件栏勾选一张原始图。")
+                "掩膜的形状要与积分图像一致；先在文件栏勾选一张原始图。")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入 Mask 配方或通用掩膜",
+            self, "导入掩膜配方或通用掩膜",
             str(self._default_mask_path().parent),
-            f"Mask 配方 (*{RECIPE_SUFFIX});;通用掩膜 (*.npy *.edf)")
+            f"掩膜配方 (*{RECIPE_SUFFIX});;通用掩膜 (*.npy *.edf)")
         if not path:
             return
         p = Path(path)
@@ -1545,7 +1545,7 @@ class MaskWorkbench(QWidget):
         if mask.shape != self.image.shape:
             QMessageBox.critical(
                 self, "形状不一致",
-                f"mask {mask.shape} 与图像 {self.image.shape} 不一致")
+                f"掩膜 {mask.shape} 与图像 {self.image.shape} 不一致")
             return
         self.mask = mask
         if src is None:
@@ -1562,8 +1562,8 @@ class MaskWorkbench(QWidget):
         self._update_status()
         self._schedule_preview()
         if is_recipe(p):
-            self._say(f"Mask 配方已导入：{p}"
-                           "（来源分层已恢复；点 [生成 Mask 2D] 才会建产物）")
+            self._say(f"掩膜配方已导入：{p}"
+                           "（来源分层已恢复；点 [生成掩膜 2D] 才会建产物）")
         else:
             self._say(f"通用掩膜已导入：{p}"
                            "（没有来源信息，统一按手动显示）")
@@ -1607,7 +1607,7 @@ class MaskWorkbench(QWidget):
     def _uncheck_raw(self, paths):
         """新产物出现 → 取消对应原始数据的勾选（既有规矩，2026-10-01）。
 
-        只动**用到的原始数据**，不动刚生成的 Mask 2D；批量时失败的文件
+        只动**用到的原始数据**，不动刚生成的掩膜 2D；批量时失败的文件
         保持勾选，方便直接重试。
         """
         wanted = {str(Path(p).expanduser().resolve()) for p in paths}
@@ -1619,42 +1619,42 @@ class MaskWorkbench(QWidget):
         QApplication.processEvents()
 
     def _apply_to_main(self):
-        """为当前图像生成一条 Mask 后的 2D（原图 + mask manifest）。"""
+        """为当前图像生成一条掩膜后的 2D（原图 + 掩膜 manifest）。"""
         if self.mask is None or self.image_path is None:
             return
         if not np.any(self.mask):
-            self._say("Mask 为空：没有生成 Mask 后的 2D")
-            self.main.status_text.setText("Mask 为空：未生成产物")
+            self._say("掩膜为空：没有生成掩膜后的 2D")
+            self.main.status_text.setText("掩膜为空：未生成产物")
             return
         label = self.mask_path.name if self.mask_path else "未导出配方"
         try:
             self._create_masked2d([self.image_path], label=label)
         except Exception as err:                       # noqa: BLE001
             QMessageBox.critical(self, "生成失败", str(err))
-            self._say(f"Mask 2D 生成失败：{err}")
+            self._say(f"掩膜 2D 生成失败：{err}")
             return
         self._uncheck_raw([self.image_path])
         st = mask_stats(self.mask)
         self.main.status_text.setText(
-            f"Mask 后的 2D 已生成：{st['masked_pixels']} px")
-        self._say(f"Mask 后的 2D 已生成：{Path(self.image_path).name}"
+            f"掩膜后的 2D 已生成：{st['masked_pixels']} px")
+        self._say(f"掩膜后的 2D 已生成：{Path(self.image_path).name}"
                        f"（{st['masked_pixels']} px，"
-                       f"{st['fraction'] * 100:.2f}%，mask {label}）"
-                       "——在文件栏「Mask 后的 2D」里选它，再点 [1D]")
+                       f"{st['fraction'] * 100:.2f}%，掩膜 {label}）"
+                       "——在文件栏「掩膜后的 2D」里选它，再点 [1D]")
         self._update_status()
         self._refresh_groups()
 
     def _apply_to_checked(self):
-        """把当前 mask 生成到文件栏里勾选的每个原始数据上。"""
+        """把当前掩膜生成到文件栏里勾选的每个原始数据上。"""
         if self.mask is None or self.image_path is None:
             return
         if not np.any(self.mask):
-            self._say("Mask 为空：没有生成 Mask 后的 2D")
+            self._say("掩膜为空：没有生成掩膜后的 2D")
             return
         raw = [s for s in gui_sources.checked_sources(self.main)
                if s.kind == gui_sources.RAW]
         if not raw:
-            self._say("没有勾选的原始数据：先在文件栏勾上要应用 mask 的文件")
+            self._say("没有勾选的原始数据：先在文件栏勾上要应用掩膜的文件")
             return
         label = self.mask_path.name if self.mask_path else "未导出配方"
         made = 0
@@ -1665,7 +1665,7 @@ class MaskWorkbench(QWidget):
                 made += 1
                 made_paths.append(source.path)
             except Exception as err:                   # noqa: BLE001
-                self._say(f"Mask 2D 生成失败：{source.display}——{err}")
+                self._say(f"掩膜 2D 生成失败：{source.display}——{err}")
         if made_paths:
             self._uncheck_raw(made_paths)
             idx = self.scope_combo.findData("current")
@@ -1674,10 +1674,10 @@ class MaskWorkbench(QWidget):
                 self.scope_combo.setCurrentIndex(idx)
         st = mask_stats(self.mask)
         self.main.status_text.setText(
-            f"Mask 后的 2D 已生成 {made} 条")
-        self._say(f"Mask 后的 2D：{made}/{len(raw)} 个文件"
-                       f"（{st['masked_pixels']} px，mask {label}）"
-                       "——在文件栏「Mask 后的 2D」里选它们再点 [1D]")
+            f"掩膜后的 2D 已生成 {made} 条")
+        self._say(f"掩膜后的 2D：{made}/{len(raw)} 个文件"
+                       f"（{st['masked_pixels']} px，掩膜 {label}）"
+                       "——在文件栏「掩膜后的 2D」里选它们再点 [1D]")
         self._update_status()
         self._refresh_groups()
 
@@ -1694,14 +1694,14 @@ class MaskWorkbench(QWidget):
         self._schedule_preview()
 
     def _generate_current(self):
-        """[生成 Mask 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""
+        """[生成掩膜 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""
         if self.image is None or self.mask is None:
-            self._say("Mask：先载入一张图像")
+            self._say("掩膜：先载入一张图像")
             return
         if not np.any(self.mask):
-            self._say("Mask 为空：没有生成 Mask 后的 2D")
+            self._say("掩膜为空：没有生成掩膜后的 2D")
             if hasattr(self.main, "status_text"):
-                self.main.status_text.setText("Mask 为空：未生成产物")
+                self.main.status_text.setText("掩膜为空：未生成产物")
             return
         if self.scope_combo.currentData() == "checked":
             self._apply_to_checked()
@@ -1710,7 +1710,7 @@ class MaskWorkbench(QWidget):
         self._update_generate_state()
 
     def _preview_effect(self):
-        """[预览效果]：立即重算 mask 前/后的 1D（不建产物）。"""
+        """[预览效果]：立即重算掩膜前/后的 1D（不建产物）。"""
         if self.image is None or self.mask is None:
             return
         self._refresh_preview()
@@ -1778,7 +1778,7 @@ class MaskWorkbench(QWidget):
         if t1 is not None:
             ax.plot(t1, y1, lw=0.9, color="tab:red", label="with mask")
         else:
-            ax.text(0.5, 0.5, "mask 为空：画/自动检测后这里出现红色对照",
+            ax.text(0.5, 0.5, "掩膜为空：画/自动检测后这里出现红色对照",
                     transform=ax.transAxes, ha="center", va="center",
                     fontsize=9, color="#888888")
         ax.set_xlabel("2θ (°)", fontsize=8)
@@ -1791,10 +1791,10 @@ class MaskWorkbench(QWidget):
 
 
 class _MaskSubWindow(QMdiSubWindow):
-    """Mask 工作台的中央子窗口（2026-10-30）。
+    """掩膜工作台的中央子窗口（2026-10-30）。
 
-    × 关闭 = 退出 Mask 模式（参数坞/日志坞恢复），但**不销毁内容**：
-    mask、撤销栈和配方路径都留着，下次点 [Mask] 原样继续。子窗口
+    × 关闭 = 退出掩膜模式（参数坞/日志坞恢复），但**不销毁内容**：
+    mask、撤销栈和配方路径都留着，下次点 [掩膜] 原样继续。子窗口
     只是 hide，真正的销毁随主窗口一起走。
     """
 
@@ -1808,6 +1808,6 @@ class _MaskSubWindow(QMdiSubWindow):
         if (not getattr(window, "_closing", False)
                 and getattr(window, "mask_btn", None) is not None
                 and window.mask_btn.isChecked()):
-            window.mask_btn.setChecked(False)   # toggled → 退出 Mask 模式
+            window.mask_btn.setChecked(False)   # toggled → 退出掩膜模式
         event.ignore()
         self.hide()

@@ -69,7 +69,7 @@ def _process_source(window, source, kw, settings, params0, blank_curve,
             raw_name = Path(masked2d.meta_of(path).get("raw_path", "")).name
         except Exception:                              # noqa: BLE001
             raw_name = path.name
-        stored_source = f"{raw_name}（mask）"
+        stored_source = f"{raw_name}（掩膜）"
     else:
         stored_source = path.name
     if source.kind == gui_sources.ONED:

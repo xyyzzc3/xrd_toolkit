@@ -75,14 +75,14 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
             for name in OPEN_BULK_VIEWS:
                 actions[sub.addAction(name)] = ("open_group", name)
     elif item.data(0, GROUP_MASKED2D_ROLE):
-        # Mask 后的 2D 组：和原始数据一样能出 2D/1D/剖面/瀑布
+        # 掩膜后的 2D 组：和原始数据一样能出 2D/1D/剖面/瀑布
         if item.childCount():
             sub = menu.addMenu(f"打开整组图（{item.childCount()} 张）")
             for name in OPEN_BULK_VIEWS:
                 actions[sub.addAction(name)] = ("open_group", name)
             menu.addSeparator()
             actions[menu.addAction(
-                f"删除这一组 Mask 2D（{item.childCount()} 条）")] = \
+                f"删除这一组掩膜 2D（{item.childCount()} 条）")] = \
                 "drop_masked2d_group"
     elif is_group(item):
         # 产物组：产物是 1D 曲线，只有 1D 能出——不给视图子菜单
@@ -97,10 +97,10 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
     elif src is not None and src.kind == gui_sources.MASKED2D:
         actions[menu.addAction(f"打开 1D 图（{src.display}）")] = "open_item"
         actions[menu.addAction(
-            "导出 Mask 2D 数据（.npz：image + mask）…")] = "export_masked2d"
+            "导出掩膜 2D 数据（.npz：原图 + 掩膜）…")] = "export_masked2d"
         menu.addSeparator()
         actions[menu.addAction(
-            f"删除这条 Mask 2D（{src.display}；原图与 mask 不动）")] = \
+            f"删除这条掩膜 2D（{src.display}；原图与掩膜不动）")] = \
             "drop_masked2d"
     elif src is None or src.kind == gui_sources.RAW:
         shown = f"（{src.display}）" if src is not None else ""
@@ -121,33 +121,33 @@ def _entry_menu_actions(menu: QMenu, window: QMainWindow, item) -> dict:
     return actions
 
 def _export_masked2d(window, src) -> None:
-    """右键 Mask 2D 条目 → 导出独立 .npz（image + mask + meta）。"""
+    """右键掩膜 2D 条目 → 导出独立 .npz（原图 + 掩膜 + meta）。"""
     try:
         meta = masked2d.meta_of(src.path)
     except Exception as err:                           # noqa: BLE001
-        _log(window, f"导出 Mask 2D 失败：{err}")
+        _log(window, f"导出掩膜 2D 失败：{err}")
         return
     raw = Path(meta.get("raw_path") or "image")
     default = str(Path(OUTPUTS_DIR) / f"{raw.stem}_mask2d.npz")
     target, _ = QFileDialog.getSaveFileName(
-        window, "导出 Mask 2D 数据", default,
+        window, "导出掩膜 2D 数据", default,
         "Numpy 数据 (*.npz)")
     if not target:
         return
     try:
         out, shape, npx = masked2d.export_npz(src.path, target)
     except Exception as err:                           # noqa: BLE001
-        _log(window, f"导出 Mask 2D 失败：{err}")
+        _log(window, f"导出掩膜 2D 失败：{err}")
         return
-    _log(window, f"已导出 Mask 2D 数据：{out}"
-                 f"（{shape[0]}×{shape[1]} px，mask {npx} px）")
-    window.status_text.setText(f"已导出 Mask 2D 数据：{Path(out).name}")
+    _log(window, f"已导出掩膜 2D 数据：{out}"
+                 f"（{shape[0]}×{shape[1]} px，掩膜 {npx} px）")
+    window.status_text.setText(f"已导出掩膜 2D 数据：{Path(out).name}")
 
 
 def _drop_masked2d(window, paths) -> tuple:
-    """删 Mask 2D manifest，并清掉它名下的 1D / 处理产物缓存。
+    """删掩膜 2D manifest，并清掉它名下的 1D / 处理产物缓存。
 
-    Mask 2D 是源，1D/处理产物都按 manifest 路径取数；manifest 没了，
+    掩膜 2D 是源，1D/处理产物都按 manifest 路径取数；manifest 没了，
     这些产物就再也挂不回文件栏，留着只占磁盘。返回 (manifest 数,
     相关产物数)。
     """
@@ -216,8 +216,8 @@ def _entry_menu(window: QMainWindow, item) -> None:
                 paths.append(src.path)
         removed, related = _drop_masked2d(window, paths)
         refresh_product_groups(window)
-        _log(window, f"已删除 {removed} 条 Mask 后的 2D + {related} 条相关 "
-                     f"1D/处理产物（原始图与 mask 文件不动）")
+        _log(window, f"已删除 {removed} 条掩膜后的 2D + {related} 条相关 "
+                     f"1D/处理产物（原始图与掩膜文件不动）")
     elif what == "drop_item":
         drop_product_item(window, item)
     elif what == "remove_raw":

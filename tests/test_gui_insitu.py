@@ -137,7 +137,7 @@ class TestInSituWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.w.mask_btn.click()
         QApplication.processEvents()
-        self.assertFalse(self.w._insitu_active, "Mask 应把原位退掉")
+        self.assertFalse(self.w._insitu_active, "掩膜应把原位退掉")
         self.assertTrue(self.w._mask_active)
         self.w.mask_btn.click()
         QApplication.processEvents()
@@ -253,14 +253,14 @@ class TestInSituWorkbench(unittest.TestCase):
         editor = self.w.insitu_editor
         editor.data_label.setText(
             "/Users/bryan/Data/XRD/lmfpdata（81 帧）")
-        editor.mask_label.setText("mask：lmfp1_lab6_mask.npy")
+        editor.mask_label.setText("掩膜：lmfp1_lab6_mask.npy")
         QApplication.processEvents()
         self.assertGreaterEqual(editor.mask_label.width(), 150)
         self.assertLessEqual(editor.data_label.width(), 420)
         self.assertFalse(
             editor.mask_label.geometry().intersects(
                 editor.mask_btn.geometry()),
-            "mask 灰字不能被『选 mask…』按钮遮住")
+            "掩膜灰字不能被『选掩膜…』按钮遮住")
         self.assertFalse(
             editor.mask_label.geometry().intersects(
                 editor.mask_clear_btn.geometry()),

@@ -152,7 +152,7 @@ def _choose_panels(window: QMainWindow, panels) -> list:
 
 
 def _mask_desc(path) -> str:
-    """Mask 2D 源的文件头溯源：ASCII，例如 `sha 1a2b3c4d, 6561 px`。"""
+    """掩膜 2D 源的文件头溯源：ASCII，例如 `sha 1a2b3c4d, 6561 px`。"""
     if not masked2d.is_manifest(path):
         return ""
     try:

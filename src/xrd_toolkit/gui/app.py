@@ -364,7 +364,7 @@ def _open_manual(window: QMainWindow) -> None:
 def _open_report(window: QMainWindow) -> None:
     """[报告]：把当前会话的 1D/峰/拟合/W-H/物相/精修/原位汇成 HTML。
 
-    模块级延迟导入（同 Mask/精修等入口）：report_export 会 import
+    模块级延迟导入（同掩膜/精修等入口）：report_export 会 import
     panel_state/peak_view，放在模块顶部容易绕成 app ↔ 这些模块的环。
     """
     from xrd_toolkit.gui.report_export import open_report_dialog
@@ -435,8 +435,8 @@ def _build_menu(window: QMainWindow) -> None:
         # 挂到窗口这一级——实测"隐藏菜单栏"后它仍能触发
         window.addAction(act_manual)
 
-_MASK_TIP = ("Mask 工作台：画/自动遮罩 beamstop/模块缝/坏点，"
-             "生成 Mask 后的 2D 数据（原图 + mask），再去做 1D")
+_MASK_TIP = ("掩膜工作台：画掩膜/自动检测 beamstop/模块缝/坏点，"
+             "生成掩膜后的 2D 数据（原图 + 掩膜），再去做 1D")
 
 # 所有工作台按钮（校准 + 四个中央工作台）：同一时刻只许亮一个。
 # 新增工作台只要把按钮命名成 <name>_btn 并进这张表。
@@ -460,10 +460,10 @@ def _exit_other_workbenches(window: QMainWindow, keep, *,
 
 
 def _open_mask_workbench(window: QMainWindow) -> None:
-    """打开/前置中央 Mask 工作台（工具栏 [Mask]）。
+    """打开/前置中央掩膜工作台（工具栏 [掩膜]）。
 
     内容（MaskWorkbench）常驻主窗口；子窗口只是显示容器。× 关闭 =
-    退出 Mask 模式（参数坞/日志坞恢复），内容不销毁，下次原样继续。
+    退出掩膜模式（参数坞/日志坞恢复），内容不销毁，下次原样继续。
     模块级延迟导入避开 app ↔ mask_editor 的环。
     """
     from xrd_toolkit.gui.mask_editor import MaskWorkbench, _MaskSubWindow
@@ -476,7 +476,7 @@ def _open_mask_workbench(window: QMainWindow) -> None:
         dock.setWidget(window.mask_editor)
         window.mdi.addSubWindow(dock)
         window.mask_dock = dock
-        dock.setWindowTitle("Mask 工作台")
+        dock.setWindowTitle("掩膜工作台")
         area = window.mdi.viewport().size()
         dock.resize(max(640, area.width() - 40),
                     max(480, area.height() - 40))
@@ -486,7 +486,7 @@ def _open_mask_workbench(window: QMainWindow) -> None:
 
 
 def _enter_mask_mode(window: QMainWindow) -> None:
-    """进入 Mask 工作台：收起参数/日志坞，中央换成 Mask 工作台。"""
+    """进入掩膜工作台：收起参数/日志坞，中央换成掩膜工作台。"""
     if getattr(window, "_mask_active", False):
         return
     # 五种工作台互斥：先把校准/精修/物相/原位退掉（各自恢复自己的状态）
@@ -501,7 +501,7 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     _resync_docks(window)
     # 五个分析入口熄灯（参数页不动，退出时按 _mask_prev_entrance 复原）
     _highlight_entrance(window, None)
-    window.mode_label.setText("Mask 模式")
+    window.mode_label.setText("掩膜模式")
     _set_bottom_strip_visible(window, False)
     _open_mask_workbench(window)
     # Home 键：工作台自己的 [复位视图] 接管；主窗口那条先让开，
@@ -510,13 +510,13 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     if main_home is not None:
         main_home.setEnabled(False)
     window.mask_editor.home_sc.setEnabled(True)
-    window.mask_btn.setText("退出 Mask")
-    window.mask_btn.setToolTip("退出 Mask 工作台，回到分析模式")
-    _log(window, "进入 Mask 模式")
+    window.mask_btn.setText("退出掩膜")
+    window.mask_btn.setToolTip("退出掩膜工作台，回到分析模式")
+    _log(window, "进入掩膜模式")
 
 
 def _exit_mask_mode(window: QMainWindow) -> None:
-    """退出 Mask 工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
+    """退出掩膜工作台：隐藏子窗口（状态保留）+ 恢复参数/日志坞。"""
     if not getattr(window, "_mask_active", False):
         return
     window._mask_active = False
@@ -540,9 +540,9 @@ def _exit_mask_mode(window: QMainWindow) -> None:
         _highlight_entrance(window, prev)
     window.mode_label.setText("分析模式")
     _set_bottom_strip_visible(window, True)
-    window.mask_btn.setText("Mask")
+    window.mask_btn.setText("掩膜")
     window.mask_btn.setToolTip(_MASK_TIP)
-    _log(window, "退出 Mask 模式")
+    _log(window, "退出掩膜模式")
 
 
 def _on_mask_mode(window: QMainWindow, on: bool) -> None:
@@ -559,7 +559,7 @@ _REFINE_TIP = ("精修工作台：选一条 1D 曲线和一张 CIF，"
 def _open_refine_workbench(window: QMainWindow) -> None:
     """打开/前置中央精修工作台（工具栏 [精修]）。
 
-    与 Mask 工作台同一套做法：内容常驻，子窗口只是显示容器；× 关闭
+    与掩膜工作台同一套做法：内容常驻，子窗口只是显示容器；× 关闭
     = 退出精修模式，内容不销毁。模块级延迟导入避开 app ↔
     refine_workbench 的环。
     """
@@ -589,7 +589,7 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     """进入精修工作台：收起参数/日志坞，中央换成精修工作台。"""
     if getattr(window, "_refine_active", False):
         return
-    # 五种工作台互斥：先把校准/Mask/物相/原位退掉
+    # 五种工作台互斥：先把校准/掩膜/物相/原位退掉
     _exit_other_workbenches(window, "refine")
     window._refine_active = True
     window._refine_prev_entrance = getattr(window, "_last_entrance", None)
@@ -668,7 +668,7 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     """进入物相工作台：收起参数/日志坞，中央换成物相工作台。"""
     if getattr(window, "_phase_active", False):
         return
-    # 五种工作台互斥：先把校准/Mask/精修/原位退掉
+    # 五种工作台互斥：先把校准/掩膜/精修/原位退掉
     _exit_other_workbenches(window, "phase")
     window._phase_active = True
     window._phase_prev_entrance = getattr(window, "_last_entrance", None)
@@ -796,16 +796,16 @@ def _on_insitu_mode(window: QMainWindow, on: bool) -> None:
 
 
 def _build_toolbar(window: QMainWindow) -> None:
-    """工具栏 = 五个入口 + [Mask] / [精修] / [物相] / [原位] 工作台 + 面板开关 + [帮助]。
+    """工具栏 = 五个入口 + [掩膜] / [精修] / [物相] / [原位] 工作台 + 面板开关 + [帮助]。
 
-    分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加 Mask，
+    分组与顺序（用户 2026-10-07 两轮讨论定稿，2026-10-27 加掩膜，
     2026-10-30 加 精修）：
-    `[校准][Mask] │ [原图] [1D] [处理] [对比] │ [物相][精修][原位] │
+    `[校准][掩膜] │ [原图] [1D] [处理] [对比] │ [物相][精修][原位] │
     [报告] │ [文件][参数][日志] │ [帮助▾]`——左边一格是"一次性设置"
     （校准 / mask），中间四个是每天干活的循环，按数据流排：**原图**
     （直接看/直接算原图：2D / 剖面 / 瀑布）→ **1D**（积分主台）→
     **处理**（链加工）→ **对比**（多文件汇总）；再右边是重分析工作台
-    （物相 → 精修 → 原位），与 Mask 一样开中央子窗口，不占参数页；
+    （物相 → 精修 → 原位），与掩膜一样开中央子窗口，不占参数页；
     [报告]（2026-11-08，v1.1 起含精修/原位）把当前会话的结果汇成
     一份自包含 HTML。
 
@@ -836,13 +836,13 @@ def _build_toolbar(window: QMainWindow) -> None:
     tb.addWidget(btn_calib)
     window.entrance_buttons["校准"] = btn_calib
     btn_calib.clicked.connect(lambda checked=False: _switch_entrance(window, "校准"))
-    # [Mask] 与 [校准] 并列：都属"一次性设置"，但它开的是中央工作台
-    # （不进 entrance_buttons / PARAM_PAGES）。可勾选：点亮 = Mask 模式，
+    # [掩膜] 与 [校准] 并列：都属"一次性设置"，但它开的是中央工作台
+    # （不进 entrance_buttons / PARAM_PAGES）。可勾选：点亮 = 掩膜模式，
     # 再点一次 = 退出（参数坞/日志坞恢复原样）。
     window._mask_active = False
     window._mask_prev_entrance = None
     window._mask_dock_saved = None
-    btn_mask = QPushButton("Mask")
+    btn_mask = QPushButton("掩膜")
     btn_mask.setCheckable(True)
     btn_mask.setToolTip(_MASK_TIP)
     btn_mask.toggled.connect(lambda on: _on_mask_mode(window, on))
@@ -858,7 +858,7 @@ def _build_toolbar(window: QMainWindow) -> None:
         btn.clicked.connect(lambda checked=False, n=name:
                             _switch_entrance(window, n))
 
-    # [物相][精修][原位] 与 [Mask] 同类：打开中央工作台（不进
+    # [物相][精修][原位] 与 [掩膜] 同类：打开中央工作台（不进
     # entrance_buttons / PARAM_PAGES）。可勾选：点亮 = 该模式，再点一次
     # = 退出。顺序按数据流：先认相（物相），再定量精修，最后批处理原位
     # （物相工作台的 [送去精修] 就是把 CIF 交给精修）。
@@ -996,7 +996,7 @@ def _switch_entrance(window: QMainWindow, name: str) -> None:
     pages = getattr(window, "PARAM_PAGES", {})
     if name not in pages or name not in window.entrance_buttons:
         return
-    # 点分析入口 = 离开 Mask/精修/物相/原位；**校准留到后面**再退——
+    # 点分析入口 = 离开掩膜/精修/物相/原位；**校准留到后面**再退——
     # 先退校准会走 _clear_entrance，把刚点的入口按钮也熄灭，下一条
     # 判断会误以为用户是在"再点一次退出"。
     _exit_other_workbenches(
@@ -1171,12 +1171,12 @@ def create_window() -> QMainWindow:
     window._image_cache = {}
     # 焦点面板：参数面板"编辑对象"指向的图面板（点图/计算完成时更新）
     window.focus_panel = None
-    # Mask 工作台内容与中央子窗口（2026-10-30 起不再是独立窗口）：
-    # 子窗口关闭只隐藏，内容不销毁，下次点 [Mask] 原样继续。Mask 本身是
-    # Mask 后的 2D 产物（services/masked2d），不是窗口级开关。
+    # 掩膜工作台内容与中央子窗口（2026-10-30 起不再是独立窗口）：
+    # 子窗口关闭只隐藏，内容不销毁，下次点 [掩膜] 原样继续。掩膜本身是
+    # 掩膜后的 2D 产物（services/masked2d），不是窗口级开关。
     window.mask_editor = None
     window.mask_dock = None
-    # 精修 / 物相工作台内容与中央子窗口（2026-10-30）：与 Mask 同一套
+    # 精修 / 物相工作台内容与中央子窗口（2026-10-30）：与掩膜同一套
     # 生命周期，子窗口关闭只隐藏，选中的曲线/CIF/上一次结果不销毁。
     window.refine_editor = None
     window.refine_dock = None

@@ -342,7 +342,7 @@ def _draw_2d(window: QMainWindow, dock, image) -> None:
         im = ax.imshow(data, cmap=_panel_param(window, dock, "2D 色图", "magma"),
                        norm=LogNorm(vmin=vmin, vmax=vmax),
                        origin="lower")
-        # Mask 2D 产物自带的 mask：半透明红叠在原图上（2026-10-27）。
+        # 掩膜 2D 产物自带的 mask：半透明红叠在原图上（2026-10-27）。
         # 大图先做「块内有任一被遮」降采样——隔点取样会漏掉奇坐标上的
         # 孤立坏点；extent 要乘回 ds，块心才对得上原像素中心。
         mask = panel_mask

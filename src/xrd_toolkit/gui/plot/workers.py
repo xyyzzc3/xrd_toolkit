@@ -11,7 +11,7 @@ from xrd_toolkit.services.integrator import integrate_1d, integrate_sectors
 # ══ 文件 → 1D 闭环：选文件 → 后台积分 → 1D 面板出图 ══════════
 def _compute_integration(path_str: str, geom: dict, npt: int,
                          mask=None) -> tuple:
-    """后台线程里运行的纯计算：读图 →（按需遮罩）→ 全角度积分。
+    """后台线程里运行的纯计算：读图 →（按需掩膜）→ 全角度积分。
 
     不碰任何界面控件；异常由 tasks.BackgroundTask 转成 error 信号
     送回主线程。mask 为 None = 不遮；否则 True = 被遮掉。

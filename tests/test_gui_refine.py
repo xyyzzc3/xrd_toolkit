@@ -2,7 +2,7 @@
 
 覆盖三件事：
   1. [精修] 的进出：收起参数/日志坞、按钮两副面孔、退出恢复；
-  2. 三种工作台互斥：精修 ↔ Mask ↔ 校准，点分析入口也退出精修；
+  2. 三种工作台互斥：精修 ↔ 掩膜 ↔ 校准，点分析入口也退出精修；
   3. 真拟合链路：合成 LaB₆ 曲线 → [开始精修] → 结果表/报告/Rwp。
 """
 import os
@@ -137,7 +137,7 @@ class TestRefineWorkbench(unittest.TestCase):
         self._enter()
         self.w.mask_btn.click()
         QApplication.processEvents()
-        self.assertFalse(self.w._refine_active, "Mask 应把精修退掉")
+        self.assertFalse(self.w._refine_active, "掩膜应把精修退掉")
         self.assertTrue(self.w._mask_active)
         self.assertFalse(self.w.refine_dock.isVisible())
         self.w.mask_btn.click()

@@ -261,8 +261,8 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""
-        # 1D/处理产物不继承 Mask 2D 条目上的「Mask2D（未导出配方）」尾巴：
-        # 那条尾巴只说明 mask 配方有没有导出，不该跟着分析结果走。
+        # 1D/处理产物不继承掩膜 2D 条目上的「掩膜 2D（未导出配方）」尾巴：
+        # 那条尾巴只说明掩膜配方有没有导出，不该跟着分析结果走。
         source = gui_sources.source_of(raw_item)
         base = (gui_sources.panel_display(source)
                 if source is not None else raw_item.text(0))
@@ -288,7 +288,7 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
                 continue
             by_path[str(Path(raw).resolve())] = it
 
-        # ① Mask 后的 2D：manifest（原图 + mask）当**源数据**条目
+        # ① 掩膜后的 2D：manifest（原图 + 掩膜）当**源数据**条目
         #    （2026-10-28）。它们和原始数据一样能出 2D/1D；1D 产物会按
         #    manifest 路径挂回这一条（见下面 by_path_name）。
         masked_rows = []
@@ -300,8 +300,8 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
             order = {id(it): i for i, it in enumerate(_walk_items(tree))}
             masked_rows.sort(key=lambda kv: order.get(id(kv[0]), 10 ** 9))
             mgroup = _make_group(
-                "Mask 后的 2D",
-                "Mask 后的 2D 数据（原始像素 + mask manifest）。"
+                "掩膜后的 2D",
+                "掩膜后的 2D 数据（原始像素 + 掩膜记录）。"
                 "双击看 2D；右键可开 1D。")
             mgroup.setData(0, GROUP_MASKED2D_ROLE, True)
             for raw_item, meta in masked_rows:
@@ -310,7 +310,7 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
                 raw_name = Path(meta.get("raw_path") or "").name
                 base_text = (raw_item.text(0) if raw_item is not None
                              else f"{raw_name}（不在文件栏）")
-                leaf = FileItem([f"{base_text} · Mask2D{tag}"])
+                leaf = FileItem([f"{base_text} · 掩膜 2D{tag}"])
                 leaf.setFlags(leaf.flags() | Qt.ItemIsUserCheckable)
                 leaf.setCheckState(0, Qt.Unchecked)
                 gui_sources.set_item_source(
@@ -321,7 +321,7 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
                 pct = 100.0 * px / tot if tot else 0.0
                 tip = (raw_item.toolTip(0) if raw_item is not None else "")
                 leaf.setToolTip(
-                    0, f"{tip}\nMask 后的 2D：{px} px"
+                    0, f"{tip}\n掩膜后的 2D：{px} px"
                        f"（{pct:.2f}%），原始图 {meta.get('raw_path')}")
                 mgroup.addChild(leaf)
                 by_path[str(Path(meta["path"]).resolve())] = leaf

@@ -1,6 +1,6 @@
 """2D 探测器掩膜：文件读写、手动/自动合并、径向坏点检测。
 
-掩膜必须在**图像加载之后、方位角积分之前**生效：被 mask 的像素完全不
+掩膜必须在**图像加载之后、方位角积分之前**生效：被掩膜的像素完全不
 参与 2θ 平均。它挡的是几何/探测器问题，不是样品信号：
 
 - beamstop 及其支撑臂的遮挡区；
@@ -13,7 +13,7 @@
 手动遮掉的、局部坏点检测抓到的、整环离群抓到的，任何一方认定坏就
 不进积分。若误用交集（`&`），只被一边标出的坏点会漏掉。
 
-自动检测只是补充，不能替代手动 mask：beamstop/模块缝不是"异常亮
+自动检测只是补充，不能替代手动掩膜：beamstop/模块缝不是"异常亮
 像素"，径向统计抓不到；而真实衍射环（尤其强织构/大晶粒）可能被
 整环离群误判，需要人工擦除。
 """
@@ -27,7 +27,7 @@ import numpy as np
 # pyFAI-drawmask 等工具也能直接读写。
 MASK_SUFFIXES = (".npy", ".edf")
 
-# Mask 配方：mask + 来源分层 + 元数据（2026-10-30）。通用掩膜（.npy/.edf）
+# 掩膜配方：掩膜 + 来源分层 + 元数据（2026-10-30）。通用掩膜（.npy/.edf）
 # 只存 bool 数组，读回来分不清哪块是手动画的、哪块是自动检测的；配方把
 # 这些一起存下，和「处理」页的配方是同一个概念。
 RECIPE_SUFFIX = ".mask.npz"
@@ -80,7 +80,7 @@ def load_mask(path) -> np.ndarray:
 
 
 def is_recipe(path) -> bool:
-    """这个路径是不是 Mask 配方（按后缀判断）。"""
+    """这个路径是不是掩膜配方（按后缀判断）。"""
     return str(path).lower().endswith(RECIPE_SUFFIX)
 
 
@@ -93,7 +93,7 @@ def recipe_path(path) -> Path:
 
 
 def save_recipe(path, mask, *, source=None, meta=None) -> Path:
-    """保存 Mask 配方：bool 数组 + 来源分层 + 元数据。
+    """保存掩膜配方：bool 数组 + 来源分层 + 元数据。
 
     参数：
         path    目标路径；不以 `.mask.npz` 结尾时自动补上
@@ -109,7 +109,7 @@ def save_recipe(path, mask, *, source=None, meta=None) -> Path:
         src = np.asarray(source)
         if src.shape != arr.shape:
             raise ValueError(
-                f"来源分层 {src.shape} 与 mask {arr.shape} 不一致")
+                f"来源分层 {src.shape} 与掩膜 {arr.shape} 不一致")
         src = src.astype(np.uint8, copy=False)
     info = {"format": RECIPE_FORMAT, "version": RECIPE_VERSION,
             "shape": [int(x) for x in arr.shape], "created": time.time()}
@@ -127,31 +127,31 @@ def save_recipe(path, mask, *, source=None, meta=None) -> Path:
 
 
 def load_recipe(path) -> tuple:
-    """读 Mask 配方 → (mask, source 或 None, meta dict)。
+    """读掩膜配方 → (mask, source 或 None, meta dict)。
 
     旧配方/手工做的 npz 没有 `source` 时返回 None，由调用方按"全手动"
     处理；形状以元数据里的 `shape` 为准（packbits 本身不带形状）。
     """
     p = Path(path)
     if not is_recipe(p):
-        raise ValueError(f"不是 Mask 配方：{p}")
+        raise ValueError(f"不是掩膜配方：{p}")
     with np.load(p, allow_pickle=False) as z:
         if "mask" not in z or "meta" not in z:
-            raise ValueError(f"Mask 配方缺少 mask/meta：{p}")
+            raise ValueError(f"掩膜配方缺少 mask/meta：{p}")
         packed = np.asarray(z["mask"], dtype=np.uint8)
         meta = json.loads(str(z["meta"].item()))
         src = np.asarray(z["source"]) if "source" in z else None
     shape = tuple(int(x) for x in meta.get("shape") or ())
     if len(shape) != 2 or min(shape) <= 0:
-        raise ValueError(f"Mask 配方缺少有效形状：{p}")
+        raise ValueError(f"掩膜配方缺少有效形状：{p}")
     mask = np.unpackbits(packed)[:shape[0] * shape[1]].astype(bool)
     if mask.size != shape[0] * shape[1]:
-        raise ValueError(f"Mask 配方内容不完整：{p}")
+        raise ValueError(f"掩膜配方内容不完整：{p}")
     mask = mask.reshape(shape)
     if src is not None:
         if src.shape != mask.shape:
             raise ValueError(
-                f"Mask 配方的来源分层 {src.shape} 与 mask {mask.shape} 不一致")
+                f"掩膜配方的来源分层 {src.shape} 与掩膜 {mask.shape} 不一致")
         src = src.astype(np.uint8, copy=False)
     return mask, src, meta
 
@@ -171,7 +171,7 @@ def combine_masks(*masks) -> np.ndarray:
         else:
             out |= arr
     if out is None:
-        raise ValueError("combine_masks 至少需要一张掩膜")
+        raise ValueError("至少需要一张掩膜")
     return out
 
 
@@ -201,7 +201,7 @@ def radial_outlier_mask(image, center, *, n_sigma=5.0, bin_px=4.0,
     """
     img = np.asarray(image, dtype=float)
     if img.ndim != 2:
-        raise ValueError("radial_outlier_mask 需要 2D 图像")
+        raise ValueError("整环离群检测需要 2D 图像")
     if img.size == 0:
         return np.zeros(img.shape, dtype=bool)
     row, col = float(center[0]), float(center[1])
@@ -241,7 +241,7 @@ def radial_outlier_mask(image, center, *, n_sigma=5.0, bin_px=4.0,
 def auto_mask(image, center, *, n_sigma=5.0, bin_px=4.0,
               include_hot=True, include_radial=False,
               hot_kwargs=None) -> dict:
-    """自动 mask：默认只跑**局部坏点检测**（生产路径）。
+    """自动掩膜：默认只跑**局部坏点检测**（生产路径）。
 
     整环离群（原“径向 nσ”）默认关闭：2026-10-27 在真实 LMFP 帧上实测，
     它会把真实衍射环的强弧段当离群点（18k px，红色沿环分布），直接用于

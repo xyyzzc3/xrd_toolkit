@@ -102,12 +102,12 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.preset_combo = QComboBox()
     window.preset_combo.setObjectName("preset_combo")
     window.preset_combo.setToolTip(
-        "项目预设：几何配置 + 第二相 CIF + 原位帧目录/mask + 相库目录")
+        "项目预设：几何配置 + 第二相 CIF + 原位帧目录/掩膜 + 相库目录")
     preset_lay.addWidget(window.preset_combo, 1)
     btn_preset_save = QPushButton("保存…")
     btn_preset_save.setObjectName("preset_save_btn")
     btn_preset_save.setToolTip(
-        "把当前几何 / 相库 / 原位目录 / mask 存成一份用户预设")
+        "把当前几何 / 相库 / 原位目录 / 掩膜存成一份用户预设")
     btn_preset_save.clicked.connect(lambda: save_preset_dialog(window))
     preset_lay.addWidget(btn_preset_save)
     btn_preset_manage = QPushButton("管理…")

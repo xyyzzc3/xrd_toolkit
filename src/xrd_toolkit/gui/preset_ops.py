@@ -3,7 +3,7 @@
 分工：
   * `presets.py` 管数据（内置/用户预设、读写 `presets_user.json`）；
   * 本模块管界面：参数坞的预设下拉、[保存…]/[管理…] 弹窗，以及把预设
-    应用到当前窗口（几何 + 物相/精修相库 + 原位目录/mask）。
+    应用到当前窗口（几何 + 物相/精修相库 + 原位目录/掩膜）。
 
 应用规则：
   * 切预设会先检查物相/精修/原位三个工作台有没有后台任务在跑——有就
@@ -323,7 +323,7 @@ def _fields_text(values, *, empty_library=None) -> str:
         f"几何配置：{geom}\n"
         f"第二相 CIF：{values.get('second_phase_cif') or '（无）'}\n"
         f"原位帧目录：{values.get('insitu_dir') or '（未设置）'}\n"
-        f"原位 mask：{values.get('insitu_mask_name') or '（不遮）'}\n"
+        f"原位掩膜：{values.get('insitu_mask_name') or '（不遮）'}\n"
         f"相库目录：{library}")
 
 
@@ -355,8 +355,8 @@ class PresetManagerDialog(QDialog):
         root = QVBoxLayout(self)
         hint = QLabel(
             "预设保存五项输入：几何配置、第二相 CIF、原位帧目录、"
-            "原位 mask、相库目录。\n"
-            "先把工作台里的目录/mask 调好，再点 [保存当前…]。")
+            "原位掩膜、相库目录。\n"
+            "先把工作台里的目录/掩膜调好，再点 [保存当前…]。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
@@ -378,7 +378,7 @@ class PresetManagerDialog(QDialog):
         self.apply_btn.clicked.connect(self._apply)
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
-            "用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖选中的用户预设；"
+            "用当前窗口的几何 / 相库 / 原位目录 / 掩膜覆盖选中的用户预设；"
             "没打开的工作台与第二相保留该预设原值")
         self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除")
@@ -460,7 +460,7 @@ class PresetManagerDialog(QDialog):
             return
         answer = QMessageBox.question(
             self, "更新预设",
-            f"用当前窗口的几何 / 相库 / 原位目录 / mask 覆盖用户预设"
+            f"用当前窗口的几何 / 相库 / 原位目录 / 掩膜覆盖用户预设"
             f"「{name}」？\n没打开的工作台与第二相 CIF 保留该预设原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:

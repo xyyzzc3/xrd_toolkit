@@ -293,7 +293,7 @@ def _insitu_snapshot(window):
         ("数据目录", str(meta.get("data_dir")
                        or getattr(editor, "data_dir", "") or "—")),
         ("帧数", str(len(rows))),
-        ("mask", mask_note),
+        ("掩膜", mask_note),
     ]
     for key, label in (("rich", "富锂相"), ("poor", "贫锂相"),
                        ("al", "Al 参考相")):

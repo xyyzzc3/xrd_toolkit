@@ -1,8 +1,8 @@
-"""独立 Mask 编辑器 GUI 测试（2026-10-27；2026-10-28 改为 Mask 2D 产物模型）。
+"""独立掩膜编辑器 GUI 测试（2026-10-27；2026-10-28 改为掩膜 2D 产物模型）。
 
-窗口级行为：工具栏 [Mask] 能开/复用；画笔/矩形/撤销改同一张 bool mask；
-[生成 Mask 2D] 在 stage cache 里写一条 manifest（原始图 + mask），文件栏
-出现「Mask 后的 2D」条目；[清空] 只清编辑器，不删已生成的产物。
+窗口级行为：工具栏 [掩膜] 能开/复用；画笔/矩形/撤销改同一张 bool mask；
+[生成掩膜 2D] 在 stage cache 里写一条 manifest（原始图 + mask），文件栏
+出现「掩膜后的 2D」条目；[清空] 只清编辑器，不删已生成的产物。
 
 不测文件对话框；`.npy/.edf` 读写由 test_mask 覆盖，manifest 本身由
 test_masked2d 覆盖。
@@ -92,8 +92,14 @@ class TestMaskEditor(unittest.TestCase):
         return masked2d.list_products()
 
     def test_panel_display_drops_mask2d_recipe_tag(self):
+        # 旧会话里的英文后缀仍认（改名兼容）
         source = gui_sources.make_source(
             "/tmp/x.mask2d.npz", display="LMFP_1 · Mask2D（未导出配方）",
+            kind=gui_sources.MASKED2D)
+        self.assertEqual(gui_sources.panel_display(source), "LMFP_1")
+        # 新后缀
+        source = gui_sources.make_source(
+            "/tmp/x.mask2d.npz", display="LMFP_1 · 掩膜 2D（未导出配方）",
             kind=gui_sources.MASKED2D)
         self.assertEqual(gui_sources.panel_display(source), "LMFP_1")
 
@@ -102,8 +108,8 @@ class TestMaskEditor(unittest.TestCase):
         self._open()
         self.assertTrue(self.w.mask_btn.isChecked())
         self.assertTrue(self.w.mask_dock.isVisible())
-        self.assertNotIn("Mask", self.w.entrance_buttons)
-        self.w.mask_btn.click()                  # 退出 Mask 模式
+        self.assertNotIn("掩膜", self.w.entrance_buttons)
+        self.w.mask_btn.click()                  # 退出掩膜模式
         QApplication.processEvents()
         self.assertFalse(self.w.mask_btn.isChecked())
         self.assertFalse(self.w.mask_dock.isVisible())
@@ -164,7 +170,7 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(raws)
         for source in raws:
             self.assertEqual(source.item.checkState(), Qt.Unchecked,
-                             "生成 Mask 2D 后原始数据应取消勾选")
+                             "生成掩膜 2D 后原始数据应取消勾选")
 
     def test_live_preview_and_locator_context(self):
         self._open()
@@ -508,7 +514,7 @@ class TestMaskEditor(unittest.TestCase):
         self.assertIsNone(self.ed._rect_patch)
         self.assertEqual(int(self.ed.mask.sum()), before)
 
-        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 第二次：退出 Mask
+        QTest.keyClick(self.ed.canvas, Qt.Key_Escape)   # 第二次：退出掩膜
         QApplication.processEvents()
         self.assertFalse(self.ed.isVisible())
         self.assertFalse(self.w.mask_dock.isVisible())
@@ -523,8 +529,8 @@ class TestMaskEditor(unittest.TestCase):
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
         self.assertTrue(self.w.file_dock.isVisible())
-        self.assertEqual(self.w.mode_label.text(), "Mask 模式")
-        self.assertEqual(self.w.mask_btn.text(), "退出 Mask")
+        self.assertEqual(self.w.mode_label.text(), "掩膜模式")
+        self.assertEqual(self.w.mask_btn.text(), "退出掩膜")
         self.assertTrue(self.w._bottom_strip.isHidden(),
                         "工作台里底部横带应隐藏")
         self.w.mask_btn.click()
@@ -532,7 +538,7 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
         self.assertEqual(self.w.mode_label.text(), "分析模式")
-        self.assertEqual(self.w.mask_btn.text(), "Mask")
+        self.assertEqual(self.w.mask_btn.text(), "掩膜")
         self.assertFalse(self.w._bottom_strip.isHidden(),
                          "退出工作台应恢复底部横带")
 
@@ -542,7 +548,7 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(self.w.mode_label.text(), "校准模式")
         self._open()
         self.assertFalse(self.w.calib_btn.isChecked())
-        self.assertEqual(self.w.mode_label.text(), "Mask 模式")
+        self.assertEqual(self.w.mode_label.text(), "掩膜模式")
         self.w.calib_btn.setChecked(True)
         QApplication.processEvents()
         self.assertFalse(self.w.mask_btn.isChecked())

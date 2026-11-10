@@ -81,7 +81,7 @@ def main():
     ap.add_argument("--data", default=str(DEFAULT_DATA),
                     help="原位帧目录（默认 ~/Data/XRD/lmfpdata）")
     ap.add_argument("--mask", default=str(DEFAULT_MASK),
-                    help="mask 文件（.npy/.edf；空字符串 = 不遮）")
+                    help="掩膜文件（.npy/.edf；空字符串 = 不遮）")
     ap.add_argument("--config", default="lmfp1_lab6")
     ap.add_argument("--rich", default=str(DEFAULT_RICH))
     ap.add_argument("--poor", default=str(DEFAULT_POOR))
@@ -144,7 +144,7 @@ def main():
         if mp.exists():
             mask_path = str(mp)
         else:
-            print(f"警告：mask 不存在（{mp}），按不遮运行")
+            print(f"警告：掩膜文件不存在（{mp}），按不遮运行")
 
     try:
         batch = prepare_setup(

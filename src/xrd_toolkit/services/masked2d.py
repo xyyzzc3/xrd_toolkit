@@ -1,4 +1,4 @@
-"""Mask 后的 2D 数据产物（2026-10-28）。
+"""掩膜后的 2D 数据产物（2026-10-28）。
 
 设计（讨论结论）：mask 是 2D→1D 之间的一个可选阶段。产物**不复制像素**，
 而是一个小 manifest：
@@ -13,9 +13,9 @@
 manifest 本身是一个真实文件（`.mask2d.npz`），所以现有“按路径取数/缓存”
 的整条链路都能直接用：1D 缓存键、面板键、对比/热图/导出都把它当成一张
 “源数据”即可。`data_loader.load_diffraction_image` 读到 manifest 时返回
-`np.ma.MaskedArray`（原始像素 + mask），积分器自动排除被遮像素。
+`np.ma.MaskedArray`（原始像素 + 掩膜），积分器自动排除被遮像素。
 
-mask 像素**不被改写**（不填 0/NaN）：这样 2D 查看、导出、积分都保持
+掩膜像素**不被改写**（不填 0/NaN）：这样 2D 查看、导出、积分都保持
 物理含义；要“看不见坏点”只是显示层的事。
 """
 import hashlib
@@ -101,10 +101,10 @@ def create(raw_path, mask, *, label: str = "", mask_path=None) -> dict:
     """
     arr = np.asarray(mask, dtype=bool)
     if arr.ndim != 2:
-        raise ValueError(f"mask 必须是 2D（现在是 {arr.ndim}D）")
+        raise ValueError(f"掩膜必须是 2D（现在是 {arr.ndim}D）")
     raw = Path(raw_path).expanduser().resolve()
     if is_manifest(raw):
-        raise ValueError("不能对 Mask 后的 2D 再建 Mask 2D；请用原始图")
+        raise ValueError("不能对掩膜后的 2D 再建掩膜 2D；请用原始图")
     name, size, mtime, head = stage_cache.fingerprint(raw)
     mhash = mask_hash(arr)
     blob = json.dumps({"name": name, "size": size, "mtime_ns": mtime,
@@ -116,7 +116,7 @@ def create(raw_path, mask, *, label: str = "", mask_path=None) -> dict:
             old = meta_of(path)
             if (old.get("mask_hash") == mhash
                     and old.get("raw_path") == str(raw)):
-                # 同一 raw+mask：manifest 不重写（保住 1D 缓存），
+                # 同一 raw+掩膜：manifest 不重写（保住 1D 缓存），
                 # 只把新的显示标签写进旁路映射。
                 new_tag = {"label": str(label or ""),
                            "mask_path": "" if mask_path is None
@@ -156,7 +156,7 @@ def load_manifest(path) -> tuple:
     mask = mask.reshape(shape)
     raw = Path(meta.get("raw_path") or "")
     if not raw.is_file():
-        raise OSError(f"masked 2D 的原始图不在了：{raw}")
+        raise OSError(f"掩膜后的 2D 的原始图不在了：{raw}")
     return str(raw), mask, _merged_meta(meta)
 
 
@@ -186,7 +186,7 @@ def list_products() -> list:
 
 
 def export_npz(path, target) -> tuple:
-    """把 Mask 2D 导出成独立的 `.npz`：image + mask + meta。
+    """把掩膜 2D 导出成独立的 `.npz`：原图 + 掩膜 + meta。
 
     与内部 manifest 不同，这个文件**自带像素**，换机器/不给原始图也能用；
     坏点仍是 mask（不填 0/NaN），读法：
@@ -198,7 +198,7 @@ def export_npz(path, target) -> tuple:
     image = np.asarray(load_diffraction_image(raw_path), dtype=float)
     if image.shape != mask.shape:
         raise ValueError(
-            f"mask 形状 {mask.shape} 与原始图 {image.shape} 不一致")
+            f"掩膜形状 {mask.shape} 与原始图 {image.shape} 不一致")
     target = Path(target)
     if target.suffix.lower() != ".npz":
         target = target.with_suffix(".npz")
@@ -210,7 +210,7 @@ def export_npz(path, target) -> tuple:
 
 
 def delete(path) -> bool:
-    """删掉一条 masked 2D manifest（原始图/ mask 文件都不动）。"""
+    """删掉一条 masked 2D manifest（原始图/ 掩膜文件都不动）。"""
     p = Path(path)
     try:
         key = str(meta_of(p).get("key")

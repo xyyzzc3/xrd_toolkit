@@ -109,7 +109,7 @@ class TestPhaseWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.w.mask_btn.click()
         QApplication.processEvents()
-        self.assertFalse(self.w._phase_active, "Mask 应把物相退掉")
+        self.assertFalse(self.w._phase_active, "掩膜应把物相退掉")
         self.assertTrue(self.w._mask_active)
         self.w.mask_btn.click()
         QApplication.processEvents()

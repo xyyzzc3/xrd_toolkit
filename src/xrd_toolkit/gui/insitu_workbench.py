@@ -1,6 +1,6 @@
 """原位三相批量中央工作台（2026-10-30）。
 
-打开方式：工具栏 [原位]。与 [Mask]、[精修]、[物相] 同一套中央 MDI
+打开方式：工具栏 [原位]。与 [掩膜]、[精修]、[物相] 同一套中央 MDI
 子窗口：进入时收起参数坞和日志坞，退出只隐藏，选中的目录/参数/结果
 都留着。
 
@@ -166,10 +166,10 @@ class InSituWorkbench(QWidget):
 
     def _refresh_mask_label(self):
         if self.mask_path is not None:
-            self.mask_label.setText(f"mask：{self.mask_path.name}")
+            self.mask_label.setText(f"掩膜：{self.mask_path.name}")
             self.mask_label.setToolTip(str(self.mask_path))
         else:
-            self.mask_label.setText("mask：不遮")
+            self.mask_label.setText("掩膜：不遮")
             self.mask_label.setToolTip("")
 
     # ── 界面组装 ─────────────────────────────────────────────
@@ -192,7 +192,7 @@ class InSituWorkbench(QWidget):
         self.data_btn.clicked.connect(self._choose_data)
         top.addWidget(self.data_btn)
         top.addStretch(1)
-        self.mask_label = _ElideLabel("mask：不遮", Qt.ElideMiddle)
+        self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
         self.mask_label.setMinimumWidth(170)
         self.mask_label.setMaximumWidth(260)
@@ -201,7 +201,7 @@ class InSituWorkbench(QWidget):
         self.mask_label.setSizePolicy(QSizePolicy.Preferred,
                                       QSizePolicy.Preferred)
         top.addWidget(self.mask_label)
-        self.mask_btn = QPushButton("选 mask…")
+        self.mask_btn = QPushButton("选掩膜…")
         self.mask_btn.clicked.connect(self._choose_mask)
         top.addWidget(self.mask_btn)
         self.mask_clear_btn = QPushButton("清除")
@@ -429,8 +429,8 @@ class InSituWorkbench(QWidget):
 
     def _choose_mask(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择 mask 文件", str(self.data_dir),
-            "mask (*.npy *.edf);;所有文件 (*)")
+            self, "选择掩膜文件", str(self.data_dir),
+            "掩膜 (*.npy *.edf);;所有文件 (*)")
         if not path:
             return
         self.mask_path = Path(path)

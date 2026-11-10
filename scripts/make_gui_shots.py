@@ -24,8 +24,8 @@ docs/使用说明.md）：
     gui_views       2D / 剖面 / 瀑布 三块面板（2800×1800）    → NOTES
     gui_batch       导入文件夹 → 批量积分（日志带 k/n）→ 导出 → NOTES
     gui_background  自动基线（不加锚点，原始/基线/结果三线）  → README / 使用说明 §6
-    gui_mask        Mask 编辑器：束心方块 + 孤立坏点 + mask 前后 1D → Mask 快速上手
-    gui_mask2d      「Mask 后的 2D」条目 + 2D 面板（原图 + mask）→ Mask 快速上手
+    gui_mask        掩膜编辑器：束心方块 + 孤立坏点 + 掩膜前后 1D → 使用说明 §5
+    gui_mask2d      「掩膜后的 2D」条目 + 2D 面板（原图 + mask）→ 使用说明 §5
     gui_refine      精修工作台：LaB₆ + Al 额外相 + 仪器基线     → README 分析工作台
     gui_phase       物相工作台：13 候选 + LaB₆/LiFePO₄ 双选叠加 → README 分析工作台
     gui_insitu      原位工作台：3 帧真 LMFP 数据（表 + 趋势）  → README 分析工作台
@@ -684,9 +684,9 @@ def _mask_image_path():
 
 
 def _mask_editor_setup(window, *, zoom=0.45):
-    """打开 Mask 编辑器、画一份代表性 mask（束心方块 + 孤立坏点）。
+    """打开掩膜编辑器、画一份代表性 mask（束心方块 + 孤立坏点）。
 
-    走用户路径：原始图先进文件栏并勾选 → [Mask] 自动载入 → 矩形用
+    走用户路径：原始图先进文件栏并勾选 → [掩膜] 自动载入 → 矩形用
     _fill_rect → [孤立坏点（局部）]。
     """
     from xrd_toolkit.gui import sources as gui_sources
@@ -711,7 +711,7 @@ def _mask_editor_setup(window, *, zoom=0.45):
     editor.btn_hot.click()                       # 孤立坏点（后台）
     wait_for(lambda: editor._auto_task is None, timeout_s=120)
     settle(300)
-    # 存一份临时配方（不进 outputs/）：图上的 Mask 2D 标签才像用户流程
+    # 存一份临时配方（不进 outputs/）：图上的掩膜 2D 标签才像用户流程
     from xrd_toolkit.services.mask import save_recipe
     editor.mask_path = save_recipe(
         _SCRATCH / "lmfp_mask.mask.npz", editor.mask,
@@ -727,7 +727,7 @@ def _mask_editor_setup(window, *, zoom=0.45):
 
 
 def shot_mask(window) -> None:
-    """Mask 编辑器：束心方块（红）+ 孤立坏点（青）+ mask 前后 1D 预览。"""
+    """掩膜编辑器：束心方块（红）+ 孤立坏点（青）+ mask 前后 1D 预览。"""
     editor = _mask_editor_setup(window)
     editor.btn_preview.click()                   # 预览是独立按钮
     wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
@@ -738,7 +738,7 @@ def shot_mask(window) -> None:
 
 
 def shot_mask2d(window) -> None:
-    """主窗口页面：生成后文件栏出现「Mask 后的 2D」条目（不打开 2D 面板）。"""
+    """主窗口页面：生成后文件栏出现「掩膜后的 2D」条目（不打开 2D 面板）。"""
     from xrd_toolkit.gui import sources as gui_sources
     editor = _mask_editor_setup(window, zoom=None)
     editor.btn_apply.click()

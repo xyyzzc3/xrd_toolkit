@@ -1,10 +1,10 @@
-"""Mask 后的 2D 产物（manifest：原图 + mask）测试（2026-10-28）。
+"""掩膜后的 2D 产物（manifest：原图 + mask）测试（2026-10-28）。
 
 钉住：
   * manifest 建/复用/列出/删除；不改写原始像素；
   * `load_diffraction_image(manifest)` 返回 MaskedArray；
   * 积分器自动排除 masked 像素（与显式传 mask 等价）；
-  * GUI 双击 Mask 2D 条目 → 2D 面板；右键/显式 → 1D 面板。
+  * GUI 双击掩膜 2D 条目 → 2D 面板；右键/显式 → 1D 面板。
 """
 import os
 import sys
@@ -185,7 +185,7 @@ class TestMasked2DGui(unittest.TestCase):
         menu = QMenu(self.w)
         actions = menus._entry_menu_actions(menu, self.w, self.src.item)
         texts = [a.text() for a in actions]
-        self.assertTrue(any("导出 Mask 2D 数据" in t for t in texts))
+        self.assertTrue(any("导出掩膜 2D 数据" in t for t in texts))
 
     def test_double_click_opens_masked_2d(self):
         _open_entry_view(self.w, self.src.item)      # 双击 = 2D
@@ -239,7 +239,7 @@ class TestMasked2DGui(unittest.TestCase):
         QApplication.processEvents()
         oned = [s for s in gui_sources.all_sources(self.w)
                 if s.kind == gui_sources.ONED]
-        self.assertTrue(oned)          # 1D 产物挂回 Mask 2D 条目
+        self.assertTrue(oned)          # 1D 产物挂回掩膜 2D 条目
         kw = dict(config=self.w.config_name,
                   npt=int(self.w.params["输出点数"].value()),
                   tth_min=1.0, tth_max=8.0)
