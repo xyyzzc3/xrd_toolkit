@@ -874,7 +874,8 @@ class InSituWorkbench(QWidget):
             name = "insitu_model_independent"
         stamp = time.strftime("%Y%m%d-%H%M%S")
         saved = save_figure_with_options(
-            self.main, fig, f"{name}_{stamp}", title="保存当前图")
+            self.main, fig, f"{name}_{stamp}", title="保存当前图",
+            default_dir=self.outdir)
         if saved is not None:
             self._set_status(f"已保存 {saved.name}")
 

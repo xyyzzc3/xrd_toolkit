@@ -85,18 +85,21 @@ def _resolution_note(options) -> str:
 
 
 def save_figure_with_options(window: QMainWindow, figure, stem: str,
-                             *, title: str = "保存图片"):
+                             *, title: str = "保存图片", default_dir=None):
     """工作台里的单张画布：分辨率/格式弹窗 → 选文件名 → savefig。
 
     与图面板的 [保存图片…] 共用同一套格式（PNG/TIF/PDF/SVG）和默认
     300 dpi。工作台的画布不在 `plot_docks` 里，没有"已保存"记账，
     这里只把当前画面存对；返回保存路径（取消/失败 = None）。
+    `default_dir` = 文件名框的起始目录（如原位工作台的输出目录）；
+    不给就用产物根目录。
     """
     options = _ask_save_options(window)
     if options is None:
         return None
     ext = options["fmt"]
-    default = str(paths.OUTPUTS_DIR / f"{stem}.{ext}")
+    base = Path(default_dir) if default_dir is not None else paths.OUTPUTS_DIR
+    default = str(base / f"{stem}.{ext}")
     name, _ = QFileDialog.getSaveFileName(
         window, title, default, f"{ext.upper()} 图片 (*.{ext})")
     if not name:
