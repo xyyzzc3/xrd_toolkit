@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
+from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 
@@ -254,10 +255,16 @@ class PhaseWorkbench(QWidget):
         row2.setSpacing(6)
         row2.addWidget(QLabel("元素"))
         self.elements_edit = QLineEdit()
-        self.elements_edit.setPlaceholderText("例如 Fe Co Ni（留空不筛）")
+        self.elements_edit.setPlaceholderText(
+            "点 [周期表…] 勾选，或直接输入 Fe Co Ni（留空不筛）")
         self.elements_edit.setToolTip(
             "只保留元素全在这张表里的相；留空 = 相库里全部参与")
         row2.addWidget(self.elements_edit, 1)
+        self.periodic_btn = QPushButton("周期表…")
+        self.periodic_btn.setToolTip(
+            "打开元素周期表：点元素格子勾选，确定后写回左边的元素表")
+        self.periodic_btn.clicked.connect(self._open_periodic_table)
+        row2.addWidget(self.periodic_btn)
         self.screen_btn = QPushButton("开始筛相")
         self.screen_btn.setToolTip("对相库目录里的每张 CIF 打峰位匹配分")
         self.screen_btn.clicked.connect(self._start_screen)
@@ -543,6 +550,19 @@ class PhaseWorkbench(QWidget):
         self.best_label.setText("还没有筛相")
         self.best_label.setStyleSheet("color: gray;")
         self._set_status("相库已切换，点 [开始筛相]")
+
+    def _open_periodic_table(self):
+        """[周期表…]：点选元素，确定后写回输入框（输入框仍是可手输的）。"""
+        from xrd_toolkit.simulation import phase_search as ps
+        selected = ps._element_set(self.elements_edit.text())
+        dlg = PeriodicTableDialog(selected, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._apply_elements(dlg.selected_elements())
+
+    def _apply_elements(self, symbols):
+        """把元素集合按原子序数写回输入框（周期表与测试共用）。"""
+        self.elements_edit.setText(" ".join(sort_elements(symbols)))
 
     # ── 筛相 ────────────────────────────────────────────────
     def _start_screen(self):
