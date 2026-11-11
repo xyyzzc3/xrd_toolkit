@@ -1,7 +1,8 @@
 """原位三相批量的展示图（GUI 与命令行共用，2026-11-02）。
 
 这里只负责"把已经算好的 rows / FitResult 画到一张 Figure 上"：
-- `draw_trends`：四栏趋势（相分数、rich 晶胞、poor 晶胞、Rwp）；
+- `draw_trends`：四栏趋势（相分数与交叉、两相 a 轴相对变化、
+  两相 c 轴相对变化、Rwp）；
 - `draw_summary`：四栏汇总（带状态标记/误差棒/充放电底色）；
 - `draw_model_independent`：模型无关的 (200) 双峰质心检查；
 - `model_independent_rows`：从 `InSituBatch.fitted` 里算质心/面积。
@@ -108,39 +109,57 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
     # CSV rows carry frame as str; GUI rows carry int. Coerce so matplotlib
     # plots a numeric axis instead of one categorical tick per frame.
     x = [int(r["frame"]) for r in good]
+    rich_y = [_num(r["f_rich"]) for r in good]
+    poor_y = [_num(r.get("f_poor", 1.0 - _num(r["f_rich"])))
+              for r in good]
     ax1 = fig.add_subplot(2, 2, 1)
-    ax1.plot(x, [_num(r["f_rich"]) for r in good], "o-", ms=2.5,
-             color=_RICH_COLOR, label="LMFP rich")
-    ax1.plot(x, [_num(r.get("f_poor", 1.0 - _num(r["f_rich"])))
-                 for r in good], "s-", ms=2.5,
-             color=_POOR_COLOR, label="LMFP poor")
+    # 堆叠面积把"两相此消彼长"直接画出来；曲线仍保留，便于逐帧读数
+    ax1.fill_between(x, 0.0, rich_y, color=_RICH_COLOR, alpha=0.10, lw=0)
+    ax1.fill_between(x, rich_y, 1.0, color=_POOR_COLOR, alpha=0.10, lw=0)
+    ax1.plot(x, rich_y, "o-", ms=2.5, color=_RICH_COLOR, label="LMFP rich")
+    ax1.plot(x, poor_y, "s-", ms=2.5, color=_POOR_COLOR, label="LMFP poor")
+    ax1.axhline(MINORITY_FRACTION, color="0.55", lw=0.8, ls=":")
+    # 交叉帧 = 两相比例换手的位置，大致框出反应区间
+    for (x0, y0), (x1, y1) in zip(zip(x, rich_y), zip(x[1:], rich_y[1:])):
+        if (y0 - MINORITY_FRACTION) * (y1 - MINORITY_FRACTION) < 0:
+            ax1.axvline(x1, color="0.55", lw=0.6, ls="--", alpha=0.7)
     yerr = [_num(r.get("f_rich_esd"), 0.0) for r in good]
     if any(e > 0 for e in yerr):
-        ax1.errorbar(x, [_num(r["f_rich"]) for r in good], yerr=yerr,
-                     fmt="none", ecolor=_RICH_COLOR, capsize=2, alpha=0.6)
+        ax1.errorbar(x, rich_y, yerr=yerr, fmt="none", ecolor=_RICH_COLOR,
+                     capsize=2, alpha=0.6)
+    ax1.set_ylim(0.0, 1.0)
     ax1.set_ylabel("relative fraction", fontsize=8)
     ax1.set_title("(a) Phase fractions", fontsize=9)
     ax1.legend(fontsize=8, loc="best")
     ax1.grid(alpha=0.25, linestyle=":")
 
-    for idx, (key, label, title_i) in enumerate((
-            ("rich", "rich cell (Å)", "(b) rich cell"),
-            ("poor", "poor cell (Å)", "(c) poor cell"))):
+    # (b)(c) 两相的同一根晶胞轴放在一起：Δa/a0 与 Δc/c0（%）。
+    # 一条线一个相，看的是"谁在胀、谁在缩"；实心点 = 该相占多数
+    # （>=50%），淡色 = 少数相估计，只作趋势参考。
+    for idx, axis in enumerate(("a", "c")):
         ax = fig.add_subplot(2, 2, 2 + idx)
-        f_key = "f_rich" if key == "rich" else "f_poor"
-        for axis, color in (("a", "tab:blue"), ("b", "tab:orange"),
-                            ("c", "tab:green")):
-            ys = [_num(r.get(f"{key}_{axis}")) for r in good]
-            # 全轨迹用淡线；只在该相占主导时画实心点
-            ax.plot(x, ys, "-", lw=0.8, color=color, alpha=0.25)
-            rel = [(int(r["frame"]), y) for r, y in zip(good, ys)
-                   if _num(r.get(f_key, 1.0 - _num(r["f_rich"])))
+        for key, color, label in (("rich", _RICH_COLOR, "rich"),
+                                  ("poor", _POOR_COLOR, "poor")):
+            raw = [_num(r.get(f"{key}_{axis}")) for r in good]
+            base = next((v for v in raw if math.isfinite(v) and v > 0), None)
+            if base is None:
+                continue
+            rel = [100.0 * (v / base - 1.0) if math.isfinite(v)
+                   else float("nan") for v in raw]
+            f_key = "f_rich" if key == "rich" else "f_poor"
+            ax.plot(x, rel, "-", lw=0.9, color=color, alpha=0.3,
+                    label=f"{label} ({axis}₀ {base:.3f} Å)")
+            pts = [(xi, yi) for xi, yi, r in zip(x, rel, good)
+                   if math.isfinite(yi)
+                   and _num(r.get(f_key, 1.0 - _num(r["f_rich"])))
                    >= MINORITY_FRACTION]
-            if rel:
-                ax.plot([p[0] for p in rel], [p[1] for p in rel],
-                        "o", ms=2.2, color=color, label=axis)
-        ax.set_ylabel(label, fontsize=8)
-        ax.set_title(title_i, fontsize=9)
+            if pts:
+                ax.plot([p[0] for p in pts], [p[1] for p in pts],
+                        "o", ms=2.2, color=color, label="_nolegend_")
+        ax.axhline(0.0, color="0.7", lw=0.6)
+        ax.set_ylabel(f"Δ{axis}/{axis}₀ (%)", fontsize=8)
+        ax.set_title(f"({'b' if idx == 0 else 'c'}) cell {axis} change",
+                     fontsize=9)
         if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=7, loc="best")
         ax.grid(alpha=0.25, linestyle=":")
@@ -148,6 +167,12 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
             ax.set_xlabel("frame", fontsize=8)
 
     ax4 = fig.add_subplot(2, 2, 4)
+    # 状态不是 ok 的帧：淡红竖带，提醒这一帧的读数不可信
+    for row in good:
+        status = str(row.get("status", "ok"))
+        if status and status not in ("ok", "usable"):
+            ax4.axvspan(int(row["frame"]) - 0.5, int(row["frame"]) + 0.5,
+                        color="#d0544e", alpha=0.08, lw=0)
     ax4.plot(x, [_num(r["rwp"]) for r in good], "o-", ms=2.5,
              color=_RWP_COLOR)
     ax4.set_ylabel("Rwp (%)", fontsize=8)
@@ -159,8 +184,9 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
         ax.tick_params(labelsize=7)
     fig.suptitle(title, fontsize=11)
     fig.text(0.5, 0.012,
-             "cell markers are solid only when that phase is the majority (≥50%); "
-             "faded tracks are minority-phase estimates (not reliable).",
+             "cell tracks: solid markers only when that phase is the majority (≥50%); "
+             "faded = minority-phase estimate (not reliable). Dotted line in (a) = "
+             "50/50 crossover; dashed verticals mark crossings.",
              ha="center", fontsize=7, color="0.4")
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     return fig

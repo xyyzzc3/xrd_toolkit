@@ -848,9 +848,11 @@ f_rich = A_rich / (A_rich + A_poor)
    <code>high_rwp</code>/<code>error</code> 标红，其余非 <code>ok</code> 标黄——都不中断，下一帧仍用上一个
    好种子。</li>
 <li>右侧四个标签页：</li>
-<li><strong>趋势</strong>：相分数（富锂/贫锂，带 f_rich 的 esd）、rich 晶胞、
-     poor 晶胞、Rwp；晶胞面板只有该相占多数（≥50%）时才画实心点，
-     淡色是 minority 估计，不作为结构证据；</li>
+<li><strong>趋势</strong>：相分数（富锂/贫锂，带 f_rich 的 esd；堆叠面积 + 50/50
+     交叉线 + 交叉帧虚线）、两相 <strong>a 轴与 c 轴的相对变化</strong>（Δa/a₀、
+     Δc/c₀；一条线一个相，直接看谁在胀、谁在缩）、Rwp（非 ok 帧淡红
+     竖带）；晶胞面板只有该相占多数（≥50%）时才画实心点，淡色是
+     minority 估计，不作为结构证据；</li>
 <li><strong>汇总</strong>：相分数 + 状态标记（<code>ok</code> / <code>ok_soft</code> / <code>cell_jump</code> 等）、
      两相晶胞误差棒、Rwp/Rp，底色按 f_rich 最低点分充/放电段；
      晶胞点同样只在相占多数时实心；</li>
