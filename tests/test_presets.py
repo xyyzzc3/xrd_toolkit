@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from xrd_toolkit import presets  # noqa: E402
 from xrd_toolkit.config import DEFAULT_CONFIG  # noqa: E402
+from xrd_toolkit.services import recipes  # noqa: E402
 
 
 def _tmp_path():
@@ -160,6 +161,38 @@ class TestPresetService(unittest.TestCase):
         self.assertEqual(
             presets.get_preset("只平滑", path)["processing"]["smooth_deg"],
             0.2)
+
+    def test_migrate_legacy_recipes_once(self):
+        """旧 recipes.json 的命名设置迁成用户预设；空扫/全关跳过，只迁一次。"""
+        path = _tmp_path()
+        old_store = recipes.STORE
+        recipes.STORE = path.parent / "recipes.json"
+        self.addCleanup(setattr, recipes, "STORE", old_store)
+        recipes.save("旧方案", {"mode": "auto", "window_deg": 2.0,
+                                "anchors": [[3.0, 1.0]]})
+        recipes.save("空扫", {"mode": "blank"})
+        self.assertEqual(presets.migrate_legacy_recipes(path), 1)
+        preset = presets.get_preset("旧方案", path)
+        self.assertEqual(preset["processing"]["mode"], "auto")
+        self.assertEqual(preset["geometry"], presets.DEFAULTS["geometry"])
+        self.assertNotIn("空扫", presets.preset_names(path))
+        # 第二次不再重复导入
+        self.assertEqual(presets.migrate_legacy_recipes(path), 0)
+        self.assertEqual(presets.get_preset("旧方案", path)["processing"],
+                         preset["processing"])
+
+    def test_migration_does_not_overwrite_existing_preset(self):
+        path = _tmp_path()
+        old_store = recipes.STORE
+        recipes.STORE = path.parent / "recipes.json"
+        self.addCleanup(setattr, recipes, "STORE", old_store)
+        recipes.save("同名", {"mode": "auto"})
+        presets.save_user_preset(
+            "同名", {"geometry": "lmfp1_lab6", "insitu_dir": "~/keep"},
+            path=path)
+        self.assertEqual(presets.migrate_legacy_recipes(path), 0)
+        self.assertEqual(presets.get_preset("同名", path)["insitu_dir"],
+                         "~/keep")
 
     def test_old_file_without_optional_fields(self):
         """version 1 文件读进来：两个可选字段保持未设置，不补 LMFP 默认。"""

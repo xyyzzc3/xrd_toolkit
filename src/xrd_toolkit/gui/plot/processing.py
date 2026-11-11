@@ -366,7 +366,7 @@ def _proc_batch_run(window: QMainWindow, targets: list, kw: dict, settings: dict
     if out_of_range:
         _log(window, f"注意：{files_with_drop} 个文件上有 {out_of_range} 个锚点"
                      f"落在数据 2θ 范围外，已跳过那些锚点"
-                     f"（跨批次复用配方时常见——确认装置/几何没换）")
+                     f"（跨批次复用处理设置时常见——确认装置/几何没换）")
     # 记台账：这一批 = 文件坞里的一个"扣背景"分组（用户 2026-09-25 定：
     # 每次 [批量扣背景] 一组）。整批写一次，中途不留半截台账。跳过的
     # 文件不进台账（它们没有产物，进组了也是空壳）

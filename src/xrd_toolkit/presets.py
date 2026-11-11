@@ -11,11 +11,15 @@ v0.2.1 B1（2026-11-10）起，预设不再只有内置的一份：
   * 文件里同时记住最后使用的预设名（`active`），下次启动自动接上。
 
 2026-11-11 起预设还可带两项可选配置（缺省 = 不改这一项）：
-  * `processing`：内嵌一份处理配方（背景 / 平滑 / 裁剪，结构同
-    services.recipes）；切换预设时只在「处理」页配方下拉里**预选**，
-    点 [套用] 才生效，不重跑任何计算；
-  * `mask_recipe`：`.mask.npz` 掩膜配方路径（引用，不内嵌二进制）；
-    Mask 工作台在该图没有自己的配方时用它兜底。
+  * `processing`：内嵌一份处理设置（背景 / 平滑 / 裁剪，结构同
+    services.recipes）；切换预设只更新「处理」页的说明，点
+    [套用当前预设] 才生效，不重跑任何计算；调好新设置后用
+    [存进预设…] 写回预设；
+  * `mask_recipe`：`.mask.npz` 掩膜文件路径（引用，不内嵌二进制）；
+    Mask 工作台在该图没有自己的掩膜文件时用它兜底。
+
+2026-11-11 起「配方」不再是独立概念：旧 `recipes.json` 里的命名配方由
+`migrate_legacy_recipes` 一次性迁成用户预设（只迁设置，原文件留作备份）。
 
 预设只覆盖"换项目时要改的输入"：几何配置、第二相 CIF、原位帧目录、
 原位 mask 文件名、相库目录（+ 上述两项可选）。它**不改变**原位三相
@@ -46,7 +50,7 @@ DEFAULTS = {
 _FIELDS = tuple(DEFAULTS)
 # 可选字段：缺省 = 不改这一项（旧文件/旧预设不会被补成 LMFP 默认值）
 OPTIONAL_DEFAULTS = {
-    "processing": None,       # 内嵌处理配方 dict，或 None
+    "processing": None,       # 内嵌处理设置 dict，或 None
     "mask_recipe": "",        # .mask.npz 路径（可写 ~/…），或空
 }
 
@@ -75,7 +79,7 @@ USER_PRESETS_PATH = Path(os.environ.get(
 
 
 def _clean_processing(raw):
-    """预设里的处理配方：合法且真的会改变曲线才留，否则 None。
+    """预设里的处理设置：合法且真的会改变曲线才留，否则 None。
 
     全关 / 空扫相减（空扫图不在配方里）按"未设置"处理；手写文件里
     一个坏配方只丢这一项，不影响整份预设。
@@ -119,7 +123,8 @@ def _read_state(path=None) -> dict:
     旧式"顶层直接是 {名字: 预设}"的文件（没有 active，按内置默认）。
     """
     path = Path(path) if path is not None else USER_PRESETS_PATH
-    empty = {"active": DEFAULT_PRESET_NAME, "presets": {}}
+    empty = {"active": DEFAULT_PRESET_NAME, "presets": {},
+             "legacy_recipes_imported": False}
     if not path.is_file():
         return empty
     try:
@@ -160,7 +165,9 @@ def _read_state(path=None) -> dict:
         presets[key] = preset
     if active not in presets and active not in BUILTIN_PRESETS:
         active = DEFAULT_PRESET_NAME
-    return {"active": active, "presets": presets}
+    return {"active": active, "presets": presets,
+            "legacy_recipes_imported": bool(
+                raw.get("legacy_recipes_imported"))}
 
 
 def _write_state(state, path=None) -> None:
@@ -169,6 +176,8 @@ def _write_state(state, path=None) -> None:
     payload = {
         "version": 2,
         "active": str(state.get("active") or DEFAULT_PRESET_NAME),
+        "legacy_recipes_imported": bool(
+            state.get("legacy_recipes_imported")),
         "presets": {
             name: {
                 **{key: preset.get(key, DEFAULTS[key]) for key in _FIELDS},
@@ -292,3 +301,38 @@ def remove_user_preset(name, path=None) -> bool:
         state["active"] = DEFAULT_PRESET_NAME
     _write_state(state, path)
     return True
+
+
+def migrate_legacy_recipes(path=None) -> int:
+    """把旧 `recipes.json` 的命名处理设置一次性迁成用户预设。
+
+    2026-11-11 起 UI 不再有独立的"配方"：处理设置只跟着预设走。迁移以
+    当前活动预设为模板（几何 / 相库 / 原位目录 / 掩膜文件照搬），只把
+    `processing` 换成旧配方，名字用配方名。已有同名预设或与内置预设
+    重名时跳过；空扫相减/全关的旧条目没有可迁的设置，也跳过。
+
+    迁完在预设文件里写 `legacy_recipes_imported=true`，以后不再重复；
+    `recipes.json` 原样保留作备份。返回本次新建的预设数。
+    """
+    state = _read_state(path)
+    if state.get("legacy_recipes_imported"):
+        return 0
+    legacy = recipes.load_all()
+    base = get_preset(state["active"], path)
+    imported = 0
+    for name, recipe in legacy.items():
+        key = str(name).strip()
+        if not key or key in BUILTIN_PRESETS or key in state["presets"]:
+            continue
+        values = {field: base.get(field, DEFAULTS[field]) for field in _FIELDS}
+        values["processing"] = recipe
+        values["mask_recipe"] = str(base.get("mask_recipe") or "")
+        clean = _clean_preset({**values, "name": key}, fallback_name=key)
+        if not clean.get("processing"):
+            continue
+        clean["name"] = key
+        state["presets"][key] = clean
+        imported += 1
+    state["legacy_recipes_imported"] = True
+    _write_state(state, path)
+    return imported

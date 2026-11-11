@@ -1020,9 +1020,20 @@ class TestRecipeReuse(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="xrd_recipe_"))
         self._old_store = recipe_store.STORE
         recipe_store.STORE = self.dir / "recipes.json"
+        self._old_presets = presets_mod.USER_PRESETS_PATH
+        presets_mod.USER_PRESETS_PATH = self.dir / "presets_user.json"
 
     def tearDown(self):
         recipe_store.STORE = self._old_store
+        presets_mod.USER_PRESETS_PATH = self._old_presets
+
+    def _save_proc_preset(self, name, settings):
+        """把一套处理设置存成用户预设（其他字段用默认值）。"""
+        from xrd_toolkit.services import recipes as recipes_mod
+        values = {key: presets_mod.DEFAULTS[key]
+                  for key in presets_mod.DEFAULTS}
+        values["processing"] = recipes_mod.normalize(settings)
+        presets_mod.save_user_preset(name, values)
 
     def test_anchors_outside_the_data_are_dropped(self):
         """锚点落在数据范围外要**丢掉**（`np.interp` 会静默钳到端点值）。
@@ -1064,11 +1075,13 @@ class TestRecipeReuse(unittest.TestCase):
                 combo.setCurrentIndex(combo.findData("auto"))
                 w.bg_anchors[str(files[0])] = [(2.0, 900.0), (6.0, 300.0)]
                 QApplication.processEvents()
-                recipe_store.save("测试配方", gui_panel_state._proc_settings(
-                    w, dockA, files[0]))
-                self.assertIn("测试配方", recipe_store.names())
+                self._save_proc_preset(
+                    "测试预设", gui_panel_state._proc_settings(
+                        w, dockA, files[0]))
+                self.assertIn("测试预设", presets_mod.preset_names())
+                self.assertTrue(gui_preset_ops.apply_preset(w, "测试预设"))
 
-                # B：打开（曲线是原始的），再套用配方
+                # B：打开（曲线是原始的），再套用预设的处理设置
                 gui_file_dock._open_entry_view(w, w.file_list.raw_group.child(1),
                                                explicit=True)
                 keyB = f"1D|{files[1]}"
@@ -1078,9 +1091,7 @@ class TestRecipeReuse(unittest.TestCase):
                 dockB = w.plot_docks[keyB]
                 gui_panel_state._set_focus(w, keyB, dockB.windowTitle())
                 QApplication.processEvents()
-                w.recipe_combo.setCurrentIndex(
-                    w.recipe_combo.findData("saved|测试配方"))
-                gui_app._apply_selected_recipe(w)
+                gui_param_helpers._apply_preset_processing(w)
                 QApplication.processEvents()
                 anchors_b = w.bg_anchors.get(str(files[1])) or []
                 self.assertEqual([x for x, _ in anchors_b], [2.0, 6.0],
@@ -1096,20 +1107,19 @@ class TestRecipeReuse(unittest.TestCase):
         finally:
             w.close()
 
-    def test_save_recipe_button_actually_writes_the_store(self):
-        """[保存为配方…] 这个**按钮**要能落盘（2026-09-28 用户报"保存无效"的回归）。
-
-        查出来的根因很朴素：`app._save_recipe_dialog` 里调了 `_proc_settings`，
-        而这个名字**在 app 模块里从来没导入过**——每点一次都是 NameError，
-        日志区一个字都没有，`outputs/recipes.json` 从来没生成过（用户机器上
-        确实不存在这个文件，正是佐证）。旧的配方测试都直接调
-        `recipe_store.save(...)`，正好绕过按钮，所以一直全绿。
-
-        这条守在**用户走的那条路**上：点按钮 → 仓库里多一份 → 下拉里立刻
-        能选到它。
-        """
+    def test_save_processing_button_writes_the_preset(self):
+        """[存进预设…] 只改 processing；其余字段照抄目标/当前预设。"""
         w = create_window()
         try:
+            # 先造一份带可辨认字段的用户预设并应用
+            presets_mod.save_user_preset("按钮预设", {
+                "geometry": presets_mod.DEFAULTS["geometry"],
+                "second_phase_cif": "Si_9008565.cif",
+                "insitu_dir": "~/keep_frames",
+                "insitu_mask_name": "keep_mask.npy",
+                "phase_library": "~/keep_phases",
+            })
+            self.assertTrue(gui_preset_ops.apply_preset(w, "按钮预设"))
             files = _tmp_files(1)
             w.add_files([str(p) for p in files], select=False)
             with mock.patch.object(gui_plot_spawn, "_compute_integration",
@@ -1124,29 +1134,43 @@ class TestRecipeReuse(unittest.TestCase):
             combo.setCurrentIndex(combo.findData("auto"))
             QApplication.processEvents()
             dlg = mock.MagicMock()
-            dlg.getText.return_value = ("按钮配方", True)
-            with mock.patch.object(gui_param_helpers, "QInputDialog", dlg):
-                w.findChild(QPushButton, "recipe_save_btn").click()
+            dlg.getText.return_value = ("按钮预设", True)
+            with mock.patch.object(gui_param_helpers, "QInputDialog", dlg), \
+                    mock.patch.object(gui_param_helpers.QMessageBox, "question",
+                                      return_value=gui_param_helpers
+                                      .QMessageBox.Yes):
+                w.findChild(QPushButton, "preset_proc_save_btn").click()
             QApplication.processEvents()
-            self.assertIn("按钮配方", recipe_store.names(),
-                          "点了按钮就该真的存下来")
-            self.assertIn("配方已保存：按钮配方", w.log_text.toPlainText())
-            # 存完立刻能选（下拉当场刷）
+            saved = presets_mod.get_preset("按钮预设")
+            self.assertEqual(saved["processing"]["mode"], "auto",
+                             "点了按钮就该真的把处理设置存进预设")
+            self.assertEqual(saved["second_phase_cif"], "Si_9008565.cif",
+                             "第二相不是处理设置，不许被按钮动到")
+            self.assertEqual(saved["insitu_dir"], "~/keep_frames")
+            self.assertEqual(saved["insitu_mask_name"], "keep_mask.npy")
+            self.assertEqual(saved["phase_library"], "~/keep_phases")
+            self.assertIn("处理设置已存进预设：按钮预设",
+                          w.log_text.toPlainText())
+
+            # 存进一个新名字 = 以当前预设为模板，只换 processing
+            dlg.getText.return_value = ("副本设置", True)
+            with mock.patch.object(gui_param_helpers, "QInputDialog", dlg):
+                w.findChild(QPushButton, "preset_proc_save_btn").click()
+            QApplication.processEvents()
+            copy = presets_mod.get_preset("副本设置")
+            self.assertEqual(copy["processing"]["mode"], "auto")
+            self.assertEqual(copy["second_phase_cif"], "Si_9008565.cif",
+                             "新建副本要照抄当前预设的其他字段")
+            self.assertEqual(copy["insitu_dir"], "~/keep_frames")
+            self.assertIn("副本设置", presets_mod.preset_names())
             self.assertGreaterEqual(
-                w.recipe_combo.findData("saved|按钮配方"), 0,
-                "存下来的配方要能马上在下拉里选到")
+                w.preset_combo.findData("副本设置"), 0,
+                "新建的预设要立刻出现在下拉里")
         finally:
             w.close()
 
-    def test_recipe_rows_are_fresh_right_after_a_tweak(self):
-        """刚调完参数，下拉里就该有「本图配方」（用户报"套用无效"的另一半）。
-
-        原先填下拉的动作跑在 `_sync_bg_rows` 里、而"本图配方"是 `_refresh_proc`
-        末尾才写进 window.proc_recipes 的——顺序颠倒，于是**刚处理完那一刻
-        下拉里只有占位项**（"（还没有配方…）"），用户按 [套用] 只得到一句
-        "先在下拉里选一份配方"。真实手势恰恰是"调好参数马上点 [套用]"
-        （2026-09-28 探针复现）。现在 _refresh_proc 收尾回调刷一次。
-        """
+    def test_provenance_row_is_fresh_right_after_a_tweak(self):
+        """刚调完参数，「本图上次处理」那行就该跟着更新。"""
         w = create_window()
         try:
             files = _tmp_files(1)
@@ -1162,11 +1186,9 @@ class TestRecipeReuse(unittest.TestCase):
             combo = w.params["背景扣除模式"]
             combo.setCurrentIndex(combo.findData("auto"))
             QApplication.processEvents()      # 不再手动调 _sync_bg_rows
-            self.assertGreaterEqual(
-                w.recipe_combo.findData("local"), 0,
-                "调完参数下拉里就该有「本图配方」")
-            self.assertIn("本图配方", w.bg_prov_lbl.text(),
+            self.assertIn("本图上次处理", w.bg_prov_lbl.text(),
                           "来处那行也该跟着新鲜")
+            self.assertIn("当前预设", w.preset_proc_lbl.text())
         finally:
             w.close()
 
@@ -1200,23 +1222,20 @@ class TestRecipeReuse(unittest.TestCase):
             gui_panel_state._set_focus(w, panel_key, dock.windowTitle())
             QApplication.processEvents()
             self.assertIsNotNone(dock.panel_source, "前提：这是产物面板")
-            recipe_store.save("R", {"mode": "auto", "window_deg": 0.3,
-                                    "anchors": [[2.0, 100.0]]})
-            gui_app._recipe_combo_fill(w)     # 下拉要刷一次才看得到"已保存：R"
-            w.recipe_combo.setCurrentIndex(w.recipe_combo.findData("saved|R"))
-            self.assertEqual(w.recipe_combo.currentData(), "saved|R",
-                             "前提：下拉里选中了那份配方")
-            gui_app._apply_selected_recipe(w)
+            self._save_proc_preset("R", {"mode": "auto", "window_deg": 0.3,
+                                         "anchors": [[2.0, 100.0]]})
+            self.assertTrue(gui_preset_ops.apply_preset(w, "R"))
+            gui_param_helpers._apply_preset_processing(w)
             QApplication.processEvents()
             log = w.log_text.toPlainText()
             self.assertIn("已换成它底下的原始 1D 曲线", log)
-            self.assertIn("已套用配方", log, "配方真的套上去了")
+            self.assertIn("已套用处理设置", log, "处理设置真的套上去了")
             self.assertIsNone(dock.panel_source, "面板不再是「产物面板」")
             self.assertTrue(np.allclose(np.asarray(dock.last_intensity,
                                                    dtype=float), inten),
                             "画的是**源曲线**，不是在扣完的曲线上再扣一遍")
             self.assertEqual((dock.params_snapshot or {}).get("背景扣除模式"),
-                             "auto", "配方把模式也带过来了")
+                             "auto", "处理设置把模式也带过来了")
         finally:
             w.close()
 
@@ -1232,16 +1251,13 @@ class TestRecipeReuse(unittest.TestCase):
             dock = w.plot_docks[panel_key]
             gui_panel_state._set_focus(w, panel_key, dock.windowTitle())
             QApplication.processEvents()
-            recipe_store.save("R", {"mode": "auto", "window_deg": 0.3,
-                                    "anchors": [[2.0, 100.0]]})
-            gui_app._recipe_combo_fill(w)     # 下拉要刷一次才看得到"已保存：R"
-            w.recipe_combo.setCurrentIndex(w.recipe_combo.findData("saved|R"))
-            self.assertEqual(w.recipe_combo.currentData(), "saved|R",
-                             "前提：下拉里选中了那份配方")
-            gui_app._apply_selected_recipe(w)
+            self._save_proc_preset("R", {"mode": "auto", "window_deg": 0.3,
+                                         "anchors": [[2.0, 100.0]]})
+            self.assertTrue(gui_preset_ops.apply_preset(w, "R"))
+            gui_param_helpers._apply_preset_processing(w)
             QApplication.processEvents()
             log = w.log_text.toPlainText()
-            self.assertIn("换配方重做不了", log)
+            self.assertIn("换处理设置重做不了", log)
             self.assertIn("打开原始条目重出图再处理", log)
             self.assertEqual((dock.params_snapshot or {}).get("背景扣除模式"),
                              "off", "拒绝时产物面板的模式不许被改掉")

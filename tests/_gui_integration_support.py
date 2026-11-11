@@ -103,11 +103,14 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import config as config_mod
 from xrd_toolkit import paths as xrd_paths
-from xrd_toolkit.services import (export as data_export, process,
-                                  recipes as recipe_store, stage_cache)
+from xrd_toolkit import presets as presets_mod
+from xrd_toolkit.services import (export as data_export, mask_params,
+                                  process, recipes as recipe_store,
+                                  stage_cache)
 from xrd_toolkit.services.integrator import lab6_theoretical_2theta
 from xrd_toolkit.gui import app as gui_app
 _gui_app = gui_app
+from xrd_toolkit.gui import preset_ops as gui_preset_ops
 from xrd_toolkit.gui import file_dock as gui_file_dock
 from xrd_toolkit.gui.files import actions as gui_file_actions
 from xrd_toolkit.gui.files import importing as gui_file_importing
@@ -168,6 +171,11 @@ def setUpModule():
     os.environ.setdefault(
         "XRD_INSTRUMENT_BASELINE",
         str(Path(_BASELINE_TMP) / "instrument_baseline.json"))
+    # 用户数据隔离：create_window 现在会把旧 recipes.json 迁成预设、
+    # Mask 工作台会写检测参数；测试不许碰仓库里的真实文件。
+    recipe_store.STORE = Path(_CACHE_TMP) / "recipes.json"
+    presets_mod.USER_PRESETS_PATH = Path(_CACHE_TMP) / "presets_user.json"
+    mask_params.STORE = Path(_CACHE_TMP) / "mask_params.json"
 
 
 def _wait_until(predicate, timeout_ms=5000):

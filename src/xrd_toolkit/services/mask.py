@@ -27,9 +27,9 @@ import numpy as np
 # pyFAI-drawmask 等工具也能直接读写。
 MASK_SUFFIXES = (".npy", ".edf")
 
-# 掩膜配方：掩膜 + 来源分层 + 元数据（2026-10-30）。通用掩膜（.npy/.edf）
-# 只存 bool 数组，读回来分不清哪块是手动画的、哪块是自动检测的；配方把
-# 这些一起存下，和「处理」页的配方是同一个概念。
+# 掩膜文件（.mask.npz）：掩膜 + 来源分层 + 元数据（2026-10-30）。通用掩膜
+# （.npy/.edf）只存 bool 数组，读回来分不清哪块是手动画的、哪块是自动检测
+# 的；.mask.npz 把这些一起存下（2026-11-11 起界面统一叫「掩膜文件」）。
 RECIPE_SUFFIX = ".mask.npz"
 RECIPE_FORMAT = "xrd-toolkit-mask-recipe"
 RECIPE_VERSION = 1
@@ -80,12 +80,12 @@ def load_mask(path) -> np.ndarray:
 
 
 def is_recipe(path) -> bool:
-    """这个路径是不是掩膜配方（按后缀判断）。"""
+    """这个路径是不是 .mask.npz 掩膜文件（按后缀判断）。"""
     return str(path).lower().endswith(RECIPE_SUFFIX)
 
 
 def recipe_path(path) -> Path:
-    """补上配方后缀：`x.npy` → `x.mask.npz`（已经是配方就不动）。"""
+    """补上掩膜文件后缀：`x.npy` → `x.mask.npz`（已经是就不动）。"""
     p = Path(path)
     if is_recipe(p):
         return p
@@ -93,14 +93,14 @@ def recipe_path(path) -> Path:
 
 
 def save_recipe(path, mask, *, source=None, meta=None) -> Path:
-    """保存掩膜配方：bool 数组 + 来源分层 + 元数据。
+    """保存掩膜文件：bool 数组 + 来源分层 + 元数据。
 
     参数：
         path    目标路径；不以 `.mask.npz` 结尾时自动补上
         mask    2D bool 数组（True = 被遮掉）
         source  可选的 uint8 数组，与 mask 同形；数值由调用方定义
                 （GUI 里 1=整环离群、2=孤立坏点、3=手动），0 = 未遮
-        meta    dict，写进配方的元数据（来源图、自动参数等）
+        meta    dict，写进这份掩膜文件的元数据（来源图、自动参数等）
     """
     p = recipe_path(path)
     arr = _as_bool_mask(mask)
@@ -127,31 +127,31 @@ def save_recipe(path, mask, *, source=None, meta=None) -> Path:
 
 
 def load_recipe(path) -> tuple:
-    """读掩膜配方 → (mask, source 或 None, meta dict)。
+    """读掩膜文件 → (mask, source 或 None, meta dict)。
 
-    旧配方/手工做的 npz 没有 `source` 时返回 None，由调用方按"全手动"
+    旧文件/手工做的 npz 没有 `source` 时返回 None，由调用方按"全手动"
     处理；形状以元数据里的 `shape` 为准（packbits 本身不带形状）。
     """
     p = Path(path)
     if not is_recipe(p):
-        raise ValueError(f"不是掩膜配方：{p}")
+        raise ValueError(f"不是掩膜文件（应为 .mask.npz）：{p}")
     with np.load(p, allow_pickle=False) as z:
         if "mask" not in z or "meta" not in z:
-            raise ValueError(f"掩膜配方缺少 mask/meta：{p}")
+            raise ValueError(f"掩膜文件缺少 mask/meta：{p}")
         packed = np.asarray(z["mask"], dtype=np.uint8)
         meta = json.loads(str(z["meta"].item()))
         src = np.asarray(z["source"]) if "source" in z else None
     shape = tuple(int(x) for x in meta.get("shape") or ())
     if len(shape) != 2 or min(shape) <= 0:
-        raise ValueError(f"掩膜配方缺少有效形状：{p}")
+        raise ValueError(f"掩膜文件缺少有效形状：{p}")
     mask = np.unpackbits(packed)[:shape[0] * shape[1]].astype(bool)
     if mask.size != shape[0] * shape[1]:
-        raise ValueError(f"掩膜配方内容不完整：{p}")
+        raise ValueError(f"掩膜文件内容不完整：{p}")
     mask = mask.reshape(shape)
     if src is not None:
         if src.shape != mask.shape:
             raise ValueError(
-                f"掩膜配方的来源分层 {src.shape} 与掩膜 {mask.shape} 不一致")
+                f"掩膜文件的来源分层 {src.shape} 与掩膜 {mask.shape} 不一致")
         src = src.astype(np.uint8, copy=False)
     return mask, src, meta
 

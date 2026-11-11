@@ -63,6 +63,20 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(self.w.preset_combo.currentText(),
                          presets.DEFAULT_PRESET_NAME)
 
+    def test_create_window_does_not_migrate_legacy_recipes(self):
+        """迁移只在 main() 跑：测试/脚本调 create_window 不许改用户文件。"""
+        recipe_store.save("旧设置", {"mode": "auto"})
+        self.addCleanup(recipe_store.delete, "旧设置")
+        path = self.tmp / "presets_user.json"
+        self.assertFalse(path.exists(), "前提：预设文件还不存在")
+        w = create_window()
+        try:
+            self.assertFalse(path.exists(),
+                             "create_window 不该写 presets_user.json")
+            self.assertNotIn("旧设置", presets.preset_names())
+        finally:
+            w.close()
+
     def test_save_and_switch_user_preset_updates_workbenches(self):
         frames = self.tmp / "frames"
         frames.mkdir()
@@ -170,8 +184,8 @@ class TestPresetWindow(unittest.TestCase):
             presets.get_preset("带第二相")["second_phase_cif"],
             "Si_9008565.cif")
 
-    def test_save_current_carries_processing_recipe_only_preselects(self):
-        """预设保存当前处理设置；切换后只预选，点 [套用] 才改控件。"""
+    def test_save_current_carries_processing_settings_only_on_apply(self):
+        """预设保存当前处理设置；切换只显示，点 [套用当前预设] 才改控件。"""
         _prime_1d(self.w, ["data/fake_a.tif"])
         settings = {
             "mode": "anchor", "window_deg": 2.0,
@@ -188,12 +202,12 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(saved["processing"]["mode"], "anchor")
         self.assertEqual(saved["processing"]["smooth_deg"], 0.15)
         self.assertNotIn("created", saved["processing"])
-        # 只预选：下拉选中「预设配方」，但处理页控件没被改
-        self.assertEqual(self.w.recipe_combo.currentData(), "preset|带处理")
+        # 只显示：处理页标签写明当前预设的设置，但控件没被改
+        self.assertIn("当前预设「带处理」", self.w.preset_proc_lbl.text())
         self.assertNotEqual(
             self.w.params["背景扣除模式"].currentData(), "anchor")
-        # 显式点 [套用] 才生效
-        dock_helpers._apply_selected_recipe(self.w)
+        # 显式点 [套用当前预设] 才生效
+        dock_helpers._apply_preset_processing(self.w)
         self.assertEqual(
             self.w.params["背景扣除模式"].currentData(), "anchor")
 

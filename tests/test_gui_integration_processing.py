@@ -151,8 +151,8 @@ class TestBackgroundFromProduct(unittest.TestCase):
             self.assertEqual((dockB.params_snapshot or {}).get("背景扣除模式"),
                              "off", "打开原始条目 = 原始曲线，不套配方")
             QApplication.processEvents()
-            self.assertIn("本图配方", w.bg_prov_lbl.text(),
-                          "配方只在处理页显示")
+            self.assertIn("本图上次处理", w.bg_prov_lbl.text(),
+                          "处理设置只在处理页显示")
             self.assertIn(getattr(dockA, "panel_display", "").split(".")[0],
                           w.bg_prov_lbl.text(), "来处写清楚（以 A 的锚点为基准）")
         finally:
@@ -167,7 +167,7 @@ class TestBackgroundFromProduct(unittest.TestCase):
         plain = {"chain": "自动基线、窗口 0.2°", "anchors": [],
                  "anchor_source": None}
         self.assertEqual(gui_views.recipe_text(plain),
-                         "本图配方：自动基线、窗口 0.2°")
+                         "本图上次处理：自动基线、窗口 0.2°")
         hand = {"chain": "自动基线、锚点 2 个", "anchors": [(1.0, 2.0),
                                                             (3.0, 4.0)],
                 "anchor_source": None}

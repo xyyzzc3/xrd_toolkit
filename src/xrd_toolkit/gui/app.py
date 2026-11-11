@@ -81,7 +81,8 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import config, paths
 from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
-from xrd_toolkit.presets import active_preset_name, get_preset
+from xrd_toolkit.presets import (
+    active_preset_name, get_preset, migrate_legacy_recipes)
 # ── 兼容再导出（见模块 docstring）：测试继续经本模块访问 ──
 from xrd_toolkit.gui.plot_export import (
     _ask_save_options, _build_export_dialog, _checked_1d_results,
@@ -130,24 +131,22 @@ from xrd_toolkit.gui.plot_views import (
     _plot_view, _refresh_1d_display, _refresh_image_display,
     _refresh_heatmap_names, _refresh_profile_angle, _refresh_proc,
     _refresh_waterfalls,
-    _retarget_product_panel_to_source, _spawn_task,
-    apply_recipe, chain_label_of, recipe_text)
+    _retarget_product_panel_to_source, _spawn_task)
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui import watchdog
-from xrd_toolkit.services import recipes as recipe_store
 from xrd_toolkit.services.instrument_baseline import load_baseline
 # 自动基线窗口的**默认值**（0.2°，见 background 里的来历）：控件初始值、
 # 悬停提示都读它，免得"引擎默认 / 面板默认 / 恢复默认 / 控件初始值"四处
 # 各写一个字面量、改一个漏一个（2026-09-28 之前控件就是写死的 1.0）
 from xrd_toolkit.services.background import AUTO_WINDOW_DEG
 
-# 参数坞背景/配方 helper（2026-10-21 从本文件原样搬出，只改结构）
+# 参数坞背景/预设处理设置 helper（2026-10-21 从本文件原样搬出，只改结构）
 from xrd_toolkit.gui.param_dock.helpers import (
-    _apply_selected_recipe, _bg_anchor_count, _bg_anchor_file,
-    _bg_edit_dock, _connect_pending_hooks, _delete_selected_recipe,
-    _fit_max_width, _on_bg_mode, _on_choose_blank, _on_clear_anchors,
-    _on_pick_anchor, _recipe_combo_fill, _save_recipe_dialog,
-    _selected_recipe, _sync_bg_rows, _sync_recipe_rows, _update_bg_count)
+    _apply_preset_processing, _bg_anchor_count, _bg_anchor_file,
+    _bg_edit_dock, _connect_pending_hooks, _fit_max_width, _on_bg_mode,
+    _on_choose_blank, _on_clear_anchors, _on_pick_anchor,
+    _save_processing_to_preset_dialog, _sync_bg_rows,
+    _sync_preset_proc_rows, _update_bg_count)
 from xrd_toolkit.gui.param_dock.pages import (
     _build_check_summary, _build_plot_type_row, _cut_text, _on_cut_add,
     _on_cut_clear, _on_cut_toggled, _select_plot_type, _sync_cut_label,
@@ -1211,9 +1210,9 @@ def create_window() -> QMainWindow:
     # 背景扣除专用行的显隐同步入口（panel_state 回放面板快照后回调，
     # 同样避免反向 import）
     window._bg_rows_sync = _sync_bg_rows
-    # 「配方」小节的显示刷新入口：_refresh_proc 记完"本图配方"之后回调
-    # （顺序见 _sync_recipe_rows 的说明——用户报"套用无效"的根因之一）
-    window._recipe_rows_sync = lambda: _sync_recipe_rows(window)
+    # 「预设处理设置」小节的显示刷新入口：_refresh_proc 记完"本图上次处理"之后回调
+    # （顺序见 _sync_preset_proc_rows 的说明——用户报"套用无效"的根因之一）
+    window._preset_proc_rows_sync = lambda: _sync_preset_proc_rows(window)
     # 文件栏"正在打开"记号的刷新入口（面板开/关时回调，用户 2026-09-28 第 5 条）
     window.mark_open_rows = lambda: refresh_open_marks(window)
     # 焦点切换入口：当前编辑对象那块面板的标题栏深一档（plot_panels
@@ -1246,6 +1245,8 @@ def create_window() -> QMainWindow:
         lambda sources, name="1D": _open_source_group(window, name, sources))
     # 项目预设：先读出上次用的那份（几何/相库/原位目录都由它决定），
     # 再建参数坞——预设下拉要用这个名字。
+    # 旧 recipes.json 的迁移不在这里做：create_window 被测试/脚本大量调用，
+    # 不该有"改用户文件"的副作用；迁移放在 main()，真启动时才跑一次。
     window.preset_name = active_preset_name()
     window.preset = get_preset(window.preset_name)
     window.param_dock = _build_param_dock(window)
@@ -1345,7 +1346,17 @@ def main() -> int:
     """
     app = QApplication(sys.argv)
     _install_chinese_translations(app)
+    # 旧 recipes.json 一次性迁成用户预设（2026-11-11：UI 不再有"配方"）。
+    # 放在 create_window 之前：预设下拉一建好就包含迁进来的条目。
+    # 只在真入口做——测试/脚本调 create_window 不会改用户文件。
+    try:
+        imported = migrate_legacy_recipes()
+    except Exception:                              # noqa: BLE001
+        imported = 0
     window = create_window()
+    if imported:
+        _log(window, f"旧的命名处理配方已迁成 {imported} 份用户预设"
+                     "（原 recipes.json 保留作备份）")
     window.show()
     return app.exec()
 

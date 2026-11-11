@@ -1,4 +1,4 @@
-"""参数坞里的背景/配方 helper。
+"""参数坞里的背景/预设处理设置 helper。
 
 2026-10-21 从 gui/app.py 原样搬出（只改结构，不动逻辑）。这些函数只被
 参数坞和 create_window 调用；app.py 再导出，外部照旧经 gui_app 取用。
@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog,
-    QLabel, QMainWindow, QPushButton, QWidget)
+    QLabel, QMainWindow, QMessageBox, QPushButton, QWidget)
 
 from xrd_toolkit.config import entry_display
 from xrd_toolkit.gui.file_dock import FILE_FILTER
@@ -18,7 +18,6 @@ from xrd_toolkit.gui.panel_state import (
 from xrd_toolkit.gui.plot_views import (
     _compute_integration, _refresh_proc, _retarget_product_panel_to_source,
     _spawn_task, apply_recipe, chain_label_of, recipe_text)
-from xrd_toolkit.services import recipes as recipe_store
 
 
 def _bg_edit_dock(window: QMainWindow):
@@ -96,7 +95,7 @@ def _sync_bg_rows(window: QMainWindow) -> None:
     for name, row in rows.items():
         row.setVisible(name == mode
                        or (name == "anchor" and mode == "auto"))
-    _sync_recipe_rows(window)
+    _sync_preset_proc_rows(window)
     # "显示原始曲线对比"只在真的在扣的时候才有意义
     window.params["背景显示原始"].setEnabled(mode != "off")
     window.params["负值截断为 0"].setEnabled(mode != "off")
@@ -109,169 +108,126 @@ def _sync_bg_rows(window: QMainWindow) -> None:
     _update_bg_count(window)
 
 
-def _sync_recipe_rows(window: QMainWindow) -> None:
-    """「配方」这一小节的两样显示：「本图配方」来处那行 + 配方下拉。
+def _sync_preset_proc_rows(window: QMainWindow) -> None:
+    """处理页底部两行：本图上次处理（只读）+ 当前预设的处理设置。
 
-    **为什么单独一个函数、而且要在记录配方之后调**（2026-09-28 探针查出来的
-    用户报"套用无效"）：填下拉的动作原先只在 _sync_bg_rows 里做，而
-    _on_bg_mode 是"_sync_bg_rows → _refresh_proc"这个顺序——配方是
-    _refresh_proc 末尾才写进 window.proc_recipes 的，于是**刚调完参数那一刻
-    下拉里还只有占位项**（"还没有配方…"），用户按 [套用] 只得到一句"先在下拉
-    里选一份配方"。真实的手势恰恰就是"调好参数马上点 [套用]"。
-
-    现在由 _refresh_proc 收尾时经 window._recipe_rows_sync 回调一次（与
-    _bg_rows_sync 同一套路，避免 plot_views 反向 import app），顺序问题从
-    根上消失——不管谁先谁后，记录之后就刷一次。
+    由 _refresh_proc 收尾时经 `window._preset_proc_rows_sync` 回调一次
+    （与 _bg_rows_sync 同一套路，避免 plot_views 反向 import app）。
     """
-    # 处理来处：这个文件上次是用哪套设置处理的（**只作展示**，不回填面板——
-    # 用户 2026-09-27 晚："原始数据会被改变…应该是原始 tif"）
+    # 处理来处：这个文件上次是用哪套设置处理的（**只作展示**，不回填面板）
     lbl = getattr(window, "bg_prov_lbl", None)
     if lbl is not None:
-        # 配方按 str(path) 存；面板自己记着它的文件（panel_file）
         dock_ = window.plot_docks.get(window.focus_panel)
         path_ = getattr(dock_, "panel_file", None)
         recipe = (getattr(window, "proc_recipes", None)
                   or {}).get(str(path_))
         lbl.setText(recipe_text(recipe))
-    _recipe_combo_fill(window)
-
-
-def _recipe_combo_fill(window: QMainWindow) -> None:
-    """配方下拉：本图配方 + 当前预设内嵌配方 + 已保存的命名配方。
-
-    data 用字符串（"local" / "preset|预设名" / "saved|名字"）：`findData`
-    比的是值，字符串最稳（元组也能比，但不值得赌 PySide 的转换）。
-    预设配方只是**预选项**，选中不触发任何计算；点 [套用] 才动。
-    """
-    combo = getattr(window, "recipe_combo", None)
-    if combo is None:
+    preset_lbl = getattr(window, "preset_proc_lbl", None)
+    if preset_lbl is None:
         return
-    dock = window.plot_docks.get(window.focus_panel)
-    path = getattr(dock, "panel_file", None)
-    local = (getattr(window, "proc_recipes", None) or {}).get(str(path))
-    preset_name = str(getattr(window, "preset_name", "") or "")
+    name = str(getattr(window, "preset_name", "") or "")
     preset = getattr(window, "preset", None) or {}
-    has_preset_recipe = bool(preset_name) and bool(preset.get("processing"))
-    keep = combo.currentData()
-    combo.blockSignals(True)
-    combo.clear()
-    if local:
-        combo.addItem(f"本图配方（{Path(path).name}）", "local")
-    if has_preset_recipe:
-        combo.addItem(f"预设配方（{preset_name}）", f"preset|{preset_name}")
-    for name in recipe_store.names():
-        combo.addItem(f"已保存：{name}", f"saved|{name}")
-    if combo.count() == 0:
-        combo.addItem("（还没有配方：调好参数后点 [存成配方…]）", "")
-    idx = combo.findData(keep) if keep else -1
-    combo.setCurrentIndex(max(0, idx))
-    combo.blockSignals(False)
+    proc = preset.get("processing")
+    if isinstance(proc, dict):
+        preset_lbl.setText(
+            f"当前预设「{name}」：{chain_label_of(proc)}\n"
+            "点 [套用当前预设] 把这套设置用到编辑对象；调好新设置后"
+            "点 [存进预设…] 写回去。")
+    else:
+        preset_lbl.setText(
+            f"当前预设「{name}」还没有处理设置；调好背景/平滑/裁剪后"
+            "点 [存进预设…]。")
 
 
-def _selected_recipe(window: QMainWindow):
-    """下拉里选中的那份配方 → (配方 dict 或 None, 是不是"本图配方")。
+def _apply_preset_processing(window: QMainWindow) -> None:
+    """[套用当前预设]：把当前预设的 `processing` 用到编辑对象（显式动作）。
 
-    “预设配方”直接从当前预设的 `processing` 取（不复制进 recipes.json）。
+    锚点位置照搬、强度按本图曲线重取；其余设置填进本页控件并立刻重画。
+    面板打开时**不会**自动套用（见 plot_views._proc_recipe）。
     """
-    combo = getattr(window, "recipe_combo", None)
-    data = combo.currentData() if combo is not None else None
-    dock = window.plot_docks.get(window.focus_panel)
-    path = getattr(dock, "panel_file", None)
-    if not data or path is None:
-        return None, False
-    if data == "local":
-        return (getattr(window, "proc_recipes", None) or {}).get(str(path)), True
-    kind, _, key = str(data).partition("|")
-    if kind == "preset":
-        from xrd_toolkit.presets import get_preset
-        return get_preset(key).get("processing"), False
-    return recipe_store.load_all().get(key), False
-
-
-def _apply_selected_recipe(window: QMainWindow) -> None:
-    """[套用]：把选中的配方用到**编辑对象**那张图上（显式动作，按了才动）。
-
-    锚点位置照搬、强度按本图曲线重取（跨批次复用的核心）；其余设置填进本页
-    控件并立刻重画。面板打开时**不会**自动套用——见 plot_views._proc_recipe。
-    """
-    recipe, _is_local = _selected_recipe(window)
-    dock = window.plot_docks.get(window.focus_panel)
-    path = getattr(dock, "panel_file", None)
-    if recipe is None:
-        _log(window, "先在下拉里选一份配方，再点 [套用]"
-                     "（还没有就调好参数 [存成配方…]）")
+    preset = getattr(window, "preset", None) or {}
+    recipe = preset.get("processing")
+    if not isinstance(recipe, dict):
+        _log(window, "当前预设没有处理设置；先在「处理」页调好，"
+                     "再点 [存进预设…]")
         return
+    dock = window.plot_docks.get(window.focus_panel)
+    path = getattr(dock, "panel_file", None)
     if dock is None or path is None:
-        _log(window, "先把一张 1D 图设为编辑对象，再套配方")
+        _log(window, "先把一张 1D 图设为编辑对象，再套用处理设置")
         return
-    if (recipe or {}).get("mode") == "blank":
-        # 空扫相减靠的是那张**空扫图**（window.bg_blank，在内存里、不进配方）
-        # ——套上去也只会得到"没有空扫可减"，不如直说
-        _log(window, "这份配方是「空扫相减」：它靠的是那张空扫图，"
-                     "空扫图不在配方里，套不了")
+    if recipe.get("mode") == "blank":
+        # 空扫相减靠的是那张**空扫图**（window.bg_blank，在内存里、不进预设）
+        _log(window, "当前预设的处理设置是「空扫相减」：它靠的是那张"
+                     "空扫图，空扫图不在预设里，套不了")
         return
-    # 处理产物面板：**就地换成它底下的原始 1D 曲线**，配方照常往上套
-    # （用户 2026-09-28 第 3 条："套用别的配方的处理图不能二次处理了，修正"）。
-    # 旧版在这里一句拒绝（怕二次相减），界面上就没路可走了——现在把"输入"
-    # 换成没扣过背景的那条曲线，二次相减的隐患从根上没有了
-    # （见 plot_views._retarget_product_panel_to_source）
+    # 处理产物面板：**就地换成它底下的原始 1D 曲线**，设置照常往上套
     if not _retarget_product_panel_to_source(window, dock):
         return
     apply_recipe(window, dock, path, recipe)
 
 
-def _save_recipe_dialog(window: QMainWindow) -> None:
-    """[保存为配方…]：把编辑对象这张图当前这套设置存成命名配方。
+def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
+    """[存进预设…]：把编辑对象当前处理设置写进一份预设（只改 processing）。
 
-    存的是**设置本身**（模式/窗口/锚点位置/平滑/裁剪）——强度不参与跨批次
-    复用，锚点的强度只在"本图配方"里作参考（见 services/recipes 的说明）。
+    预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值；用户预设已存在时
+    先问一次，内置预设不能覆盖（要另存新名字）。
     """
     dock = window.plot_docks.get(window.focus_panel)
     path = getattr(dock, "panel_file", None)
     if dock is None or path is None:
-        _log(window, "先点一张 1D 图（编辑对象），再保存配方")
+        _log(window, "先把一张 1D 图设为编辑对象，再把当前处理设置存进预设")
         return
     settings = _proc_settings(window, dock, path)
-    if settings.get("mode") == "off" and not settings.get("smooth_deg") \
-            and not settings.get("cut_ranges"):
-        _log(window, "「处理」页三项都关着，没有可存的配方")
+    from xrd_toolkit.services import recipes
+    if not recipes.is_meaningful(settings):
+        _log(window, "「处理」页三项都关着（或是空扫相减），没有可存的设置")
         return
-    if settings.get("mode") == "blank":
-        _log(window, "「空扫相减」存不了配方：它靠的是那张空扫图，"
-                     "空扫图不在配方里（别的模式都能存）")
-        return
-    default = Path(path).stem
-    name, ok = QInputDialog.getText(window, "存成配方",
-                                    "配方名（例如：自动基线+锚点）：",
-                                    text=f"{default} 配方")
+    snapshot = recipes.normalize(settings)
+    from xrd_toolkit.presets import (
+        DEFAULT_PRESET_NAME, get_preset, is_builtin, preset_names,
+        save_user_preset)
+    current = str(getattr(window, "preset_name", DEFAULT_PRESET_NAME))
+    default = current if not is_builtin(current) else f"{current} 副本"
+    name, ok = QInputDialog.getText(
+        window, "存进预设",
+        "预设名称（处理设置只写进这一份预设；几何/相库等保持原值）：",
+        text=default)
     if not ok or not str(name).strip():
         return
-    recipe_store.save(str(name).strip(), settings)
-    _log(window, f"配方已保存：{name}（{chain_label_of(settings)}）"
-                 "——「处理」页下拉里可以给别的批次套用")
-    _recipe_combo_fill(window)
-
-
-def _delete_selected_recipe(window: QMainWindow) -> None:
-    """[删除]：删掉下拉里选中的**已保存**配方（"本图配方"跟着文件走，删不掉）。"""
-    recipe, is_local = _selected_recipe(window)
-    combo = getattr(window, "recipe_combo", None)
-    data = combo.currentData() if combo is not None else None
-    if not data:
-        _log(window, "先在下拉里选一份配方")
+    name = str(name).strip()
+    if is_builtin(name):
+        _log(window, f"「{name}」是内置预设，不能覆盖；换个名字")
         return
-    if is_local:
-        _log(window, "「本图配方」删不掉——它跟着这个文件走；"
-                     "只有 [存成配方…] 存下来的那些能删")
+    existing = name in preset_names()
+    if existing:
+        answer = QMessageBox.question(
+            window, "存进预设",
+            f"把当前处理设置写进用户预设「{name}」？\n"
+            "该预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+    # 只改 processing：其余字段照抄目标预设（已有）或当前预设（新建副本）。
+    # 不能走"当前设置快照"——那会把没打开的工作台清空、把几何漂移一并
+    # 写进去，与按钮上"其他项保持原值"的承诺不符。
+    from xrd_toolkit.presets import raw_preset
+    template = name if existing else str(
+        getattr(window, "preset_name", "") or "")
+    values = dict(raw_preset(template) or {})
+    values["processing"] = snapshot
+    try:
+        save_user_preset(name, values)
+    except (OSError, ValueError) as err:
+        QMessageBox.warning(window, "存进预设", str(err))
         return
-    if str(data).startswith("preset|"):
-        _log(window, "「预设配方」跟着项目预设走，不能在这里删；"
-                     "要换配方请改预设，或 [存成配方…] 另存一份")
-        return
-    name = str(data).split("|", 1)[1]
-    if recipe_store.delete(name):
-        _log(window, f"配方已删除：{name}")
-    _recipe_combo_fill(window)
+    _log(window, f"处理设置已存进预设：{name}"
+                 f"（{chain_label_of(snapshot)}）")
+    from xrd_toolkit.gui.preset_ops import refresh_preset_combo
+    refresh_preset_combo(window)          # 新建的预设立刻出现在下拉里
+    if getattr(window, "preset_name", None) == name:
+        window.preset = get_preset(name)
+        _sync_preset_proc_rows(window)
 
 
 def _on_bg_mode(window: QMainWindow) -> None:

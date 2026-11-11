@@ -261,8 +261,8 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
 
     def add_leaf(group, raw_item, kind, key, tail):
         """往组里加一条产物条目（默认不勾）。"""
-        # 1D/处理产物不继承掩膜 2D 条目上的「掩膜 2D（未导出配方）」尾巴：
-        # 那条尾巴只说明掩膜配方有没有导出，不该跟着分析结果走。
+        # 1D/处理产物不继承掩膜 2D 条目上的「掩膜 2D（未导出掩膜文件）」
+        # 尾巴：那条尾巴只说明掩膜文件有没有导出，不该跟着分析结果走。
         source = gui_sources.source_of(raw_item)
         base = (gui_sources.panel_display(source)
                 if source is not None else raw_item.text(0))

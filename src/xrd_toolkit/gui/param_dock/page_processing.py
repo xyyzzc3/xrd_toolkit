@@ -1,4 +1,4 @@
-"""参数坞「处理」页：裁剪 / 背景扣除 / 平滑 / 配方 + [存成产物]。
+"""参数坞「处理」页：裁剪 / 背景扣除 / 平滑 / 预设处理设置 + [存成产物]。
 
 2026-10-22 从 builder.py 的 _build_param_dock 原样搬出（只改结构，不动逻辑）。
 """
@@ -8,9 +8,8 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit.gui.panels import _ElideLabel
 from xrd_toolkit.gui.param_dock.helpers import (
-    _apply_selected_recipe, _delete_selected_recipe, _fit_max_width,
-    _on_bg_mode, _on_choose_blank, _on_clear_anchors, _on_pick_anchor,
-    _save_recipe_dialog)
+    _apply_preset_processing, _fit_max_width, _on_bg_mode, _on_choose_blank,
+    _on_clear_anchors, _on_pick_anchor, _save_processing_to_preset_dialog)
 from xrd_toolkit.gui.param_dock.pages import (
     _on_cut_add, _on_cut_clear, _on_cut_toggled, _sync_smooth_rows)
 from xrd_toolkit.gui.param_dock.widgets import add_caption, bg_group, bg_row
@@ -267,55 +266,37 @@ def build_processing_page(window, form_bg, btns_bg):
         lambda _=0: _sync_smooth_rows(window))
     window._sync_smooth_rows = lambda: _sync_smooth_rows(window)
 
-    # ── 配方（小节，**放在整页最下方**）：一份设置存下来，别的批次能照用 ──
-    # 用户 2026-09-27："我觉得配方可以保存用也挺好，两批数据用同一个锚点
-    # 可行吗"——可行：跨批次沿用锚点的**位置**（那是装置的性质），强度到每张
-    # 图自己的曲线上重取（同 [批量处理] 一贯的口径，见 services/recipes）。
-    # 配方的来源有两个：本图配方（那个文件上次用的）与已保存的命名配方。
-    # **位置**（用户 2026-10-02 第 3 条："配方位置 最下方？"）：一份配方管的是
-    # **整条链**（背景 + 平滑 + 裁剪），原先夹在背景扣除与平滑之间，看着像
-    # 只管背景——而且你在它下面改的平滑/裁剪其实也会被存进去，顺序跟含义
-    # 反着。挪到三节之后：先把整条链摆好，再存下来。
-    add_caption(form_bg, "配方")
-    # 处理来处（用户 2026-09-27 立项："在扣背景的参数栏可以显示这个图是以 a
-    # 的锚点为基准进行扣除的。按文件。"；2026-10-07 用户："配方详细内容的
-    # 灰字位置改一下，和配方放一起"——它讲的本来就是配方，挪到配方标题下）
+    # ── 预设处理设置（小节，**放在整页最下方**）──────────────────
+    # 2026-11-11 起不再有独立的"配方"概念：处理设置只跟着项目预设走。
+    # 这里只留三样：本图上次处理（只读）、当前预设的处理设置、两个动作。
+    add_caption(form_bg, "预设处理设置")
     bg_prov_lbl = QLabel("")
     bg_prov_lbl.setStyleSheet("color: gray;")
     bg_prov_lbl.setWordWrap(True)
     window.bg_prov_lbl = bg_prov_lbl
     form_bg.addRow(bg_prov_lbl)
-    recipe_combo = QComboBox()
-    recipe_combo.setToolTip("选一份配方：本图配方：这个文件上次处理用的那套；"
-                            "预设配方：跟着当前项目预设走（切换预设时预选）；"
-                            "下面是已保存的命名配方。选好点 [套用] 才生效——"
-                            "打开原始条目永远是原始曲线，不会自动扣。")
-    window.recipe_combo = recipe_combo
-    recipe_apply_btn = QPushButton("套用")
-    recipe_apply_btn.setObjectName("recipe_apply_btn")
-    recipe_apply_btn.setToolTip("把选中的配方用到<b>编辑对象</b>这张图上："
-                                "锚点位置照搬、强度按本图曲线重取，"
-                                "其余设置填进本页控件并立刻重画")
-    recipe_apply_btn.clicked.connect(lambda: _apply_selected_recipe(window))
-    # [存成配方…]（原名 [保存为配方…]）：存的是**设置**，不是数据——与
-    # 下面的 [存成产物] 成对：一个存"怎么做"，一个存"做出来的东西"。
-    # 用户 2026-10-02 第 2 条说这两个按钮重复，其实是名字太像：
-    # "保存为配方" / "采用这份结果"都像"保存"，各改一个字把差别写在脸上
-    recipe_save_btn = QPushButton("存成配方…")
-    recipe_save_btn.setObjectName("recipe_save_btn")
-    recipe_save_btn.setToolTip("把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）"
-                               "存成一个命名配方，以后任何一批都能套用"
-                               "（配方文件：outputs/recipes.json）。存的是设置；"
-                               "要把结果留下用下面的 [存成产物]")
-    recipe_save_btn.clicked.connect(lambda: _save_recipe_dialog(window))
-    recipe_del_btn = QPushButton("删除")
-    recipe_del_btn.setObjectName("recipe_del_btn")
-    recipe_del_btn.setToolTip("删掉下拉里选中的那份<b>已保存</b>配方")
-    recipe_del_btn.clicked.connect(lambda: _delete_selected_recipe(window))
-    window.recipe_btns = (recipe_apply_btn, recipe_save_btn, recipe_del_btn)
-    form_bg.addRow(bg_row((recipe_combo, 2)))
-    form_bg.addRow(bg_row((recipe_apply_btn, 1), (recipe_save_btn, 1),
-                          (recipe_del_btn, 0)))
+    preset_proc_lbl = QLabel("")
+    preset_proc_lbl.setStyleSheet("color: gray;")
+    preset_proc_lbl.setWordWrap(True)
+    window.preset_proc_lbl = preset_proc_lbl
+    form_bg.addRow(preset_proc_lbl)
+    preset_apply_btn = QPushButton("套用当前预设")
+    preset_apply_btn.setObjectName("preset_proc_apply_btn")
+    preset_apply_btn.setToolTip(
+        "把顶部当前预设里的处理设置用到<b>编辑对象</b>这张图上："
+        "锚点位置照搬、强度按本图曲线重取，其余设置填进本页控件并立刻重画。"
+        "切换预设时不会自动套用——这一下必须由你按。")
+    preset_apply_btn.clicked.connect(lambda: _apply_preset_processing(window))
+    preset_save_btn = QPushButton("存进预设…")
+    preset_save_btn.setObjectName("preset_proc_save_btn")
+    preset_save_btn.setToolTip(
+        "把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）写进一份预设；"
+        "该预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值。"
+        "要把结果留下用下面的 [存成产物]")
+    preset_save_btn.clicked.connect(
+        lambda: _save_processing_to_preset_dialog(window))
+    window.preset_proc_btns = (preset_apply_btn, preset_save_btn)
+    form_bg.addRow(bg_row((preset_apply_btn, 1), (preset_save_btn, 1)))
 
     # 面板绑定这组控件（_sync_bg_rows 在小节外也要用）
     window.bg_rows = {"blank": blank_row, "auto": auto_row,
@@ -361,7 +342,7 @@ def build_processing_page(window, form_bg, btns_bg):
                              "用到勾选的每一份（锚点只传 2θ 位置、强度逐文件"
                              "重取）；一个都没勾 = 存编辑对象这一张。结果都进"
                              "文件栏「处理产物 …」，对比 / 热图 / 导出直接复用；"
-                             "存的是数据，要存「这套设置」用最下面的 [存成配方…]")
+                             "存的是数据，要存「这套设置」用最下面的 [存进预设…]")
     btn_proc_save.clicked.connect(lambda: _proc_save(window))
     window.proc_save_btn = btn_proc_save
     # 兼容别名：旧名（测试与探针按它们找按钮）现在都指向这一颗，行为 = 合并语义
