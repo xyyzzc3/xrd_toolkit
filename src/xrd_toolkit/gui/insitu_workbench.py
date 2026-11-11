@@ -201,6 +201,12 @@ class InSituWorkbench(QWidget):
             "（不用先进文件夹；只认原始图，同几何/同形状）")
         self.checked_btn.clicked.connect(self._use_checked_frames)
         top.addWidget(self.checked_btn)
+        self.generic_btn = QPushButton("通用多相…")
+        self.generic_btn.setToolTip(
+            "任意相列表的原位顺序精修（第一张 CIF = 主相，其余为额外相）；"
+            "专用 LMFP 三相快速模式仍是本页的 [开始]")
+        self.generic_btn.clicked.connect(self._open_generic_dialog)
+        top.addWidget(self.generic_btn)
         top.addStretch(1)
         self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
@@ -434,6 +440,18 @@ class InSituWorkbench(QWidget):
         self.data_label.setText(
             f"{self.data_dir}（{len(self.frames)} 帧）")
         self.data_label.setToolTip(str(self.data_dir))
+
+    def _open_generic_dialog(self):
+        """打开通用多相入口（2026-11-11 用户第 14 条）。"""
+        from xrd_toolkit.gui.insitu_generic_dialog import GenericInsituDialog
+        dlg = getattr(self.main, "_generic_insitu_dialog", None)
+        if dlg is not None:
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        dlg = GenericInsituDialog(self.main, self)
+        self.main._generic_insitu_dialog = dlg
+        dlg.show()
 
     def _choose_data(self):
         chosen = QFileDialog.getExistingDirectory(
