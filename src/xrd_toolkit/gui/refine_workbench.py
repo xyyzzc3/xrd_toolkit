@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
     QMdiSubWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget)
+    QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
@@ -165,6 +165,11 @@ class RefineWorkbench(QWidget):
         self._extra_cifs = []
         self._extra_phase_paths = []
         self._product_sources = {}     # 文件栏产物条目：key -> Source
+        # 结构参数（原子坐标/占位）：按当前 CIF 的空间群列轨道；None =
+        # 还没算（小节展开时才建，见 _ensure_sites）
+        self._site_model = None
+        self._site_cif = None
+        self._site_rows = {}           # label -> (orbit, 坐标项, 占位项)
         # {"params": {...}, "wavelength": Å, ...}：启动时从落盘文件读回
         # （app.create_window 的 window.instrument_baseline），保存时再
         # 写回磁盘；W-H 页读同一份。
@@ -205,6 +210,7 @@ class RefineWorkbench(QWidget):
         top.addWidget(QLabel("结构"))
         self.cif_combo = QComboBox()
         self.cif_combo.setMinimumWidth(220)
+        self.cif_combo.currentIndexChanged.connect(self._refresh_sites)
         top.addWidget(self.cif_combo, 1)
         self.open_cif_btn = QPushButton("打开 CIF…")
         self.open_cif_btn.setToolTip("从任意位置加入一张 CIF 结构")
@@ -310,6 +316,49 @@ class RefineWorkbench(QWidget):
         self.chk_extra_lebail.setToolTip(
             "第二相（如箔材/基片）织构强时，峰强交给数据逐反射解出")
         left_lay.addWidget(self.chk_extra_lebail)
+        extra_hint = QLabel("额外相只精修比例与峰强，不精修原子位置/占位")
+        extra_hint.setWordWrap(True)
+        extra_hint.setStyleSheet("color: gray;")
+        left_lay.addWidget(extra_hint)
+
+        # 结构参数（2026-11-11 用户第 13 条："有没有精修 CIF 原子位置？"）：
+        # 默认收起；展开时才做空间群分析，避免换 CIF 就卡界面。
+        self.site_toggle = QToolButton()
+        self.site_toggle.setText("结构参数（原子坐标 / 占位）")
+        self.site_toggle.setCheckable(True)
+        self.site_toggle.setChecked(False)
+        self.site_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.site_toggle.setArrowType(Qt.RightArrow)
+        self.site_toggle.setStyleSheet(
+            "QToolButton { border: none; color: gray; font-weight: 600;"
+            " padding: 2px 0; }")
+        self.site_toggle.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.site_toggle.setToolTip(
+            "精修主相 CIF 的原子坐标/占位；坐标按空间群只放开允许的方向")
+        self.site_toggle.toggled.connect(self._on_site_toggle)
+        left_lay.addWidget(self.site_toggle)
+        self.site_hint = QLabel("展开后列出这张 CIF 可精修的位点")
+        self.site_hint.setWordWrap(True)
+        self.site_hint.setStyleSheet("color: gray;")
+        self.site_hint.setVisible(False)
+        left_lay.addWidget(self.site_hint)
+        self.site_table = QTableWidget(0, 4)
+        self.site_table.setHorizontalHeaderLabels(
+            ["位点", "Wyckoff", "坐标", "占位"])
+        self.site_table.verticalHeader().setVisible(False)
+        self.site_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.site_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.site_table.setShowGrid(False)
+        self.site_table.setFrameShape(QFrame.NoFrame)
+        self.site_table.setMaximumHeight(150)
+        header = self.site_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self.site_table.setVisible(False)
+        left_lay.addWidget(self.site_table)
+        self.chk_lebail.toggled.connect(lambda _on: self._apply_site_enabled())
 
         self.run_btn = QPushButton("开始精修")
         self.run_btn.setToolTip("用选中的 1D 曲线和 CIF 做全谱最小二乘拟合")
@@ -659,6 +708,100 @@ class RefineWorkbench(QWidget):
         if self.result is None:
             self._draw_observed()
 
+    # ── 结构参数（原子坐标 / 占位）──────────────────────────
+    def _on_site_toggle(self, checked):
+        """展开/收起「结构参数」小节；展开时才做空间群分析。"""
+        self.site_toggle.setArrowType(
+            Qt.DownArrow if checked else Qt.RightArrow)
+        self.site_hint.setVisible(checked)
+        self.site_table.setVisible(checked)
+        if checked:
+            self._ensure_sites()
+
+    def _refresh_sites(self):
+        """换 CIF：丢掉旧位点表；小节展开着就立刻重列。"""
+        self._site_model = None
+        self._site_cif = None
+        self._site_rows = {}
+        self.site_table.setRowCount(0)
+        if self.site_toggle.isChecked():
+            self._ensure_sites()
+        self._apply_site_enabled()
+
+    def _ensure_sites(self):
+        """按当前 CIF 的空间群列轨道（代表位点 + 允许方向）。
+
+        空间群分析在界面线程做；只在小节展开/换 CIF 时触发一次，
+        典型 CIF（几十个原子）眨眼完成。
+        """
+        path = self.cif_combo.currentData()
+        if not path:
+            self.site_hint.setText("先在左上选一张 CIF")
+            return
+        if self._site_model is not None and self._site_cif == str(path):
+            return
+        self._site_rows = {}
+        self.site_table.setRowCount(0)
+        self._site_model = None
+        self._site_cif = None
+        self.site_hint.setText(f"读取 {Path(path).name} 的位点…")
+        try:
+            from xrd_toolkit.simulation import load_structure
+            from xrd_toolkit.simulation.site_model import SiteModel
+            model = SiteModel(load_structure(str(path)))
+        except Exception as err:                       # noqa: BLE001
+            self.site_hint.setText(
+                f"这张 CIF 不能精修原子位置：{user_error_text(err)}")
+            return
+        self._site_model = model
+        self._site_cif = str(path)
+        for orbit in model.orbits.values():
+            row = self.site_table.rowCount()
+            self.site_table.insertRow(row)
+            label = QTableWidgetItem(orbit.label)
+            label.setToolTip(
+                "、".join(orbit.params) if orbit.params
+                else "坐标由对称性固定")
+            self.site_table.setItem(row, 0, label)
+            wyckoff = QTableWidgetItem(orbit.wyckoff)
+            wyckoff.setToolTip(f"CIF 占位 {orbit.base_occ:g}")
+            self.site_table.setItem(row, 1, wyckoff)
+            coord = QTableWidgetItem()
+            if orbit.n_free:
+                coord.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                coord.setCheckState(Qt.Unchecked)
+                coord.setToolTip("精修 " + "、".join(orbit.params))
+            else:
+                coord.setText("—")
+                # QTableWidgetItem 默认带 ItemIsUserCheckable，必须清掉，
+                # 否则"特殊位置不可勾"只是看着像
+                coord.setFlags(Qt.ItemIsEnabled)
+                coord.setToolTip("特殊位置：坐标由对称性固定")
+            self.site_table.setItem(row, 2, coord)
+            occ = QTableWidgetItem()
+            occ.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            occ.setCheckState(Qt.Unchecked)
+            occ.setToolTip(
+                f"精修 {orbit.label} 的总占位（CIF 初值 {orbit.base_occ:g}）")
+            self.site_table.setItem(row, 3, occ)
+            self._site_rows[orbit.label] = (orbit, coord, occ)
+        self._apply_site_enabled()
+
+    def _apply_site_enabled(self):
+        """Le Bail（强度自由）下坐标/占位没有意义：整表置灰。"""
+        enabled = not self.chk_lebail.isChecked()
+        self.site_table.setEnabled(enabled)
+        if not enabled:
+            self.site_hint.setText(
+                "Le Bail（强度自由）下不精修结构参数；"
+                "取消勾选才能用坐标/占位")
+        elif self._site_model is not None:
+            self.site_hint.setText(
+                f"{self._site_model.space_group}：勾上要精修的位点；"
+                "坐标按空间群只放开允许的方向，占位精修该位点的总占位。")
+        else:
+            self.site_hint.setText("展开后列出这张 CIF 可精修的位点")
+
     # ── 精修 ────────────────────────────────────────────────
     def _free_params(self):
         free = ["zero"]
@@ -670,6 +813,12 @@ class RefineWorkbench(QWidget):
             free += ["size_um", "mustrain"]
         if self.chk_b.isChecked() and not self.chk_lebail.isChecked():
             free.append("b_iso")
+        if not self.chk_lebail.isChecked():
+            for orbit, coord, occ in self._site_rows.values():
+                if coord.checkState() == Qt.Checked:
+                    free.append(f"coord_{orbit.param_key}")
+                if occ.checkState() == Qt.Checked:
+                    free.append(f"occ_{orbit.param_key}")
         return free
 
     def _start_fit(self):

@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from unittest import mock  # noqa: E402
 
@@ -90,6 +91,41 @@ class TestRefineWorkbench(unittest.TestCase):
                 is not None, timeout_ms=20000)
         self.assertTrue(ok, "1D 图没算完")
         return self.w.plot_docks[f"1D|{path}"]
+
+    def test_site_parameters_feed_into_free_list(self):
+        """2026-11-11：主相原子坐标/占位可以勾选进精修参数。"""
+        self._enter()
+        editor = self.w.refine_editor
+        cif = ROOT / "data" / "structures" / "LiFePO4_olivine.cif"
+        idx = editor.cif_combo.findData(str(cif))
+        self.assertGreaterEqual(idx, 0, "相库里应有 LiFePO4 的 CIF")
+        editor.cif_combo.setCurrentIndex(idx)
+        editor.site_toggle.setChecked(True)
+        QApplication.processEvents()
+        self.assertEqual(editor.site_table.rowCount(), 6,
+                         "Pnma LiFePO4 应列出 6 条等效位点")
+        # Li 的 4a 是特殊位置：坐标由对称性固定，不给勾
+        li_coord = editor._site_rows["Li0"][1]
+        self.assertEqual(li_coord.text(), "—")
+        self.assertFalse(
+            bool(li_coord.flags() & Qt.ItemIsUserCheckable),
+            "特殊位置的坐标不许勾")
+        editor._site_rows["Fe4"][1].setCheckState(Qt.Checked)
+        editor._site_rows["O12"][2].setCheckState(Qt.Checked)
+        free = editor._free_params()
+        self.assertIn("coord_Fe4", free, "坐标别名应进 free")
+        self.assertIn("occ_O12", free, "占位别名应进 free")
+        # Le Bail = 强度自由：结构参数没有意义，不许参与
+        editor.chk_lebail.setChecked(True)
+        free = editor._free_params()
+        self.assertNotIn("coord_Fe4", free)
+        self.assertNotIn("occ_O12", free)
+        self.assertFalse(editor.site_table.isEnabled())
+        # 换 CIF：旧位点与勾选一并清掉，不能把 Fe4 的勾带到别的结构
+        editor.chk_lebail.setChecked(False)
+        editor.cif_combo.setCurrentIndex(0)
+        QApplication.processEvents()
+        self.assertNotIn("Fe4", editor._site_rows)
 
     def test_enter_exit_restores_docks(self):
         self.assertFalse(self.w.param_dock.isVisible())
