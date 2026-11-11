@@ -234,10 +234,33 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     就是那行末尾写的像素值），原先夹在「操作」组的按钮堆里。
     """
     from xrd_toolkit.gui.calib import _default_config_name, _start_auto_calib, _start_manual_calib  # 破循环
+    from xrd_toolkit.gui.calib_mode import (
+        _choose_calib_file, _on_calib_file_changed)   # 破循环
     page = QWidget()
     lay = QVBoxLayout(page)
     lay.setContentsMargins(4, 4, 4, 4)
     lay.setSpacing(4)
+
+    # ── 标样文件（2026-11-11）────────────────────────────────────
+    # 文件栏在校准模式下收起；这个下拉是标样的唯一入口，选谁就开/换
+    # 校准面板。旧的"勾选第一张原始图"降为兜底（见 calib_panel）。
+    std_box = QGroupBox("标样文件")
+    std_row = QHBoxLayout(std_box)
+    std_row.setSpacing(4)
+    window.calib_file_combo = QComboBox()
+    window.calib_file_combo.setObjectName("calib_file_combo")
+    window.calib_file_combo.setMinimumWidth(220)
+    window.calib_file_combo.setToolTip(
+        "校准用的标样原始图；换图立即切换校准面板")
+    window.calib_file_combo.currentIndexChanged.connect(
+        lambda i: _on_calib_file_changed(window, i))
+    std_row.addWidget(window.calib_file_combo, 1)
+    btn_std_open = QPushButton("打开…")
+    btn_std_open.setObjectName("calib_file_open_btn")
+    btn_std_open.setToolTip("选择一张不在文件栏里的标样图")
+    btn_std_open.clicked.connect(lambda: _choose_calib_file(window))
+    std_row.addWidget(btn_std_open)
+    lay.addWidget(std_box)
 
     # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
     # 本页第一栏，紧跟坞顶「几何配置」那一行（用户 2026-09-26 晚定）：

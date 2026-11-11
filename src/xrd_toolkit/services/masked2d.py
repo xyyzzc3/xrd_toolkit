@@ -105,6 +105,12 @@ def create(raw_path, mask, *, label: str = "", mask_path=None) -> dict:
     raw = Path(raw_path).expanduser().resolve()
     if is_manifest(raw):
         raise ValueError("不能对掩膜后的 2D 再建掩膜 2D；请用原始图")
+    from xrd_toolkit.services.data_loader import image_shape
+    raw_shape = image_shape(raw)
+    if tuple(arr.shape) != tuple(raw_shape):
+        raise ValueError(
+            f"掩膜形状 {tuple(arr.shape)} 与原始图 {raw_shape} 不一致："
+            f"{raw.name}")
     name, size, mtime, head = stage_cache.fingerprint(raw)
     mhash = mask_hash(arr)
     blob = json.dumps({"name": name, "size": size, "mtime_ns": mtime,

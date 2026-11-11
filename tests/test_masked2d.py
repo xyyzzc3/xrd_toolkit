@@ -98,6 +98,11 @@ class TestManifest(unittest.TestCase):
         self.assertNotEqual(m1["path"], m2["path"])
         self.assertEqual(len(masked2d.list_products()), 2)
 
+    def test_create_rejects_mask_shape_mismatch(self):
+        """掩膜形状与原始图不一致：直接拒绝，不生成错产物。"""
+        with self.assertRaises(ValueError):
+            masked2d.create(self.raw, np.zeros((100, 100), dtype=bool))
+
     def test_load_returns_masked_array_and_keeps_pixels(self):
         meta = masked2d.create(self.raw, self.mask)
         got = load_diffraction_image(meta["path"])

@@ -6,8 +6,8 @@
 收起，工作台自带消息行/状态行。
 
 流程（对应 Week 9 任务一）：
-  1. 先在文件栏勾选原始数据，再打开编辑器：自动载入勾选的第一张，
-     顶部下拉可以换图（掩膜只认文件栏里的原始数据）；
+  1. 打开编辑器：自动载入第一张原始图，顶部下拉可以换图；文件栏在
+     这个工作台里收起，图像/生成范围都由工作台自己选；
   2. 手动画：画笔、橡皮、矩形；或点 [孤立坏点（局部）]。
      [整环离群（实验性）] 与 GSAS-II 的自动斑点掩膜（spot mask）同一思路，
      真实环可能被误标，只作参考（见 services/mask.py）；
@@ -41,8 +41,9 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
-    QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QMdiSubWindow, QSpinBox, QVBoxLayout, QWidget)
+    QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QMdiSubWindow, QSpinBox,
+    QVBoxLayout, QWidget)
 
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
@@ -53,7 +54,7 @@ from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels, mask_suspicion
 from xrd_toolkit.services.integrator import integrate_1d
-from xrd_toolkit.services import masked2d
+from xrd_toolkit.services import mask_params, masked2d
 from xrd_toolkit.services.mask import (
     RECIPE_SUFFIX, combine_masks, is_recipe, load_mask, load_recipe,
     mask_stats, radial_outlier_mask, save_mask, save_recipe)
@@ -177,6 +178,7 @@ class MaskWorkbench(QWidget):
 
         self._build()
         self._wire_checked_count()
+        self._load_hot_params()
         # Home = 复位视野（与主窗口 app.py 同一套：绑在窗口上、WindowShortcut，
         # 焦点在数值框里时 QAbstractSpinBox 会拦下 Home 当前的光标键——两个
         # 笔刷/σ 输入框里按 Home 不会突然把图缩回去）
@@ -189,31 +191,27 @@ class MaskWorkbench(QWidget):
         self._update_status()
 
     def showEvent(self, event):
-        """每次显示：刷新图像下拉；勾选了新图就自动切过去（2026-10-30）。"""
+        """每次显示：刷新图像下拉；还没有当前图就自动载入第一张原始图。"""
         super().showEvent(event)
         self._refresh_image_combo()
-        first = self._first_checked_raw()
-        if first is not None and (
-                self.image_path is None
-                or Path(first) != Path(self.image_path)):
-            self.load_image(Path(first))
+        self._load_hot_params()      # 几何可能换过：按当前配置取参数
+        if self.image_path is None and self.image_combo.count():
+            first = self.image_combo.itemData(0)
+            if first:
+                self.load_image(Path(first))
 
     # ── 界面 ────────────────────────────────────────────────────────
     def _build(self):
         root = QVBoxLayout(self)
 
-        # ── 图像行：掩膜只认文件栏里的原始数据（2026-10-30 用户定）──
+        # ── 图像行：工作台自带的原始图下拉（2026-11-11 文件栏收起）──
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("图像"))
         self.image_combo = QComboBox()
         self.image_combo.setMinimumWidth(260)
-        self.image_combo.setToolTip("文件栏里的原始数据；换图不用关窗口")
+        self.image_combo.setToolTip("文件栏里的全部原始数据；换图不用关窗口")
         self.image_combo.activated.connect(self._on_image_combo)
         row1.addWidget(self.image_combo)
-        self.btn_checked = QPushButton("载入勾选图像")
-        self.btn_checked.setToolTip("载入文件栏里当前勾选的第一张原始数据")
-        self.btn_checked.clicked.connect(self._use_checked)
-        row1.addWidget(self.btn_checked)
         row1.addStretch(1)
         self.btn_load = QPushButton("导入配方…")
         self.btn_load.setToolTip(
@@ -365,10 +363,21 @@ class MaskWorkbench(QWidget):
                              ("扩张", self.adv_grow)):
             adv.addWidget(QLabel(text))
             adv.addWidget(widget)
+        self.btn_hot_defaults = QPushButton("恢复默认")
+        self.btn_hot_defaults.setObjectName("hot_defaults_btn")
+        self.btn_hot_defaults.setToolTip(
+            "把孤立坏点/整环离群参数恢复成默认值（按当前几何配置记住）")
+        self.btn_hot_defaults.clicked.connect(self._reset_hot_params)
+        adv.addWidget(self.btn_hot_defaults)
         adv.addStretch(1)
         self.adv_panel.setVisible(False)
         self.btn_adv.toggled.connect(self.adv_panel.setVisible)
         root.addWidget(self.adv_panel)
+        # 参数按几何配置记忆：动一下就写盘（值很小，不必防抖）
+        self._loading_hot = False
+        for widget in (self.adv_window, self.adv_ratio, self.adv_max_area,
+                       self.adv_min_peak, self.adv_grow, self.n_sigma):
+            widget.valueChanged.connect(lambda *_: self._save_hot_params())
 
         self.fig = Figure(figsize=(10, 7.4))
         gs = self.fig.add_gridspec(2, 1, height_ratios=[3.4, 1.25],
@@ -397,7 +406,7 @@ class MaskWorkbench(QWidget):
         self.lbl_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.lbl_hint)
         row4 = QHBoxLayout()
-        self.lbl_status = QLabel("未载入图像：先在文件栏勾选一张原始图")
+        self.lbl_status = QLabel("未载入图像：从上方「图像」下拉选一张原始图")
         self.lbl_status.setWordWrap(True)
         row4.addWidget(self.lbl_status, stretch=1)
         self.lbl_legend = QLabel(
@@ -422,13 +431,16 @@ class MaskWorkbench(QWidget):
         self.btn_preview.clicked.connect(self._preview_effect)
         row4.addWidget(self.btn_preview)
         self.scope_combo = QComboBox()
-        self.scope_combo.addItem("勾选的 0 个文件", "checked")
         self.scope_combo.addItem("当前图像", "current")
-        self.scope_combo.setCurrentIndex(0)      # 默认：勾选的文件
+        self.scope_combo.addItem("所有原始图", "all")
+        self.scope_combo.addItem("选择文件…", "choose")
+        self.scope_combo.setCurrentIndex(0)      # 默认：只动当前图
         self.scope_combo.setToolTip(
-            "生成掩膜 2D 的范围（默认勾选的文件；可换成当前图像）")
-        self.scope_combo.currentIndexChanged.connect(
-            lambda _i: self._update_generate_state())
+            "生成掩膜 2D 的范围：当前图像 / 所有原始图 / 自己勾选一个清单；"
+            "文件栏在这个工作台里是收起的")
+        self._scope_paths = []
+        self._scope_prev_index = 0
+        self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         row4.addWidget(self.scope_combo)
         self.btn_apply = QPushButton("生成掩膜 2D")
         self.btn_apply.setToolTip(
@@ -472,7 +484,7 @@ class MaskWorkbench(QWidget):
     def _update_status(self):
         self._status_timer.stop()
         if self.image is None or self.mask is None:
-            text = "未载入图像：先在文件栏勾选一张原始图"
+            text = "未载入图像：从上方「图像」下拉选一张原始图"
         else:
             st = mask_stats(self.mask)
             h, w = self.image.shape
@@ -490,12 +502,98 @@ class MaskWorkbench(QWidget):
         self.lbl_status.setText(text)
         self._update_generate_state()
 
+    def _raw_paths(self):
+        try:
+            return [s.path for s in gui_sources.all_sources(self.main)
+                    if s.kind == gui_sources.RAW]
+        except Exception:                              # noqa: BLE001
+            return []
+
     def _target_paths(self):
         """当前生成范围要写哪些原始图。"""
-        if self.scope_combo.currentData() == "checked":
-            return [s.path for s in gui_sources.checked_sources(self.main)
-                    if s.kind == gui_sources.RAW]
+        data = self.scope_combo.currentData()
+        if data == "all":
+            return self._raw_paths()
+        if data == "selected":
+            return list(self._scope_paths)
         return [str(self.image_path)] if self.image_path is not None else []
+
+    def _on_scope_changed(self, _index):
+        """选「选择文件…」→ 弹清单；取消就退回上一项。"""
+        if self.scope_combo.currentData() != "choose":
+            self._scope_prev_index = self.scope_combo.currentIndex()
+            self._update_generate_state()
+            return
+        chosen = self._choose_scope_paths()
+        if not chosen:
+            self.scope_combo.blockSignals(True)
+            self.scope_combo.setCurrentIndex(self._scope_prev_index)
+            self.scope_combo.blockSignals(False)
+            self._update_generate_state()
+            return
+        self._scope_paths = chosen
+        text = f"选择的 {len(chosen)} 个文件"
+        idx = self.scope_combo.findData("selected")
+        if idx < 0:
+            self.scope_combo.insertItem(
+                self.scope_combo.count() - 1, text, "selected")
+            idx = self.scope_combo.findData("selected")
+        else:
+            self.scope_combo.setItemText(idx, text)
+        self.scope_combo.blockSignals(True)
+        self.scope_combo.setCurrentIndex(idx)
+        self.scope_combo.blockSignals(False)
+        self._scope_prev_index = idx
+        self._update_generate_state()
+
+    def _choose_scope_paths(self):
+        """工作台内勾选要应用掩膜的文件（不再依赖文件栏）。"""
+        sources = [s for s in gui_sources.all_sources(self.main)
+                   if s.kind == gui_sources.RAW]
+        if not sources:
+            self._say("掩膜：文件栏里没有原始数据可选")
+            return []
+        prev = {str(Path(p).expanduser().resolve())
+                for p in self._scope_paths}
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择要应用掩膜的文件")
+        lay = QVBoxLayout(dialog)
+        lay.addWidget(QLabel("勾选要生成「掩膜后的 2D」的原始文件："))
+        listw = QListWidget(dialog)
+        for src in sources:
+            item = QListWidgetItem(src.display or Path(src.path).name)
+            item.setData(Qt.UserRole, src.path)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.Checked
+                if str(Path(src.path).expanduser().resolve()) in prev
+                else Qt.Unchecked)
+            listw.addItem(item)
+        lay.addWidget(listw, 1)
+        row = QHBoxLayout()
+        btn_all = QPushButton("全选")
+        btn_none = QPushButton("全不选")
+        btn_all.clicked.connect(
+            lambda: [listw.item(i).setCheckState(Qt.Checked)
+                     for i in range(listw.count())])
+        btn_none.clicked.connect(
+            lambda: [listw.item(i).setCheckState(Qt.Unchecked)
+                     for i in range(listw.count())])
+        row.addWidget(btn_all)
+        row.addWidget(btn_none)
+        row.addStretch(1)
+        ok = QPushButton("确定")
+        cancel = QPushButton("取消")
+        ok.clicked.connect(dialog.accept)
+        cancel.clicked.connect(dialog.reject)
+        row.addWidget(ok)
+        row.addWidget(cancel)
+        lay.addLayout(row)
+        if dialog.exec() != QDialog.Accepted:
+            return []
+        return [listw.item(i).data(Qt.UserRole)
+                for i in range(listw.count())
+                if listw.item(i).checkState() == Qt.Checked]
 
     def _update_generate_state(self):
         """空 mask / 没有目标 / 刚生成过同样的 mask → 按钮置灰。"""
@@ -616,14 +714,8 @@ class MaskWorkbench(QWidget):
         return [s for s in gui_sources.all_sources(self.main)
                 if s.kind == gui_sources.RAW]
 
-    def _first_checked_raw(self):
-        for s in gui_sources.checked_sources(self.main):
-            if s.kind == gui_sources.RAW:
-                return s.path
-        return None
-
     def _refresh_image_combo(self):
-        """把文件栏里的原始数据搬进下拉框；换图不重开窗口。"""
+        """把文件栏里的全部原始数据搬进下拉框；换图不重开窗口。"""
         raw = self._raw_sources()
         paths = tuple(s.path for s in raw)
         sig = (paths, str(self.image_path))
@@ -657,17 +749,6 @@ class MaskWorkbench(QWidget):
         path = self.image_combo.itemData(index)
         if not path or (self.image_path is not None
                         and Path(path) == Path(self.image_path)):
-            return
-        self.load_image(Path(path))
-
-    def _use_checked(self):
-        path = self._first_checked_raw()
-        if path is None:
-            self._say("掩膜：文件栏没有勾选的原始数据")
-            return
-        if (self.image_path is not None
-                and Path(path) == Path(self.image_path)):
-            self._update_status()
             return
         self.load_image(Path(path))
 
@@ -745,6 +826,7 @@ class MaskWorkbench(QWidget):
         掩膜跟几何走（与原位 mask 同一条规矩）：几何不一致时不认。
         该图自己的配方/本会话缓存优先，预设只作兜底。
         """
+        self._load_hot_params()      # 预设可能刚换了几何配置
         preset = preset or {}
         raw = str(preset.get("mask_recipe") or "").strip()
         geom = str(preset.get("geometry") or "")
@@ -1613,7 +1695,7 @@ class MaskWorkbench(QWidget):
         if self.image is None:
             QMessageBox.information(
                 self, "先载入图像",
-                "掩膜的形状要与积分图像一致；先在文件栏勾选一张原始图。")
+                "掩膜的形状要与积分图像一致；先从上方「图像」下拉选一张原始图。")
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "导入掩膜配方或通用掩膜",
@@ -1649,25 +1731,56 @@ class MaskWorkbench(QWidget):
             cb()
 
     def _wire_checked_count(self) -> None:
-        """文件栏勾选一变：更新生成范围里的数字和图像下拉。"""
+        """文件栏条目变化：更新生成范围计数和图像下拉。"""
         fl = getattr(self.main, "file_list", None)
         if fl is not None:
-            fl.itemChanged.connect(self._refresh_checked_count)
-        self._refresh_checked_count()
+            fl.itemChanged.connect(self._refresh_scope_items)
+        self._refresh_scope_items()
 
-    def _refresh_checked_count(self, *_args) -> None:
-        try:
-            n = len([s for s in gui_sources.checked_sources(self.main)
-                     if s.kind == gui_sources.RAW])
-        except Exception:                              # noqa: BLE001
-            n = 0
+    def _refresh_scope_items(self, *_args) -> None:
+        n = len(self._raw_paths())
         if hasattr(self, "scope_combo"):
-            idx = self.scope_combo.findData("checked")
+            idx = self.scope_combo.findData("all")
             if idx >= 0:
-                self.scope_combo.setItemText(
-                    idx, f"勾选的 {n} 个文件" if n else "勾选的 0 个文件")
+                self.scope_combo.setItemText(idx, f"所有原始图（{n}）")
         self._refresh_image_combo()
         self._update_generate_state()
+
+    # ── 检测参数按几何配置记忆（2026-11-11）──────────────────────
+    def _hot_widgets(self):
+        return {"window": self.adv_window, "ratio": self.adv_ratio,
+                "max_area": self.adv_max_area, "min_peak": self.adv_min_peak,
+                "grow": self.adv_grow, "n_sigma": self.n_sigma}
+
+    def _load_hot_params(self):
+        """按当前几何配置把参数填回控件；没存过就是默认值。"""
+        params = mask_params.load(getattr(self.main, "config_name", ""))
+        self._loading_hot = True
+        try:
+            for key, widget in self._hot_widgets().items():
+                widget.setValue(params[key])
+        finally:
+            self._loading_hot = False
+
+    def _save_hot_params(self):
+        if getattr(self, "_loading_hot", False):
+            return
+        params = {key: widget.value()
+                  for key, widget in self._hot_widgets().items()}
+        try:
+            mask_params.save(getattr(self.main, "config_name", ""), params)
+        except OSError:
+            pass                    # 记不住不影响本次检测
+
+    def _reset_hot_params(self):
+        self._loading_hot = True
+        try:
+            for key, widget in self._hot_widgets().items():
+                widget.setValue(mask_params.DEFAULTS[key])
+        finally:
+            self._loading_hot = False
+        self._save_hot_params()
+        self._say("掩膜检测参数：已恢复默认")
 
     def _create_masked2d(self, paths, *, label):
         made = []
@@ -1719,38 +1832,37 @@ class MaskWorkbench(QWidget):
         self._update_status()
         self._refresh_groups()
 
-    def _apply_to_checked(self):
-        """把当前掩膜生成到文件栏里勾选的每个原始数据上。"""
+    def _apply_to_paths(self, paths):
+        """把当前掩膜生成到指定的一组原始数据上（工作台内选择的范围）。"""
         if self.mask is None or self.image_path is None:
             return
         if not np.any(self.mask):
             self._say("掩膜为空：没有生成掩膜后的 2D")
             return
-        raw = [s for s in gui_sources.checked_sources(self.main)
-               if s.kind == gui_sources.RAW]
-        if not raw:
-            self._say("没有勾选的原始数据：先在文件栏勾上要应用掩膜的文件")
+        paths = [Path(p) for p in paths]
+        if not paths:
+            self._say("没有可应用的文件：先在范围里选文件")
             return
         label = self.mask_path.name if self.mask_path else "未导出配方"
         made = 0
         made_paths = []
-        for source in raw:
+        for path in paths:
             try:
-                self._create_masked2d([source.path], label=label)
+                self._create_masked2d([path], label=label)
                 made += 1
-                made_paths.append(source.path)
+                made_paths.append(path)
             except Exception as err:                   # noqa: BLE001
-                self._say(f"掩膜 2D 生成失败：{source.display}——{err}")
+                self._say(f"掩膜 2D 生成失败：{path.name}——{err}")
         if made_paths:
             self._uncheck_raw(made_paths)
             idx = self.scope_combo.findData("current")
             if idx >= 0:
-                # 勾选已清零：回到当前图像，按钮才能显示「已生成（无改动）」
+                # 批量生成完回到当前图像，按钮才能显示「已生成（无改动）」
                 self.scope_combo.setCurrentIndex(idx)
         st = mask_stats(self.mask)
         self.main.status_text.setText(
             f"掩膜后的 2D 已生成 {made} 条")
-        self._say(f"掩膜后的 2D：{made}/{len(raw)} 个文件"
+        self._say(f"掩膜后的 2D：{made}/{len(paths)} 个文件"
                        f"（{st['masked_pixels']} px，掩膜 {label}）"
                        "——在文件栏「掩膜后的 2D」里选它们再点 [1D]")
         self._update_status()
@@ -1778,10 +1890,10 @@ class MaskWorkbench(QWidget):
             if hasattr(self.main, "status_text"):
                 self.main.status_text.setText("掩膜为空：未生成产物")
             return
-        if self.scope_combo.currentData() == "checked":
-            self._apply_to_checked()
-        else:
+        if self.scope_combo.currentData() == "current":
             self._apply_to_main()
+        else:
+            self._apply_to_paths(self._target_paths())
         self._update_generate_state()
 
     def _preview_effect(self):

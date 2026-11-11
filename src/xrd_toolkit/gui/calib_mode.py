@@ -7,13 +7,15 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QFileDialog, QMainWindow
 
 from xrd_toolkit import config
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import CALIB_PANEL_RESERVE_PX
 from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _close_calib_panel, _open_calib_panel)
 from xrd_toolkit.gui.config_ops import _suggest_config_key
+from xrd_toolkit.gui.files.model import FILE_FILTER
 from xrd_toolkit.gui.panel_layout import _set_bottom_strip_visible
 from xrd_toolkit.gui.panel_state import _log
 
@@ -47,12 +49,69 @@ def _refresh_config_name_prefill(window: QMainWindow) -> None:
     box.setText(_default_config_name(window))
     window._calib_name_auto = box.text()
 
+def _refresh_calib_file_combo(window: QMainWindow) -> None:
+    """把文件栏里的原始数据搬进校准页「标样文件」下拉。
+
+    保留当前 `calib_path`；不在文件栏的（[打开…] 临时选的）也补一条，
+    避免下拉和实际标样对不上。文件栏收起后，这个下拉就是唯一入口。
+    """
+    combo = getattr(window, "calib_file_combo", None)
+    if combo is None:
+        return
+    keep = str(getattr(window, "calib_path", None) or "")
+    combo.blockSignals(True)
+    combo.clear()
+    for src in gui_sources.all_sources(window):
+        if src.kind == gui_sources.RAW:
+            combo.addItem(src.display or Path(src.path).name, src.path)
+    if keep and combo.findData(keep) < 0:
+        combo.addItem(f"{Path(keep).name}（不在文件栏）", keep)
+    idx = combo.findData(keep) if keep else -1
+    if idx < 0 and combo.count():
+        idx = 0
+    combo.setCurrentIndex(idx)
+    combo.blockSignals(False)
+    if combo.count() == 0:
+        combo.addItem("（还没有原始数据：点 [打开…] 选标样）", "")
+
+
+def _on_calib_file_changed(window: QMainWindow, index: int) -> None:
+    """下拉换标样：立即开/换校准面板（不再依赖文件栏勾选）。"""
+    combo = getattr(window, "calib_file_combo", None)
+    path = combo.itemData(index) if combo is not None else None
+    if not path:
+        return
+    path = Path(path)
+    if (getattr(window, "calib_dock", None) is not None
+            and getattr(window, "calib_key", None) == f"校准|{path}"):
+        return
+    _open_calib_panel(window, path)
+    if getattr(window, "calib_dock", None) is not None:
+        _refresh_config_name_prefill(window)
+        _log(window, f"标样文件：{path.name}")
+
+
+def _choose_calib_file(window: QMainWindow) -> None:
+    """[打开…]：选一张不在文件栏里的标样，直接开校准面板。"""
+    start = getattr(window, "calib_path", None) or Path.home()
+    path, _ = QFileDialog.getOpenFileName(
+        window, "选择标样文件", str(start), FILE_FILTER)
+    if not path:
+        return
+    window.calib_path = Path(path)
+    _refresh_calib_file_combo(window)
+    _open_calib_panel(window, Path(path))
+    if getattr(window, "calib_dock", None) is not None:
+        _refresh_config_name_prefill(window)
+        _log(window, f"标样文件：{Path(path).name}")
+
+
 def _enter_calib(window: QMainWindow) -> None:
     """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
 
-    没勾文件只记日志提示（不崩）——用户勾好文件后点 [定位束心并精修]
-    也能开面板。宽度只在够得着时拉：给绘图区留 CALIB_PANEL_RESERVE_PX
-    （点环选点是在图上做的，坞太宽就没法点了）。
+    没选标样只记日志提示（不崩）——校准页顶部有「标样文件」下拉和
+    [打开…]，选了就开面板。宽度只在够得着时拉：给绘图区留
+    CALIB_PANEL_RESERVE_PX（点环选点是在图上做的，坞太宽就没法点了）。
     """
     # 先让参数坞露出来再量宽：开局它是收起的（_clear_entrance），
     # 隐藏时量到的是旧值/默认值 → 拉宽和"退出还原"都会拿假数字
@@ -63,17 +122,27 @@ def _enter_calib(window: QMainWindow) -> None:
     # 整条隐藏（2026-11-05，与四个中央工作台同一口径）。放在"没勾文件"
     # 提前返回之前——没文件也要能退出，退出时统一恢复。
     _set_bottom_strip_visible(window, False)
-    # 进校准露坞同理记意图（见 app._switch_entrance 的同款记账）：不记的话
-    # 意图还停在开局的 False，窗口状态一变（全屏/最小化恢复）就会被
-    # _resync_docks 收回去
+    # 文件栏同样收起（2026-11-11）：校准页自带「标样文件」下拉，不再依赖
+    # 文件栏勾选；退出时按进入前的状态恢复。
     if hasattr(window, "_dock_intent"):
+        if getattr(window, "_calib_dock_saved", None) is None:
+            window._calib_dock_saved = {
+                "文件": window._dock_intent.get("文件", True)}
+        window._dock_intent["文件"] = False
+        # 进校准露坞同理记意图（见 app._switch_entrance 的同款记账）：不记
+        # 的话意图还停在开局的 False，窗口状态一变（全屏/最小化恢复）就会
+        # 被 _resync_docks 收回去。和文件栏一起 resync，避免先把参数坞
+        # 按旧意图收起来。
         window._dock_intent["参数"] = True
+        from xrd_toolkit.gui.app import _resync_docks   # 破循环
+        _resync_docks(window)
     # 出口按钮（坞顶那一行）：本模式的显式退出口，进来就亮出来。
     # 放在"没勾文件"的提前返回之前——没文件也要能退出去
     window.calib_exit_btn.setVisible(True)
+    _refresh_calib_file_combo(window)
     path = _calib_standard_path(window)
     if path is None:
-        _log(window, "请先在文件列表勾选标样文件")
+        _log(window, "请在上方「标样文件」选择一张原始图，或点 [打开…]")
         return
     _open_calib_panel(window, path)
     _refresh_config_name_prefill(window)   # 「条目名称」跟着这个标样重填
@@ -85,6 +154,12 @@ def _exit_calib(window: QMainWindow) -> None:
     _close_calib_panel(window)
     _restore_dock_width(window)
     _set_bottom_strip_visible(window, True)
+    saved = getattr(window, "_calib_dock_saved", None)
+    if saved:
+        window._dock_intent.update(saved)
+        window._calib_dock_saved = None
+        from xrd_toolkit.gui.app import _resync_docks   # 破循环
+        _resync_docks(window)
 
 def _widen_dock_for_calib(window: QMainWindow) -> None:
     """校准模式下把参数坞拉宽到"放下校准页所有内容"（不超过窗口上限）。"""

@@ -398,7 +398,31 @@ class TestCalibration(unittest.TestCase):
             self.assertEqual(w.param_stack.currentIndex(),
                              w.PARAM_PAGES["校准"])
             self.assertIsNone(getattr(w, "calib_dock", None))
-            self.assertIn("请先在文件列表勾选标样文件", self._logs(w))
+            self.assertIn("请在上方「标样文件」选择一张原始图", self._logs(w))
+        finally:
+            w.close()
+
+    def test_standard_selector_lists_raw_files_and_switches(self):
+        """校准页自带的「标样文件」下拉：列出原始图、换图换面板。"""
+        w = create_window()
+        try:
+            w.show()
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"], select=False)
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.calib_btn.click()
+                QApplication.processEvents()
+                combo = w.calib_file_combo
+                self.assertGreaterEqual(combo.count(), 2)
+                self.assertIsNotNone(w.calib_dock)
+                self.assertIn("fake_a.tif", w.calib_dock.windowTitle())
+                idx = combo.findData("data/fake_b.tif")
+                self.assertGreaterEqual(idx, 0)
+                combo.setCurrentIndex(idx)
+                QApplication.processEvents()
+                self.assertIn("fake_b.tif", w.calib_dock.windowTitle())
+                self.assertFalse(w.file_dock.isVisible(),
+                                 "校准模式下文件栏应收起")
         finally:
             w.close()
 

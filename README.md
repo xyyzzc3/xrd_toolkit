@@ -100,7 +100,7 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
 - **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
 - **Desktop app over the same engine** — five stage entrances, a live parameter panel, on-curve peak finding with a peak table, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF export.
-- **Four analysis workbenches** — Mask (paint + hot spots + recipes → Mask 2D product), phase screening (CIF library, element filter, multi-phase overlay, CSV), full-pattern refinement (extra phases, LaB₆ instrument baseline, adopt-as-panel) and the in-situ three-phase batch (per-frame table + trend plot). They share the same engines as the CLI scripts.
+- **Four analysis workbenches** — Mask (paint + hot spots + recipes → Mask 2D product), phase screening (CIF library, element filter, multi-phase overlay, CSV), full-pattern refinement (extra phases, LaB₆ instrument baseline, adopt-as-panel) and the in-situ three-phase batch (per-frame table + trend plot). They share the same engines as the CLI scripts. Entering any workbench collapses the file, parameter and log docks; files and curves are chosen inside the workbench and the previous layout returns on exit.
 - **One-click analysis report** — collects the current session's 1D curve, peak table, single-peak fits, W–H, phase screening, whole-pattern refinement and in-situ three-phase batch into a self-contained HTML (figures embedded; print to PDF from the browser). Missing sections are marked "not run", and the report states the quantitative caveats (wt% vs. f_rich, background bias, minority-phase cells).
 - **Named project presets** — a preset bundles geometry, second-phase CIF, in-situ frame directory/mask, the phase library, plus optional **processing recipe** (background/smoothing/crop snapshot) and **mask recipe** (`.mask.npz` path); switch/save/manage from the parameter dock. A processing recipe is only pre-selected on switch and takes effect when you click `[套用]`; a mask recipe is a per-image fallback in the mask workbench. The built-in LMFP preset is read-only; user presets live in `presets_user.json` and the last-used one is restored on startup. A geometry change made outside the preset (e.g. a fresh calibration) is flagged as "current settings" in the dropdown and can be folded back into a user preset from the manager.
 - **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is part of the core dependencies since 0.2, since the GUI workbenches need it — the `[simulation]` extra remains as an alias).
@@ -146,15 +146,17 @@ Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the c
 ## Mask and in-situ three-phase batch
 
 The toolbar now has a central **Mask** workbench next to **Calibrate**
-(the parameter and log docks collapse while it is open, and come back on
-exit): it opens on the first checked raw image (switch images from a
-drop-down), draws/erases beamstop, module gaps and hot pixels, auto-detects
-isolated hot pixels with a locate-changes view, previews the 1D pattern before/after
-masking, and export a `.mask.npz` *recipe* (mask + provenance layers +
+(the file, parameter and log docks collapse while it is open, and come back
+on exit): it opens on the first raw image (a drop-down lists every raw file),
+draws/erases beamstop, module gaps and hot pixels, auto-detects isolated hot
+pixels with a locate-changes view (thresholds are remembered per geometry
+configuration and can be reset), previews the 1D pattern before/after
+masking, and exports a `.mask.npz` *recipe* (mask + provenance layers +
 metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask
 writes a small **Mask 2D** product (raw image + mask manifest) into the file
-dock, for the current image or every checked file; double-click it for a 2D
-view, or integrate it to 1D. Masked and unmasked 1D results are distinct
+dock, for the current image, every raw file, or a hand-picked list; files
+whose shape does not match the mask are skipped with a log entry.
+Double-click it for a 2D view, or integrate it to 1D. Masked and unmasked 1D results are distinct
 sources that can be compared side by side.
 
 `scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases

@@ -30,7 +30,7 @@ from xrd_toolkit.gui import mask_editor as gui_mask_editor  # noqa: E402
 from xrd_toolkit.gui.image_utils import downsample_max  # noqa: E402
 from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
 from xrd_toolkit.gui.plot import runners as gui_runners  # noqa: E402
-from xrd_toolkit.services import masked2d, stage_cache  # noqa: E402
+from xrd_toolkit.services import mask_params, masked2d, stage_cache  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
 
@@ -251,15 +251,13 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._apply_to_main()
         self.assertEqual(self._products()[0]["label"], "my_mask.mask.npz")
 
-    def test_apply_to_checked_files(self):
+    def test_apply_to_paths(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)
-        self.w.add_files([str(self.img_path), str(other)], select=True)
-        QApplication.processEvents()
         self._open()
         self.ed.load_image(self.img_path)
         self.ed._fill_rect((10, 10), (20, 20), True)
-        self.ed._apply_to_checked()
+        self.ed._apply_to_paths([self.img_path, other])
         self.assertEqual(len(self._products()), 2)
 
     def test_preview_button_draws_before_after_without_product(self):
@@ -458,23 +456,42 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._update_status()
         self.assertTrue(self.ed.btn_apply.isEnabled())
 
-    def test_scope_combo_counts_checked_files(self):
+    def test_scope_combo_all_raw_files(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)
         self._open()
         self.ed.load_image(self.img_path)
-        chk_idx = self.ed.scope_combo.findData("checked")
-        self.assertIn("0", self.ed.scope_combo.itemText(chk_idx))
+        all_idx = self.ed.scope_combo.findData("all")
+        self.assertIn("0", self.ed.scope_combo.itemText(all_idx))
         self.w.add_files([str(self.img_path), str(other)], select=True)
         QApplication.processEvents()
-        self.assertIn("2", self.ed.scope_combo.itemText(chk_idx))
+        self.assertIn("2", self.ed.scope_combo.itemText(all_idx))
         self.ed._fill_rect((10, 10), (20, 20), True)
         self.ed._update_status()
-        self.ed.scope_combo.setCurrentIndex(chk_idx)      # 勾选范围
+        self.ed.scope_combo.setCurrentIndex(all_idx)      # 所有原始图
         self.ed.btn_apply.click()
         QApplication.processEvents()
         self.assertEqual(len(self._products()), 2)
         self.assertEqual(self.ed.btn_apply.text(), "已生成（无改动）")
+
+    def test_hot_params_remembered_per_geometry(self):
+        """检测参数按几何配置落盘：改了记住，[恢复默认] 清回去。"""
+        self._open()
+        store = Path(self._td.name) / "mask_params.json"
+        with mock.patch.object(gui_mask_editor.mask_params, "STORE", store):
+            self.ed.adv_ratio.setValue(12.0)
+            QApplication.processEvents()
+            self.assertEqual(
+                mask_params.load("lmfp1_lab6")["ratio"], 12.0)
+            self.ed.adv_ratio.blockSignals(True)   # 假装新会话重新载入
+            self.ed.adv_ratio.setValue(8.0)
+            self.ed.adv_ratio.blockSignals(False)
+            self.ed._load_hot_params()
+            self.assertEqual(self.ed.adv_ratio.value(), 12.0)
+            self.ed._reset_hot_params()
+            self.assertEqual(self.ed.adv_ratio.value(), 8.0)
+            self.assertEqual(
+                mask_params.load("lmfp1_lab6")["ratio"], 8.0)
 
     def test_flush_overlay_blits_without_error(self):
         self._open()
@@ -528,7 +545,7 @@ class TestMaskEditor(unittest.TestCase):
         self._open()
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
-        self.assertTrue(self.w.file_dock.isVisible())
+        self.assertFalse(self.w.file_dock.isVisible())
         self.assertEqual(self.w.mode_label.text(), "掩膜模式")
         self.assertEqual(self.w.mask_btn.text(), "退出掩膜")
         self.assertTrue(self.w._bottom_strip.isHidden(),
@@ -537,6 +554,7 @@ class TestMaskEditor(unittest.TestCase):
         QApplication.processEvents()
         self.assertTrue(self.w.param_dock.isVisible())
         self.assertTrue(self.w.log_dock.isVisible())
+        self.assertTrue(self.w.file_dock.isVisible())
         self.assertEqual(self.w.mode_label.text(), "分析模式")
         self.assertEqual(self.w.mask_btn.text(), "掩膜")
         self.assertFalse(self.w._bottom_strip.isHidden(),

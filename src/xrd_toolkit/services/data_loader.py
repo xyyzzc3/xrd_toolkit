@@ -37,3 +37,29 @@ def load_diffraction_image(path: str) -> np.ndarray:
 
     # 转成浮点数，防止后续整数除法截断小数
     return image.data.astype(np.float64)
+
+
+def image_shape(path: str) -> tuple:
+    """只读图像头拿 (行, 列)，不读像素（批量掩膜前的形状检查用）。
+
+    对 `.mask2d.npz` 读 manifest 里记录的形状；对普通衍射图用 fabio
+    打开后立刻取 shape，不碰图像数据。
+    """
+    p = str(path)
+    if p.lower().endswith(".mask2d.npz"):
+        from xrd_toolkit.services import masked2d
+        meta = masked2d.meta_of(p)
+        shape = tuple(int(x) for x in (meta.get("shape") or ()))
+        if len(shape) != 2:
+            raise ValueError(f"masked 2D 缺少图像形状：{path}")
+        return shape
+    image = fabio.open(p)
+    try:
+        return tuple(int(x) for x in image.shape[:2])
+    finally:
+        close = getattr(image, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:                      # noqa: BLE001
+                pass

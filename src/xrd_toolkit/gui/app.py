@@ -498,7 +498,8 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     window._mask_prev_entrance = getattr(window, "_last_entrance", None)
     window._mask_dock_saved = {
         name: window._dock_intent.get(name, False)
-        for name in ("参数", "日志")}
+        for name in ("文件", "参数", "日志")}
+    window._dock_intent["文件"] = False
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -598,7 +599,8 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     window._refine_prev_entrance = getattr(window, "_last_entrance", None)
     window._refine_dock_saved = {
         name: window._dock_intent.get(name, False)
-        for name in ("参数", "日志")}
+        for name in ("文件", "参数", "日志")}
+    window._dock_intent["文件"] = False
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -677,7 +679,8 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     window._phase_prev_entrance = getattr(window, "_last_entrance", None)
     window._phase_dock_saved = {
         name: window._dock_intent.get(name, False)
-        for name in ("参数", "日志")}
+        for name in ("文件", "参数", "日志")}
+    window._dock_intent["文件"] = False
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -755,7 +758,8 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
     window._insitu_prev_entrance = getattr(window, "_last_entrance", None)
     window._insitu_dock_saved = {
         name: window._dock_intent.get(name, False)
-        for name in ("参数", "日志")}
+        for name in ("文件", "参数", "日志")}
+    window._dock_intent["文件"] = False
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)

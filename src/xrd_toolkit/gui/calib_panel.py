@@ -59,12 +59,20 @@ def _load_image(path):
 
 
 def _calib_standard_path(window: QMainWindow):
-    """标样 = 勾选的第一个**原始数据**文件（列表顺序第一个对号条目）。
+    """标样文件：校准页「标样文件」下拉 > 当前 calib_path > 勾选的第一张原始图。
 
+    2026-11-11 起文件栏在校准模式下收起，标样由校准页自己的下拉选择；
+    旧口径（勾选的第一个原始数据）保留为兜底，兼容脚本/旧测试。
     产物条目跳过：校准要的是原始图像（要读像素、找环心），产物是 1D
-    曲线——勾了产物不算数（用户 2026-09-25 起文件栏里有这种条目）。
-    返回 Path 或 None（没有可用的）。
+    曲线——勾了产物不算数。
     """
+    path = getattr(window, "calib_path", None)
+    if path:
+        return Path(path)
+    combo = getattr(window, "calib_file_combo", None)
+    data = combo.currentData() if combo is not None else None
+    if data:
+        return Path(data)
     for src in gui_sources.checked_sources(window):
         if src.kind == gui_sources.RAW:
             return Path(src.path)
