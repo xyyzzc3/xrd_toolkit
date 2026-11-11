@@ -363,6 +363,57 @@ class TestCompoundStarts(unittest.TestCase):
                       smoother)
 
 
+class TestDualStartPolicy(unittest.TestCase):
+    """2026-11-11：自动双起点——首解收敛就跳过 CIF 端元那一次。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from xrd_toolkit.simulation import load_structure
+        cls.rich = load_structure(str(
+            ROOT / "data" / "structures" / "LiMn0.6Fe0.4PO4_olivine.cif"))
+        cls.poor = load_structure(str(
+            ROOT / "data" / "structures" / "Mn0.6Fe0.4PO4_heterosite.cif"))
+        cls.al = object()
+        cls.seed = {"rich": (10.30, 6.00, 4.71),
+                    "poor": (10.10, 5.81, 4.78)}
+
+    def _run(self, results, **kwargs):
+        with mock.patch.object(
+                insitu, "load_frame",
+                return_value=(np.array([1.0, 2.0]), np.array([1.0, 2.0]),
+                              np.zeros(2), {})), \
+             mock.patch.object(insitu, "_fit_once",
+                               side_effect=results) as fit:
+            res, timers = insitu._fit_one(
+                "frame.tif", self.rich, self.poor, self.al, {}, 1.0,
+                None, None, self.seed, max_nfev=5, **kwargs)
+        return res, timers, fit
+
+    def test_converged_seed_skips_second_start(self):
+        good = _result(success=True, rwp=2.1)
+        res, timers, fit = self._run([good], dual_start="auto")
+        self.assertIs(res, good)
+        self.assertEqual(fit.call_count, 1)
+        self.assertEqual(timers["dual_start"], 0)
+
+    def test_unconverged_seed_still_runs_both_starts(self):
+        seed_res = _result(success=False, rwp=2.62)
+        cif_res = _result(success=True, rwp=2.30)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="auto")
+        self.assertIs(res, cif_res, "CIF 起点 Rwp 更低，应取它")
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(timers["dual_start"], 1)
+
+    def test_always_keeps_old_behaviour(self):
+        seed_res = _result(success=True, rwp=2.1)
+        cif_res = _result(success=True, rwp=2.05)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="always")
+        self.assertIs(res, cif_res)
+        self.assertEqual(fit.call_count, 2)
+
+
 class TestExtraPhases(unittest.TestCase):
     def test_poor_cell_free_and_al_per_reflection(self):
         poor = SimpleNamespace(lattice=SimpleNamespace(

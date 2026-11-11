@@ -8,8 +8,10 @@
   * Al         集流体参考相（立方，a 固定 4.061 Å；峰强逐反射自由）
 
 每帧：读图 → mask → 1D 积分 → 自动基线 → 三相结构精修。
-第一帧用较多迭代充分收敛；后续帧从上一帧种子和 CIF 端元各跑一次
-（2026-11-03 双起点），取 Rwp 更低者；Rwp 打平时取晶胞变化小的解。
+第一帧用较多迭代充分收敛；后续帧从上一帧种子起步，严格收敛就采用；
+不收敛时再补跑 CIF 端元起点（2026-11-11 自动双起点，2026-11-03 版本的
+每帧双起点仍可用 `dual_start="always"`），取 Rwp 更低者；Rwp 打平时
+取晶胞变化小的解。
 不收敛/高 Rwp/晶胞跳变的帧标异常，不中断；晶胞跳变后连续 2 帧
 落在同一个新晶胞时重锁种子，避免两相区一跳就永远用旧种子。
 
@@ -388,12 +390,19 @@ def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
              max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
              background_model=None, background_order=None,
-             intensity_poly=None):
-    """一帧：读图/积分/背景 + **双起点**三相精修 + 计时。
+             intensity_poly=None, dual_start="auto"):
+    """一帧：读图/积分/背景 + 三相精修 + 计时。
 
     2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
     拉偏”的局部极小（frame 34 实测 Rwp 2.62 / poor_a 10.13；从 CIF 端元
-    再起一次是 2.30 / 9.87）。两个起点都跑，按 `_choose_fit` 取更好的。
+    再起一次是 2.30 / 9.87）。所以默认跑**双起点**，按 `_choose_fit`
+    取更好的。
+
+    2026-11-11（用户第 16 条：原位提速）：`dual_start="auto"` 先只跑
+    上一帧种子；这一解**严格收敛**就采用，不再白跑 CIF 端元起点——
+    81 帧里绝大多数帧都收敛，省掉一半拟合时间。首解没严格收敛
+    （两相区常见的 exit flag=False）时仍跑两个起点，保住稳健性。
+    "always" = 旧的每帧双起点；"off" 只跑种子（对照/调试用）。
     """
     t0 = time.perf_counter()
     t, y, bg, timers = load_frame(
@@ -411,9 +420,17 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
                          background_order=background_order,
                          intensity_poly=intensity_poly)
     res_cif = None
-    # 第一帧种子就是 CIF，不用白跑一遍；其余帧都跑双起点。
-    if not (_cells_close(seed_rich, cif_rich, 1e-4)
-            and _cells_close(seed_poor, cif_poor, 1e-4)):
+    cif_is_seed = (_cells_close(seed_rich, cif_rich, 1e-4)
+                   and _cells_close(seed_poor, cif_poor, 1e-4))
+    mode = str(dual_start or "auto")
+    if mode == "always":
+        need_second = not cif_is_seed
+    elif mode == "off":
+        need_second = False
+    else:
+        need_second = (not cif_is_seed
+                       and not bool(getattr(res_seed, "success", True)))
+    if need_second:
         res_cif = _fit_once(t, y, bg, rich, poor, al, lam, inst,
                             cif_rich, cif_poor, max_nfev,
                             background_model=background_model,
@@ -422,6 +439,7 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     res = _choose_fit(res_seed, res_cif, seed)
     timers["fit"] = time.perf_counter() - t3
     timers["total"] = time.perf_counter() - t0
+    timers["dual_start"] = int(res_cif is not None)
     return res, timers
 
 
