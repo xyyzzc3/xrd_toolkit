@@ -46,6 +46,25 @@ def structures_dir() -> Path:
     return ROOT / "data" / "structures"
 
 
+def phase_library_dir() -> Path:
+    """内置精选相库目录（2026-11-11 用户第 10 条）。
+
+    随包带一套常见无机/电池相（几十张 CIF），物相工作台的 [内置相库]
+    直接指向这里；用户自己的相库仍用 [选目录…]。打包后在
+    `xrd_toolkit/data/phase_library`（spec 与 structures 同一套），
+    开发时在仓库根 `data/phase_library`；CI `pip install .` 后也一样
+    加当前目录兜底。
+    """
+    packaged = Path(__file__).resolve().parent / "data" / "phase_library"
+    if packaged.is_dir():
+        return packaged
+    for base in (ROOT, Path.cwd()):
+        candidate = base / "data" / "phase_library"
+        if candidate.is_dir():
+            return candidate
+    return ROOT / "data" / "phase_library"
+
+
 def default_outputs_dir(frozen: bool = None, platform: str = None,
                         home: Path = None) -> Path:
     """产物根目录的默认值（纯函数——三个分支可直接单测）。

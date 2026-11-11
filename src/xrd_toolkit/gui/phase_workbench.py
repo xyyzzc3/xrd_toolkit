@@ -249,6 +249,12 @@ class PhaseWorkbench(QWidget):
         self.lib_btn = QPushButton("选目录…")
         self.lib_btn.clicked.connect(self._choose_lib)
         top.addWidget(self.lib_btn)
+        self.bundled_lib_btn = QPushButton("内置相库")
+        self.bundled_lib_btn.setToolTip(
+            "软件自带的精选相库（常见无机物/电池材料，约 40 张 CIF）；"
+            "自己的相库用 [选目录…]")
+        self.bundled_lib_btn.clicked.connect(self._use_bundled_library)
+        top.addWidget(self.bundled_lib_btn)
         root.addLayout(top)
 
         row2 = QHBoxLayout()
@@ -540,6 +546,17 @@ class PhaseWorkbench(QWidget):
             self._set_status("当前焦点不是 1D 图；请在下拉里选一条 1D 曲线")
             return
         self.curve_combo.setCurrentIndex(idx)
+
+    def _use_bundled_library(self):
+        """[内置相库]：切到随包的精选相库（2026-11-11 用户第 10 条）。"""
+        self.lib_dir = paths.phase_library_dir()
+        self._refresh_lib_label()
+        self.rows = []
+        self.table.setRowCount(0)
+        self.send_btn.setEnabled(False)
+        self.best_label.setText("还没有筛相")
+        self.best_label.setStyleSheet("color: gray;")
+        self._set_status("已切换到内置精选相库，点 [开始筛相]")
 
     def _choose_lib(self):
         chosen = QFileDialog.getExistingDirectory(

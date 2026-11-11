@@ -69,6 +69,9 @@ datas += [(str(ROOT / "docs" / "使用说明.html"), "xrd_toolkit"),
           (str(HERE / "icon.png"), "xrd_toolkit")]
 # ⑤ 参考 CIF：精修 / 物相 / 原位三个工作台的默认相库（paths.structures_dir）
 datas += [(str(ROOT / "data" / "structures"), "xrd_toolkit/data/structures")]
+# ⑤b 内置精选相库（2026-11-11 用户第 10 条，paths.phase_library_dir）
+datas += [(str(ROOT / "data" / "phase_library"),
+           "xrd_toolkit/data/phase_library")]
 # ⑥ pymatgen（CIF 解析、结构因子；2026-10-30 起是 GUI 分析工作台的核心依赖）
 datas += collect_data_files("pymatgen")
 binaries = collect_dynamic_libs("spglib")

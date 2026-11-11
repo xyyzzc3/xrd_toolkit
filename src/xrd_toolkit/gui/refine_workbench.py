@@ -217,6 +217,11 @@ class RefineWorkbench(QWidget):
         self.open_cif_btn.setToolTip("从任意位置加入一张 CIF 结构")
         self.open_cif_btn.clicked.connect(self._open_cif)
         top.addWidget(self.open_cif_btn)
+        self.bundled_lib_btn = QPushButton("内置相库")
+        self.bundled_lib_btn.setToolTip(
+            "切到软件自带的精选相库（常见无机物/电池材料）")
+        self.bundled_lib_btn.clicked.connect(self._use_bundled_library)
+        top.addWidget(self.bundled_lib_btn)
         self.lambda_label = QLabel("λ")
         self.lambda_label.setToolTip("波长取参数面板顶部选中的几何配置")
         top.addWidget(self.lambda_label)
@@ -526,6 +531,14 @@ class RefineWorkbench(QWidget):
             if idx >= 0:
                 self.cif_combo.setCurrentIndex(idx)
         self._set_status("已选好曲线与结构，点 [开始精修]")
+
+    def _use_bundled_library(self):
+        """[内置相库]：结构下拉切到随包的精选相库（2026-11-11 第 10 条）。"""
+        self.lib_dir = paths.phase_library_dir()
+        self.refresh_cifs()
+        count = (len(list(self.lib_dir.glob("*.cif")))
+                 if self.lib_dir.is_dir() else 0)
+        self._set_status(f"已切换到内置精选相库（{count} 张 CIF）")
 
     def _open_cif(self):
         start = paths.structures_dir()

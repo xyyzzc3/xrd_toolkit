@@ -700,9 +700,15 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
    不必先在 1D 页出图。</li>
 <li>点工具栏 <code>[物相]</code>。<strong>确认</strong>：中央换成「物相工作台」，参数坞/日志坞收起。</li>
 <li>选曲线（下拉里选；<code>[用当前图]</code> 取焦点那张——焦点不是 1D 时，若下拉
-   只有一条就直接选它，否则会提示在下拉里选），选相库目录：默认
-   <code>data/structures</code>，也可以 <code>[选目录…]</code> 指向自己的 CIF 库。当前项目
-   预设里 <code>Al_metal.cif</code> 不参与主相候选（只作集流体第二相）。</li>
+   只有一条就直接选它，否则会提示在下拉里选），选相库：
+   <ul>
+   <li><strong>默认</strong>：当前项目预设的参考结构目录（LMFP 预设是 <code>data/structures</code>）。
+     当前预设里 <code>Al_metal.cif</code> 不参与主相候选（只作集流体第二相）。</li>
+   <li><strong><code>[内置相库]</code></strong>：软件自带的精选相库（<code>data/phase_library</code>，约 40 张
+     常见无机物/电池材料/集流体/标样；随包发布，离线可用）。做通用样品
+     筛选时先点它；来源与哪些是标准原型生成的结构见库里的 <code>SOURCES.md</code>。</li>
+   <li><strong><code>[选目录…]</code></strong>：指向你自己的 CIF 库（完整库、课题专用库都走这里）。</li>
+   </ul></li>
 <li><strong>元素过滤</strong>（可选）：点 <code>[周期表…]</code> 打开元素周期表，点元素格子勾选
    （再点一下取消；当前 LMFP 示例：<code>Li Mn Fe P O</code>；留空 = 不过滤），
    确定后写回左边的元素表；也可以直接手输。只保留元素全部落在表里的
@@ -750,7 +756,8 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
    「精修工作台」，参数坞/日志坞收起。曲线下拉也列文件栏里的「1D 产物」
    与「处理产物」（处理后的曲线可直接精修，2026-11-11 起）。</li>
 <li>顶部选曲线（<code>[用当前图]</code>）与结构 CIF：默认列出 <code>data/structures</code>，
-   也可 <code>[打开 CIF…]</code>。右侧显示当前波长 λ。</li>
+   也可 <code>[内置相库]</code> 切到随包精选库、或 <code>[打开 CIF…]</code> 从任意位置加入。
+   右侧显示当前波长 λ。</li>
 <li>选背景：默认「自动基线」+ 窗口 0.20°；也可以选「无」。精修用的是
    这条 1D 曲线的<strong>积分数据</strong>，背景由工作台自己估计，不会叠加处理页的
    扣背景结果。</li>

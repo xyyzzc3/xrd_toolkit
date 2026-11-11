@@ -1,0 +1,68 @@
+#------------------------------------------------------------------------------
+# 2026-10-23: replaced the previous derived olivine model (P1 expanded,
+# a=10.236 Å — the cell was wrong by ~1.4%) with the experimental
+# entry COD 9004883 (Losey & Rakovan, Can. Mineral. 2004), Pbnm.
+# Axis conversion: axis order (b,c,a) applied: a=10.3826 b=6.0499 c=4.7138; written as P1 (all sites explicit).
+# Source: Crystallography Open Database (COD), public domain; please
+# cite the original publication for COD 9004883.
+# 2026-10-27: Mn:Fe changed from ~1:1 (COD entry) to 6:4 per the
+# sample composition; M-site occupancies set to Mn 0.6 / Fe 0.4.
+#------------------------------------------------------------------------------
+# generated using pymatgen
+data_Li4Mn2.4Fe1.6P4O16
+_symmetry_space_group_name_H-M   'P 1'
+_cell_length_a   10.38260000
+_cell_length_b   6.04990000
+_cell_length_c   4.71380000
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   1
+_chemical_formula_structural   Li4Mn2.4Fe1.6P4O16
+_chemical_formula_sum   'Li4 Mn2.4 Fe1.6 P4 O16'
+_cell_volume   296.09118012
+_cell_formula_units_Z   1
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  Li  Li0  1  0.00000000  0.00000000  0.00000000  1.0
+  Li  Li1  1  0.00000000  0.50000000  0.00000000  1.0
+  Li  Li2  1  0.50000000  0.50000000  0.50000000  1.0
+  Li  Li3  1  0.50000000  0.00000000  0.50000000  1.0
+  Mn  Mn4  1  0.28199000  0.25000000  0.97362000  0.600
+  Fe  Fe5  1  0.28199000  0.25000000  0.97362000  0.400
+  Mn  Mn6  1  0.71801000  0.75000000  0.02638000  0.600
+  Fe  Fe7  1  0.71801000  0.75000000  0.02638000  0.400
+  Mn  Mn8  1  0.21801000  0.75000000  0.47362000  0.600
+  Fe  Fe9  1  0.21801000  0.75000000  0.47362000  0.400
+  Mn  Mn10  1  0.78199000  0.25000000  0.52638000  0.600
+  Fe  Fe11  1  0.78199000  0.25000000  0.52638000  0.400
+  P  P12  1  0.09364000  0.25000000  0.41380000  1.0
+  P  P13  1  0.90636000  0.75000000  0.58620000  1.0
+  P  P14  1  0.40636000  0.75000000  0.91380000  1.0
+  P  P15  1  0.59364000  0.25000000  0.08620000  1.0
+  O  O16  1  0.09690000  0.25000000  0.73660000  1.0
+  O  O17  1  0.90310000  0.75000000  0.26340000  1.0
+  O  O18  1  0.40310000  0.75000000  0.23660000  1.0
+  O  O19  1  0.59690000  0.25000000  0.76340000  1.0
+  O  O20  1  0.45620000  0.25000000  0.20890000  1.0
+  O  O21  1  0.54380000  0.75000000  0.79110000  1.0
+  O  O22  1  0.04380000  0.75000000  0.70890000  1.0
+  O  O23  1  0.95620000  0.25000000  0.29110000  1.0
+  O  O24  1  0.16350000  0.04780000  0.28130000  1.0
+  O  O25  1  0.16350000  0.45220000  0.28130000  1.0
+  O  O26  1  0.83650000  0.54780000  0.71870000  1.0
+  O  O27  1  0.33650000  0.54780000  0.78130000  1.0
+  O  O28  1  0.66350000  0.45220000  0.21870000  1.0
+  O  O29  1  0.66350000  0.04780000  0.21870000  1.0
+  O  O30  1  0.33650000  0.95220000  0.78130000  1.0
+  O  O31  1  0.83650000  0.95220000  0.71870000  1.0
