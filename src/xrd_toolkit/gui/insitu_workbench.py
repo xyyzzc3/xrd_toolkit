@@ -117,6 +117,7 @@ class InSituWorkbench(QWidget):
         }
         self.outdir = paths.default_outputs_dir() / "insitu"
         self.frames = []
+        self._use_checked = False       # 帧来源 = 文件栏勾选
         self.batch = None
         # 批次开始那一刻的输入快照：报告用（跑完再改下拉框也不会写错）
         self._batch_meta = None
@@ -155,6 +156,7 @@ class InSituWorkbench(QWidget):
         """应用项目预设：换帧目录与 mask（不动 rich/poor/Al 三相定义）。"""
         raw = str(preset.get("insitu_dir") or "").strip()
         self._data_dir_set = bool(raw)
+        self._use_checked = False
         self.data_dir = (Path(raw).expanduser() if raw else Path.home())
         self.mask_path = self._mask_for_preset(
             preset, self.main.config_name)
@@ -191,6 +193,13 @@ class InSituWorkbench(QWidget):
         self.data_btn = QPushButton("选文件夹…")
         self.data_btn.clicked.connect(self._choose_data)
         top.addWidget(self.data_btn)
+        self.checked_btn = QPushButton("用勾选的原始数据")
+        self.checked_btn.setObjectName("insitu_use_checked_btn")
+        self.checked_btn.setToolTip(
+            "把文件栏里勾选的原始图按文件名排序当作帧序列"
+            "（不用先进文件夹；只认原始图，同几何/同形状）")
+        self.checked_btn.clicked.connect(self._use_checked_frames)
+        top.addWidget(self.checked_btn)
         top.addStretch(1)
         self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
@@ -401,6 +410,15 @@ class InSituWorkbench(QWidget):
 
     # ── 目录与文件 ──────────────────────────────────────────
     def _refresh_data_label(self):
+        if self._use_checked:
+            if self.frames:
+                self.data_label.setText(f"文件栏勾选（{len(self.frames)} 帧）")
+                self.data_label.setToolTip(
+                    "\n".join(str(p) for p in self.frames))
+            else:
+                self.data_label.setText("（文件栏没有勾选原始数据）")
+                self.data_label.setToolTip("")
+            return
         if not self._data_dir_set:
             self.frames = []
             self.data_label.setText("（未选择帧目录）")
@@ -424,8 +442,33 @@ class InSituWorkbench(QWidget):
             return
         self.data_dir = Path(chosen)
         self._data_dir_set = True
+        self._use_checked = False
         self._refresh_data_label()
         self._set_status(f"已选目录：{len(self.frames)} 帧")
+
+    def _use_checked_frames(self):
+        """帧来源改成文件栏里勾选的原始数据（按文件名排序）。
+
+        2026-11-11 用户："原位用的文件夹，是不是也可以用文件栏的数据"——
+        可以：只认原始图（.tif），同几何/同形状由引擎逐帧积分时自己把关；
+        1D/处理产物不进这条批量（三相引擎要的是原始帧）。
+        """
+        from xrd_toolkit.gui import sources as gui_sources
+        picked = sorted(
+            (Path(src.path) for src in gui_sources.checked_sources(self.main)
+             if src.kind == gui_sources.RAW),
+            key=lambda p: p.name)
+        limit = int(self.limit.value()) if hasattr(self, "limit") else 0
+        if limit > 0:
+            picked = picked[:limit]
+        self._use_checked = True
+        self.frames = picked
+        self._refresh_data_label()
+        if picked:
+            self._set_status(f"用文件栏勾选的原始数据：{len(picked)} 帧")
+            _log(self.main, f"原位批量数据源：文件栏勾选 {len(picked)} 帧")
+        else:
+            self._set_status("文件栏里没有勾选原始数据（.tif）")
 
     def _choose_mask(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -492,7 +535,7 @@ class InSituWorkbench(QWidget):
             return
         self._refresh_data_label()
         if not self.frames:
-            self._set_status("先选一个包含 .tif 的文件夹")
+            self._set_status("先选一个包含 .tif 的文件夹，或点 [用勾选的原始数据]")
             return
         for key, text in (("rich", "富锂相"), ("poor", "贫锂相"),
                           ("al", "Al 参考相")):
@@ -507,7 +550,9 @@ class InSituWorkbench(QWidget):
         self.batch = None
         self._batch_meta = {
             "data_dir": (str(self.data_dir)
-                         if self._data_dir_set else ""),
+                         if self._data_dir_set and not self._use_checked
+                         else ""),
+            "source": "checked" if self._use_checked else "folder",
             "mask": str(self.mask_path) if self.mask_path else "",
             "phases": {key: str(path)
                        for key, path in self.phase_paths.items() if path},
@@ -524,7 +569,8 @@ class InSituWorkbench(QWidget):
         self.stop_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
         self._set_status("准备中（读结构 + LaB₆ 定仪器）…")
-        _log(self.main, f"原位批量：{self.data_dir}（{len(self.frames)} 帧）")
+        where = ("文件栏勾选" if self._use_checked else str(self.data_dir))
+        _log(self.main, f"原位批量：{where}（{len(self.frames)} 帧）")
 
         task = None
 

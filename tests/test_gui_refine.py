@@ -157,6 +157,29 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertFalse(self.w._refine_active, "点分析入口应退出精修")
         self.assertTrue(self.w.entrance_buttons["1D"].isChecked())
 
+    def test_curve_data_reads_file_bar_products(self):
+        """文件栏的 1D/处理产物不打开面板也能精修（2026-11-11）。"""
+        import types
+        from xrd_toolkit.gui import refine_workbench as gui_refine
+        self._enter()
+        editor = self.w.refine_editor
+        curve = (np.linspace(1.0, 8.0, 500), np.ones(500))
+        source = types.SimpleNamespace(
+            kind=gui_refine.gui_sources.BG, display="fake_bg.tif",
+            path="data/fake_bg.tif", key="deadbeef")
+        key = f"product:{gui_refine.gui_sources.source_id(source)}"
+        editor._product_sources[key] = source
+        with mock.patch.object(gui_refine.gui_sources, "load_product",
+                               return_value=curve):
+            editor.curve_combo.addItem("fake_bg.tif（处理产物）", key)
+            editor.curve_combo.setCurrentIndex(
+                editor.curve_combo.findData(key))
+            data = editor._curve_data()
+            self.assertIsNotNone(data)
+            self.assertEqual(len(data[0]), 500)
+            # 拟合入口也认这条曲线（不是只画出来）
+            self.assertIn("2θ", editor.range_label.text())
+
     def test_cif_list_has_reference_structures(self):
         self._enter()
         combo = self.w.refine_editor.cif_combo

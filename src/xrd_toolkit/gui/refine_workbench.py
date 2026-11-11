@@ -25,7 +25,6 @@
 放在后台线程跑，界面不卡。
 """
 import time
-import time
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +39,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
+from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _data_snapshot, _log, _set_focus)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
@@ -164,6 +164,7 @@ class RefineWorkbench(QWidget):
         self._task = None
         self._extra_cifs = []
         self._extra_phase_paths = []
+        self._product_sources = {}     # 文件栏产物条目：key -> Source
         # {"params": {...}, "wavelength": Å, ...}：启动时从落盘文件读回
         # （app.create_window 的 window.instrument_baseline），保存时再
         # 写回磁盘；W-H 页读同一份。
@@ -392,6 +393,7 @@ class RefineWorkbench(QWidget):
         keep = self.curve_combo.currentData()
         self.curve_combo.blockSignals(True)
         self.curve_combo.clear()
+        seen = set()
         for key, dock in getattr(self.main, "plot_docks", {}).items():
             if not str(key).startswith("1D|"):
                 continue
@@ -399,6 +401,20 @@ class RefineWorkbench(QWidget):
                 continue
             title = dock.windowTitle() or str(key).split("|", 1)[-1]
             self.curve_combo.addItem(title, key)
+            seen.add(str(getattr(dock, "panel_file", "") or ""))
+        # 文件栏里的 1D / 处理产物也直接可用（2026-11-11 用户："三大工作台
+        # 能不能用文件栏的任意 1D 数据，比如处理后的数据"）。产物条目读
+        # 的就是它自己那一份，不重算、不受当前设置影响。
+        self._product_sources = {}
+        for source in gui_sources.all_sources(self.main):
+            if source.kind not in (gui_sources.ONED, gui_sources.BG):
+                continue
+            key = f"product:{gui_sources.source_id(source)}"
+            self._product_sources[key] = source
+            kind_text = ("1D 产物" if source.kind == gui_sources.ONED
+                         else "处理产物")
+            self.curve_combo.addItem(
+                f"{gui_sources.panel_display(source)}（{kind_text}）", key)
         self.curve_combo.blockSignals(False)
         idx = self.curve_combo.findData(keep) if keep else -1
         if idx < 0 and self.curve_combo.count():
@@ -577,6 +593,22 @@ class RefineWorkbench(QWidget):
             return None
         return getattr(self.main, "plot_docks", {}).get(key)
 
+    def _curve_data(self):
+        """下拉里选中的曲线 → (2θ, 强度)；面板或文件栏产物都行。"""
+        key = self.curve_combo.currentData()
+        if not key:
+            return None
+        if str(key).startswith("product:"):
+            source = self._product_sources.get(key)
+            if source is None:
+                return None
+            return gui_sources.load_product(source)
+        dock = getattr(self.main, "plot_docks", {}).get(key)
+        if dock is None or getattr(dock, "last_tth", None) is None:
+            return None
+        return (np.asarray(dock.last_tth, dtype=float),
+                np.asarray(dock.last_intensity, dtype=float))
+
     def _use_focus_curve(self):
         key = getattr(self.main, "focus_panel", None)
         idx = self.curve_combo.findData(key)
@@ -586,8 +618,8 @@ class RefineWorkbench(QWidget):
         self.curve_combo.setCurrentIndex(idx)
 
     def _on_curve_changed(self):
-        dock = self._selected_dock()
-        tth = getattr(dock, "last_tth", None) if dock is not None else None
+        curve = self._curve_data()
+        tth = curve[0] if curve is not None else None
         if tth is None:
             self.range_label.setText("还没有选曲线")
         else:
@@ -632,16 +664,16 @@ class RefineWorkbench(QWidget):
         if self._task is not None:
             self._set_status("上一轮精修还在跑，请稍候")
             return
-        dock = self._selected_dock()
-        if dock is None or getattr(dock, "last_tth", None) is None:
-            self._set_status("先选一条已经算完的 1D 曲线")
+        curve = self._curve_data()
+        if curve is None:
+            self._set_status("先选一条已经算完的 1D 曲线（面板或文件栏产物）")
             return
         cif_path = self.cif_combo.currentData()
         if not cif_path:
             self._set_status("先选一张 CIF 结构")
             return
-        tth = np.asarray(dock.last_tth, dtype=float).copy()
-        y = np.asarray(dock.last_intensity, dtype=float).copy()
+        tth = np.asarray(curve[0], dtype=float).copy()
+        y = np.asarray(curve[1], dtype=float).copy()
         if tth.size != y.size or tth.size < 20:
             self._set_status("这条曲线点太少或长度不一致，无法精修")
             return
@@ -738,14 +770,12 @@ class RefineWorkbench(QWidget):
     # ── 画图与结果表 ────────────────────────────────────────
     def _draw_observed(self):
         """拟合前先把选中的观测曲线画出来。"""
-        dock = self._selected_dock()
-        tth = getattr(dock, "last_tth", None) if dock is not None else None
-        y = getattr(dock, "last_intensity", None) if dock is not None else None
-        if tth is None or y is None:
+        curve = self._curve_data()
+        if curve is None:
             self._draw_placeholder()
             return
-        tth = np.asarray(tth, dtype=float)
-        y = np.asarray(y, dtype=float)
+        tth = np.asarray(curve[0], dtype=float)
+        y = np.asarray(curve[1], dtype=float)
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR)

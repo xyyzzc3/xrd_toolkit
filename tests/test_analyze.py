@@ -81,6 +81,20 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
         self.assertTrue(ranges)
         self.assertTrue(any(lo <= al_t[j] <= hi for lo, hi in ranges))
 
+    def test_estimate_zero_recovers_global_shift(self):
+        """观测峰整体平移 0.12° 时估回 +0.12°（物相叠图不再“总偏右”）。"""
+        lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
+        d0, inten = ps.reflection_data(lab6, CU_KA, 10.0, 80.0)
+        tth, _ = ps.scaled_positions(d0, inten, CU_KA, 1.0, 0.0)
+        obs = np.asarray(tth)[np.asarray(inten) >= 0.02] + 0.12
+        zero = ps.estimate_zero(obs, lab6, CU_KA, 10.0, 80.0)
+        self.assertAlmostEqual(zero, 0.12, delta=1e-3)
+
+    def test_estimate_zero_needs_enough_matches(self):
+        lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
+        self.assertEqual(
+            ps.estimate_zero([1.0], lab6, CU_KA, 10.0, 80.0), 0.0)
+
     def test_screen_phases_ranks_lab6_first(self):
         lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
         _, _, tth, inten = core.reflection_table(

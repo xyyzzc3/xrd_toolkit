@@ -91,6 +91,21 @@ class TestMaskEditor(unittest.TestCase):
     def _products(self):
         return masked2d.list_products()
 
+    def test_ellipse_and_lasso_tools(self):
+        """椭圆与套索都能改同一张 bool mask（2026-11-11 画笔多样性）。"""
+        self._open()
+        ed = self.ed
+        ed.load_image(self.img_path)
+        QApplication.processEvents()
+        ed.mask[:] = False
+        ed._fill_ellipse((10, 10), (30, 50), True)
+        self.assertTrue(ed.mask[20, 30], "椭圆中心应被遮")
+        self.assertFalse(ed.mask[10, 10], "外接矩形角落不该被遮")
+        ed.mask[:] = False
+        ed._fill_polygon([(10, 10), (10, 40), (40, 25)], True)
+        self.assertTrue(ed.mask[20, 25], "套索内部应被遮")
+        self.assertFalse(ed.mask[35, 10], "套索外部不该被遮")
+
     def test_panel_display_drops_mask2d_recipe_tag(self):
         # 旧会话里的英文后缀仍认（改名兼容）
         source = gui_sources.make_source(

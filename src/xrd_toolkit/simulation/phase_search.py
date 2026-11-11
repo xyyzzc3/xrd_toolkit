@@ -141,6 +141,33 @@ class PhaseMatch:
     purity: float
 
 
+def estimate_zero(obs_t, structure, lam, tmin, tmax, *, scale=1.0,
+                  search_deg=0.5, min_matches=3):
+    """用观测峰与该相理论峰位估一个全局 2θ 零位（中位平移）。
+
+    典型来源是 2θ 零位没校（所有峰一起偏）——筛相时先对齐再打分/叠图，
+    用户就不会看到"结构峰总在实验峰的右边"（2026-11-11 反馈）。
+    只认 0.02 以上强度的理论峰；匹配窗口 search_deg 内找不到就跳过该峰。
+    匹配少于 min_matches 或中位超出窗口时返回 0.0（不硬掰）。
+    """
+    obs_t = np.asarray(obs_t, dtype=float)
+    d0, inten = reflection_data(structure, lam, tmin, tmax)
+    strong = inten >= 0.02
+    d0, inten = d0[strong], inten[strong]
+    if d0.size == 0 or obs_t.size == 0:
+        return 0.0
+    t_th, _ = scaled_positions(d0, inten, lam, scale, 0.0)
+    shifts = []
+    for t in obs_t:
+        j = int(np.argmin(np.abs(t_th - t)))
+        if abs(t_th[j] - t) <= search_deg:
+            shifts.append(float(t - t_th[j]))
+    if len(shifts) < min_matches:
+        return 0.0
+    zero = float(np.median(shifts))
+    return zero if abs(zero) <= search_deg else 0.0
+
+
 def screen_phases(obs_t, lib, lam, tmin, tmax, zero, elements=(),
                   preferred=(), tol=0.04, skip_names=None):
     """对整个相库打分，按分数从高到低返回 PhaseMatch 列表。

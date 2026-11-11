@@ -103,6 +103,27 @@ class TestInSituWorkbench(unittest.TestCase):
         QApplication.processEvents()
         _support.stage_cache.point_root(self._old_root)
 
+    def test_use_checked_files_as_frames(self):
+        """文件栏勾选的原始图可以当帧序列（2026-11-11）。"""
+        files = _tmp_files(3, prefix="insitu_")
+        add_checked(self.w, [str(p) for p in files])
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        editor.checked_btn.click()
+        QApplication.processEvents()
+        self.assertTrue(editor._use_checked)
+        self.assertEqual([p.name for p in editor.frames],
+                         sorted(p.name for p in files))
+        self.assertIn("文件栏勾选", editor.data_label.text())
+        # 换回文件夹会把勾选来源清掉（不混着用）
+        with mock.patch.object(
+                insitu_gui.QFileDialog, "getExistingDirectory",
+                return_value=str(files[0].parent)):
+            editor._choose_data()
+        QApplication.processEvents()
+        self.assertFalse(editor._use_checked)
+
     def test_enter_exit_and_mutual_exclusion(self):
         self.w.insitu_btn.click()
         QApplication.processEvents()

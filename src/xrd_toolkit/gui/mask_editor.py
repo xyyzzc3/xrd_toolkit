@@ -109,7 +109,11 @@ class MaskWorkbench(QWidget):
     TOOL_BRUSH = "brush"
     TOOL_ERASER = "eraser"
     TOOL_RECT = "rect"
-    TOOL_NAMES = {TOOL_BRUSH: "画笔", TOOL_ERASER: "橡皮", TOOL_RECT: "矩形"}
+    TOOL_ELLIPSE = "ellipse"
+    TOOL_LASSO = "lasso"
+    TOOL_NAMES = {TOOL_BRUSH: "画笔", TOOL_ERASER: "橡皮",
+                  TOOL_RECT: "矩形", TOOL_ELLIPSE: "椭圆",
+                  TOOL_LASSO: "套索"}
 
     def __init__(self, main_window):
         super().__init__()
@@ -130,6 +134,7 @@ class MaskWorkbench(QWidget):
         self._last = None
         self._rect_start = None
         self._rect_patch = None
+        self._lasso_points = None       # 套索：拖动经过的像素坐标
         self._base_artist = None
         self._overlay_artist = None
         self._overlay_ds = None
@@ -253,7 +258,9 @@ class MaskWorkbench(QWidget):
         self.tool_buttons = {}
         for text, tool in (("画笔", self.TOOL_BRUSH),
                            ("橡皮", self.TOOL_ERASER),
-                           ("矩形", self.TOOL_RECT)):
+                           ("矩形", self.TOOL_RECT),
+                           ("椭圆", self.TOOL_ELLIPSE),
+                           ("套索", self.TOOL_LASSO)):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.clicked.connect(lambda _checked=False, t=tool:
@@ -383,8 +390,9 @@ class MaskWorkbench(QWidget):
             widget.valueChanged.connect(lambda *_: self._save_hot_params())
 
         self.fig = Figure(figsize=(10, 7.4))
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[3.4, 1.25],
-                                   hspace=0.28)
+        # 2D 是主画布：预览只留一条（2026-11-11 用户："让 2D 图大一些"）。
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0],
+                                   hspace=0.22)
         self.ax_img = self.fig.add_subplot(gs[0])
         self.ax_prev = self.fig.add_subplot(gs[1])
         self.ax_img.set_axis_off()
@@ -1329,6 +1337,7 @@ class MaskWorkbench(QWidget):
         self._drawing = False
         self._last = None
         self._rect_start = None
+        self._lasso_points = None
         self._update_overlay()
         self._update_status()
         return True
@@ -1384,6 +1393,48 @@ class MaskWorkbench(QWidget):
         self.mask[r0:r1, c0:c1] = value
         self._ensure_source()[r0:r1, c0:c1] = (SRC_MANUAL if value else 0)
 
+    def _fill_ellipse(self, a, b, value):
+        """把外接矩形内的椭圆区域填上（椭圆 = 束心/光斑最常用的形状）。"""
+        r0, r1 = sorted((a[0], b[0]))
+        c0, c1 = sorted((a[1], b[1]))
+        h, w = self.mask.shape
+        r0, r1 = max(0, r0), min(h - 1, r1)
+        c0, c1 = max(0, c0), min(w - 1, c1)
+        if r1 < r0 or c1 < c0:
+            return
+        cy, cx = (r0 + r1) / 2.0, (c0 + c1) / 2.0
+        ry, rx = max((r1 - r0) / 2.0, 0.5), max((c1 - c0) / 2.0, 0.5)
+        rr = np.arange(r0, r1 + 1, dtype=float)[:, None]
+        cc = np.arange(c0, c1 + 1, dtype=float)[None, :]
+        inside = ((rr - cy) / ry) ** 2 + ((cc - cx) / rx) ** 2 <= 1.0
+        self.mask[r0:r1 + 1, c0:c1 + 1] |= inside
+        src = self._ensure_source()[r0:r1 + 1, c0:c1 + 1]
+        src[inside] = SRC_MANUAL
+        if not value:
+            self.mask[r0:r1 + 1, c0:c1 + 1] &= ~inside
+
+    def _fill_polygon(self, points, value=True):
+        """套索/多边形：按顶点围成的区域填上。"""
+        if points is None or len(points) < 3:
+            return
+        from matplotlib.path import Path as MplPath
+        rc = np.asarray(points, dtype=float)
+        h, w = self.mask.shape
+        r0 = max(0, int(np.floor(rc[:, 0].min())))
+        r1 = min(h - 1, int(np.ceil(rc[:, 0].max())))
+        c0 = max(0, int(np.floor(rc[:, 1].min())))
+        c1 = min(w - 1, int(np.ceil(rc[:, 1].max())))
+        if r1 < r0 or c1 < c0:
+            return
+        rr, cc = np.mgrid[r0:r1 + 1, c0:c1 + 1]
+        inside = MplPath(np.column_stack([rc[:, 1], rc[:, 0]])).contains_points(
+            np.column_stack([cc.ravel(), rr.ravel()])).reshape(rr.shape)
+        self.mask[r0:r1 + 1, c0:c1 + 1] |= inside
+        src = self._ensure_source()[r0:r1 + 1, c0:c1 + 1]
+        src[inside] = SRC_MANUAL
+        if not value:
+            self.mask[r0:r1 + 1, c0:c1 + 1] &= ~inside
+
     def _on_press(self, event):
         if (self.image is None or self.mask is None
                 or event.inaxes is not self.ax_img):
@@ -1422,14 +1473,17 @@ class MaskWorkbench(QWidget):
             self._update_status()
         else:
             self._rect_start = rc
-            r0, r1 = sorted((rc[0], rc[0]))
-            c0, c1 = sorted((rc[1], rc[1]))
-            self._rect_patch = Rectangle(
-                (c0 - 0.5, r0 - 0.5), max(c1 - c0 + 1, 1),
-                max(r1 - r0 + 1, 1), fill=False, edgecolor="yellow",
-                lw=1.2, zorder=6)
-            self.ax_img.add_patch(self._rect_patch)
-            self._overlay_timer.start()
+            if self._tool == self.TOOL_LASSO:
+                self._lasso_points = [rc]
+            else:
+                r0, r1 = sorted((rc[0], rc[0]))
+                c0, c1 = sorted((rc[1], rc[1]))
+                self._rect_patch = Rectangle(
+                    (c0 - 0.5, r0 - 0.5), max(c1 - c0 + 1, 1),
+                    max(r1 - r0 + 1, 1), fill=False, edgecolor="yellow",
+                    lw=1.2, zorder=6)
+                self.ax_img.add_patch(self._rect_patch)
+                self._overlay_timer.start()
 
     def _on_motion(self, event):
         if self._panning and self._pan_start is not None:
@@ -1456,6 +1510,9 @@ class MaskWorkbench(QWidget):
                                 self._tool == self.TOOL_BRUSH)
             self._last = rc
             self._update_overlay()
+            self._update_status_later()
+        elif self._tool == self.TOOL_LASSO and self._lasso_points is not None:
+            self._lasso_points.append(rc)
             self._update_status_later()
         elif self._rect_patch is not None and self._rect_start is not None:
             r0, r1 = sorted((self._rect_start[0], rc[0]))
@@ -1495,15 +1552,26 @@ class MaskWorkbench(QWidget):
             return
         if not self._drawing:
             return
-        if self._tool == self.TOOL_RECT and self._rect_start is not None:
+        if (self._tool in (self.TOOL_RECT, self.TOOL_ELLIPSE)
+                and self._rect_start is not None):
             rc = self._pixel(event) or self._rect_start
-            self._fill_rect(self._rect_start, rc, True)
+            if self._tool == self.TOOL_RECT:
+                self._fill_rect(self._rect_start, rc, True)
+            else:
+                self._fill_ellipse(self._rect_start, rc, True)
             if self._rect_patch is not None:
                 try:
                     self._rect_patch.remove()
                 except Exception:                      # noqa: BLE001
                     pass
                 self._rect_patch = None
+            self._update_overlay()
+        elif self._tool == self.TOOL_LASSO and self._lasso_points is not None:
+            rc = self._pixel(event)
+            if rc is not None:
+                self._lasso_points.append(rc)
+            self._fill_polygon(self._lasso_points, True)
+            self._lasso_points = None
             self._update_overlay()
         self._drawing = False
         self._last = None

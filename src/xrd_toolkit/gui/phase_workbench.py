@@ -120,16 +120,32 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     matches = ps.screen_phases(
         obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
         tol=float(tol), skip_names=skip_names)
+    # 先拿最佳候选估一个全局 2θ 零位，再按对齐后的位置重新打分：
+    # 结构峰“总在实验峰右边”多半是零位没校，对齐后叠图才可信。
+    # 最多两轮（换候选时零位估计会变）；变化小于 0.005° 就停。
+    zero = 0.0
+    for _ in range(2):
+        if not matches:
+            break
+        new_zero = ps.estimate_zero(
+            obs_t, matches[0].structure, lam, tmin, tmax,
+            scale=matches[0].scale)
+        if abs(new_zero - zero) < 0.005:
+            break
+        zero = new_zero
+        matches = ps.screen_phases(
+            obs_t, lib, lam, tmin, tmax, zero, elements=elements,
+            tol=float(tol), skip_names=skip_names)
     rows = []
     for match in matches:
         d0, inten = ps.reflection_data(match.structure, lam, tmin, tmax)
         sticks_t, sticks_i = ps.scaled_positions(
-            d0, inten, lam, match.scale, 0.0)
+            d0, inten, lam, match.scale, zero)
         rows.append(PhaseRow(
             match.path, match.score, match.scale, match.coverage,
             match.purity, np.asarray(sticks_t, dtype=float),
             np.asarray(sticks_i, dtype=float)))
-    return obs_t, rows
+    return obs_t, rows, zero
 
 
 class PhaseWorkbench(QWidget):
@@ -145,6 +161,7 @@ class PhaseWorkbench(QWidget):
         self.rows = []
         self.curve = None
         self.obs_t = None
+        self._zero_used = None
         self._task = None
         self._loaded_curves = {}       # {"file:路径": {"tth", "intensity", "label"}}
         self._product_sources = {}     # {"product:ID": Source}（文件栏 1D 产物）
@@ -379,15 +396,17 @@ class PhaseWorkbench(QWidget):
             title = dock.windowTitle() or str(key).split("|", 1)[-1]
             self.curve_combo.addItem(title, key)
         for source in gui_sources.all_sources(self.main):
-            if source.kind != gui_sources.ONED:
+            if source.kind not in (gui_sources.ONED, gui_sources.BG):
                 continue
             panel_key = f"1D|{gui_sources.source_id(source)}"
-            if panel_key in docks:
+            if source.kind == gui_sources.ONED and panel_key in docks:
                 continue                      # 已有面板，上面列过了
             key = f"product:{gui_sources.source_id(source)}"
             self._product_sources[key] = source
+            kind_text = ("1D 产物" if source.kind == gui_sources.ONED
+                         else "处理产物")
             self.curve_combo.addItem(
-                f"{source.display}（1D 产物）", key)
+                f"{gui_sources.panel_display(source)}（{kind_text}）", key)
         for key, entry in self._loaded_curves.items():
             self.curve_combo.addItem(entry["label"], key)
         self.curve_combo.blockSignals(False)
@@ -557,8 +576,8 @@ class PhaseWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.screen_btn.setEnabled(True)
-            obs_t, rows = payload
-            self._on_screen_done(obs_t, rows)
+            obs_t, rows, zero = payload
+            self._on_screen_done(obs_t, rows, zero)
 
         def error(message):
             self.main._tasks.remove(task)
@@ -579,9 +598,10 @@ class PhaseWorkbench(QWidget):
         self.main._tasks.append(task)
         task.start()
 
-    def _on_screen_done(self, obs_t, rows):
+    def _on_screen_done(self, obs_t, rows, zero=0.0):
         self.rows = rows
         self.obs_t = np.asarray(obs_t, dtype=float)
+        self._zero_used = float(zero)
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
@@ -609,7 +629,9 @@ class PhaseWorkbench(QWidget):
             self.cell_btn.setEnabled(True)
             self.export_default_btn.setEnabled(True)
             self._set_status(
-                f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根")
+                f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根"
+                + (f"；已对齐 2θ 零位 {zero:+.3f}°"
+                   if abs(zero) > 0.005 else ""))
             _log(self.main, f"物相筛选完成：{len(rows)} 个候选，"
                             f"最佳 {best.path.stem}（score {best.score:.3f}）")
         else:

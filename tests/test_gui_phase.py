@@ -153,16 +153,21 @@ class TestPhaseWorkbench(unittest.TestCase):
         source = types.SimpleNamespace(
             kind=gui_phase.gui_sources.ONED, display="fake_phase.tif",
             path=PANEL_PATH, key="deadbeef")
+        bg_source = types.SimpleNamespace(
+            kind=gui_phase.gui_sources.BG, display="fake_phase.tif",
+            path=PANEL_PATH + "-bg", key="cafebabe")
         curve = (np.linspace(1.0, 8.0, 500), np.ones(500))
         key = f"product:{gui_phase.gui_sources.source_id(source)}"
+        bg_key = f"product:{gui_phase.gui_sources.source_id(bg_source)}"
         with mock.patch.object(gui_phase.gui_sources, "all_sources",
-                               return_value=[source]), \
+                               return_value=[source, bg_source]), \
                 mock.patch.object(gui_phase.gui_sources, "load_product",
                                   return_value=curve):
             editor.refresh_curves()
             keys = [editor.curve_combo.itemData(i)
                     for i in range(editor.curve_combo.count())]
             self.assertIn(key, keys)
+            self.assertIn(bg_key, keys, "处理产物也要能选")
             editor.curve_combo.setCurrentIndex(
                 editor.curve_combo.findData(key))
             self.assertIsNotNone(editor._selected_curve())
