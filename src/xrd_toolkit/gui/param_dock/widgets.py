@@ -7,7 +7,7 @@ builder 再导入，调用点保持同名。
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QScrollArea,
-    QVBoxLayout, QWidget)
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.param_dock.helpers import _fit_max_width
 
@@ -160,3 +160,31 @@ def bg_row(*widgets):
     for w, stretch in widgets:
         lay.addWidget(w, stretch)
     return row
+
+def add_section_toggle(form, text, tooltip="", checked=False):
+    """可折叠小节的标题按钮：点一下展开/收起，右侧箭头跟着翻。
+
+    2026-11-11 用户："1D 的寻峰/W-H 恢复到点击再出现"。小节默认收起时，
+    1D 页先只显示曲线与显示参数，想看峰/W-H 再点开——参数不会一次铺满整页。
+    返回按钮；调用方自己用 form.setRowVisible(内容控件, 开/关) 收起内容。
+    """
+    btn = QToolButton()
+    btn.setText(text)
+    btn.setCheckable(True)
+    btn.setChecked(checked)
+    btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+    btn.setStyleSheet("QToolButton { border: none; color: gray;"
+                      " font-weight: 600; padding: 2px 0; }")
+    btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    if tooltip:
+        btn.setToolTip(tooltip)
+    form.addRow(btn)
+    return btn
+
+
+def _toggle_section(form, button, widgets, visible):
+    """配合 add_section_toggle：翻箭头 + 显示/收起一行行内容。"""
+    button.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
+    for widget in widgets:
+        form.setRowVisible(widget, visible)

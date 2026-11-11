@@ -64,8 +64,8 @@ def make_source(path, display: str = None, kind: str = RAW, key: str = None,
 def panel_display(source) -> str:
     """图面板标题 / 默认存盘名用的显示名。
 
-    掩膜 2D 的文件栏条目为了说明“掩膜文件有没有导出”，名字里带
-    ` · 掩膜 2D（未导出掩膜文件）`；做成 1D 之后这个名字就不该再跟着走，
+    掩膜 2D 的文件栏条目为了说明“掩膜工程有没有保存”，名字里带
+    ` · 掩膜 2D（未保存掩膜工程）`；做成 1D 之后这个名字就不该再跟着走，
     只留原始文件名。
     """
     text = (getattr(source, "display", None)

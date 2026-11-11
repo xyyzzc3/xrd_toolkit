@@ -294,6 +294,9 @@ def shot_peaks(window) -> None:
     key = "1D|" + LAB6
     wait_for(lambda: key in window.plot_docks
              and len(content_of(window, key).axes_1d.lines) > 0)
+    toggle = getattr(window, "peak_section_toggle", None)
+    if toggle is not None:
+        toggle.setChecked(True)          # 2026-11-11 起找峰小节默认收起
     window.params["显示峰位"].setChecked(True)
     settle(800)
     window.resize(1600, 1000)
@@ -867,6 +870,13 @@ def shot_wh(window) -> None:
     window.select_all_peaks_btn.click()
     window.fit_selected_btn.click()
     settle(600)
+    toggle = getattr(window, "wh_section_toggle", None)
+    if toggle is not None:
+        toggle.setChecked(True)          # W-H 小节默认收起，拍图要展开
+    peak_toggle = getattr(window, "peak_section_toggle", None)
+    if peak_toggle is not None:
+        peak_toggle.setChecked(True)     # 峰表在旁边，找峰小节也展开
+    settle(400)
     window.resize(1600, 1000)
     settle(400)
     fit_panel(window, key)

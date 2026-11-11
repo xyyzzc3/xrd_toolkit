@@ -12,7 +12,9 @@ from xrd_toolkit.gui.fit_view import (
     FIT_COLUMNS, clear_fit_results, copy_fit_table, delete_fit_rows,
     fit_selected_peaks, install_fit_view, selected_peak_rows)
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
-from xrd_toolkit.gui.param_dock.widgets import add_caption, add_float, add_range
+from xrd_toolkit.gui.param_dock.widgets import (
+    _toggle_section, add_caption, add_float, add_range,
+    add_section_toggle)
 from xrd_toolkit.gui.peak_view import (
     TABLE_COLUMNS, copy_peak_table, install_peak_view, zoom_to_peak)
 from xrd_toolkit.gui.plot_views import (
@@ -137,34 +139,49 @@ def build_1d_page(window, form_1d, btns_1d):
     # ── 寻峰（2026-10-23；2026-10-24 去按钮、标签避让）──
     # 只是显示：按面板快照里的参数在画出来的曲线上找峰、画标记、填峰表。
     # 默认关——不在别人图上冒标记；参数改了立刻重画（同「1D 显示」）。
-    add_caption(form_1d, "寻峰")
-    add_float(window, form_1d, "寻峰显著度", 0.5, 50.0, 5.0,
+    peak_toggle = add_section_toggle(
+        form_1d, "自动找峰（峰位）",
+        "点开展开：找峰参数、峰位标记与峰表。默认收起，页面先显示"
+        "曲线和显示参数；找峰是「看峰在哪」的第一步，后面才是峰形拟合。")
+    peak_rows = []
+    peak_rows.append(add_float(window, form_1d, "寻峰显著度", 0.5, 50.0, 5.0,
               decimals=1, suffix=" σ", label="显著度", step=0.1,
-              tooltip="噪声的倍数：越高越只留明显的峰（默认 5σ；滚轮/箭头每格 0.1）")
-    add_float(window, form_1d, "寻峰最小峰距 (°)", 0.0, 1.0, 0.008,
+              tooltip="噪声的倍数：越高越只留明显的峰（默认 5σ；滚轮/箭头每格 0.1）"))
+    peak_rows.append(add_float(window, form_1d, "寻峰最小峰距 (°)", 0.0, 1.0, 0.008,
               decimals=4, suffix=" °", label="最小峰距", step=0.001,
               tooltip="两根峰之间至少隔多少度；靠得太近只留较高的一根"
-                      "（滚轮/箭头每格 0.001°）")
-    add_float(window, form_1d, "寻峰最小 FWHM (°)", 0.0, 1.0, 0.0,
+                      "（滚轮/箭头每格 0.001°）"))
+    peak_rows.append(add_float(window, form_1d, "寻峰最小 FWHM (°)", 0.0, 1.0, 0.0,
               decimals=4, suffix=" °", label="最小 FWHM", step=0.001,
               tooltip="只保留不窄于它的峰；0 = 不过滤（噪声尖通常很窄；"
-                      "滚轮/箭头每格 0.001°）")
+                      "滚轮/箭头每格 0.001°）"))
     spin_max = QSpinBox()
     spin_max.setRange(1, 100)
     spin_max.setValue(20)
     spin_max.setToolTip("最多列出多少根峰（按高度取最强的）")
     window.params["寻峰最多根数"] = spin_max
     form_1d.addRow("最多根数", spin_max)
+    peak_rows.append(spin_max)
 
-    show_peaks = QCheckBox("寻峰并显示峰位")
+    show_peaks = QCheckBox("在图上标出峰位并列出峰表")
     show_peaks.setToolTip("在曲线上画出峰位短线与 2θ 标签，并在下方列出峰表"
-                          "（按当前面板自己的参数；勾上即为寻峰）")
+                          "（按当前面板自己的参数；勾上即为找峰）")
     window.params["显示峰位"] = show_peaks
     form_1d.addRow(show_peaks)
+    peak_rows.append(show_peaks)
     for name in ("寻峰显著度", "寻峰最小峰距 (°)", "寻峰最小 FWHM (°)",
                  "寻峰最多根数"):
         window.params[name].valueChanged.connect(
             lambda _v=0.0: _refresh_1d_display(window))
+
+    def _set_peak_section(visible):
+        _toggle_section(form_1d, peak_toggle, peak_rows, visible)
+        if not visible and show_peaks.isChecked():
+            show_peaks.setChecked(False)     # 收起 = 关掉标记与峰表
+
+    peak_toggle.toggled.connect(_set_peak_section)
+    _set_peak_section(False)
+    window.peak_section_toggle = peak_toggle
 
     def toggle_peaks(checked):
         if checked and not str(window.focus_panel or "").startswith("1D|"):
@@ -256,7 +273,7 @@ def build_1d_page(window, form_1d, btns_1d):
     peak_tabs.addTab(peak_table, "峰表")
 
     # ── 峰形拟合（2026-10-30）：峰表给峰位，这里逐个拟合 ─────────
-    fit_title = QLabel("峰形拟合")
+    fit_title = QLabel("峰形拟合（峰高 / 半高宽）")
     fit_title.setStyleSheet("color: #33475b; font-weight: 600;")
     shape_combo = QComboBox()
     for text, key in (("伪 Voigt", "pseudovoigt"),
@@ -363,6 +380,10 @@ def build_1d_page(window, form_1d, btns_1d):
     # 2026-10-31）；基线缺失/波长不符时自动退回常数并写明原因。
     # 2026-11-03：W-H 独立成常显卡片，不再被 peak_box 的“没峰就整块
     # 隐藏”带走；空态给三步引导，[去寻峰] 直接把用户带到第一步。
+    wh_toggle = add_section_toggle(
+        form_1d, "Williamson–Hall（晶粒尺寸 / 应变）",
+        "点开展开：由已拟合的峰算晶粒尺寸 D 与微应变 ε。"
+        "至少需要 3 根已拟合的峰。")
     wh_card = QFrame()
     wh_card.setObjectName("wh_section")
     wh_card.setStyleSheet(
@@ -438,6 +459,8 @@ def build_1d_page(window, form_1d, btns_1d):
         if not str(window.focus_panel or "").startswith("1D|"):
             _log(window, "W-H：先点开一张 1D 图（或双击文件栏的「1D 产物」）")
             return
+        if not peak_toggle.isChecked():
+            peak_toggle.setChecked(True)     # 先把找峰小节展开
         if not show_peaks.isChecked():
             show_peaks.setChecked(True)      # 触发寻峰并建峰表
         QApplication.processEvents()
@@ -492,6 +515,13 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_btns.addWidget(wh_save, 1)
     wh_lay.addLayout(wh_btns)
     form_1d.addRow(wh_card)
+
+    def _set_wh_section(visible):
+        _toggle_section(form_1d, wh_toggle, [wh_card], visible)
+
+    wh_toggle.toggled.connect(_set_wh_section)
+    _set_wh_section(False)
+    window.wh_section_toggle = wh_toggle
 
     # 标签页放最后并吃掉剩余高度：拟合按钮留在上方，不会被表格挤到
     # 滚动区外面（2026-10-30 实测：先放表格时 [拟合全部] 要滚动才看得见）。

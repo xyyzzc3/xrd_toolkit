@@ -11,8 +11,9 @@
   2. 手动画：画笔、橡皮、矩形；或点 [孤立坏点（局部）]。
      [整环离群（实验性）] 与 GSAS-II 的自动斑点掩膜（spot mask）同一思路，
      真实环可能被误标，只作参考（见 services/mask.py）；
-  3. [导出掩膜文件…] 写 .mask.npz（mask + 来源分层 + 元数据）；
-     [导入掩膜文件…] 读回来；[导出通用掩膜…] 另存 .npy/.edf 给外部工具；
+  3. [保存掩膜工程…] 写 .mask.npz（mask + 来源分层 + 元数据，可再打开
+     继续改）；[打开掩膜…] 读回来（也能读 .npy/.edf）；[导出通用掩膜…]
+     另存 .npy/.edf 给外部工具（只有遮/不遮，不含来源）；
   4. [预览效果]：只画掩膜前/后的 1D，不建产物；
      [生成掩膜 2D]：按范围（当前图像 / 勾选的 N 个文件）在 stage cache
      写 manifest（原始图 + mask），文件栏出现「掩膜后的 2D」条目。
@@ -120,7 +121,7 @@ class MaskWorkbench(QWidget):
         self.mask = None
         self._source = None          # uint8：每个掩膜像素的来源（只影响配色）
         self.mask_path = None
-        # 项目预设里的掩膜文件：只作兜底（该图自己的掩膜文件优先），不生成产物
+        # 项目预设里的掩膜工程：只作兜底（该图自己的掩膜优先），不生成产物
         self.preset_mask_recipe = None
         self._preset_mask_geometry = ""
         self._undo = []
@@ -213,14 +214,16 @@ class MaskWorkbench(QWidget):
         self.image_combo.activated.connect(self._on_image_combo)
         row1.addWidget(self.image_combo)
         row1.addStretch(1)
-        self.btn_load = QPushButton("导入掩膜文件…")
+        self.btn_load = QPushButton("打开掩膜…")
         self.btn_load.setToolTip(
-            "读回掩膜文件（.mask.npz，含来源分层）"
-            "或通用掩膜（.npy/.edf）")
+            "读回<b>掩膜工程</b>（.mask.npz，含来源分层与元数据，可继续改）"
+            "或<b>通用掩膜</b>（.npy/.edf，只有遮/不遮）")
         self.btn_load.clicked.connect(self._import_mask)
         row1.addWidget(self.btn_load)
-        self.btn_save = QPushButton("导出掩膜文件…")
-        self.btn_save.setToolTip("保存 .mask.npz：掩膜、来源分层和参数一起存")
+        self.btn_save = QPushButton("保存掩膜工程…")
+        self.btn_save.setToolTip(
+            "保存 .mask.npz <b>掩膜工程</b>：掩膜、来源分层和参数一起存，"
+            "以后可 [打开掩膜…] 继续改；给外部软件用请选 [导出通用掩膜…]")
         self.btn_save.clicked.connect(self._save_recipe)
         row1.addWidget(self.btn_save)
         self.btn_save_generic = QPushButton("导出通用掩膜…")
@@ -821,10 +824,10 @@ class MaskWorkbench(QWidget):
 
     # ── 项目预设的掩膜文件（2026-11-11）────────────────────────────
     def apply_preset(self, preset):
-        """记住项目预设里的掩膜文件；当前图兼容时载入，不生成产物。
+        """记住项目预设里的掩膜工程；当前图兼容时载入，不生成产物。
 
         掩膜跟几何走（与原位 mask 同一条规矩）：几何不一致时不认。
-        该图自己的掩膜文件/本会话缓存优先，预设只作兜底。
+        该图自己的掩膜/本会话缓存优先，预设只作兜底。
         """
         self._load_hot_params()      # 预设可能刚换了几何配置
         preset = preset or {}
@@ -837,17 +840,17 @@ class MaskWorkbench(QWidget):
             return
         path = Path(raw).expanduser()
         if not path.is_file():
-            self._say(f"预设的掩膜文件不存在：{path}")
+            self._say(f"预设的掩膜工程不存在：{path}")
             return
         if not is_recipe(path):
-            self._say(f"预设的掩膜文件不是 .mask.npz：{path}")
+            self._say(f"预设的掩膜工程不是 .mask.npz：{path}")
             return
         self.preset_mask_recipe = path
         if self.image is not None and self._apply_recipe_file(path):
-            self._say(f"已载入预设的掩膜文件：{path.name}")
+            self._say(f"已载入预设的掩膜工程：{path.name}")
 
     def _preset_recipe_for_image(self, shape):
-        """该图没有自己的掩膜文件时，用预设掩膜文件兜底。"""
+        """该图没有自己的掩膜工程时，用预设掩膜工程兜底。"""
         path = self.preset_mask_recipe
         if path is None or not path.is_file():
             return None
@@ -943,7 +946,7 @@ class MaskWorkbench(QWidget):
                        f"（{img.shape[0]}×{img.shape[1]} px）")
         if (self.preset_mask_recipe is not None
                 and self.mask_path == self.preset_mask_recipe):
-            self._say(f"掩膜：用预设掩膜文件兜底（{self.mask_path.name}）")
+            self._say(f"掩膜：用预设掩膜工程兜底（{self.mask_path.name}）")
 
     def _display_ds(self):
         """显示降采样倍数：屏幕上 1 px 不必对应多于 ~1 个图像块。"""
@@ -1552,8 +1555,8 @@ class MaskWorkbench(QWidget):
                 ans = QMessageBox.question(
                     self, "孤立坏点：结果异常",
                     f"{why}\n\n"
-                    "建议先取消，改用样品帧的掩膜文件：在样品上"
-                    "[导出掩膜文件…]，再在这张图上 [导入掩膜文件…]，共享探测器"
+                    "建议先取消，改用样品帧的掩膜工程：在样品上"
+                    "[保存掩膜工程…]，再在这张图上 [打开掩膜…]，共享探测器"
                     "固定坏点坐标；或者用手动画笔只遮坏点。\n\n"
                     "仍然应用这次结果吗？",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1652,11 +1655,11 @@ class MaskWorkbench(QWidget):
 
     def _save_recipe(self):
         if self.mask is None or not self.mask.any():
-            self._say("掩膜为空：没有可导出的掩膜文件")
+            self._say("掩膜为空：没有可保存的掩膜工程")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出掩膜文件", str(self._default_mask_path()),
-            f"掩膜文件 (*{RECIPE_SUFFIX})")
+            self, "保存掩膜工程", str(self._default_mask_path()),
+            f"掩膜工程 (*{RECIPE_SUFFIX})")
         if not path:
             return
         try:
@@ -1668,7 +1671,7 @@ class MaskWorkbench(QWidget):
             return
         self.mask_path = p
         self._update_status()
-        self._say(f"掩膜文件已导出：{p}"
+        self._say(f"掩膜工程已保存：{p}"
                        "（含来源分层；点 [生成掩膜 2D] 才会建产物）")
 
     def _export_generic(self):
@@ -1698,9 +1701,9 @@ class MaskWorkbench(QWidget):
                 "掩膜的形状要与积分图像一致；先从上方「图像」下拉选一张原始图。")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入掩膜文件或通用掩膜",
+            self, "打开掩膜工程或通用掩膜",
             str(self._default_mask_path().parent),
-            f"掩膜文件 (*{RECIPE_SUFFIX});;通用掩膜 (*.npy *.edf)")
+            f"掩膜工程 (*{RECIPE_SUFFIX});;通用掩膜 (*.npy *.edf)")
         if not path:
             return
         p = Path(path)
@@ -1719,7 +1722,7 @@ class MaskWorkbench(QWidget):
             return
         self._set_mask(mask, src, p)
         if is_recipe(p):
-            self._say(f"掩膜文件已导入：{p}"
+            self._say(f"掩膜工程已打开：{p}"
                            "（来源分层已恢复；点 [生成掩膜 2D] 才会建产物）")
         else:
             self._say(f"通用掩膜已导入：{p}"
@@ -1814,7 +1817,7 @@ class MaskWorkbench(QWidget):
             self._say("掩膜为空：没有生成掩膜后的 2D")
             self.main.status_text.setText("掩膜为空：未生成产物")
             return
-        label = self.mask_path.name if self.mask_path else "未导出掩膜文件"
+        label = self.mask_path.name if self.mask_path else "未保存掩膜工程"
         try:
             self._create_masked2d([self.image_path], label=label)
         except Exception as err:                       # noqa: BLE001
@@ -1843,7 +1846,7 @@ class MaskWorkbench(QWidget):
         if not paths:
             self._say("没有可应用的文件：先在范围里选文件")
             return
-        label = self.mask_path.name if self.mask_path else "未导出掩膜文件"
+        label = self.mask_path.name if self.mask_path else "未保存掩膜工程"
         made = 0
         made_paths = []
         for path in paths:

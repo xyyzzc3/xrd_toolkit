@@ -244,7 +244,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # ── 标样文件（2026-11-11）────────────────────────────────────
     # 文件栏在校准模式下收起；这个下拉是标样的唯一入口，选谁就开/换
     # 校准面板。旧的"勾选第一张原始图"降为兜底（见 calib_panel）。
-    std_box = QGroupBox("标样文件")
+    std_box = QGroupBox("① 标样文件（第一步）")
     std_row = QHBoxLayout(std_box)
     std_row.setSpacing(4)
     window.calib_file_combo = QComboBox()
@@ -261,6 +261,16 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     btn_std_open.clicked.connect(lambda: _choose_calib_file(window))
     std_row.addWidget(btn_std_open)
     lay.addWidget(std_box)
+    std_hint = QLabel("第一步：先选标样。选好后往下取点 / 精修；"
+                      "换一张标样会自动换校准面板。")
+    std_hint.setStyleSheet("color: gray;")
+    std_hint.setWordWrap(True)
+    # 折行标签的 minimumSizeHint 在中文里等于整句宽度，会把参数坞的
+    # 最小宽度顶大（校准页给绘图区留 620 px 的约束就失效了）。
+    # 允许被压窄、高度随折行长高。
+    std_hint.setMinimumWidth(0)
+    std_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    lay.addWidget(std_hint)
 
     # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
     # 本页第一栏，紧跟坞顶「几何配置」那一行（用户 2026-09-26 晚定）：

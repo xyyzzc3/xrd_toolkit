@@ -298,6 +298,14 @@ def _close_calib_panel(window: QMainWindow) -> None:
     if grip_filter is not None:
         grip_filter._release_cursor()
     if dock in window.mdi.subWindowList():
+        # 先藏再摘：否则关闭的一瞬间会被 MDI 重新激活下面的 2D 面板，
+        # 用户看到"退出校准弹出标样 2D、还卡一下"（2026-11-11 反馈）。
+        dock.hide()
         window.mdi.removeSubWindow(dock)
     dock.deleteLater()
+    # 不把焦点/激活态交给任何一张残留的图面板：退出工作台应该安静地
+    # 回到分析模式，由用户自己决定看哪张（不主动 raise，也就不会白重绘
+    # 一次 2048² 的 2D 图）。
+    if window.mdi.subWindowList():
+        window.mdi.setActiveSubWindow(None)
     _log(window, "已关闭校准面板")

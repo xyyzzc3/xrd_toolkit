@@ -13,7 +13,7 @@
   * 预设只改默认输入，不重跑任何计算；已有结果留着，物相旧候选会被
     清掉（相库/第二相变了，旧候选不再对应）。
   * 预设内嵌的处理设置只显示在「处理」页，点 [套用当前预设] 才生效；
-    掩膜文件只在 Mask 工作台按图兜底，不生成掩膜 2D。
+    掩膜工程只在 Mask 工作台按图兜底，不生成掩膜 2D。
   * 当前几何偏离预设时，下拉顶部显示「（当前设置）」虚拟项（只提示、
     不可应用）；校准/导入新几何后用日志提示怎么把它接回预设。
 """
@@ -138,7 +138,7 @@ def current_preset_values(window, base_name=None) -> dict:
         except (TypeError, ValueError, KeyError):
             pass
 
-    # 掩膜文件：Mask 工作台已载入图像时，才认它当前那份 .mask.npz。
+    # 掩膜工程：Mask 工作台已载入图像时，才认它当前那份 .mask.npz。
     mask_editor = getattr(window, "mask_editor", None)
     if (mask_editor is not None
             and getattr(mask_editor, "image", None) is not None):
@@ -242,7 +242,7 @@ def apply_preset(window, name, *, persist=True) -> bool:
     raw_mask = str(preset.get("mask_recipe") or "").strip()
     if raw_mask:
         mask_path = Path(raw_mask).expanduser()
-        extras.append("掩膜文件：" + mask_path.name
+        extras.append("掩膜工程：" + mask_path.name
                       + ("" if mask_path.is_file() else "（未找到）"))
     tail = f"；{'；'.join(extras)}" if extras else ""
     _log(window, f"已应用项目预设：{preset['name']}"
@@ -388,7 +388,7 @@ def _fields_text(values, *, empty_library=None) -> str:
         f"原位掩膜：{values.get('insitu_mask_name') or '（不遮）'}\n"
         f"相库目录：{library}\n"
         f"处理设置：{proc_text}\n"
-        f"掩膜文件：{mask_text}")
+        f"掩膜工程：{mask_text}")
 
 
 def _summary_text(preset) -> str:
@@ -419,9 +419,9 @@ class PresetManagerDialog(QDialog):
         root = QVBoxLayout(self)
         hint = QLabel(
             "预设保存七项输入：几何配置、第二相 CIF、原位帧目录、"
-            "原位掩膜、相库目录、处理设置、掩膜文件。\n"
+            "原位掩膜、相库目录、处理设置、掩膜工程。\n"
             "处理设置在切换预设后点 [套用当前预设] 才生效；"
-            "掩膜文件在 Mask 工作台按图兜底。\n"
+            "掩膜工程在 Mask 工作台按图兜底。\n"
             "先把工作台里的目录/掩膜/处理设置调好，再点 [保存当前…]。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
@@ -445,7 +445,7 @@ class PresetManagerDialog(QDialog):
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
             "用当前窗口的几何 / 相库 / 原位目录 / 掩膜 / 处理设置 / "
-            "掩膜文件覆盖选中的用户预设；"
+            "掩膜工程覆盖选中的用户预设；"
             "没打开的工作台与第二相保留该预设原值")
         self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除")
@@ -528,7 +528,7 @@ class PresetManagerDialog(QDialog):
         answer = QMessageBox.question(
             self, "更新预设",
             f"用当前窗口的几何 / 相库 / 原位目录 / 掩膜 / 处理设置 / "
-            f"掩膜文件覆盖用户预设"
+            f"掩膜工程覆盖用户预设"
             f"「{name}」？\n没打开的工作台与第二相 CIF 保留该预设原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:

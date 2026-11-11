@@ -291,7 +291,7 @@ def build_processing_page(window, form_bg, btns_bg):
     preset_save_btn.setObjectName("preset_proc_save_btn")
     preset_save_btn.setToolTip(
         "把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）写进一份预设；"
-        "该预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值。"
+        "该预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值。"
         "要把结果留下用下面的 [存成产物]")
     preset_save_btn.clicked.connect(
         lambda: _save_processing_to_preset_dialog(window))

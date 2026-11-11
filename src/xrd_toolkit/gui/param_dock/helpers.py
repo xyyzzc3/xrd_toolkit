@@ -170,7 +170,7 @@ def _apply_preset_processing(window: QMainWindow) -> None:
 def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
     """[存进预设…]：把编辑对象当前处理设置写进一份预设（只改 processing）。
 
-    预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值；用户预设已存在时
+    预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值；用户预设已存在时
     先问一次，内置预设不能覆盖（要另存新名字）。
     """
     dock = window.plot_docks.get(window.focus_panel)
@@ -204,7 +204,7 @@ def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
         answer = QMessageBox.question(
             window, "存进预设",
             f"把当前处理设置写进用户预设「{name}」？\n"
-            "该预设的几何 / 相库 / 原位目录 / 掩膜文件保持原值。",
+            "该预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
