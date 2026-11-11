@@ -30,7 +30,7 @@ from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _PanelBarFilter, _PanelResizeFilter,
                                     _panel_extra, _PlotSubWindow, _settle,
                                     _toggle_pop_out)
-from xrd_toolkit.gui.plot_export import _ask_save_options
+from xrd_toolkit.gui.plot_export import _ask_save_options, _resolution_note
 # 画布辅助与交互层（2026-10-21 从本文件原样搬出；再导出，plot_views 与
 # 测试照旧经 gui_plot_panels 取用）
 from xrd_toolkit.gui.plot.canvas import (
@@ -311,7 +311,7 @@ def _save_panel(window: QMainWindow, key: str, get_dock=None) -> None:
         return
     dock.figure_saved = True
     _log(window, f"已保存 {dock.windowTitle()} → {name}"
-                 f"（{options['dpi']} dpi）")
+                 f"（{_resolution_note(options)}）")
 
 def _build_view_widget(window: QMainWindow, name: str, key: str,
                        title: str) -> QWidget:

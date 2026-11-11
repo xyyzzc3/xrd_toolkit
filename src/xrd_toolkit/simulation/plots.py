@@ -466,10 +466,11 @@ def plot_profile(tth, curve, peaks, is_hex, title, out_path, *,
     return out_path
 
 
-def plot_williamson_hall(result, out_path, title="Williamson–Hall"):
+def plot_williamson_hall(result, out_path, title="Williamson–Hall", dpi=150):
     """W-H 图：(βcosθ)² vs sin²θ，点 + 拟合直线。
 
     `result` 是 `microstructure.WilliamsonHallResult`（鸭子类型即可）。
+    `dpi` 只对位图（PNG/TIF）有效；PDF/SVG 是矢量，曲线不会糊。
     """
     import matplotlib.pyplot as plt
     x = np.asarray(result.x, dtype=float)
@@ -492,6 +493,6 @@ def plot_williamson_hall(result, out_path, title="Williamson–Hall"):
         ax.text(0.02, 0.97, result.warning, transform=ax.transAxes,
                 va="top", fontsize=8, color="#b03030")
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=int(dpi))
     plt.close(fig)
     return out_path

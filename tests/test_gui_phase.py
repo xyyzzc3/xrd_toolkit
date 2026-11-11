@@ -185,6 +185,22 @@ class TestPhaseWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.assertIn("先点 [开始筛相]", editor.status.text())
 
+    def test_save_figure_requires_result_and_uses_shared_options(self):
+        """2026-11-11：筛相图也要能存（PNG/TIF/PDF/SVG）。"""
+        from xrd_toolkit.gui import plot_export as gui_plot_export
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        editor = self.w.phase_editor
+        editor._save_figure()
+        self.assertIn("还没有筛相结果", editor.status.text())
+        editor.rows = [object()]
+        with mock.patch.object(gui_plot_export,
+                               "save_figure_with_options",
+                               return_value=Path("/tmp/phase.png")) as save:
+            editor._save_figure()
+        self.assertEqual(save.call_count, 1)
+        self.assertIn("已保存 phase.png", editor.status.text())
+
     def test_curve_shows_on_open(self):
         """进入物相工作台就该看到选中的 1D 曲线（2026-11-02）。"""
         self._open_panel()

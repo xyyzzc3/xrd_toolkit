@@ -333,6 +333,11 @@ class PhaseWorkbench(QWidget):
             "把候选表写成 CSV，直接写到默认输出目录；先 [开始筛相] 出候选")
         self.export_default_btn.clicked.connect(self._export_default)
         left_lay.addWidget(self.export_default_btn)
+        self.save_fig_btn = QPushButton("保存图片…")
+        self.save_fig_btn.setToolTip(
+            "把当前候选叠加图存成 PNG/TIF/PDF/SVG；矢量格式可再编辑")
+        self.save_fig_btn.clicked.connect(self._save_figure)
+        left_lay.addWidget(self.save_fig_btn)
         self.preset_hint = QLabel("")
         self.preset_hint.setWordWrap(True)
         self.preset_hint.setStyleSheet("color: gray;")
@@ -867,6 +872,19 @@ class PhaseWorkbench(QWidget):
         lay.addLayout(buttons)
         self._cell_dialog = dlg
         dlg.show()
+
+    def _save_figure(self):
+        """存当前候选叠加图（与面板 [保存图片…] 同一套格式）。"""
+        from xrd_toolkit.gui.plot_export import save_figure_with_options
+        if not self.rows:
+            self._set_status("还没有筛相结果；先点 [开始筛相]")
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        saved = save_figure_with_options(
+            self.main, self.fig, f"phase_screen_{stamp}",
+            title="保存筛相图")
+        if saved is not None:
+            self._set_status(f"已保存 {saved.name}")
 
     def _send_to_refine(self):
         row = self._selected_row()

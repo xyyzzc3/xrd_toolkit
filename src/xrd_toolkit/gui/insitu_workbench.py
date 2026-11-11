@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
+from xrd_toolkit.gui.plot_export import save_figure_with_options
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import DEFAULT_PRESET_NAME, PROJECT_PRESET
 
@@ -872,19 +873,10 @@ class InSituWorkbench(QWidget):
             draw_model_independent(fig, self._mi_rows)
             name = "insitu_model_independent"
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        default = Path(self.outdir) / f"{name}_{stamp}.png"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存当前图", str(default), "PNG (*.png);;PDF (*.pdf)",
-            options=QFileDialog.DontUseNativeDialog)
-        if not path:
-            return
-        try:
-            fig.savefig(path, dpi=200)
-        except Exception as err:                   # noqa: BLE001
-            self._set_status(f"保存失败：{user_error_text(err)}")
-            return
-        self._set_status(f"已保存 {Path(path).name}")
-        _log(self.main, f"原位当前图已保存：{path}")
+        saved = save_figure_with_options(
+            self.main, fig, f"{name}_{stamp}", title="保存当前图")
+        if saved is not None:
+            self._set_status(f"已保存 {saved.name}")
 
     def _table_tsv(self, selected_only=False):
         model = self.table.selectionModel()

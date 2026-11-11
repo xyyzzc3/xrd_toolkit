@@ -567,6 +567,19 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(Path(self.ed.image_path), second,
                          "双击第二张应换当前图像")
 
+    def test_save_figure_uses_shared_options(self):
+        """2026-11-11：掩膜画布也能存成 PNG/TIF/PDF/SVG。"""
+        from xrd_toolkit.gui import plot_export as gui_plot_export
+        self._open()
+        self.ed.load_image(self.img_path)
+        QApplication.processEvents()
+        with mock.patch.object(gui_plot_export,
+                               "save_figure_with_options",
+                               return_value=Path("/tmp/mask.png")) as save:
+            self.ed._save_figure()
+        self.assertEqual(save.call_count, 1)
+        self.assertIn("已保存 mask.png", self.ed.lbl_hint.text())
+
     def test_workbench_collapses_and_restores_docks(self):
         self.w.param_dock.setVisible(True)
         self.w.log_dock.setVisible(True)

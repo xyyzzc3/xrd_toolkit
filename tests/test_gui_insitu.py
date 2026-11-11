@@ -258,7 +258,12 @@ class TestInSituWorkbench(unittest.TestCase):
                           QApplication.clipboard().text())
 
             out = folder / "fit.png"
-            with mock.patch.object(insitu_gui.QFileDialog,
+            # 2026-11-11 起保存走与面板共用的选项弹窗（plot_export 里
+            # 的 QFileDialog 才是真正弹框的那个）
+            from xrd_toolkit.gui import plot_export as gui_plot_export
+            with mock.patch.object(gui_plot_export, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "png"}), \
+                 mock.patch.object(gui_plot_export.QFileDialog,
                                    "getSaveFileName",
                                    return_value=(str(out), "PNG (*.png)")):
                 editor.save_btn.click()

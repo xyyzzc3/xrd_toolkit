@@ -268,8 +268,16 @@
   就是提示这里能抓。拖过的大小这张面板会一直保持（[横排]/[竖排] 重排也
   不改尺寸）；关掉再打开 = 回到默认大小。</p>
 </li>
-<li><strong>这一步的"导出"＝<code>[保存图片…]</code></strong>：把图另存为 PNG / TIF（可选分辨率），
-  存的就是当前画面（含缩放）。数据导出见第 5、6 节。</li>
+<li><strong>这一步的"导出"＝<code>[保存图片…]</code></strong>：把图另存为 PNG / TIF / PDF / SVG，
+  存的就是当前画面（含缩放）。PNG/TIF 可选分辨率（默认 300 dpi）；
+  <strong>PDF/SVG 是矢量格式</strong>——曲线和文字放大不糊，SVG 还能进
+  Illustrator/Inkscape 再改任何元素（论文图常用这条路）。数据导出见
+  第 5、6 节。</li>
+<li><strong>论文图的工作流</strong>：先在面板上 <code>[复位视图]</code> 回全貌、用 <code>[外观…]</code> 改
+  标题/轴标签/边距/纵轴刻度，再 <code>[保存图片…]</code> 选 PDF 或 SVG；要加箭头、
+  标注、拼多张图，把 SVG 拖进 Illustrator 或免费的 Inkscape 继续改，
+  改完导出最终 PDF/PNG。软件里不内置"全能图片编辑器"——矢量导出交给
+  专业工具改，比在软件里重造一套省事，也不容易被改坏。</li>
 <li>鼠标在曲线上移动：绘图区横带实时显示该点读数（2θ / 强度或距离，悬停
   对比图还会报曲线名）。</li>
 <li><strong>文件栏里的「打开的图」组</strong>：列出当前开着的每张图——单击 / 双击 = 提到
@@ -537,7 +545,7 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
      zero/U/V/W/X/Y 逐峰算仪器宽度（与命令行 <code>--instrument-from</code> 同口径）。
      没保存基线或波长对不上时，会自动退回常数并在“参与 N/M 根”后面写明原因。</li>
 <li><code>[查看 W-H 图]</code> 直接在窗口里看：参与点实心、排除点灰色空心、
-     拟合线、D/ε/R²；<code>[保存 W-H 图…]</code> 出 PNG/PDF。</li>
+     拟合线、D/ε/R²；<code>[保存 W-H 图…]</code> 出 PNG/TIF/PDF/SVG。</li>
 <li><strong>确认</strong>：<code>D</code> / <code>ε</code> / <code>参与 N/M 根</code> 出现；改线型、半窗或背景会清空旧
    结果；<strong>换曲线/重新积分也会自动清空</strong>（旧数字不会留在表里）。</li>
 </ol>
@@ -554,7 +562,7 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
   D、ε（附百分比）、参与 N/M 根、仪器来源、R²、警告，以及参与峰的
   2θ / FWHM / sin²θ / (βcosθ)² / 面积 / Rwp 表。</li>
 <li><strong>W-H 图</strong>：<code>[查看 W-H 图]</code> 预览（参与/排除点、拟合线、D/ε/R²）；
-  <code>[保存 W-H 图…]</code> 存 PNG/PDF。</li>
+  <code>[保存 W-H 图…]</code> 存 PNG/TIF/PDF/SVG。</li>
 <li>W-H 没有单独的数值文件导出；留档用「复制 W-H 结果」+ 保存图就够了。</li>
 </ul>
 <p><strong>导出 1D 曲线数据（不是 W-H 结果）</strong></p>
@@ -658,7 +666,7 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
 <p><strong>导出（就在这一步）</strong></p>
 <ul>
 <li><strong>数据</strong>：勾选参与对比的条目 → <code>[导出数据]</code>（同第 6 节流程）；</li>
-<li><strong>图</strong>：面板标题行的 <code>[保存图片…]</code>。</li>
+<li><strong>图</strong>：面板标题行的 <code>[保存图片…]</code>（PNG/TIF/PDF/SVG）。</li>
 </ul>
 <p><strong>这一节还能做什么</strong>：归一化（不归一化 / 全局最强峰 / 指定数据）、
 渐变色系（蓝 / 绿 / 橙 / 紫 / 灰：按文件名尾号从深到浅；彩虹：瀑布同款
@@ -778,7 +786,7 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
 <li><strong>采纳为图面板</strong>：把这次结果开成一张普通 1D 图（观测 + 计算 + 背景 +
    布拉格刻度，处理链默认关），之后可以保存、参与对比、导出。叠加按曲线
    指纹匹配；换了数据就静默不画。
-   <code>[保存图片…]</code> 出 PNG/PDF，<code>[复制报告]</code> 直接贴走。</li>
+   <code>[保存图片…]</code> 出 PNG/TIF/PDF/SVG，<code>[复制报告]</code> 直接贴走。</li>
 </ol>
 <p><strong>这一节还能做什么</strong></p>
 <ul>
@@ -852,8 +860,8 @@ f_rich = A_rich / (A_rich + A_poor)
 <li><strong>模型无关</strong>：(200) 双峰的强度加权质心与总面积，和批量的 f_poor
      独立对照；只用已经拟合成功的帧，不重新读图。</li>
 <li><code>[停止]</code> 在当前帧算完后停，已完成的帧保留。结束时写
-   <code>insitu_fit.csv</code> 与 <code>fit_summary.txt</code>。<code>[保存当前图…]</code> 保存当前标签页，
-   按脚本同尺寸重画后再存（报告可直接用）；单帧拟合另有
+   <code>insitu_fit.csv</code> 与 <code>fit_summary.txt</code>。<code>[保存当前图…]</code> 保存当前标签页
+   （PNG/TIF/PDF/SVG），按脚本同尺寸重画后再存（报告可直接用）；单帧拟合另有
    <code>[复制这一帧报告]</code>。</li>
 </ol>
 <p><strong>这一节还能做什么</strong></p>

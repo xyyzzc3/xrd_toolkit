@@ -1223,6 +1223,41 @@ class TestSaveOptions(unittest.TestCase):
         finally:
             w.close()
 
+    def test_dialog_vector_formats(self):
+        """PDF/SVG 也在格式表里：矢量图不糊、能再编辑。"""
+        w = create_window()
+        try:
+            for index, fmt in ((2, "pdf"), (3, "svg")):
+                def fake_exec(dlg, _i=index):
+                    dlg.findChild(QComboBox,
+                                  "save_fmt_combo").setCurrentIndex(_i)
+                    return QDialog.Accepted
+                with mock.patch.object(gui_plot_export.QDialog, "exec",
+                                       new=fake_exec):
+                    self.assertEqual(gui_plot_export._ask_save_options(w),
+                                     {"dpi": 300, "fmt": fmt})
+        finally:
+            w.close()
+
+    def test_workbench_save_helper_logs_vector(self):
+        """工作台画布共用同一套选项；矢量格式日志不写 dpi。"""
+        w = create_window()
+        try:
+            fig = mock.Mock()
+            with mock.patch.object(gui_plot_export, "_ask_save_options",
+                                   return_value={"dpi": 300, "fmt": "svg"}), \
+                 mock.patch.object(gui_plot_export.QFileDialog,
+                                   "getSaveFileName",
+                                   return_value=("/tmp/xrd_vec.svg", "")):
+                saved = gui_plot_export.save_figure_with_options(
+                    w, fig, "demo")
+            self.assertEqual(saved, Path("/tmp/xrd_vec.svg"))
+            fig.savefig.assert_called_once()
+            log = w.log_text.toPlainText()
+            self.assertIn("已保存 xrd_vec.svg（矢量）", log)
+        finally:
+            w.close()
+
     def test_dialog_cancel_returns_none(self):
         w = create_window()
         try:

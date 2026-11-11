@@ -1,4 +1,4 @@
-"""导出：1D 数据（txt/chi + 全部数据总表）+ 图片（PNG/TIF，可选 DPI）。
+"""导出：1D 数据（txt/chi + 全部数据总表）+ 图片（PNG/TIF/PDF/SVG）。
 
 从 app.py 与 plot_views.py 拆出来（纯搬迁）：这一块是"把算好的东西
 写出去"——只读面板缓存（dock.last_tth / last_intensity）与处理设置
@@ -35,12 +35,14 @@ from xrd_toolkit.services import masked2d, process, stage_cache
 
 
 def _ask_save_options(window: QMainWindow):
-    """保存图片选项弹窗：分辨率 dpi + 格式（PNG/TIF）。
+    """保存图片选项弹窗：分辨率 dpi + 格式（PNG/TIF/PDF/SVG）。
 
-    返回 {"dpi": int, "fmt": "png"|"tif"} 或 None（取消 = 整个保存
-    流程中止，不继续弹文件名框）。fmt 既是 currentData 也是扩展名，
-    文件名框的过滤器与自动补后缀都从它来。默认 300 dpi：屏幕看 100
-    dpi 够用，论文/报告印刷要求 300 起步，图大了再往上加。
+    返回 {"dpi": int, "fmt": "png"|"tif"|"pdf"|"svg"} 或 None
+    （取消 = 整个保存流程中止，不继续弹文件名框）。fmt 既是
+    currentData 也是扩展名，文件名框的过滤器与自动补后缀都从它来。
+    默认 300 dpi：屏幕看 100 dpi 够用，论文/报告印刷要求 300 起步，
+    图大了再往上加。PDF/SVG 是矢量图：曲线和文字不糊、能再编辑，
+    dpi 只影响图里内嵌的位图（如 2D 衍射图）。
     """
     dlg = QDialog(window)
     dlg.setWindowTitle("保存图片选项")
@@ -49,11 +51,15 @@ def _ask_save_options(window: QMainWindow):
     dpi_spin.setObjectName("save_dpi_spin")
     dpi_spin.setRange(72, 1200)
     dpi_spin.setValue(300)
+    dpi_spin.setToolTip("位图（PNG/TIF）的分辨率；PDF/SVG 只影响"
+                        "内嵌位图，矢量部分不受影响")
     lay.addRow("分辨率 (dpi)", dpi_spin)
     fmt_combo = QComboBox()
     fmt_combo.setObjectName("save_fmt_combo")
     fmt_combo.addItem("PNG（通用，文件小）", "png")
     fmt_combo.addItem("TIF（无损，论文常用）", "tif")
+    fmt_combo.addItem("PDF（矢量，排版/打印）", "pdf")
+    fmt_combo.addItem("SVG（矢量，可进 Illustrator/Inkscape 再改）", "svg")
     lay.addRow("格式", fmt_combo)
     btn_row = QWidget()
     btn_lay = QHBoxLayout(btn_row)
@@ -69,6 +75,42 @@ def _ask_save_options(window: QMainWindow):
     if dlg.exec() != QDialog.Accepted:
         return None
     return {"dpi": dpi_spin.value(), "fmt": fmt_combo.currentData()}
+
+
+def _resolution_note(options) -> str:
+    """日志里的分辨率说明：位图写 dpi，矢量格式写「矢量」。"""
+    if options["fmt"] in ("png", "tif"):
+        return f"{options['dpi']} dpi"
+    return "矢量"
+
+
+def save_figure_with_options(window: QMainWindow, figure, stem: str,
+                             *, title: str = "保存图片"):
+    """工作台里的单张画布：分辨率/格式弹窗 → 选文件名 → savefig。
+
+    与图面板的 [保存图片…] 共用同一套格式（PNG/TIF/PDF/SVG）和默认
+    300 dpi。工作台的画布不在 `plot_docks` 里，没有"已保存"记账，
+    这里只把当前画面存对；返回保存路径（取消/失败 = None）。
+    """
+    options = _ask_save_options(window)
+    if options is None:
+        return None
+    ext = options["fmt"]
+    default = str(paths.OUTPUTS_DIR / f"{stem}.{ext}")
+    name, _ = QFileDialog.getSaveFileName(
+        window, title, default, f"{ext.upper()} 图片 (*.{ext})")
+    if not name:
+        return None
+    if not name.lower().endswith(f".{ext}"):
+        name += f".{ext}"
+    try:
+        Path(name).parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(name, dpi=options["dpi"])
+    except OSError as err:
+        _log(window, f"保存失败 {Path(name).name}（{err}）")
+        return None
+    _log(window, f"已保存 {Path(name).name}（{_resolution_note(options)}）")
+    return Path(name)
 
 
 def _save_figures(window: QMainWindow) -> bool:
@@ -117,9 +159,9 @@ def _save_figures(window: QMainWindow) -> bool:
         dock.figure_saved = True
         saved += 1
         _log(window, f"已保存 {dock.windowTitle()} → {name}"
-                     f"（{options['dpi']} dpi）")
+                     f"（{_resolution_note(options)}）")
     if saved:
-        _log(window, f"保存完成：{saved} 张图（{options['dpi']} dpi）")
+        _log(window, f"保存完成：{saved} 张图（{_resolution_note(options)}）")
     return skipped == 0
 
 

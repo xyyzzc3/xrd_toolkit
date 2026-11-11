@@ -42,6 +42,7 @@ from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _data_snapshot, _log, _set_focus)
+from xrd_toolkit.gui.plot_export import save_figure_with_options
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
@@ -1096,18 +1097,10 @@ class RefineWorkbench(QWidget):
         if self.result is None:
             return
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        default = paths.default_outputs_dir() / f"refine_{stamp}.png"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存精修图", str(default), "PNG (*.png);;PDF (*.pdf)")
-        if not path:
-            return
-        try:
-            self.fig.savefig(path, dpi=200)
-        except Exception as err:                   # noqa: BLE001
-            self._set_status(f"保存失败：{user_error_text(err)}")
-            return
-        self._set_status(f"已保存 {Path(path).name}")
-        _log(self.main, f"精修图已保存：{path}")
+        saved = save_figure_with_options(
+            self.main, self.fig, f"refine_{stamp}", title="保存精修图")
+        if saved is not None:
+            self._set_status(f"已保存 {saved.name}")
 
     def _copy_report(self):
         if self.result is None:

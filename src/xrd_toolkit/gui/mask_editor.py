@@ -28,6 +28,7 @@ mask 永远是全分辨率；只有**显示**按视图降采样（块内取最�
 像素约定：mask[y, x] = True 表示该像素被遮掉；与
 `services.mask`、`services.integrator` 一致。mask 必须与图像同形。
 """
+import time
 from collections import OrderedDict
 from functools import partial
 from pathlib import Path
@@ -441,6 +442,11 @@ class MaskWorkbench(QWidget):
             "立即重算掩膜前/后的 1D 对比；实时预览开着时会自动更新")
         self.btn_preview.clicked.connect(self._preview_effect)
         row4.addWidget(self.btn_preview)
+        self.btn_save = QPushButton("保存图片…")
+        self.btn_save.setToolTip(
+            "把当前掩膜画布（2D + 1D 预览）存成 PNG/TIF/PDF/SVG")
+        self.btn_save.clicked.connect(self._save_figure)
+        row4.addWidget(self.btn_save)
         self.scope_combo = QComboBox()
         self.scope_combo.addItem("当前图像", "current")
         self.scope_combo.addItem("所有原始图", "all")
@@ -1950,6 +1956,18 @@ class MaskWorkbench(QWidget):
         self._update_overlay()
         self._update_status()
         self._schedule_preview()
+
+    def _save_figure(self):
+        """存当前掩膜画布（主图 + 预览），与面板 [保存图片…] 同一套格式。"""
+        if getattr(self, "image", None) is None:
+            self._say("还没有载入图像")
+            return
+        from xrd_toolkit.gui.plot_export import save_figure_with_options
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        saved = save_figure_with_options(
+            self.main, self.fig, f"mask_{stamp}", title="保存掩膜图")
+        if saved is not None:
+            self._say(f"已保存 {saved.name}")
 
     def _generate_current(self):
         """[生成掩膜 2D]：按下拉框范围（当前图像 / 勾选的 N 个文件）建产物。"""

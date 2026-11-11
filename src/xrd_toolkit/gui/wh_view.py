@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import paths
 from xrd_toolkit.gui.panel_state import _log, _panel_param
 from xrd_toolkit.gui.peak_view import _wavelength_for
+from xrd_toolkit.gui.plot_export import (
+    _ask_save_options, _resolution_note, save_figure_with_options)
 from xrd_toolkit.gui.tasks import user_error_text
 
 WH_INSTRUMENT_KEY = "W-H 仪器 FWHM (°)"
@@ -424,15 +426,12 @@ def show_wh_dialog(window, dock):
     row = QHBoxLayout()
     row.addStretch(1)
     save = QPushButton("保存图片…")
-    save.setToolTip("把这个 W-H 图存成 PNG/PDF")
+    save.setToolTip("把这个 W-H 图存成 PNG/TIF/PDF/SVG")
 
     def _save():
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        default = paths.default_outputs_dir() / f"williamson_hall_{stamp}.png"
-        path, _ = QFileDialog.getSaveFileName(
-            dlg, "保存 W-H 图", str(default), "PNG (*.png);;PDF (*.pdf)")
-        if path:
-            fig.savefig(path, dpi=200)
+        save_figure_with_options(
+            window, fig, f"williamson_hall_{stamp}", title="保存 W-H 图")
 
     save.clicked.connect(_save)
     row.addWidget(save)
@@ -454,25 +453,36 @@ def dock_for_wh(window):
 
 
 def save_wh_plot(window, dock, path=None):
-    """把 W-H 图存成 PNG/PDF；path 给定时不弹框（测试/脚本用）。"""
+    """把 W-H 图存成 PNG/TIF/PDF/SVG；path 给定时不弹框（测试/脚本用）。"""
     result = getattr(dock, "wh_result", None)
     if result is None:
         _log(window, "W-H：先拟合至少 3 根峰")
         return None
+    options = None
     if path is None:
+        options = _ask_save_options(window)
+        if options is None:
+            return None
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        default = paths.default_outputs_dir() / f"williamson_hall_{stamp}.png"
+        ext = options["fmt"]
+        default = (paths.default_outputs_dir()
+                   / f"williamson_hall_{stamp}.{ext}")
         path, _ = QFileDialog.getSaveFileName(
             window, "保存 W-H 图", str(default),
-            "PNG (*.png);;PDF (*.pdf)")
+            f"{ext.upper()} 图片 (*.{ext})")
         if not path:
             return None
+        if not str(path).lower().endswith(f".{ext}"):
+            path = f"{path}.{ext}"
     try:
         from xrd_toolkit.simulation import plot_williamson_hall
         title = dock.windowTitle() or "Williamson–Hall"
-        plot_williamson_hall(result, str(path), title=title)
+        plot_williamson_hall(
+            result, str(path), title=title,
+            dpi=(options["dpi"] if options is not None else 150))
     except Exception as err:                       # noqa: BLE001
         _log(window, f"W-H 图保存失败：{user_error_text(err)}")
         return None
-    _log(window, f"W-H 图已保存：{path}")
+    note = (f"（{_resolution_note(options)}）" if options is not None else "")
+    _log(window, f"W-H 图已保存：{path}{note}")
     return Path(path)
