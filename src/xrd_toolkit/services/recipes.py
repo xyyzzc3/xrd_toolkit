@@ -66,6 +66,31 @@ def load_all() -> dict:
     return {str(k): _norm(v) for k, v in data.items() if isinstance(v, dict)}
 
 
+def normalize(recipe: dict) -> dict:
+    """规范化一份配方但不带 `created`（预设内嵌快照用，2026-11-11）。
+
+    预设是"快照"不是"链接"：存的是此刻的设置，不该因为读一次就更新
+    时间戳；其它字段与 recipes.json 里的配方完全同口径。
+    """
+    out = _norm(dict(recipe or {}))
+    out.pop("created", None)
+    return out
+
+
+def is_meaningful(recipe: dict) -> bool:
+    """这份设置是否值得存进预设：三项全关 / 空扫相减都不算。
+
+    空扫相减靠的是那张空扫图，图本身不在配方里（与 [存成配方…] 的
+    拒绝口径一致，即使同时开了平滑/裁剪也不存）；只开平滑/裁剪则仍然
+    有意义。
+    """
+    norm = normalize(recipe)
+    if norm["mode"] == "blank":
+        return False
+    return (norm["mode"] != "off" or norm["smooth_deg"] > 0
+            or bool(norm["cut_ranges"]))
+
+
 def save(name: str, recipe: dict) -> None:
     """存/覆盖一份命名配方（整表原子重写）。"""
     name = str(name).strip()

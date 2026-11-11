@@ -287,6 +287,7 @@ def build_processing_page(window, form_bg, btns_bg):
     form_bg.addRow(bg_prov_lbl)
     recipe_combo = QComboBox()
     recipe_combo.setToolTip("选一份配方：本图配方：这个文件上次处理用的那套；"
+                            "预设配方：跟着当前项目预设走（切换预设时预选）；"
                             "下面是已保存的命名配方。选好点 [套用] 才生效——"
                             "打开原始条目永远是原始曲线，不会自动扣。")
     window.recipe_combo = recipe_combo

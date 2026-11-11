@@ -469,6 +469,9 @@ def _open_mask_workbench(window: QMainWindow) -> None:
     from xrd_toolkit.gui.mask_editor import MaskWorkbench, _MaskSubWindow
     if getattr(window, "mask_editor", None) is None:
         window.mask_editor = MaskWorkbench(window)
+        apply_preset = getattr(window.mask_editor, "apply_preset", None)
+        if callable(apply_preset):
+            apply_preset(getattr(window, "preset", None) or {})
     dock = getattr(window, "mask_dock", None)
     if dock is None:
         dock = _MaskSubWindow(window)

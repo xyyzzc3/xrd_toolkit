@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
 
+import numpy as np  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -29,6 +30,9 @@ except ModuleNotFoundError:  # 直接运行本文件
 from xrd_toolkit import paths, presets  # noqa: E402
 from xrd_toolkit.config import CONFIGS  # noqa: E402
 from xrd_toolkit.gui import preset_ops  # noqa: E402
+from xrd_toolkit.gui.param_dock import helpers as dock_helpers  # noqa: E402
+from xrd_toolkit.gui.state import processing as gui_processing  # noqa: E402
+from xrd_toolkit.services.mask import save_recipe  # noqa: E402
 
 
 def setUpModule():
@@ -155,6 +159,8 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(values["insitu_dir"], "")
         self.assertEqual(values["phase_library"], "")
         self.assertEqual(values["second_phase_cif"], "")
+        self.assertIsNone(values["processing"])
+        self.assertEqual(values["mask_recipe"], "")
         values["second_phase_cif"] = "Si_9008565.cif"
         self.assertTrue(preset_ops.save_current_preset(
             self.w, "带第二相", values=values))
@@ -163,6 +169,72 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(
             presets.get_preset("带第二相")["second_phase_cif"],
             "Si_9008565.cif")
+
+    def test_save_current_carries_processing_recipe_only_preselects(self):
+        """预设保存当前处理设置；切换后只预选，点 [套用] 才改控件。"""
+        _prime_1d(self.w, ["data/fake_a.tif"])
+        settings = {
+            "mode": "anchor", "window_deg": 2.0,
+            "anchor_method": "pchip", "clip": False,
+            "anchors": [(3.0, 1.0), (4.0, 1.0)],
+            "smooth_deg": 0.15, "smooth_method": "boxcar",
+            "smooth_order": 3, "cut_ranges": [],
+        }
+        with mock.patch.object(gui_processing, "_proc_settings",
+                               return_value=settings):
+            self.assertTrue(preset_ops.save_current_preset(
+                self.w, "带处理"))
+        saved = presets.get_preset("带处理")
+        self.assertEqual(saved["processing"]["mode"], "anchor")
+        self.assertEqual(saved["processing"]["smooth_deg"], 0.15)
+        self.assertNotIn("created", saved["processing"])
+        # 只预选：下拉选中「预设配方」，但处理页控件没被改
+        self.assertEqual(self.w.recipe_combo.currentData(), "preset|带处理")
+        self.assertNotEqual(
+            self.w.params["背景扣除模式"].currentData(), "anchor")
+        # 显式点 [套用] 才生效
+        dock_helpers._apply_selected_recipe(self.w)
+        self.assertEqual(
+            self.w.params["背景扣除模式"].currentData(), "anchor")
+
+    def test_processing_recipe_is_dropped_when_all_off(self):
+        """三项全关 = 没有配方可存，预设里保持未设置。"""
+        _prime_1d(self.w, ["data/fake_a.tif"])
+        settings = {"mode": "off", "window_deg": 0.0,
+                    "anchor_method": "pchip", "clip": False, "anchors": [],
+                    "smooth_deg": 0.0, "smooth_method": "boxcar",
+                    "smooth_order": 3, "cut_ranges": []}
+        with mock.patch.object(gui_processing, "_proc_settings",
+                               return_value=settings):
+            self.assertTrue(preset_ops.save_current_preset(
+                self.w, "无配方"))
+        self.assertIsNone(presets.get_preset("无配方")["processing"])
+
+    def test_preset_mask_recipe_fallback(self):
+        """预设只引用 .mask.npz；该图没自己的配方时用它兜底。"""
+        mask = np.zeros((8, 8), dtype=bool)
+        mask[0, :] = True
+        recipe_path = self.tmp / "lmfp.mask.npz"
+        save_recipe(recipe_path, mask,
+                    meta={"source_image": "some_other_frame.tif"})
+        presets.save_user_preset("带掩膜", {
+            "geometry": "lmfp1_lab6", "second_phase_cif": "",
+            "insitu_dir": "", "insitu_mask_name": "", "phase_library": "",
+            "mask_recipe": str(recipe_path),
+        })
+        self.assertTrue(preset_ops.apply_preset(self.w, "带掩膜"))
+        self.w.mask_btn.click()          # 打开掩膜工作台（创建时接住预设）
+        QApplication.processEvents()
+        editor = self.w.mask_editor
+        self.assertIsNotNone(editor)
+        self.assertEqual(editor.preset_mask_recipe, recipe_path)
+        # 模拟载入一张同形状、但没有自己配方的图 → 预设配方兜底
+        editor.chk_preview.setChecked(False)
+        editor.image = np.zeros((8, 8))
+        editor.image_path = Path("unrelated.tif")
+        editor.apply_preset(self.w.preset)
+        self.assertEqual(editor.mask_path, recipe_path)
+        self.assertTrue(np.array_equal(editor.mask, mask))
 
     def test_empty_insitu_dir_stays_unset(self):
         """预设没写帧目录时，原位工作台显示未设置，不落回 LMFP 默认。"""

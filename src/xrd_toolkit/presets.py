@@ -10,9 +10,16 @@ v0.2.1 B1（2026-11-10）起，预设不再只有内置的一份：
     测试/脚本可用 XRD_USER_PRESETS 整体覆盖），可新增/覆盖/删除；
   * 文件里同时记住最后使用的预设名（`active`），下次启动自动接上。
 
+2026-11-11 起预设还可带两项可选配置（缺省 = 不改这一项）：
+  * `processing`：内嵌一份处理配方（背景 / 平滑 / 裁剪，结构同
+    services.recipes）；切换预设时只在「处理」页配方下拉里**预选**，
+    点 [套用] 才生效，不重跑任何计算；
+  * `mask_recipe`：`.mask.npz` 掩膜配方路径（引用，不内嵌二进制）；
+    Mask 工作台在该图没有自己的配方时用它兜底。
+
 预设只覆盖"换项目时要改的输入"：几何配置、第二相 CIF、原位帧目录、
-原位 mask 文件名、相库目录。它**不改变**原位三相引擎的物理模型
-（仍假定 rich/poor/Al），也不做任意 N 相批量。
+原位 mask 文件名、相库目录（+ 上述两项可选）。它**不改变**原位三相
+引擎的物理模型（仍假定 rich/poor/Al），也不做任意 N 相批量。
 """
 import json
 import os
@@ -20,6 +27,7 @@ import sys
 from pathlib import Path
 
 from xrd_toolkit import paths
+from xrd_toolkit.services import recipes
 
 DEFAULT_PRESET_NAME = "LMFP 三相"
 
@@ -36,9 +44,15 @@ DEFAULTS = {
     "phase_library": "",
 }
 _FIELDS = tuple(DEFAULTS)
+# 可选字段：缺省 = 不改这一项（旧文件/旧预设不会被补成 LMFP 默认值）
+OPTIONAL_DEFAULTS = {
+    "processing": None,       # 内嵌处理配方 dict，或 None
+    "mask_recipe": "",        # .mask.npz 路径（可写 ~/…），或空
+}
 
 BUILTIN_PRESETS = {
-    DEFAULT_PRESET_NAME: {"name": DEFAULT_PRESET_NAME, **DEFAULTS},
+    DEFAULT_PRESET_NAME: {"name": DEFAULT_PRESET_NAME, **DEFAULTS,
+                          **OPTIONAL_DEFAULTS},
 }
 # 旧代码直接读 PROJECT_PRESET；保留为内置预设的副本（不随用户选择变化）
 PROJECT_PRESET = dict(BUILTIN_PRESETS[DEFAULT_PRESET_NAME])
@@ -60,8 +74,23 @@ USER_PRESETS_PATH = Path(os.environ.get(
     "XRD_USER_PRESETS", _default_user_presets_path()))
 
 
+def _clean_processing(raw):
+    """预设里的处理配方：合法且真的会改变曲线才留，否则 None。
+
+    全关 / 空扫相减（空扫图不在配方里）按"未设置"处理；手写文件里
+    一个坏配方只丢这一项，不影响整份预设。
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        norm = recipes.normalize(raw)
+    except (TypeError, ValueError):
+        return None
+    return norm if recipes.is_meaningful(norm) else None
+
+
 def _clean_preset(raw, fallback_name="") -> dict:
-    """校验并规范化一份预设：只留五个字段，缺项补默认值。
+    """校验并规范化一份预设：核心五项补默认、两项可选保持"未设置"。
 
     非法结构抛 ValueError；字段类型不对时用默认值（不因为一个手写
     JSON 的笔误把整份预设丢掉）。名称从 raw["name"] 或 fallback_name
@@ -76,6 +105,9 @@ def _clean_preset(raw, fallback_name="") -> dict:
     for key in _FIELDS:
         value = raw.get(key, DEFAULTS[key])
         out[key] = value.strip() if isinstance(value, str) else DEFAULTS[key]
+    out["processing"] = _clean_processing(raw.get("processing"))
+    mask = raw.get("mask_recipe", "")
+    out["mask_recipe"] = mask.strip() if isinstance(mask, str) else ""
     return out
 
 
@@ -135,10 +167,14 @@ def _write_state(state, path=None) -> None:
     """原子写入预设文件（与 config / 仪器基线同一套先写临时文件再替换）。"""
     path = Path(path) if path is not None else USER_PRESETS_PATH
     payload = {
-        "version": 1,
+        "version": 2,
         "active": str(state.get("active") or DEFAULT_PRESET_NAME),
         "presets": {
-            name: {key: preset.get(key, DEFAULTS[key]) for key in _FIELDS}
+            name: {
+                **{key: preset.get(key, DEFAULTS[key]) for key in _FIELDS},
+                "processing": preset.get("processing"),
+                "mask_recipe": str(preset.get("mask_recipe") or ""),
+            }
             for name, preset in (state.get("presets") or {}).items()
         },
     }

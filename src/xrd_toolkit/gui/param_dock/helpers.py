@@ -137,10 +137,11 @@ def _sync_recipe_rows(window: QMainWindow) -> None:
 
 
 def _recipe_combo_fill(window: QMainWindow) -> None:
-    """配方下拉：本图配方（这个文件上次那套）+ 已保存的命名配方。
+    """配方下拉：本图配方 + 当前预设内嵌配方 + 已保存的命名配方。
 
-    data 用字符串（"local" / "saved|名字"）：`findData` 比的是值，字符串
-    最稳（元组也能比，但不值得赌 PySide 的转换）。
+    data 用字符串（"local" / "preset|预设名" / "saved|名字"）：`findData`
+    比的是值，字符串最稳（元组也能比，但不值得赌 PySide 的转换）。
+    预设配方只是**预选项**，选中不触发任何计算；点 [套用] 才动。
     """
     combo = getattr(window, "recipe_combo", None)
     if combo is None:
@@ -148,11 +149,16 @@ def _recipe_combo_fill(window: QMainWindow) -> None:
     dock = window.plot_docks.get(window.focus_panel)
     path = getattr(dock, "panel_file", None)
     local = (getattr(window, "proc_recipes", None) or {}).get(str(path))
+    preset_name = str(getattr(window, "preset_name", "") or "")
+    preset = getattr(window, "preset", None) or {}
+    has_preset_recipe = bool(preset_name) and bool(preset.get("processing"))
     keep = combo.currentData()
     combo.blockSignals(True)
     combo.clear()
     if local:
         combo.addItem(f"本图配方（{Path(path).name}）", "local")
+    if has_preset_recipe:
+        combo.addItem(f"预设配方（{preset_name}）", f"preset|{preset_name}")
     for name in recipe_store.names():
         combo.addItem(f"已保存：{name}", f"saved|{name}")
     if combo.count() == 0:
@@ -163,7 +169,10 @@ def _recipe_combo_fill(window: QMainWindow) -> None:
 
 
 def _selected_recipe(window: QMainWindow):
-    """下拉里选中的那份配方 → (配方 dict 或 None, 是不是"本图配方")。"""
+    """下拉里选中的那份配方 → (配方 dict 或 None, 是不是"本图配方")。
+
+    “预设配方”直接从当前预设的 `processing` 取（不复制进 recipes.json）。
+    """
     combo = getattr(window, "recipe_combo", None)
     data = combo.currentData() if combo is not None else None
     dock = window.plot_docks.get(window.focus_panel)
@@ -172,7 +181,11 @@ def _selected_recipe(window: QMainWindow):
         return None, False
     if data == "local":
         return (getattr(window, "proc_recipes", None) or {}).get(str(path)), True
-    return recipe_store.load_all().get(str(data).split("|", 1)[1]), False
+    kind, _, key = str(data).partition("|")
+    if kind == "preset":
+        from xrd_toolkit.presets import get_preset
+        return get_preset(key).get("processing"), False
+    return recipe_store.load_all().get(key), False
 
 
 def _apply_selected_recipe(window: QMainWindow) -> None:
@@ -250,6 +263,10 @@ def _delete_selected_recipe(window: QMainWindow) -> None:
     if is_local:
         _log(window, "「本图配方」删不掉——它跟着这个文件走；"
                      "只有 [存成配方…] 存下来的那些能删")
+        return
+    if str(data).startswith("preset|"):
+        _log(window, "「预设配方」跟着项目预设走，不能在这里删；"
+                     "要换配方请改预设，或 [存成配方…] 另存一份")
         return
     name = str(data).split("|", 1)[1]
     if recipe_store.delete(name):

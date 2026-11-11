@@ -12,6 +12,8 @@
     已经退回默认；这里只按退回后的值应用。
   * 预设只改默认输入，不重跑任何计算；已有结果留着，物相旧候选会被
     清掉（相库/第二相变了，旧候选不再对应）。
+  * 预设内嵌的处理配方只预选到「处理」页配方下拉，点 [套用] 才生效；
+    掩膜配方只在 Mask 工作台按图兜底，不生成掩膜 2D。
   * 当前几何偏离预设时，下拉顶部显示「（当前设置）」虚拟项（只提示、
     不可应用）；校准/导入新几何后用日志提示怎么把它接回预设。
 """
@@ -30,6 +32,8 @@ from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, get_preset, is_builtin, preset_names,
     preset_phase_library, remove_user_preset, save_user_preset,
     set_active_preset)
+from xrd_toolkit.services import process, recipes
+from xrd_toolkit.services.mask import is_recipe
 
 
 # 预设下拉里的虚拟项：当前几何已经偏离预设时显示，只作状态提示，不可"应用"。
@@ -72,12 +76,22 @@ def _portable_dir(path) -> str:
     return "~" if str(rel) == "." else "~/" + str(rel)
 
 
-def current_preset_values(window, base_name=None) -> dict:
-    """把当前窗口**实际设置过**的五项输入读成预设 dict。
+def _processing_snapshot(settings) -> dict:
+    """当前处理设置 → 预设内嵌配方；三项全关 / 空扫相减返回 None。"""
+    if not isinstance(settings, dict):
+        return None
+    if not recipes.is_meaningful(settings):
+        return None
+    return recipes.normalize(settings)
 
-    默认（base_name=None）是"诚实快照"：没打开过的物相/精修/原位工作台
-    以及没有独立控件的第二相一律留空，不借用任何预设或内置默认值——
-    「（当前设置）」显示与 `[保存…]` 都按这个口径。
+
+def current_preset_values(window, base_name=None) -> dict:
+    """把当前窗口**实际设置过**的输入读成预设 dict（七项）。
+
+    默认（base_name=None）是"诚实快照"：没打开过的物相/精修/原位工作台、
+    没有独立控件的第二相、没有编辑对象时的处理配方、没载入图像的掩膜
+    配方一律留空，不借用任何预设或内置默认值——「（当前设置）」显示与
+    `[保存…]` 都按这个口径。
 
     base_name 给定时（`[用当前设置更新]` 的目标预设），没打开的字段用
     目标预设补齐：更新是合并，不是清空。
@@ -99,6 +113,8 @@ def current_preset_values(window, base_name=None) -> dict:
         "phase_library": (
             "" if phase_lib is None or phase_lib == paths.structures_dir()
             else _portable_dir(phase_lib)),
+        "processing": base.get("processing"),
+        "mask_recipe": str(base.get("mask_recipe") or ""),
     }
     insitu = getattr(window, "insitu_editor", None)
     if insitu is not None:
@@ -108,6 +124,28 @@ def current_preset_values(window, base_name=None) -> dict:
             else "")
         values["insitu_mask_name"] = (insitu.mask_path.name
                                       if insitu.mask_path else "")
+
+    # 处理配方：只在真的有编辑对象（1D 面板）时读当前设置；
+    # 没打开 1D / 拿不到文件 → 保留 base（更新）或未设置（保存）。
+    docks = getattr(window, "plot_docks", None) or {}
+    dock = docks.get(getattr(window, "focus_panel", None))
+    panel_file = getattr(dock, "panel_file", None)
+    if dock is not None and panel_file is not None:
+        from xrd_toolkit.gui.state.processing import _proc_settings
+        try:
+            values["processing"] = _processing_snapshot(
+                _proc_settings(window, dock, panel_file))
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    # 掩膜配方：Mask 工作台已载入图像时，才认它当前那份 .mask.npz。
+    mask_editor = getattr(window, "mask_editor", None)
+    if (mask_editor is not None
+            and getattr(mask_editor, "image", None) is not None):
+        mask_path = getattr(mask_editor, "mask_path", None)
+        values["mask_recipe"] = (
+            _portable_dir(mask_path)
+            if mask_path is not None and is_recipe(mask_path) else "")
     return values
 
 
@@ -152,6 +190,28 @@ def refresh_preset_combo(window, select=None) -> None:
     combo.blockSignals(False)
 
 
+def _preselect_preset_recipe(window) -> None:
+    """把预设内嵌的处理配方预选到「配方」下拉——只选中，不套用。
+
+    选中本身不连任何槽（[套用] 才是动作），所以不会重算曲线；用户
+    打开「处理」页就能看到"预设配方"已选中，点 [套用] 才生效。
+    """
+    preset = getattr(window, "preset", None) or {}
+    if not preset.get("processing"):
+        return
+    try:
+        from xrd_toolkit.gui.param_dock.helpers import _recipe_combo_fill
+    except ImportError:                       # 参数坞还没建好（极早期）
+        return
+    _recipe_combo_fill(window)
+    combo = getattr(window, "recipe_combo", None)
+    if combo is None:
+        return
+    idx = combo.findData(f"preset|{preset.get('name', '')}")
+    if idx >= 0:
+        combo.setCurrentIndex(idx)
+
+
 def apply_preset(window, name, *, persist=True) -> bool:
     """应用一份预设到当前窗口；成功 True。
 
@@ -181,7 +241,8 @@ def apply_preset(window, name, *, persist=True) -> bool:
         combo.setCurrentIndex(idx)          # 触发 _apply_config
     for attr, method in (("phase_editor", "apply_preset"),
                          ("refine_editor", "apply_preset"),
-                         ("insitu_editor", "apply_preset")):
+                         ("insitu_editor", "apply_preset"),
+                         ("mask_editor", "apply_preset")):
         editor = getattr(window, attr, None)
         if editor is not None and hasattr(editor, method):
             getattr(editor, method)(preset)
@@ -191,10 +252,21 @@ def apply_preset(window, name, *, persist=True) -> bool:
         except (OSError, ValueError) as err:
             _log(window, f"预设状态写入失败：{user_error_text(err)}")
     refresh_preset_combo(window, preset["name"])
+    _preselect_preset_recipe(window)
     for warning in preset.get("warnings") or []:
         _log(window, f"预设提示：{warning}")
+    extras = []
+    if preset.get("processing"):
+        extras.append("处理配方：" + process.chain_label(preset["processing"])
+                      + "（已预选，点 [套用] 才生效）")
+    raw_mask = str(preset.get("mask_recipe") or "").strip()
+    if raw_mask:
+        mask_path = Path(raw_mask).expanduser()
+        extras.append("掩膜配方：" + mask_path.name
+                      + ("" if mask_path.is_file() else "（未找到）"))
+    tail = f"；{'；'.join(extras)}" if extras else ""
     _log(window, f"已应用项目预设：{preset['name']}"
-                 f"（几何 {preset['geometry']}）")
+                 f"（几何 {preset['geometry']}{tail}）")
     return True
 
 
@@ -308,7 +380,7 @@ def save_preset_dialog(window) -> None:
 
 
 def _fields_text(values, *, empty_library=None) -> str:
-    """五项输入的摘要文本（预设与「当前设置」共用）。
+    """七项输入的摘要文本（预设与「当前设置」共用）。
 
     empty_library：相库字段为空时显示什么。预设里空＝随包参考 CIF 目录
     （显示实际路径）；「当前设置」里空＝这次没设置过（显示「（未设置）」）。
@@ -319,12 +391,24 @@ def _fields_text(values, *, empty_library=None) -> str:
     library = values.get("phase_library") or (
         empty_library if empty_library is not None
         else str(paths.structures_dir()))
+    processing = values.get("processing")
+    proc_text = (process.chain_label(processing)
+                 if isinstance(processing, dict) else "（未设置）")
+    raw_mask = str(values.get("mask_recipe") or "").strip()
+    if raw_mask:
+        mask_path = Path(raw_mask).expanduser()
+        mask_text = str(mask_path) + (
+            "" if mask_path.is_file() else "（未找到）")
+    else:
+        mask_text = "（未设置）"
     return (
         f"几何配置：{geom}\n"
         f"第二相 CIF：{values.get('second_phase_cif') or '（无）'}\n"
         f"原位帧目录：{values.get('insitu_dir') or '（未设置）'}\n"
         f"原位掩膜：{values.get('insitu_mask_name') or '（不遮）'}\n"
-        f"相库目录：{library}")
+        f"相库目录：{library}\n"
+        f"处理配方：{proc_text}\n"
+        f"掩膜配方：{mask_text}")
 
 
 def _summary_text(preset) -> str:
@@ -354,9 +438,11 @@ class PresetManagerDialog(QDialog):
 
         root = QVBoxLayout(self)
         hint = QLabel(
-            "预设保存五项输入：几何配置、第二相 CIF、原位帧目录、"
-            "原位掩膜、相库目录。\n"
-            "先把工作台里的目录/掩膜调好，再点 [保存当前…]。")
+            "预设保存七项输入：几何配置、第二相 CIF、原位帧目录、"
+            "原位掩膜、相库目录、处理配方、掩膜配方。\n"
+            "处理配方切换时只预选，点 [套用] 才生效；"
+            "掩膜配方在 Mask 工作台按图兜底。\n"
+            "先把工作台里的目录/掩膜/处理设置调好，再点 [保存当前…]。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
@@ -378,7 +464,8 @@ class PresetManagerDialog(QDialog):
         self.apply_btn.clicked.connect(self._apply)
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
-            "用当前窗口的几何 / 相库 / 原位目录 / 掩膜覆盖选中的用户预设；"
+            "用当前窗口的几何 / 相库 / 原位目录 / 掩膜 / 处理配方 / "
+            "掩膜配方覆盖选中的用户预设；"
             "没打开的工作台与第二相保留该预设原值")
         self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除")
@@ -406,7 +493,7 @@ class PresetManagerDialog(QDialog):
         if dirty:
             item = QListWidgetItem(CURRENT_PRESET_TEXT + "    （未保存）")
             item.setData(Qt.UserRole, None)   # 虚拟行：不对应任何文件条目
-            item.setToolTip("当前窗口实际使用的五项输入；未保存为预设")
+            item.setToolTip("当前窗口实际使用的七项输入；未保存为预设")
             self.list.addItem(item)
         for name in preset_names():
             item = QListWidgetItem(
@@ -450,7 +537,7 @@ class PresetManagerDialog(QDialog):
         self.delete_btn.setEnabled(not is_builtin(name))
 
     def _update(self):
-        """用当前窗口的五项输入覆盖选中的用户预设。
+        """用当前窗口的七项输入覆盖选中的用户预设。
 
         第二相没有独立控件，保留预设里原来的值；内置预设只读。若更新的
         正是当前预设，顺手重新应用一遍（相库/原位目录等跟着刷新）。
@@ -460,7 +547,8 @@ class PresetManagerDialog(QDialog):
             return
         answer = QMessageBox.question(
             self, "更新预设",
-            f"用当前窗口的几何 / 相库 / 原位目录 / 掩膜覆盖用户预设"
+            f"用当前窗口的几何 / 相库 / 原位目录 / 掩膜 / 处理配方 / "
+            f"掩膜配方覆盖用户预设"
             f"「{name}」？\n没打开的工作台与第二相 CIF 保留该预设原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:

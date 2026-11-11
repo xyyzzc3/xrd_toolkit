@@ -119,6 +119,9 @@ class MaskWorkbench(QWidget):
         self.mask = None
         self._source = None          # uint8：每个掩膜像素的来源（只影响配色）
         self.mask_path = None
+        # 项目预设里的掩膜配方：只作兜底（该图自己的配方优先），不生成产物
+        self.preset_mask_recipe = None
+        self._preset_mask_geometry = ""
         self._undo = []
         self._tool = self.TOOL_BRUSH
         self._drawing = False
@@ -735,6 +738,84 @@ class MaskWorkbench(QWidget):
                      if meta.get("mask_path") else None)
         return mask, source, mask_path
 
+    # ── 项目预设的掩膜配方（2026-11-11）────────────────────────────
+    def apply_preset(self, preset):
+        """记住项目预设里的掩膜配方；当前图兼容时载入，不生成产物。
+
+        掩膜跟几何走（与原位 mask 同一条规矩）：几何不一致时不认。
+        该图自己的配方/本会话缓存优先，预设只作兜底。
+        """
+        preset = preset or {}
+        raw = str(preset.get("mask_recipe") or "").strip()
+        geom = str(preset.get("geometry") or "")
+        current = str(getattr(self.main, "config_name", "") or "")
+        self._preset_mask_geometry = geom
+        self.preset_mask_recipe = None
+        if not raw or not geom or current != geom:
+            return
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            self._say(f"预设的掩膜配方不存在：{path}")
+            return
+        if not is_recipe(path):
+            self._say(f"预设的掩膜配方不是 .mask.npz：{path}")
+            return
+        self.preset_mask_recipe = path
+        if self.image is not None and self._apply_recipe_file(path):
+            self._say(f"已载入预设的掩膜配方：{path.name}")
+
+    def _preset_recipe_for_image(self, shape):
+        """该图没有自己的掩膜配方时，用预设配方兜底。"""
+        path = self.preset_mask_recipe
+        if path is None or not path.is_file():
+            return None
+        if (self._preset_mask_geometry
+                and str(getattr(self.main, "config_name", "") or "")
+                != self._preset_mask_geometry):
+            return None
+        try:
+            mask, source, _meta = load_recipe(path)
+        except Exception:                              # noqa: BLE001
+            return None
+        if mask.shape != tuple(shape):
+            return None
+        return mask, source, path
+
+    def _set_mask(self, mask, source, path):
+        """把一份掩膜装进编辑器（导入配方/预设兜底共用）。
+
+        形状由调用方先验；这里只负责状态与界面同步。
+        """
+        self.mask = np.array(mask, dtype=bool, copy=True)
+        if source is None:
+            self._source = np.where(self.mask, SRC_MANUAL, 0).astype(np.uint8)
+        else:
+            self._source = np.asarray(source, dtype=np.uint8).copy()
+            self._source[~self.mask] = 0
+            self._source[self._source > SRC_MANUAL] = SRC_MANUAL
+        self.mask_path = Path(path) if path is not None else None
+        self._undo.clear()
+        self._set_last_added(None)
+        self._update_overlay()
+        self._update_status()
+        self._schedule_preview()
+
+    def _apply_recipe_file(self, path):
+        """读一份 .mask.npz 装进当前图；读失败/形状不符只记日志。"""
+        if self.image is None:
+            return False
+        try:
+            mask, source, _meta = load_recipe(path)
+        except Exception as err:                       # noqa: BLE001
+            self._say(f"掩膜配方读取失败：{Path(path).name}（{err}）")
+            return False
+        if mask.shape != self.image.shape:
+            self._say(f"掩膜配方 {Path(path).name} 形状 {mask.shape} 与当前图 "
+                      f"{self.image.shape} 不一致，未载入")
+            return False
+        self._set_mask(mask, source, path)
+        return True
+
     def load_image(self, path):
         try:
             img = load_diffraction_image(str(path))
@@ -761,9 +842,13 @@ class MaskWorkbench(QWidget):
             if loaded is not None:
                 self.mask, self._source, self.mask_path = loaded
             else:
-                self.mask = np.zeros(img.shape, dtype=bool)
-                self._source = np.zeros(img.shape, dtype=np.uint8)
-                self.mask_path = None
+                preset_hit = self._preset_recipe_for_image(img.shape)
+                if preset_hit is not None:
+                    self.mask, self._source, self.mask_path = preset_hit
+                else:
+                    self.mask = np.zeros(img.shape, dtype=bool)
+                    self._source = np.zeros(img.shape, dtype=np.uint8)
+                    self.mask_path = None
         self._ensure_source()
         self._undo.clear()
         self._set_last_added(None)
@@ -774,6 +859,9 @@ class MaskWorkbench(QWidget):
         self._update_status()
         self._say(f"掩膜编辑器：载入 {self.image_path.name}"
                        f"（{img.shape[0]}×{img.shape[1]} px）")
+        if (self.preset_mask_recipe is not None
+                and self.mask_path == self.preset_mask_recipe):
+            self._say(f"掩膜：用预设配方兜底（{self.mask_path.name}）")
 
     def _display_ds(self):
         """显示降采样倍数：屏幕上 1 px 不必对应多于 ~1 个图像块。"""
@@ -1547,20 +1635,7 @@ class MaskWorkbench(QWidget):
                 self, "形状不一致",
                 f"掩膜 {mask.shape} 与图像 {self.image.shape} 不一致")
             return
-        self.mask = mask
-        if src is None:
-            # 通用掩膜没有来源信息：统一按“手动”（红）显示
-            self._source = np.where(mask, SRC_MANUAL, 0).astype(np.uint8)
-        else:
-            self._source = src.astype(np.uint8, copy=True)
-            self._source[~mask] = 0
-            self._source[self._source > SRC_MANUAL] = SRC_MANUAL
-        self.mask_path = p
-        self._undo.clear()
-        self._set_last_added(None)
-        self._update_overlay()
-        self._update_status()
-        self._schedule_preview()
+        self._set_mask(mask, src, p)
         if is_recipe(p):
             self._say(f"掩膜配方已导入：{p}"
                            "（来源分层已恢复；点 [生成掩膜 2D] 才会建产物）")

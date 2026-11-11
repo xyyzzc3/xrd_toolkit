@@ -108,6 +108,70 @@ class TestPresetService(unittest.TestCase):
             {"phase_library": "/definitely/not/a/dir"})
         self.assertEqual(got, paths.structures_dir())
 
+    def test_processing_and_mask_roundtrip(self):
+        """可选两项随预设存取；配方归一化但不带 created 时间戳。"""
+        path = _tmp_path()
+        processing = {
+            "mode": "anchor", "window_deg": 2.0, "anchor_method": "pchip",
+            "clip": True, "anchors": [[3.0, 100.0], [4.5, 90.0]],
+            "smooth_deg": 0.15, "smooth_method": "boxcar",
+            "smooth_order": 3, "cut_ranges": [[2.0, 3.0]],
+        }
+        values = {
+            "geometry": "lmfp1_lab6", "second_phase_cif": "",
+            "insitu_dir": "", "insitu_mask_name": "", "phase_library": "",
+            "processing": processing,
+            "mask_recipe": "~/masks/lmfp.mask.npz",
+        }
+        presets.save_user_preset("带配方", values, path=path)
+        preset = presets.get_preset("带配方", path)
+        self.assertEqual(preset["processing"]["mode"], "anchor")
+        self.assertEqual(preset["processing"]["anchors"],
+                         [[3.0, 100.0], [4.5, 90.0]])
+        self.assertEqual(preset["processing"]["smooth_deg"], 0.15)
+        self.assertNotIn("created", preset["processing"])
+        self.assertEqual(preset["mask_recipe"], "~/masks/lmfp.mask.npz")
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["version"], 2)
+        self.assertEqual(raw["presets"]["带配方"]["processing"]["mode"],
+                         "anchor")
+        self.assertEqual(raw["presets"]["带配方"]["mask_recipe"],
+                         "~/masks/lmfp.mask.npz")
+
+    def test_processing_only_when_meaningful(self):
+        """全关 / 空扫相减不算配方；只开平滑/裁剪仍然算。"""
+        path = _tmp_path()
+        base = {"geometry": "lmfp1_lab6"}
+        presets.save_user_preset(
+            "全关", {**base, "processing": {"mode": "off"}}, path=path)
+        presets.save_user_preset(
+            "空扫", {**base, "processing": {"mode": "blank"}}, path=path)
+        presets.save_user_preset(
+            "空扫加平滑", {**base, "processing": {"mode": "blank",
+                                                "smooth_deg": 0.2}}, path=path)
+        presets.save_user_preset(
+            "只平滑", {**base, "processing": {"mode": "off",
+                                             "smooth_deg": 0.2}}, path=path)
+        self.assertIsNone(presets.get_preset("全关", path)["processing"])
+        self.assertIsNone(presets.get_preset("空扫", path)["processing"])
+        self.assertIsNone(
+            presets.get_preset("空扫加平滑", path)["processing"])
+        self.assertEqual(
+            presets.get_preset("只平滑", path)["processing"]["smooth_deg"],
+            0.2)
+
+    def test_old_file_without_optional_fields(self):
+        """version 1 文件读进来：两个可选字段保持未设置，不补 LMFP 默认。"""
+        path = _tmp_path()
+        path.write_text(json.dumps({
+            "version": 1, "active": "旧预设",
+            "presets": {"旧预设": {"geometry": "lmfp1_lab6"}},
+        }, ensure_ascii=False), encoding="utf-8")
+        preset = presets.get_preset("旧预设", path)
+        self.assertIsNone(preset["processing"])
+        self.assertEqual(preset["mask_recipe"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
