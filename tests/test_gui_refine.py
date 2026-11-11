@@ -168,12 +168,13 @@ class TestRefineWorkbench(unittest.TestCase):
             kind=gui_refine.gui_sources.BG, display="fake_bg.tif",
             path="data/fake_bg.tif", key="deadbeef")
         key = f"product:{gui_refine.gui_sources.source_id(source)}"
-        editor._product_sources[key] = source
-        with mock.patch.object(gui_refine.gui_sources, "load_product",
-                               return_value=curve):
-            editor.curve_combo.addItem("fake_bg.tif（处理产物）", key)
-            editor.curve_combo.setCurrentIndex(
-                editor.curve_combo.findData(key))
+        with mock.patch.object(gui_refine.gui_sources, "all_sources",
+                               return_value=[source]), \
+                mock.patch.object(gui_refine.gui_sources, "load_product",
+                                  return_value=curve):
+            self.assertTrue(editor.select_source(source),
+                            "双击路由应能把产物设为当前曲线")
+            self.assertEqual(editor.curve_combo.currentData(), key)
             data = editor._curve_data()
             self.assertIsNotNone(data)
             self.assertEqual(len(data[0]), 500)

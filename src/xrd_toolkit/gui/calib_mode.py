@@ -55,7 +55,8 @@ def _refresh_calib_file_combo(window: QMainWindow) -> None:
     """把文件栏里的原始数据搬进校准页「标样文件」下拉。
 
     保留当前 `calib_path`；不在文件栏的（[打开…] 临时选的）也补一条，
-    避免下拉和实际标样对不上。文件栏收起后，这个下拉就是唯一入口。
+    避免下拉和实际标样对不上。文件栏里双击原始图也能换标样，
+    这个下拉是同一件事的镜像/兜底。
     """
     combo = getattr(window, "calib_file_combo", None)
     if combo is None:
@@ -77,12 +78,11 @@ def _refresh_calib_file_combo(window: QMainWindow) -> None:
         combo.addItem("（还没有原始数据：点 [打开…] 选标样）", "")
 
 
-def _on_calib_file_changed(window: QMainWindow, index: int) -> None:
-    """下拉换标样：立即开/换校准面板（不再依赖文件栏勾选）。"""
-    combo = getattr(window, "calib_file_combo", None)
-    path = combo.itemData(index) if combo is not None else None
-    if not path:
-        return
+def _select_calib_file(window: QMainWindow, path) -> None:
+    """选一张标样：开/换校准面板、预填条目名、同步下拉。
+
+    下拉换标样与文件栏双击（2026-11-11：双击 = 对这一个操作）共用。
+    """
     path = Path(path)
     if (getattr(window, "calib_dock", None) is not None
             and getattr(window, "calib_key", None) == f"校准|{path}"):
@@ -90,7 +90,16 @@ def _on_calib_file_changed(window: QMainWindow, index: int) -> None:
     _open_calib_panel(window, path)
     if getattr(window, "calib_dock", None) is not None:
         _refresh_config_name_prefill(window)
+        _refresh_calib_file_combo(window)
         _log(window, f"标样文件：{path.name}")
+
+
+def _on_calib_file_changed(window: QMainWindow, index: int) -> None:
+    """下拉换标样：立即开/换校准面板（不再依赖文件栏勾选）。"""
+    combo = getattr(window, "calib_file_combo", None)
+    path = combo.itemData(index) if combo is not None else None
+    if path:
+        _select_calib_file(window, path)
 
 
 def _choose_calib_file(window: QMainWindow) -> None:
@@ -100,12 +109,7 @@ def _choose_calib_file(window: QMainWindow) -> None:
         window, "选择标样文件", str(start), FILE_FILTER)
     if not path:
         return
-    window.calib_path = Path(path)
-    _refresh_calib_file_combo(window)
-    _open_calib_panel(window, Path(path))
-    if getattr(window, "calib_dock", None) is not None:
-        _refresh_config_name_prefill(window)
-        _log(window, f"标样文件：{Path(path).name}")
+    _select_calib_file(window, Path(path))
 
 
 def _enter_calib(window: QMainWindow) -> None:
@@ -133,13 +137,13 @@ def _enter_calib(window: QMainWindow) -> None:
     # 整条隐藏（2026-11-05，与四个中央工作台同一口径）。放在"没勾文件"
     # 提前返回之前——没文件也要能退出，退出时统一恢复。
     _set_bottom_strip_visible(window, False)
-    # 文件栏同样收起（2026-11-11）：校准页自带「标样文件」下拉，不再依赖
-    # 文件栏勾选；退出时按进入前的状态恢复。
+    # 文件栏保持可见（2026-11-11 晚：双击 = 对这一个操作，校准也不例外）；
+    # 页顶「标样文件」下拉仍作镜像/兜底。退出时按进入前的状态恢复。
     if hasattr(window, "_dock_intent"):
         if getattr(window, "_calib_dock_saved", None) is None:
             window._calib_dock_saved = {
                 "文件": window._dock_intent.get("文件", True)}
-        window._dock_intent["文件"] = False
+        window._dock_intent["文件"] = True
         # 进校准露坞同理记意图（见 app._switch_entrance 的同款记账）：不记
         # 的话意图还停在开局的 False，窗口状态一变（全屏/最小化恢复）就会
         # 被 _resync_docks 收回去。和文件栏一起 resync，避免先把参数坞

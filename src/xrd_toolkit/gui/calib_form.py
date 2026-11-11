@@ -242,8 +242,8 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.setSpacing(4)
 
     # ── 标样文件（2026-11-11）────────────────────────────────────
-    # 文件栏在校准模式下收起；这个下拉是标样的唯一入口，选谁就开/换
-    # 校准面板。旧的"勾选第一张原始图"降为兜底（见 calib_panel）。
+    # 这个下拉与文件栏双击互为镜像：选谁就开/换校准面板。
+    # 旧的"勾选第一张原始图"降为兜底（见 calib_panel）。
     std_box = QGroupBox("① 标样文件（第一步）")
     std_row = QHBoxLayout(std_box)
     std_row.setSpacing(4)

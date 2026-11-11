@@ -617,6 +617,18 @@ class RefineWorkbench(QWidget):
             return
         self.curve_combo.setCurrentIndex(idx)
 
+    def select_source(self, source):
+        """文件栏双击：把这一条 1D/处理产物设为当前曲线。"""
+        self.refresh_curves()
+        sid = gui_sources.source_id(source)
+        for key in (f"1D|{sid}", f"product:{sid}"):
+            idx = self.curve_combo.findData(key)
+            if idx >= 0:
+                self.curve_combo.setCurrentIndex(idx)
+                return True
+        self._set_status("这条数据还没有可用的 1D 曲线；先在 1D 页出图")
+        return False
+
     def _on_curve_changed(self):
         curve = self._curve_data()
         tth = curve[0] if curve is not None else None

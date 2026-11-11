@@ -210,7 +210,7 @@ class MaskWorkbench(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
 
-        # ── 图像行：工作台自带的原始图下拉（2026-11-11 文件栏收起）──
+        # ── 图像行：工作台自带的原始图下拉（与文件栏双击互为镜像）──
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("图像"))
         self.image_combo = QComboBox()
@@ -448,7 +448,7 @@ class MaskWorkbench(QWidget):
         self.scope_combo.setCurrentIndex(0)      # 默认：只动当前图
         self.scope_combo.setToolTip(
             "生成掩膜 2D 的范围：当前图像 / 所有原始图 / 自己勾选一个清单；"
-            "文件栏在这个工作台里是收起的")
+            "换当前图像也可以在文件栏里双击")
         self._scope_paths = []
         self._scope_prev_index = 0
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)

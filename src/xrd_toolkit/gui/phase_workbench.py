@@ -120,22 +120,14 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     matches = ps.screen_phases(
         obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
         tol=float(tol), skip_names=skip_names)
-    # 先拿最佳候选估一个全局 2θ 零位，再按对齐后的位置重新打分：
-    # 结构峰“总在实验峰右边”多半是零位没校，对齐后叠图才可信。
-    # 最多两轮（换候选时零位估计会变）；变化小于 0.005° 就停。
+    # 拿最佳候选估一个全局 2θ 零位，只用于叠图/后续输出——不重新跑一遍
+    # 全库打分：零位主要影响"看起来贴不贴"，排序仍是零位 0 下的结果；
+    # 重打分会让大库筛相变慢一倍（2026-11-11 实测小库都跑超 30 s）。
     zero = 0.0
-    for _ in range(2):
-        if not matches:
-            break
-        new_zero = ps.estimate_zero(
+    if matches:
+        zero = ps.estimate_zero(
             obs_t, matches[0].structure, lam, tmin, tmax,
             scale=matches[0].scale)
-        if abs(new_zero - zero) < 0.005:
-            break
-        zero = new_zero
-        matches = ps.screen_phases(
-            obs_t, lib, lam, tmin, tmax, zero, elements=elements,
-            tol=float(tol), skip_names=skip_names)
     rows = []
     for match in matches:
         d0, inten = ps.reflection_data(match.structure, lam, tmin, tmax)
@@ -416,6 +408,18 @@ class PhaseWorkbench(QWidget):
         if idx >= 0:
             self.curve_combo.setCurrentIndex(idx)
         self._on_curve_changed(clear=False)
+
+    def select_source(self, source):
+        """文件栏双击：把这一条 1D/处理产物设为当前曲线。"""
+        self.refresh_curves()
+        sid = gui_sources.source_id(source)
+        for key in (f"1D|{sid}", f"product:{sid}"):
+            idx = self.curve_combo.findData(key)
+            if idx >= 0:
+                self.curve_combo.setCurrentIndex(idx)
+                return True
+        self._set_status("这条数据还没有可用的 1D 曲线；先在 1D 页出图")
+        return False
 
     def _on_curve_changed(self, clear=False):
         curve = self._selected_curve()

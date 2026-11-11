@@ -421,8 +421,29 @@ class TestCalibration(unittest.TestCase):
                 combo.setCurrentIndex(idx)
                 QApplication.processEvents()
                 self.assertIn("fake_b.tif", w.calib_dock.windowTitle())
-                self.assertFalse(w.file_dock.isVisible(),
-                                 "校准模式下文件栏应收起")
+                self.assertTrue(w.file_dock.isVisible(),
+                                "2026-11-11 起校准模式保留文件栏（双击换标样）")
+        finally:
+            w.close()
+
+    def test_double_click_raw_switches_standard(self):
+        """2026-11-11：校准里双击文件栏 = 换这张标样（不再只靠下拉）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"], select=False)
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.calib_btn.click()
+                QApplication.processEvents()
+                self.assertIn("fake_a.tif", w.calib_dock.windowTitle())
+                gui_file_dock._open_entry_view(
+                    w, w.file_list.raw_group.child(1), explicit=False)
+                QApplication.processEvents()
+                self.assertIn("fake_b.tif", w.calib_dock.windowTitle(),
+                              "双击第二张应换到它")
+                self.assertEqual(Path(w.calib_file_combo.currentData()).name,
+                                 "fake_b.tif", "下拉要跟着镜像当前标样")
         finally:
             w.close()
 

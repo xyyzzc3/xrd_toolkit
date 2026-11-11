@@ -460,6 +460,47 @@ def _exit_other_workbenches(window: QMainWindow, keep, *,
             btn.setChecked(False)
 
 
+def _open_entry_in_workbench(window: QMainWindow, item) -> bool:
+    """文件栏双击的路由：工作台开着时，这一条就是"当前对象"。
+
+    校准：换标样；掩膜：换当前图像（批量范围仍用勾选）；物相/精修：
+    换当前 1D 曲线（含处理产物）；原位：提示用勾选批量。返回 True =
+    这一下已经消费掉，不再走默认的"打开 2D/1D 面板"。
+    """
+    src = gui_sources.source_of(item)
+    if src is None:
+        return False
+    if (getattr(window, "calib_btn", None) is not None
+            and window.calib_btn.isChecked()):
+        if src.kind != gui_sources.RAW:
+            return False
+        from xrd_toolkit.gui.calib_mode import _select_calib_file
+        _select_calib_file(window, src.path)
+        return True
+    if getattr(window, "_mask_active", False):
+        if src.kind != gui_sources.RAW:
+            return False
+        editor = getattr(window, "mask_editor", None)
+        if editor is None:
+            return False
+        editor.load_image(Path(src.path))
+        return True
+    if getattr(window, "_phase_active", False) or getattr(
+            window, "_refine_active", False):
+        if src.kind not in (gui_sources.ONED, gui_sources.BG):
+            return False
+        editor = (window.phase_editor if getattr(window, "_phase_active", False)
+                  else window.refine_editor)
+        if editor is None or not hasattr(editor, "select_source"):
+            return False
+        return editor.select_source(src)
+    if (getattr(window, "_insitu_active", False)
+            and src.kind == gui_sources.RAW):
+        _log(window, "原位是批量：先勾选帧，再点 [用勾选的原始数据]")
+        return True
+    return False
+
+
 def _open_mask_workbench(window: QMainWindow) -> None:
     """打开/前置中央掩膜工作台（工具栏 [掩膜]）。
 
@@ -501,7 +542,7 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     window._mask_dock_saved = {
         name: window._dock_intent.get(name, False)
         for name in ("文件", "参数", "日志")}
-    window._dock_intent["文件"] = False
+    window._dock_intent["文件"] = True
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -604,7 +645,7 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     window._refine_dock_saved = {
         name: window._dock_intent.get(name, False)
         for name in ("文件", "参数", "日志")}
-    window._dock_intent["文件"] = False
+    window._dock_intent["文件"] = True
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -686,7 +727,7 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     window._phase_dock_saved = {
         name: window._dock_intent.get(name, False)
         for name in ("文件", "参数", "日志")}
-    window._dock_intent["文件"] = False
+    window._dock_intent["文件"] = True
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -767,7 +808,7 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
     window._insitu_dock_saved = {
         name: window._dock_intent.get(name, False)
         for name in ("文件", "参数", "日志")}
-    window._dock_intent["文件"] = False
+    window._dock_intent["文件"] = True
     window._dock_intent["参数"] = False
     window._dock_intent["日志"] = False
     _resync_docks(window)
@@ -1259,6 +1300,8 @@ def create_window() -> QMainWindow:
     # 不该有"改用户文件"的副作用；迁移放在 main()，真启动时才跑一次。
     window.preset_name = active_preset_name()
     window.preset = get_preset(window.preset_name)
+    window.open_entry_in_workbench = (
+        lambda item: _open_entry_in_workbench(window, item))
     window.param_dock = _build_param_dock(window)
     window.log_dock = _build_log_dock(window)
     # 日志"两边缩"（用户 2026-10-07）：两个底角归左右区 → 文件栏/参数栏

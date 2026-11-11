@@ -168,6 +168,9 @@ class TestPhaseWorkbench(unittest.TestCase):
                     for i in range(editor.curve_combo.count())]
             self.assertIn(key, keys)
             self.assertIn(bg_key, keys, "处理产物也要能选")
+            self.assertTrue(editor.select_source(bg_source),
+                            "双击路由应能选中处理产物")
+            self.assertEqual(editor.curve_combo.currentData(), bg_key)
             editor.curve_combo.setCurrentIndex(
                 editor.curve_combo.findData(key))
             self.assertIsNotNone(editor._selected_curve())

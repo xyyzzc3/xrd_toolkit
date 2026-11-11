@@ -31,6 +31,12 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     if key is not None:
         _raise_panel(window, key)   # 「打开的图」那些行：双击可提到最前面
         return
+    # 2026-11-11：工作台里双击 = 对这一个对象操作（校准换标样、掩膜换图、
+    # 物相/精修换曲线），由 app 挂的路由决定；右键显式打开不走这条。
+    if not explicit:
+        router = getattr(window, "open_entry_in_workbench", None)
+        if callable(router) and router(item):
+            return
     opener = getattr(window, "open_view_source", None)
     if opener is None or item is None or is_group(item):
         return

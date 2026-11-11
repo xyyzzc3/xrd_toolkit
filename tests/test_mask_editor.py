@@ -28,7 +28,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from xrd_toolkit.gui.app import create_window  # noqa: E402
 from xrd_toolkit.gui import mask_editor as gui_mask_editor  # noqa: E402
 from xrd_toolkit.gui.image_utils import downsample_max  # noqa: E402
-from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
+from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui import file_dock as gui_file_dock  # noqa: E402
 from xrd_toolkit.gui.plot import runners as gui_runners  # noqa: E402
 from xrd_toolkit.services import mask_params, masked2d, stage_cache  # noqa: E402
 
@@ -552,6 +553,20 @@ class TestMaskEditor(unittest.TestCase):
         self.assertFalse(self.w.mask_dock.isVisible())
         self.assertFalse(self.w.mask_btn.isChecked())
 
+    def test_double_click_raw_switches_image(self):
+        """2026-11-11：掩膜工作台里双击文件栏 = 换当前图像。"""
+        second = Path(self._td.name) / "frame2.edf"
+        _write_image(second)
+        self.w.add_files([str(self.img_path), str(second)], select=False)
+        self._open()
+        QApplication.processEvents()
+        self.assertEqual(Path(self.ed.image_path), self.img_path)
+        gui_file_dock._open_entry_view(
+            self.w, self.w.file_list.raw_group.child(1), explicit=False)
+        QApplication.processEvents()
+        self.assertEqual(Path(self.ed.image_path), second,
+                         "双击第二张应换当前图像")
+
     def test_workbench_collapses_and_restores_docks(self):
         self.w.param_dock.setVisible(True)
         self.w.log_dock.setVisible(True)
@@ -560,7 +575,8 @@ class TestMaskEditor(unittest.TestCase):
         self._open()
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
-        self.assertFalse(self.w.file_dock.isVisible())
+        self.assertTrue(self.w.file_dock.isVisible(),
+                        "2026-11-11 起工作台保留文件栏（双击 = 当前对象）")
         self.assertEqual(self.w.mode_label.text(), "掩膜模式")
         self.assertEqual(self.w.mask_btn.text(), "退出掩膜")
         self.assertTrue(self.w._bottom_strip.isHidden(),
