@@ -151,8 +151,12 @@ class GenericBatch:
 
     def __init__(self, phase_paths, geom, wavelength, *, instrument=None,
                  mask=None, max_rwp=20.0, first_nfev=120, frame_nfev=40,
-                 npt=3000, tth_min=1.0, tth_max=8.0, outdir=None):
+                 npt=3000, tth_min=1.0, tth_max=8.0, outdir=None,
+                 extra_lebail=False, extra_cell=False):
         self.phases = make_phases(phase_paths)
+        for i, phase in enumerate(self.phases):
+            phase.cell_free = True if i == 0 else bool(extra_cell)
+            phase.lebail = bool(extra_lebail and i > 0)
         self.geom = dict(geom)
         self.lam = float(wavelength)
         self.instrument = dict(instrument or {})

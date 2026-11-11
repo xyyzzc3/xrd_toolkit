@@ -26,7 +26,8 @@ from xrd_toolkit.gui.tasks import BackgroundTask
 
 
 def _prepare_worker(phase_paths, folder, config_name, mask_path, instrument,
-                    max_rwp, limit, npt, tth_min, tth_max):
+                    max_rwp, limit, npt, tth_min, tth_max,
+                    extra_lebail, extra_cell):
     """后台准备：读结构/mask、列帧。不能碰界面控件。"""
     from xrd_toolkit.simulation.insitu_generic import (
         GenericBatch, frames_for_dir, load_mask_file)
@@ -36,7 +37,8 @@ def _prepare_worker(phase_paths, folder, config_name, mask_path, instrument,
     batch = GenericBatch(
         phase_paths, geom, lam, instrument=instrument, mask=mask,
         max_rwp=max_rwp, first_nfev=120, frame_nfev=60,
-        npt=npt, tth_min=tth_min, tth_max=tth_max)
+        npt=npt, tth_min=tth_min, tth_max=tth_max,
+        extra_lebail=bool(extra_lebail), extra_cell=bool(extra_cell))
     frames = frames_for_dir(folder, limit=limit)
     return batch, frames
 
@@ -123,8 +125,9 @@ class GenericInsituDialog(QDialog):
         opts.addWidget(self.chk_lebail)
         self.chk_extra_cell = QCheckBox("额外相晶胞自由")
         self.chk_extra_cell.setToolTip(
-            "勾上 = 额外相的 a/b/c 也参与精修（只对正交/立方相开放）")
-        self.chk_extra_cell.setChecked(True)
+            "勾上 = 额外相的 a/b/c 也参与精修（只对正交/立方相开放）；"
+            "默认固定，避免少相晶胞漂移")
+        self.chk_extra_cell.setChecked(False)
         opts.addWidget(self.chk_extra_cell)
         opts.addWidget(QLabel("帧数上限"))
         self.limit = QSpinBox()
@@ -299,6 +302,7 @@ class GenericInsituDialog(QDialog):
             int(self.workbench.npt.value()),
             float(self.workbench.tth_min.value()),
             float(self.workbench.tth_max.value()),
+            self.chk_lebail.isChecked(), self.chk_extra_cell.isChecked(),
             on_done=self._prepared, on_error=self._failed)
         self._task.start()
 
