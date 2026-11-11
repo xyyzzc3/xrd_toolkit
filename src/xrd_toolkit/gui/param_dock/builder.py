@@ -92,7 +92,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.focus_label.setStyleSheet("color: gray;")
     lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
 
-    # 项目预设（v0.3 B1，2026-11-10）：几何 + 第二相 + 原位目录/mask +
+    # 项目预设（v0.2.1 B1，2026-11-10）：几何 + 第二相 + 原位目录/掩膜 +
     # 相库的一键切换。放在几何配置上方——它比单条几何更高一层。
     window.preset_row = QWidget()
     preset_lay = QHBoxLayout(window.preset_row)
