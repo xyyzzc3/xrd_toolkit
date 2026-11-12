@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _data_snapshot, _log, _set_focus)
 from xrd_toolkit.gui.plot_export import save_figure_with_options
@@ -693,6 +694,11 @@ class RefineWorkbench(QWidget):
         return False
 
     def _on_curve_changed(self):
+        # 文件栏蓝点 = 当前曲线这张图开着（2026-11-12）
+        set_workbench_open(
+            self.main,
+            gui_sources.file_bar_id_from_curve_key(
+                self.curve_combo.currentData()))
         curve = self._curve_data()
         tth = curve[0] if curve is not None else None
         if tth is None:

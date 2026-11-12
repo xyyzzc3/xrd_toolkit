@@ -160,6 +160,36 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_workbench_current_standard_uses_open_dot(self):
+        """校准当前标样在文件栏亮「开着」蓝点；换标样跟着移，退出收回。"""
+        w = create_window()
+        try:
+            w.show()
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"], select=False)
+            item_a = w.file_list.item(0)
+            item_b = w.file_list.item(1)
+            item_a.setCheckState(0, Qt.Checked)
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.calib_btn.click()
+                QApplication.processEvents()
+                self.assertFalse(item_a.icon(0).isNull(), "标样 A 应亮蓝点")
+                self.assertTrue(item_b.icon(0).isNull())
+                idx = w.calib_file_combo.findData("data/fake_b.tif")
+                self.assertGreaterEqual(idx, 0)
+                w.calib_file_combo.setCurrentIndex(idx)   # 换标样 B
+                QApplication.processEvents()
+                self.assertTrue(item_a.icon(0).isNull(), "换标样后 A 应收回")
+                self.assertFalse(item_b.icon(0).isNull(), "标样 B 应亮蓝点")
+                w.calib_btn.click()
+            QApplication.processEvents()
+            self.assertTrue(item_a.icon(0).isNull())
+            self.assertTrue(item_b.icon(0).isNull(), "退出校准蓝点收回")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_calibrant_selector_defaults_to_lab6(self):
         """校准页有标样下拉框：默认 LaB₆，环数默认 16（当前几何）。"""
         w = create_window()

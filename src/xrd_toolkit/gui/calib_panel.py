@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QMainWindow, QMdiSubWindow,
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.calib_model import (
     PANEL_SCALE, _calib_state, _geom_px_keys)
+from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panels import _install_resize_grip, _settle
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import user_error_text
@@ -125,6 +126,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
             # 用户可能手动还原过子窗口；再进校准仍要铺满绘图区。
             if not window.calib_dock.isMaximized():
                 window.calib_dock.showMaximized()
+            set_workbench_open(window, str(path))   # 文件栏蓝点 = 这张图开着
             window.calib_dock.raise_()
             return
         _close_calib_panel(window)
@@ -225,6 +227,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     window.calib_dock = sub
     window.calib_key = key
     window.calib_path = path
+    set_workbench_open(window, str(path))   # 文件栏蓝点 = 这张图开着
     window.calib_display = path.name
     window.calib_canvas = canvas
     window.calib_ax = fig.add_subplot(111)
@@ -284,6 +287,7 @@ def _close_calib_panel(window: QMainWindow) -> None:
         return
     window.calib_dock = None
     window.calib_key = None
+    set_workbench_open(window, None)   # 图关了：文件栏蓝点收回
     window.calib_gen = getattr(window, "calib_gen", 0) + 1   # 迟到结果作废
     # 视野开关随面板一起弃：下次开面板回到"锁定图像"（关闭即遗忘）。
     # 控件跟着子窗口销毁，只清状态位（读悬空控件会 RuntimeError）

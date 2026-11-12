@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
@@ -440,6 +441,12 @@ class PhaseWorkbench(QWidget):
         return False
 
     def _on_curve_changed(self, clear=False):
+        # 文件栏蓝点 = 当前曲线这张图开着（2026-11-12；工作台中央图与
+        # 独立面板共用同一个记号）
+        set_workbench_open(
+            self.main,
+            gui_sources.file_bar_id_from_curve_key(
+                self.curve_combo.currentData()))
         curve = self._selected_curve()
         tth = curve[0] if curve is not None else None
         if tth is not None:

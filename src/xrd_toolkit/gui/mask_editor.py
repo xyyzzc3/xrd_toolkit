@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
@@ -982,6 +983,8 @@ class MaskWorkbench(QWidget):
         self._preview_cache = None
         self._refresh_preview()      # 一开始就显示无 mask 的 1D
         self._update_status()
+        # 文件栏蓝点 = 这张图开着（掩膜画布就是当前图；2026-11-12）
+        set_workbench_open(self.main, str(path))
         self._say(f"掩膜编辑器：载入 {self.image_path.name}"
                        f"（{img.shape[0]}×{img.shape[1]} px）")
         if (self.preset_mask_recipe is not None

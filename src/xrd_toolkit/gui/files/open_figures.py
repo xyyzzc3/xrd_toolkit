@@ -113,30 +113,53 @@ def _open_dot_icon() -> QIcon:
         _open_dot = QIcon(pm)
     return _open_dot
 
+def set_workbench_open(window: QMainWindow, source_id) -> None:
+    """当前工作台的中央图对应的条目也算"开着"（2026-11-12 用户拍板）。
+
+    校准 2D 图、掩膜画布、物相/精修当前曲线都显示在屏幕中央，但不在
+    plot_docks 里；这里把它的 source id 记到 window._workbench_open_id，
+    refresh_open_marks 会和面板键的 id 取并集，用同一个蓝点表达。
+    退出工作台 / 没有当前图时传 None 清掉。
+    """
+    sid = str(source_id) if source_id else None
+    if getattr(window, "_workbench_open_id", None) == sid:
+        return
+    window._workbench_open_id = sid
+    refresh_open_marks(window)
+
+
 def refresh_open_marks(window: QMainWindow) -> None:
-    """把"这个条目有活着的面板"画出来：左侧实心蓝点。
+    """把"屏幕上现在有这张图"画出来：左侧实心蓝点。
 
     用户 2026-09-28 定「文件栏记号 = 正在打开」；2026-11-12 进一步
     简化："背景加深很乱"——去掉整行淡色，只留蓝点；勾没勾只看框里的
     小勾（Qt 的选中底色已在 FileTree.__init__ 的样式里取消）。
+    2026-11-12 再扩：**当前工作台的中央图也算开着**（校准 2D / 掩膜
+    画布 / 物相精修当前曲线），与独立面板共用同一个蓝点。
 
     认哪一条开着：面板键是 `"<视图>|<条目身份>"`（1D/2D/剖面/瀑布都按条目
     开），身份 = sources.source_id（原始文件是路径、产物是 "阶段#键"）——
-    所以直接拿键的后半段跟每个条目的身份对。对比/热图是**单槽多文件**视图
-    （键里没有 "|"，见 plot_compare._plot_compare），不对应单个条目，不参与。
+    所以直接拿键的后半段跟每个条目的身份对；再加上工作台的
+    window._workbench_open_id。对比/热图是**单槽多文件**视图（键里没有
+    "|"，见 plot_compare._plot_compare），不对应单个条目，不参与。
 
     什么时候调：面板开（plot_panels._open_plot_panel 末尾）/ 关
     （panels._close_panel 里）/ 文件栏重建（refresh_product_groups 末尾），
-    都经 window.mark_open_rows 回调，避免那两个模块反向 import 文件坞。
+    都经 window.mark_open_rows 回调，避免那两个模块反向 import 文件坞；
+    工作台换对象/退出由 set_workbench_open 调。
 
     「打开的图」那一组也在这里同步（同一件事的两半：谁是开着的）：行是
     左侧小点的**另一处**表达，而且对"单槽多文件"的对比/热图也成立——
     那两种视图没有对应条目，只在那一组里看得见（用户 2026-10-01 第 5 条：
-    "现在在左边文件区看不到的内容，比如对比、热图、瀑布之类"）。
+    "现在在左边文件区看不到的内容，比如对比、热图、瀑布之类"）。工作台
+    的中央图**不进这一组**（它是工具，不是结果图；2026-11-12 用户确认）。
     """
     _sync_open_figures(window)     # 「打开的图」组：开着的窗口逐个列出来
     open_ids = {key.split("|", 1)[1] for key in getattr(window, "plot_docks", {})
                 if "|" in key}
+    workbench_id = getattr(window, "_workbench_open_id", None)
+    if workbench_id:
+        open_ids.add(str(workbench_id))
     icon = _open_dot_icon()
     tree = window.file_list
     # 屏蔽信号：setBackground/setIcon 会经 FileItem.setData 走一遍
@@ -148,9 +171,9 @@ def refresh_open_marks(window: QMainWindow) -> None:
     prev_blocked = tree.blockSignals(True)
     try:
         for src in gui_sources.all_sources(window):
-            item = src.item
+            item = getattr(src, "item", None)
             if item is None:
-                continue
+                continue   # 测试/脚本手工造的 Source 可能没有文件栏行
             if gui_sources.source_id(src) in open_ids:
                 item.setIcon(0, icon)      # 同一张图重复设同一个 icon 无害
             else:

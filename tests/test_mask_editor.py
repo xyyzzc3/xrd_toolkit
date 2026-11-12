@@ -731,6 +731,28 @@ class TestMaskEditor(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(Path(self.ed.image_path).resolve(), other.resolve())
 
+    def test_workbench_current_image_uses_open_dot(self):
+        """掩膜当前图在文件栏亮「开着」蓝点；换图跟着移，退出收回。"""
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=False)
+        self._open()
+        QApplication.processEvents()
+        item0 = self.w.file_list.raw_group.child(0)
+        item1 = self.w.file_list.raw_group.child(1)
+        self.assertFalse(item0.icon(0).isNull(), "首张图应亮蓝点")
+        self.assertTrue(item1.icon(0).isNull())
+        idx = self.ed.image_combo.findData(str(other))
+        self.assertGreaterEqual(idx, 0)
+        self.ed._on_image_combo(idx)
+        QApplication.processEvents()
+        self.assertTrue(item0.icon(0).isNull(), "换图后旧图应收回")
+        self.assertFalse(item1.icon(0).isNull(), "当前图应亮蓝点")
+        self.w.mask_btn.click()
+        QApplication.processEvents()
+        self.assertTrue(item0.icon(0).isNull())
+        self.assertTrue(item1.icon(0).isNull(), "退出掩膜蓝点收回")
+
     def test_image_combo_switches_image(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)

@@ -133,6 +133,7 @@ from xrd_toolkit.gui.plot_views import (
     _refresh_waterfalls,
     _retarget_product_panel_to_source, _spawn_task)
 from xrd_toolkit.gui import sources as gui_sources
+from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui import watchdog
 from xrd_toolkit.services.instrument_baseline import load_baseline
 # 自动基线窗口的**默认值**（0.2°，见 background 里的来历）：控件初始值、
@@ -566,6 +567,7 @@ def _exit_mask_mode(window: QMainWindow) -> None:
     if not getattr(window, "_mask_active", False):
         return
     window._mask_active = False
+    set_workbench_open(window, None)   # 工作台图不再显示：蓝点收回
     dock = getattr(window, "mask_dock", None)
     if dock is not None:
         dock.hide()
@@ -678,6 +680,7 @@ def _exit_refine_mode(window: QMainWindow) -> None:
     if not getattr(window, "_refine_active", False):
         return
     window._refine_active = False
+    set_workbench_open(window, None)
     dock = getattr(window, "refine_dock", None)
     if dock is not None:
         dock.hide()
@@ -760,6 +763,7 @@ def _exit_phase_mode(window: QMainWindow) -> None:
     if not getattr(window, "_phase_active", False):
         return
     window._phase_active = False
+    set_workbench_open(window, None)
     dock = getattr(window, "phase_dock", None)
     if dock is not None:
         dock.hide()
@@ -818,6 +822,7 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
         return
     _exit_other_workbenches(window, "insitu")
     window._insitu_active = True
+    set_workbench_open(window, None)   # 原位是批量，没有单一"当前图"
     window._insitu_prev_entrance = getattr(window, "_last_entrance", None)
     window._insitu_dock_saved = {
         name: window._dock_intent.get(name, False)
@@ -851,6 +856,7 @@ def _exit_insitu_mode(window: QMainWindow) -> None:
     if not getattr(window, "_insitu_active", False):
         return
     window._insitu_active = False
+    set_workbench_open(window, None)
     dock = getattr(window, "insitu_dock", None)
     if dock is not None:
         dock.hide()

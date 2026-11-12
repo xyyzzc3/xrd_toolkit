@@ -158,6 +158,20 @@ def source_id(source) -> str:
     return f"{source.kind}#{source.key}"
 
 
+def file_bar_id_from_curve_key(key):
+    """曲线下拉键 → 文件栏 source id；不是文件栏条目时返回 None。
+
+    物相/精修的曲线下拉键：打开的面板 = "1D|<id>"，产物 = "product:<id>"；
+    手工载入的文本曲线 = "file:..."，没有文件栏行。
+    """
+    key = str(key or "")
+    if key.startswith("1D|"):
+        return key.split("|", 1)[1]
+    if key.startswith("product:"):
+        return key[len("product:"):]
+    return None
+
+
 def path_of(source):
     """产物条目对应的**源文件**路径（锚点、日志、默认文件名都用它）。"""
     return source.path
