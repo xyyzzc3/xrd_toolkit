@@ -567,6 +567,35 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(Path(self.ed.image_path), second,
                          "双击第二张应换当前图像")
 
+    def test_workbench_row_click_does_not_check(self):
+        """工作台里点行只聚焦；双击换对象不顺手勾上（2026-11-12 选 A）。"""
+        second = Path(self._td.name) / "frame2.edf"
+        _write_image(second)
+        self.w.add_files([str(self.img_path), str(second)], select=False)
+        self._open()
+        QApplication.processEvents()
+        item = self.w.file_list.raw_group.child(1)
+        self.assertEqual(item.checkState(0), Qt.Unchecked)
+        # 双击的第一下单击：工作台里不许把它勾上
+        self.w._press_item, self.w._press_state = item, Qt.Unchecked
+        self.w.file_list.itemClicked.emit(item, 0)
+        QApplication.processEvents()
+        self.assertEqual(item.checkState(0), Qt.Unchecked,
+                         "工作台内点行不该改勾选")
+        # 第二下：换当前图像，仍不勾
+        self.w.file_list.itemDoubleClicked.emit(item, 0)
+        QApplication.processEvents()
+        self.assertEqual(Path(self.ed.image_path), second,
+                         "双击第二张应换当前图像")
+        self.assertEqual(item.checkState(0), Qt.Unchecked,
+                         "双击换对象不许顺手勾上")
+        # 对号方块仍然能勾（批量）
+        self.w._press_item, self.w._press_state = item, Qt.Unchecked
+        item.setCheckState(0, Qt.Checked)      # Qt 在方块上自动切换
+        self.w.file_list.itemClicked.emit(item, 0)
+        QApplication.processEvents()
+        self.assertEqual(item.checkState(0), Qt.Checked)
+
     def test_save_figure_uses_shared_options(self):
         """2026-11-11：掩膜画布也能存成 PNG/TIF/PDF/SVG。"""
         from xrd_toolkit.gui import plot_export as gui_plot_export

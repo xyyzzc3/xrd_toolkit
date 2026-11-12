@@ -17,8 +17,9 @@ def _open_entry_view(window: QMainWindow, item, explicit: bool = False) -> None:
     """双击条目 / 右键 [打开 1D 图]：按条目打开一张面板（两处共用）。
 
     走 window.open_view_source 回调（app 建窗时挂上 plot_views._open_source_view），
-    避免本模块反向 import plot_views。双击时第一次单击已经按老手势处理过
-    （可能顺手把这条勾上了）——不去撤销：勾上无害，撤销反而打乱用户的选择。
+    避免本模块反向 import plot_views。双击时第一次单击按当前手势处理：
+    分析模式会顺手把这条勾上（无害）；**工作台里点行不勾**（2026-11-12
+    用户选 A），所以双击换对象不会改变勾选。
 
     **原始条目双击 = 打开它本身的 2D 图**（2026-10-08 用户拍板改的）：
     旧行为（2026-09-27"双击打不开、只给指路"）的理由是"原始数据能出多种

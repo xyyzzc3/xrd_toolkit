@@ -32,16 +32,32 @@ from xrd_toolkit.gui.plot_export import _run_export, _save_figures
 from xrd_toolkit.services import stage_cache
 
 
+def _workbench_active(window: QMainWindow) -> bool:
+    """任一工作台开着（校准也算）：此时点行只聚焦，不改勾选。
+
+    2026-11-12 用户选 A：双击换对象的第一下单击不许顺手勾上；工作台里
+    勾选只能点对号方块（批量照旧），组节点点行仍可全选。
+    """
+    return bool(
+        getattr(window, "_mask_active", False)
+        or getattr(window, "_phase_active", False)
+        or getattr(window, "_refine_active", False)
+        or getattr(window, "_insitu_active", False)
+        or (getattr(window, "calib_btn", None) is not None
+            and window.calib_btn.isChecked()))
+
+
 def _build_file_dock(window: QMainWindow) -> QDockWidget:
     """文件坞：打开（多选）/ 保存 / 删除 / 导出 + 选择工具 + 文件列表。
 
     选择 = 对号，三种手势：
-      - 点行 = 加选：勾上这一行，其他对号不动；已勾的行再点没
-        反应（不取消）；
-      - 点对号方块 = 勾上/取消这一行；
+      - 点行 = 加选（**仅分析模式**）：勾上这一行，其他对号不动；已勾
+        的行再点没反应（不取消）。工作台里点行不勾（2026-11-12 用户
+        选 A：双击换对象不许顺手勾上），勾选点对号方块；
+      - 点对号方块 = 勾上/取消这一行（分析模式与工作台都一样）；
       - [全选] / [全不选] / [按条件选…] = 批量（区间·间隔·名字包含）。
-    背景高亮跟随最后点的那行（且必须是对号行，没对号就不高亮），
-    作图按钮对所有对号文件各开一张图，删除删所有对号文件。
+    「正在打开」只用左侧蓝点表示（不再有整行底色），作图按钮读取所有
+    对号文件，删除删所有对号文件。
     itemChanged 统一刷新标签和日志；itemClicked 靠 _PressRecorder
     记着的按下状态区分方块/行体手势；批量改对号走 _set_checks（屏蔽
     信号、只刷新一次）。
@@ -205,8 +221,10 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     def on_item_clicked(item, column=0):
         """手势区分：
           - 点对号方块：Qt 已自动切换（勾上/取消），无需再动；
-          - 点行：只勾上这一条（加选），其他对号不动；已勾的再点没
-            反应。取消对号只能用对号方块。组节点点行 = 勾上整组。
+          - 点行（分析模式）：只勾上这一条（加选），其他对号不动；
+          - 点行（工作台里）：只聚焦，不改勾选（2026-11-12 选 A）——
+            否则双击换对象的第一下单击会顺手勾上；勾选点对号方块；
+          - 组节点点行 = 勾上整组（工作台里也一样）。
         """
         square = (window._press_item is item
                   and item.checkState(0) != window._press_state)
@@ -223,6 +241,9 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         if is_group(item):
             if item.checkState(0) != Qt.Checked:
                 item.setCheckState(0, Qt.Checked)   # 整组勾上（点行不取消）
+            return
+        if _workbench_active(window):
+            # 工作台里点行 = 只聚焦；对号只能用方块/组节点/批量工具改。
             return
         if item.checkState(0) == Qt.Unchecked:
             item.setCheckState(0, Qt.Checked)   # → itemChanged 同步高亮/标签/日志
