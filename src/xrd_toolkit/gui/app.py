@@ -1391,10 +1391,12 @@ def create_window() -> QMainWindow:
 
     window.closeEvent = on_close
 
-    # 初始尺寸：文件列/参数列默认收到最窄（各自内容的最小宽度），
-    # 需要时用户自己拖宽；日志高 140（都可拖动）
-    for d in (window.file_dock, window.param_dock):
-        window.resizeDocks([d], [d.minimumSizeHint().width()], Qt.Horizontal)
+    # 初始尺寸：文件列与参数列默认**同宽**（取两者最小宽度的较大者），
+    # 左右对称、都刚好放下内容；需要时用户自己拖宽。日志高 140。
+    dock_w = max(window.file_dock.minimumSizeHint().width(),
+                 window.param_dock.minimumSizeHint().width())
+    window.resizeDocks([window.file_dock, window.param_dock],
+                       [dock_w, dock_w], Qt.Horizontal)
     window.resizeDocks([window.log_dock], [140], Qt.Vertical)
 
     # 启动即应用预设里的几何条目（没有预设时就是内置默认）：参数坞

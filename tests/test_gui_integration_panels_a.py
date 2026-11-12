@@ -355,6 +355,29 @@ class TestParamDockSplitLayout(unittest.TestCase):
         finally:
             w.close()
 
+    def test_file_and_param_docks_share_the_default_width(self):
+        """文件栏和参数栏默认同宽（左右对称，2026-11-12 用户要求）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.entrance_buttons["1D"].click()   # 参数坞显示出来
+            QApplication.processEvents()
+            self.assertAlmostEqual(w.file_dock.width(),
+                                   w.param_dock.width(), delta=2)
+            self.assertGreaterEqual(w.file_dock.width(),
+                                    w.file_dock.minimumSizeHint().width())
+            self.assertGreaterEqual(w.param_dock.width(),
+                                    w.param_dock.minimumSizeHint().width())
+            # 之后用户拖一个坞，只改那一个（不强制重新等宽）
+            file_w = w.file_dock.width()
+            w.resizeDocks([w.param_dock], [320], Qt.Horizontal)
+            QApplication.processEvents()
+            self.assertAlmostEqual(w.file_dock.width(), file_w, delta=2,
+                                   msg="拖参数栏不该带着文件栏一起变")
+            self.assertAlmostEqual(w.param_dock.width(), 320, delta=5)
+        finally:
+            w.close()
+
     def test_dock_min_sizes_prevent_clipping(self):
         w = create_window()
         try:
