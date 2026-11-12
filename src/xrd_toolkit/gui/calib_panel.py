@@ -121,6 +121,9 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     key = f"校准|{path}"
     if getattr(window, "calib_dock", None) is not None:
         if window.calib_key == key:
+            # 用户可能手动还原过子窗口；再进校准仍要铺满绘图区。
+            if not window.calib_dock.isMaximized():
+                window.calib_dock.showMaximized()
             window.calib_dock.raise_()
             return
         _close_calib_panel(window)
@@ -248,6 +251,10 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     off = 16 + 24 * ((n - 1) % 6)
     sub.move(off, off)
     sub.show()
+    # 校准是工作台：子窗口铺满绘图区（2026-11-12 用户：要的是工作区
+    # 子窗口最大化，不是主窗口）。先铺满再 settle，画布按最终尺寸算，
+    # 也把 resize 引发的重画在开面板这一步处理掉（不留给后面的交互）。
+    sub.showMaximized()
     _settle(window)
     # 新面板 = 新一轮：当前配置从分析页选中的条目借起（登记成"原始"），
     # 并异步算它的环位偏差（表里那一格先显示 —）。**借完再画**：反过来
@@ -299,6 +306,11 @@ def _close_calib_panel(window: QMainWindow) -> None:
     if grip_filter is not None:
         grip_filter._release_cursor()
     if dock in window.mdi.subWindowList():
+        # 最大化态直接摘除/销毁，在 macOS 上会把前台交回桌面（与
+        # panel_container._close_panel 同款问题，2026-11-03 实测）；
+        # 先还原成普通子窗口再摘。用户看不到这一步（紧接着就藏）。
+        if dock.isMaximized():
+            dock.showNormal()
         # 先藏再摘：否则关闭的一瞬间会被 MDI 重新激活下面的 2D 面板，
         # 用户看到"退出校准弹出标样 2D、还卡一下"（2026-11-11 反馈）。
         dock.hide()

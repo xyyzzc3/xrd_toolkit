@@ -148,7 +148,8 @@
    进入 <code>[校准]</code> 后，页顶「标样文件」下拉会列出所有原始图，选哪张就
    载入哪张；不在文件栏里的图点 <code>[打开…]</code> 直接选。旁边的「标样」下拉
    再换 CeO₂、Si、α-Al₂O₃ 等常用标样（请按证书选到具体 SRM 变体）。</li>
-<li>点顶部 <code>[校准]</code>。<strong>确认</strong>：中央出现标样图（工作台会自动最大化窗口，退出恢复原大小）；图上青色的一圈圈是<strong>当前
+<li>点顶部 <code>[校准]</code>。<strong>确认</strong>：中央出现标样图（工作台子窗口会自动铺满绘图区；
+   主窗口大小不动）；图上青色的一圈圈是<strong>当前
    几何</strong>画出的理论环，数据区的表在页面下方。校准模式下文件栏保留：
    <strong>双击文件栏里的原始图</strong>就能换标样；页顶「标样文件」下拉是同一件事的
    镜像/兜底。环数默认按「完整落在图像
@@ -700,15 +701,13 @@ A：标样的衍射是<strong>斑点状</strong>——每一颗真实衍射斑�
    不必先在 1D 页出图。</li>
 <li>点工具栏 <code>[物相]</code>。<strong>确认</strong>：中央换成「物相工作台」，参数坞/日志坞收起。</li>
 <li>选曲线（下拉里选；<code>[用当前图]</code> 取焦点那张——焦点不是 1D 时，若下拉
-   只有一条就直接选它，否则会提示在下拉里选），选相库：
-   <ul>
-   <li><strong>默认</strong>：当前项目预设的参考结构目录（LMFP 预设是 <code>data/structures</code>）。
+   只有一条就直接选它，否则会提示在下拉里选），选相库：</li>
+<li><strong>默认</strong>：当前项目预设的参考结构目录（LMFP 预设是 <code>data/structures</code>）。
      当前预设里 <code>Al_metal.cif</code> 不参与主相候选（只作集流体第二相）。</li>
-   <li><strong><code>[内置相库]</code></strong>：软件自带的精选相库（<code>data/phase_library</code>，约 40 张
+<li><strong><code>[内置相库]</code></strong>：软件自带的精选相库（<code>data/phase_library</code>，约 40 张
      常见无机物/电池材料/集流体/标样；随包发布，离线可用）。做通用样品
      筛选时先点它；来源与哪些是标准原型生成的结构见库里的 <code>SOURCES.md</code>。</li>
-   <li><strong><code>[选目录…]</code></strong>：指向你自己的 CIF 库（完整库、课题专用库都走这里）。</li>
-   </ul></li>
+<li><strong><code>[选目录…]</code></strong>：指向你自己的 CIF 库（完整库、课题专用库都走这里）。</li>
 <li><strong>元素过滤</strong>（可选）：点 <code>[周期表…]</code> 打开元素周期表，点元素格子勾选
    （再点一下取消；当前 LMFP 示例：<code>Li Mn Fe P O</code>；留空 = 不过滤），
    确定后写回左边的元素表；也可以直接手输。只保留元素全部落在表里的

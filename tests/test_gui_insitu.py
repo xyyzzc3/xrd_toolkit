@@ -131,6 +131,9 @@ class TestInSituWorkbench(unittest.TestCase):
         self.assertEqual(self.w.insitu_btn.text(), "退出原位")
         self.assertEqual(self.w.mode_label.text(), "原位模式")
         self.assertTrue(self.w.insitu_dock.isVisible())
+        self.assertTrue(self.w.insitu_dock.isMaximized(),
+                        "进工作台应把工作区子窗口铺满（2026-11-12）")
+        self.assertFalse(self.w.isMaximized(), "主窗口不应被最大化")
         self.assertFalse(self.w.param_dock.isVisible())
         self.assertFalse(self.w.log_dock.isVisible())
         self.assertTrue(self.w._bottom_strip.isHidden(),
@@ -140,6 +143,7 @@ class TestInSituWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.assertFalse(self.w._insitu_active, "精修应把原位退掉")
         self.assertTrue(self.w._refine_active)
+        self.assertTrue(self.w.refine_dock.isMaximized())
         self.w.refine_btn.click()
         QApplication.processEvents()
         self.assertFalse(self.w._bottom_strip.isHidden(),
@@ -151,6 +155,7 @@ class TestInSituWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.assertFalse(self.w._insitu_active, "物相应把原位退掉")
         self.assertTrue(self.w._phase_active)
+        self.assertTrue(self.w.phase_dock.isMaximized())
         self.w.phase_btn.click()
         QApplication.processEvents()
 
@@ -160,6 +165,7 @@ class TestInSituWorkbench(unittest.TestCase):
         QApplication.processEvents()
         self.assertFalse(self.w._insitu_active, "掩膜应把原位退掉")
         self.assertTrue(self.w._mask_active)
+        self.assertTrue(self.w.mask_dock.isMaximized())
         self.w.mask_btn.click()
         QApplication.processEvents()
 

@@ -363,46 +363,17 @@ def _toggle_pop_out(window: QMainWindow, key: str) -> None:
 
 
 
-# ══ 工作台窗口最大化（2026-11-11）══════════════════════════════
-def _maximize_for_workbench(window: QMainWindow) -> None:
-    """进入工作台时最大化主窗口；进之前的状态/几何记在窗口上，退出还原。
+# ══ 工作台子窗口最大化（2026-11-12 用户口径）══════════════════
+def _maximize_subwindow(dock) -> None:
+    """进入工作台时把它的中央子窗口铺满绘图区。
 
-    只在窗口已显示时动手（测试/脚本常常只建窗不 show，别把它弹出来）。
-    连续切换工作台时保存的是**最初**那份状态，不会把"最大化"当成原状态。
+    2026-11-11 的初版最大化的主窗口，用户 2026-11-12 纠正：要的是
+    **工作区的子窗口**（如校准的那张 2D 图）最大化，主窗口大小由用户
+    自己掌握。子窗口只是 QMdiSubWindow：showMaximized 让它在 MDI 里
+    铺满，原生最大化按钮仍然可用；退出工作台时子窗口只是 hide（状态
+    保留），再进来仍是最大化。
     """
-    if not window.isVisible():
+    if dock is None:
         return
-    if window.isMaximized() or window.isFullScreen():
-        return                              # 本来就已经最大化/全屏
-    # 窗口本来就比屏幕大（离屏测试的 fake screen 只有 800×600，而测试
-    # 窗口默认 1600×1000）时，"最大化"反而会把它缩小——跳过，别帮倒忙。
-    screen = window.screen() or QApplication.primaryScreen()
-    if screen is not None:
-        avail = screen.availableGeometry()
-        if (window.width() > avail.width()
-                or window.height() > avail.height()):
-            return
-    if getattr(window, "_workbench_window_saved", None) is None:
-        window._workbench_window_saved = {
-            "maximized": False,
-            "fullscreen": False,
-            "geometry": window.saveGeometry(),
-        }
-    window.showMaximized()
-
-
-def _restore_after_workbench(window: QMainWindow) -> None:
-    """退出工作台：还原进之前的最大化/全屏状态与窗口几何（幂等）。"""
-    saved = getattr(window, "_workbench_window_saved", None)
-    if saved is None:
-        return
-    window._workbench_window_saved = None
-    if not window.isVisible():
-        return
-    if saved.get("fullscreen"):
-        window.showFullScreen()
-    elif saved.get("maximized"):
-        window.showMaximized()
-    else:
-        window.showNormal()
-        window.restoreGeometry(saved["geometry"])
+    if not dock.isMaximized():
+        dock.showMaximized()

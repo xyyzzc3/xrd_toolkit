@@ -16,9 +16,7 @@ from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _close_calib_panel, _open_calib_panel)
 from xrd_toolkit.gui.config_ops import _suggest_config_key
 from xrd_toolkit.gui.files.model import FILE_FILTER
-from xrd_toolkit.gui.panel_layout import (
-    _maximize_for_workbench, _restore_after_workbench,
-    _set_bottom_strip_visible)
+from xrd_toolkit.gui.panel_layout import _set_bottom_strip_visible
 from xrd_toolkit.gui.panel_state import _log
 
 
@@ -124,15 +122,14 @@ def _enter_calib(window: QMainWindow) -> None:
     # （[校准] 的 toggled 先于 clicked 触发，所以不能指望入口那边先
     # 露坞——2026-09-26 实测：以前量出来 327 px，远没到该有的宽度）
     window.param_dock.setVisible(True)
-    # 在最大化**之前**记住分析模式的坞宽：最大化会重排布局，之后再量
-    # 拿到的是大窗口下的宽度，退出还原会停在那条宽上（2026-11-11 实测
-    # 测试里 178 → 360）。量宽前手动走一遍布局（同 _widen_dock_for_calib）。
+    # 拉宽**之前**记住分析模式的坞宽：退出时要还原到这条宽度，晚了量
+    # 拿到的是拉宽后的值（2026-11-11 实测测试里 178 → 360）。量宽前
+    # 手动走一遍布局（同 _widen_dock_for_calib）。
     if getattr(window, "_dock_w_before", None) is None:
         lay = window.layout()
         if lay is not None:
             lay.activate()
         window._dock_w_before = window.param_dock.width()
-    _maximize_for_workbench(window)
     # 校准也是工作台：底部坐标/横排/缩放/全部关闭对校准页没有意义，
     # 整条隐藏（2026-11-05，与四个中央工作台同一口径）。放在"没勾文件"
     # 提前返回之前——没文件也要能退出，退出时统一恢复。
@@ -166,9 +163,8 @@ def _enter_calib(window: QMainWindow) -> None:
 def _exit_calib(window: QMainWindow) -> None:
     """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
     window.calib_exit_btn.setVisible(False)
-    # 先还原窗口（最大化/几何），再还原坞宽：反过来会被窗口几何
-    # 重新布局把坞宽覆盖回去（2026-11-11 实测退出后坞宽停在 360）。
-    _restore_after_workbench(window)
+    # 先关校准面板（子窗口），再还原坞宽：反过来会被重新布局把坞宽
+    # 覆盖回去（2026-11-11 实测退出后坞宽停在 360）。
     _close_calib_panel(window)
     _restore_dock_width(window)
     _set_bottom_strip_visible(window, True)

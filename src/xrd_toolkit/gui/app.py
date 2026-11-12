@@ -116,8 +116,7 @@ from xrd_toolkit.gui.panel_state import (
     _family_label, _GRADIENT_FAMILY_ORDER, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
     _reload_config_combo, _set_focus)
-from xrd_toolkit.gui.panel_layout import (
-    _maximize_for_workbench, _restore_after_workbench)
+from xrd_toolkit.gui.panel_layout import _maximize_subwindow
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
@@ -528,13 +527,13 @@ def _open_mask_workbench(window: QMainWindow) -> None:
         dock.move(12, 12)
     dock.show()
     dock.raise_()
+    _maximize_subwindow(dock)
 
 
 def _enter_mask_mode(window: QMainWindow) -> None:
     """进入掩膜工作台：收起参数/日志坞，中央换成掩膜工作台。"""
     if getattr(window, "_mask_active", False):
         return
-    _maximize_for_workbench(window)
     # 五种工作台互斥：先把校准/精修/物相/原位退掉（各自恢复自己的状态）
     _exit_other_workbenches(window, "mask")
     window._mask_active = True
@@ -567,7 +566,6 @@ def _exit_mask_mode(window: QMainWindow) -> None:
     if not getattr(window, "_mask_active", False):
         return
     window._mask_active = False
-    _restore_after_workbench(window)
     dock = getattr(window, "mask_dock", None)
     if dock is not None:
         dock.hide()
@@ -631,13 +629,13 @@ def _open_refine_workbench(window: QMainWindow) -> None:
     window.refine_editor.refresh_cifs()
     dock.show()
     dock.raise_()
+    _maximize_subwindow(dock)
 
 
 def _enter_refine_mode(window: QMainWindow) -> None:
     """进入精修工作台：收起参数/日志坞，中央换成精修工作台。"""
     if getattr(window, "_refine_active", False):
         return
-    _maximize_for_workbench(window)
     # 五种工作台互斥：先把校准/掩膜/物相/原位退掉
     _exit_other_workbenches(window, "refine")
     window._refine_active = True
@@ -663,7 +661,6 @@ def _exit_refine_mode(window: QMainWindow) -> None:
     if not getattr(window, "_refine_active", False):
         return
     window._refine_active = False
-    _restore_after_workbench(window)
     dock = getattr(window, "refine_dock", None)
     if dock is not None:
         dock.hide()
@@ -713,13 +710,13 @@ def _open_phase_workbench(window: QMainWindow) -> None:
     window.phase_editor.refresh_curves()
     dock.show()
     dock.raise_()
+    _maximize_subwindow(dock)
 
 
 def _enter_phase_mode(window: QMainWindow) -> None:
     """进入物相工作台：收起参数/日志坞，中央换成物相工作台。"""
     if getattr(window, "_phase_active", False):
         return
-    _maximize_for_workbench(window)
     # 五种工作台互斥：先把校准/掩膜/精修/原位退掉
     _exit_other_workbenches(window, "phase")
     window._phase_active = True
@@ -745,7 +742,6 @@ def _exit_phase_mode(window: QMainWindow) -> None:
     if not getattr(window, "_phase_active", False):
         return
     window._phase_active = False
-    _restore_after_workbench(window)
     dock = getattr(window, "phase_dock", None)
     if dock is not None:
         dock.hide()
@@ -795,13 +791,13 @@ def _open_insitu_workbench(window: QMainWindow) -> None:
         dock.move(12, 12)
     dock.show()
     dock.raise_()
+    _maximize_subwindow(dock)
 
 
 def _enter_insitu_mode(window: QMainWindow) -> None:
     """进入原位工作台：收起参数/日志坞，中央换成原位工作台。"""
     if getattr(window, "_insitu_active", False):
         return
-    _maximize_for_workbench(window)
     _exit_other_workbenches(window, "insitu")
     window._insitu_active = True
     window._insitu_prev_entrance = getattr(window, "_last_entrance", None)
@@ -826,7 +822,6 @@ def _exit_insitu_mode(window: QMainWindow) -> None:
     if not getattr(window, "_insitu_active", False):
         return
     window._insitu_active = False
-    _restore_after_workbench(window)
     dock = getattr(window, "insitu_dock", None)
     if dock is not None:
         dock.hide()

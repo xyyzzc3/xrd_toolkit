@@ -118,6 +118,26 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_enter_mode_maximizes_the_panel_subwindow(self):
+        """进校准 = 工作区子窗口铺满；主窗口不被放大（2026-11-12）。"""
+        w = create_window()
+        try:
+            w.show()
+            QApplication.processEvents()
+            size_before = w.size()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+            QApplication.processEvents()
+            self.assertTrue(w.calib_dock.isMaximized(),
+                            "校准 2D 子窗口应铺满绘图区")
+            self.assertFalse(w.isMaximized(), "主窗口不应被最大化")
+            self.assertEqual(w.size(), size_before, "主窗口大小不该变")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_calibrant_selector_defaults_to_lab6(self):
         """校准页有标样下拉框：默认 LaB₆，环数默认 16（当前几何）。"""
         w = create_window()
@@ -792,6 +812,10 @@ class TestCalibration(unittest.TestCase):
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
                 self._click_rings(w, ((2, 0), (4, 90), (6, 180)))
+            # 进面板时子窗口最大化会排一次 resize 重画（画布换成最终
+            # 尺寸）：先把它消化掉，下面测的才是"撤销/清空本身不整幅
+            # 重画"（2026-11-12）。
+            QApplication.processEvents()
             self.assertEqual(len(w.calib_marker_artists), 6, "3 个点 × 2 artist")
             with mock.patch.object(w.calib_canvas, "draw_idle") as idle, \
                  mock.patch.object(w.calib_canvas, "blit") as blit:
