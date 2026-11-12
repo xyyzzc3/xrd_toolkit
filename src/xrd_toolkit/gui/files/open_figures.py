@@ -1,4 +1,4 @@
-"""文件栏「打开的图」组：同步屏幕上开着的面板、淡色/小点标记。
+"""文件栏「打开的图」组：同步屏幕上开着的面板、左侧小点标记。
 
 2026-10-21 从 files/groups.py 原样搬出（只改结构，不动逻辑）。
 groups 再导出，file_dock 照旧经 gui_file_dock 取用。
@@ -14,9 +14,8 @@ from xrd_toolkit.gui.files.model import (
 
 OPEN_FIGURES_TITLE = "打开的图"
 
-# 「正在打开」的两种记号（用户 2026-09-28 第 5 条）：整行淡色 + 左侧小点
-_OPEN_ROW_BG = "#e8f0fb"
-
+# 「正在打开」的唯一记号 = 左侧实心蓝点（2026-11-12 用户：整行淡色
+# 容易和"选中/勾选"混，去掉底色，只留点）。
 _open_dot = None        # 懒建（建 QPixmap 要先有 QApplication）
 
 def _sync_open_figures(window: QMainWindow) -> None:
@@ -84,7 +83,6 @@ def _sync_open_figures(window: QMainWindow) -> None:
                 row.setText(0, title)
             row.setToolTip(0, f"{key}\n双击可把这张图提到最前面；"
                               f"右键可以关掉这一张（不动数据与产物）")
-            row.setBackground(0, QBrush(QColor(_OPEN_ROW_BG)))
         group.setToolTip(0, f"{OPEN_FIGURES_TITLE}（{len(wanted)} 张）："
                             "屏幕上开着的图，双击提到最前面")
     finally:
@@ -99,8 +97,8 @@ def _top_groups(tree) -> list:
 def _open_dot_icon() -> QIcon:
     """左侧那个小实心点：深蓝色 8 px 圆，居中画在 10×10 的透明底上。
 
-    为什么要它：整行淡色在浅色主题下很淡（远看像隔行着色），旁边再给一个
-    "实心点 = 有面板活着"的硬记号，扫一眼就能数出开着几张。
+    为什么要它：整行底色容易和"选中/勾选"混（2026-11-12 用户：背景加深
+    很乱）。现在蓝点是唯一的"有面板活着"记号，扫一眼就能数出开着几张。
     """
     global _open_dot
     if _open_dot is None:
@@ -116,15 +114,11 @@ def _open_dot_icon() -> QIcon:
     return _open_dot
 
 def refresh_open_marks(window: QMainWindow) -> None:
-    """把"这个条目有活着的面板"画出来：整行淡色 + 左侧小点。
+    """把"这个条目有活着的面板"画出来：左侧实心蓝点。
 
-    用户 2026-09-28 第 5 条："文件栏背景加深代表这个图正在打开，选中未选中
-    仅用框内的标志表示"。改之前整行深色是 Qt 的"当前行"高亮（而且被限制成
-    "只能在勾选着的行上"，见 _sync_current_to_checks），而**哪张图开着**在
-    文件栏里根本看不出来——`dock.panel_item` 只被用来做删除时的清理。
-
-    现在反过来：整行颜色专供"正在打开"，勾没勾只看框里的小勾（Qt 的选中
-    底色已在 FileTree.__init__ 的样式里取消）。
+    用户 2026-09-28 定「文件栏记号 = 正在打开」；2026-11-12 进一步
+    简化："背景加深很乱"——去掉整行淡色，只留蓝点；勾没勾只看框里的
+    小勾（Qt 的选中底色已在 FileTree.__init__ 的样式里取消）。
 
     认哪一条开着：面板键是 `"<视图>|<条目身份>"`（1D/2D/剖面/瀑布都按条目
     开），身份 = sources.source_id（原始文件是路径、产物是 "阶段#键"）——
@@ -136,14 +130,13 @@ def refresh_open_marks(window: QMainWindow) -> None:
     都经 window.mark_open_rows 回调，避免那两个模块反向 import 文件坞。
 
     「打开的图」那一组也在这里同步（同一件事的两半：谁是开着的）：行是
-    整行淡色 + 左侧小点的**另一处**表达，而且对"单槽多文件"的对比/热图
-    也成立——那两种视图没有对应条目，只在那一组里看得见（用户 2026-10-01
-    第 5 条："现在在左边文件区看不到的内容，比如对比、热图、瀑布之类"）。
+    左侧小点的**另一处**表达，而且对"单槽多文件"的对比/热图也成立——
+    那两种视图没有对应条目，只在那一组里看得见（用户 2026-10-01 第 5 条：
+    "现在在左边文件区看不到的内容，比如对比、热图、瀑布之类"）。
     """
     _sync_open_figures(window)     # 「打开的图」组：开着的窗口逐个列出来
     open_ids = {key.split("|", 1)[1] for key in getattr(window, "plot_docks", {})
                 if "|" in key}
-    brush = QBrush(QColor(_OPEN_ROW_BG))
     icon = _open_dot_icon()
     tree = window.file_list
     # 屏蔽信号：setBackground/setIcon 会经 FileItem.setData 走一遍
@@ -159,11 +152,11 @@ def refresh_open_marks(window: QMainWindow) -> None:
             if item is None:
                 continue
             if gui_sources.source_id(src) in open_ids:
-                item.setBackground(0, brush)
                 item.setIcon(0, icon)      # 同一张图重复设同一个 icon 无害
             else:
-                item.setBackground(0, QBrush())   # 空画刷 = 恢复默认（无底）
                 item.setIcon(0, QIcon())
+            # 旧版的"整行淡色"残留：统一清掉（空画刷 = 恢复默认）
+            item.setBackground(0, QBrush())
     finally:
         tree.blockSignals(prev_blocked)
 

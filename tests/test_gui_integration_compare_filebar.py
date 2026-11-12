@@ -1375,19 +1375,16 @@ class TestGroupSelectionBadge(unittest.TestCase):
 class TestOpenRowMarks(unittest.TestCase):
     """文件栏的"正在打开"记号（用户 2026-09-28 第 5 条）。
 
-    用户的原话："文件栏背景加深代表这个图正在打开，选中未选中仅用框内的标志
-    表示"。改之前整行深色是 Qt 的"当前行"高亮（还被限制成"只能在勾选着的行
-    上"），而哪张图开着在文件栏里**完全看不出来**。现在：
+    2026-11-12 用户："双击、勾选、背景加深很乱"——记号简化成**左侧实心
+    蓝点**，整行淡色取消；勾没勾只看框里的小勾。两个记号互不影响。
 
-      * 有面板活着的条目 = 整行淡色 + 左侧小点（refresh_open_marks）；
-      * 勾没勾只看框里的小勾（Qt 的选中底色已在 FileTree 的样式里取消）；
-      * 两个记号互不影响——取消勾选不该把"开着"的记号抹掉，反过来也一样。
+      * 有面板活着的条目 = 左侧蓝点（refresh_open_marks）；
+      * 条目不许有底色（否则又会和"选中"混）；
+      * 取消勾选不该把"开着"的记号抹掉，反过来也一样。
     """
 
     def _marked(self, item):
-        return (item.background(0).color().isValid()
-                and item.background(0).color().alpha() > 0
-                and not item.icon(0).isNull())
+        return not item.icon(0).isNull()
 
     def test_row_is_marked_while_a_panel_is_open(self):
         w = create_window()
@@ -1420,17 +1417,11 @@ class TestOpenRowMarks(unittest.TestCase):
         finally:
             w.close()
 
-    def test_the_current_row_keeps_its_open_tint(self):
-        """当前行也要看得见"正在打开"的淡色（2026-09-30 修的尾巴）。
+    def test_the_current_row_is_not_tinted(self):
+        """当前行不再铺"正在打开"的底色（2026-11-12 用户：背景加深很乱）。
 
-        根因：原来那条样式表（`QTreeView::item:selected { background:
-        transparent }`）把条目**自己**的背景刷子也一起盖掉了——刚从别处点
-        过来的那一行只剩左侧小点、淡色没了，而它恰恰是最该被看见的一行。
-        现在绘制走 _RowPaintDelegate：交基类前摘掉"选中"状态位（Qt 的选中
-        深色不画），条目自己的刷子由代理先铺一遍。
-
-        这里**真的渲染一遍抓像素**：数据槽里的刷子查不出这种问题——出事
-        的正是"样式表/绘制路径"这一层（旧样式表在时，`_marked()` 照样为真）。
+        「开着」只用左侧蓝点；整行底色容易被当成"选中"。这里真的渲染
+        一遍抓像素，确认旧的淡蓝底色不再出现。
         """
         w = create_window()
         try:
@@ -1448,13 +1439,16 @@ class TestOpenRowMarks(unittest.TestCase):
             tree.setCurrentItem(first)          # 当前行 = 开着的那条
             for _ in range(5):
                 QApplication.processEvents()
+            self.assertTrue(self._marked(first), "开着的那条仍要有蓝点")
+            self.assertEqual(first.background(0).style(),
+                             Qt.BrushStyle.NoBrush, "条目不该有底色")
             img = tree.viewport().grab().toImage()
             rect = tree.visualItemRect(first)
             y = rect.center().y()
             colors = {img.pixelColor(x, y).name()
                       for x in (rect.center().x(), rect.right() - 3)}
-            self.assertIn(gui_file_dock._OPEN_ROW_BG, colors,
-                          "当前行也要铺「正在打开」的淡色")
+            self.assertNotIn("#e8f0fb", colors,
+                             "旧的「正在打开」淡色不该再出现")
         finally:
             # 本用例 show() 过（要真渲染才能抓像素）→ 关窗会弹"未保存的图"
             # 确认框；离屏下没人点，必须按脚本关（同 TestCloseFlow 的做法）

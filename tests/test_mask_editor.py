@@ -691,6 +691,17 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(self.ed.image_combo.currentData(),
                          str(self.img_path))
 
+    def test_editor_autoloads_the_checked_image_not_the_first(self):
+        """进掩膜用勾选的那张，不是列表第一条（2026-11-12）。"""
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=False)
+        self.w.file_list.raw_group.child(1).setCheckState(0, Qt.Checked)
+        QApplication.processEvents()
+        self._open()
+        QApplication.processEvents()
+        self.assertEqual(Path(self.ed.image_path).resolve(), other.resolve())
+
     def test_image_combo_switches_image(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)

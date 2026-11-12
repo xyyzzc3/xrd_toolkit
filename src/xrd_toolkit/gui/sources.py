@@ -123,6 +123,21 @@ def checked_sources(window) -> list:
             if s.item.checkState(0) == Qt.Checked]
 
 
+def first_checked_source(window, kinds):
+    """文件栏里第一条勾选、且 kind 在 kinds 里的来源（没有则 None）。
+
+    进入单对象工作台（校准/掩膜/物相/精修）时用它选"当前对象"：
+    勾选是唯一的选择表达（2026-11-12 用户：勾了 B 进功能还是 A，
+    根因是各工作台都回落到"列表第一条"）。按文件栏显示顺序取第一条，
+    这样"选哪条"在列表里看得见、可预期。
+    """
+    wanted = set(kinds)
+    for source in checked_sources(window):
+        if source.kind in wanted:
+            return source
+    return None
+
+
 def is_rawlike(kind) -> bool:
     """这个来源是否像“一张会算 1D 的图”（原始图 / 掩膜后的 2D）。
 

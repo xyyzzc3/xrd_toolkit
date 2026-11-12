@@ -9,9 +9,9 @@
 **一套积分设置一组**，组名写着是哪一套；「处理后 …」= 每次 [批量处理] 一组），
 再往下是「打开的图」（**屏幕上开着的图**逐个列出来，双击提到最前面；校准图
 不在内，那些行不给勾——用户 2026-10-01 第 5 条，见 _sync_open_figures）。
-勾组 = 整组全选，两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**整行颜色
-只表示"这个条目有图正开着"**（淡色 + 左侧小点，见 refresh_open_marks），
-勾没勾只看框里的小勾——用户 2026-09-28 第 5 条定的。**原始数据那部分的接口
+勾组 = 整组全选，两态：全勾 / 不勾（勾一部分 = 不亮，没有半勾）。**左侧
+小点只表示"这个条目有图正开着"**（见 refresh_open_marks；2026-11-12 起
+去掉整行淡色，用户："背景加深很乱"），勾没勾只看框里的小勾。**原始数据那部分的接口
 沿用老列表的写法**（item(i)/count()/addItem，见 FileTree），免得几十处读写
 全改一遍。
 
@@ -61,7 +61,7 @@ from xrd_toolkit.gui.files.sorting import (
     _stamp_import_order, _sync_sort_menu)
 # 文件栏分组/打开的图（2026-10-21 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.files.groups import (
-    OPEN_FIGURES_TITLE, _OPEN_ROW_BG, _fmt_deg, _group_key, _oned_group_title,
+    OPEN_FIGURES_TITLE, _fmt_deg, _group_key, _oned_group_title,
     _oned_group_tip, _oned_sig, _oned_sig_is_current, _open_dot,
     _open_dot_icon, _product_keys, _product_keys_on_disk, _restore_tree_state,
     _sync_open_figures, _top_groups, _tree_state, _uncheck_everything,

@@ -59,14 +59,18 @@ def _load_image(path):
 
 
 def _calib_standard_path(window: QMainWindow):
-    """标样文件：校准页「标样文件」下拉 > 当前 calib_path > 勾选的第一张原始图。
+    """标样文件：文件栏勾选的第一张原始图 > 当前 calib_path > 下拉当前项。
 
-    2026-11-11 起标样由校准页自己的下拉或文件栏双击选择，
-    页顶下拉是同一件事的镜像/兜底；
-    旧口径（勾选的第一个原始数据）保留为兜底，兼容脚本/旧测试。
+    2026-11-12 用户："勾了 B 进校准还是默认的 A"——原来先看下拉当前项，
+    而下拉没保留值时就取列表第一条，勾选永远轮不到。现在勾选优先；
+    没勾选才沿用上次的 calib_path / 下拉，保持"退出再进还是这张"的习惯。
     产物条目跳过：校准要的是原始图像（要读像素、找环心），产物是 1D
     曲线——勾了产物不算数。
     """
+    checked = gui_sources.first_checked_source(
+        window, (gui_sources.RAW,))
+    if checked is not None:
+        return Path(checked.path)
     path = getattr(window, "calib_path", None)
     if path:
         return Path(path)
@@ -74,9 +78,6 @@ def _calib_standard_path(window: QMainWindow):
     data = combo.currentData() if combo is not None else None
     if data:
         return Path(data)
-    for src in gui_sources.checked_sources(window):
-        if src.kind == gui_sources.RAW:
-            return Path(src.path)
     return None
 
 

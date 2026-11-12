@@ -527,6 +527,7 @@ def _open_mask_workbench(window: QMainWindow) -> None:
         dock.move(12, 12)
     dock.show()
     dock.raise_()
+    window.mask_editor.prefer_checked_image()
     _maximize_subwindow(dock)
 
 
@@ -598,6 +599,22 @@ def _on_mask_mode(window: QMainWindow, on: bool) -> None:
         _exit_mask_mode(window)
 
 
+def _select_checked_curve(window: QMainWindow, editor) -> bool:
+    """进入物相/精修：文件栏勾选的第一条 1D/处理产物优先（2026-11-12）。
+
+    勾选是唯一的选择表达；没有勾选时保持编辑器原来的当前对象
+    （下拉/上次用过的那条）。只认 1D 产物与处理产物：原始图要先积分。
+    """
+    src = gui_sources.first_checked_source(
+        window, (gui_sources.ONED, gui_sources.BG))
+    if src is None:
+        return False
+    if editor.select_source(src):
+        _log(window, f"物相/精修：用文件栏勾选的第 1 条曲线 {src.display}")
+        return True
+    return False
+
+
 _REFINE_TIP = ("精修工作台：选一条 1D 曲线和一张 CIF，"
                "做 Le Bail 或结构全谱拟合")
 
@@ -627,6 +644,7 @@ def _open_refine_workbench(window: QMainWindow) -> None:
         dock.move(12, 12)
     window.refine_editor.refresh_curves()
     window.refine_editor.refresh_cifs()
+    _select_checked_curve(window, window.refine_editor)
     dock.show()
     dock.raise_()
     _maximize_subwindow(dock)
@@ -708,6 +726,7 @@ def _open_phase_workbench(window: QMainWindow) -> None:
                     max(520, area.height() - 40))
         dock.move(12, 12)
     window.phase_editor.refresh_curves()
+    _select_checked_curve(window, window.phase_editor)
     dock.show()
     dock.raise_()
     _maximize_subwindow(dock)
@@ -812,6 +831,17 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
     window.mode_label.setText("原位模式")
     _set_bottom_strip_visible(window, False)
     _open_insitu_workbench(window)
+    editor = window.insitu_editor
+    checked_raw = [s for s in gui_sources.checked_sources(window)
+                   if s.kind == gui_sources.RAW]
+    if checked_raw and not editor.frames:
+        # 还没有帧：直接用勾选（2026-11-12 用户：进入要跟随勾选）。
+        editor._use_checked_frames()
+    elif checked_raw:
+        # 已有文件夹/预设帧：不悄悄覆盖，提示可切换。
+        editor._set_status(
+            f"文件栏有 {len(checked_raw)} 张勾选原始图；"
+            "点 [用勾选的原始数据] 可改用它们")
     window.insitu_btn.setText("退出原位")
     window.insitu_btn.setToolTip("退出原位工作台，回到分析模式")
     _log(window, "进入原位模式")

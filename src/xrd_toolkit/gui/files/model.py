@@ -208,22 +208,15 @@ def _group_state(states) -> Qt.CheckState:
     return Qt.Checked if states == {Qt.Checked} else Qt.Unchecked
 
 class _RowPaintDelegate(QStyledItemDelegate):
-    """条目底色的画笔：只画"正在打开"，不画 Qt 的选中底色。
+    """条目绘制：不画 Qt 的选中底色（选中/勾选只看框内小勾）。
 
-    用户 2026-09-28 第 5 条："文件栏背景加深代表这个图正在打开，选中未选中
-    仅用框内的标志表示"。当时是靠 FileTree 上的一条样式表
-    （`QTreeView::item:selected { background: transparent; }`）把 Qt 的选中
-    底色压成透明的——可样式表是"对所有条目一条口径"，它连条目**自己**的
-    背景刷子（refresh_open_marks 设的那层淡色）也一起盖掉了：当前那一行
-    （刚点过的、或刚双击打开的那行）反而是纯白，只剩左边小点——"整行淡色"
-    这个记号在最该看见它的那行偏偏没有（2026-09-30 复核逮到）。
+    用户 2026-09-28："选中未选中仅用框内的标志表示"——靠 style sheet 把
+    Qt 的选中底色压掉时，会连条目自己的背景刷子一起盖掉；改到绘制这一层：
+    交基类之前摘掉"选中"状态位即可。选中逻辑本身在 selection model 里，
+    勾选、右键、删除、键盘操作一律照旧。
 
-    改到绘制这一层，两步：
-      ① 交基类之前把 option 里的"选中"状态位摘掉 → Qt 的选中底色不画。
-         只是"怎么画"变了：选中逻辑本身在 selection model 里，勾选、右键、
-         删除、键盘操作一律照旧；
-      ② 条目带背景刷子（= "正在打开"）时自己先铺一遍 → 淡色不再依赖样式表
-         放行，也用不着跟任何风格博弈。
+    （2026-11-12 起"正在打开"只用左侧小点表示，不再设整行底色；这里
+    仍保留"有条目自带背景刷子就先铺"的通用路径，当前无人设置。）
     """
 
     def initStyleOption(self, option, index) -> None:

@@ -202,10 +202,16 @@ class MaskWorkbench(QWidget):
         super().showEvent(event)
         self._refresh_image_combo()
         self._load_hot_params()      # 几何可能换过：按当前配置取参数
-        if self.image_path is None and self.image_combo.count():
-            first = self.image_combo.itemData(0)
-            if first:
-                self.load_image(Path(first))
+        if self.image_path is None:
+            # 2026-11-12 用户：进入工作台要跟随文件栏勾选，不是默认第一张。
+            checked = gui_sources.first_checked_source(
+                self.main, (gui_sources.RAW,))
+            if checked is not None:
+                self.load_image(Path(checked.path))
+            elif self.image_combo.count():
+                first = self.image_combo.itemData(0)
+                if first:
+                    self.load_image(Path(first))
 
     # ── 界面 ────────────────────────────────────────────────────────
     def _build(self):
@@ -768,6 +774,26 @@ class MaskWorkbench(QWidget):
                         and Path(path) == Path(self.image_path)):
             return
         self.load_image(Path(path))
+
+    def prefer_checked_image(self):
+        """进入掩膜：文件栏勾选的第一张原始图优先（2026-11-12 用户口径）。
+
+        第一次进入时 showEvent 已按勾选载入；这个入口负责"工作台已经
+        有当前图、但用户后来勾了另一张再进来"的情况。没有勾选就保持
+        现状，不覆盖双击/下拉选的当前图。
+        """
+        src = gui_sources.first_checked_source(
+            self.main, (gui_sources.RAW,))
+        if src is None:
+            return False
+        path = Path(src.path)
+        if self.image_path is not None and Path(self.image_path) == path:
+            return False
+        self.load_image(path)
+        if self.image_path is not None and Path(self.image_path) == path:
+            _log(self.main, f"掩膜：用文件栏勾选的第 1 张原始图 {src.display}")
+            return True
+        return False
 
     def _stash_mask(self):
         """把当前图的 mask 记进内存缓存（换图前调用，最近 4 张）。"""

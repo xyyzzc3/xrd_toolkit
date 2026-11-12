@@ -138,6 +138,28 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_enter_mode_uses_checked_file_not_first(self):
+        """进校准用文件栏勾选的那张，不是列表第一条（2026-11-12）。"""
+        w = create_window()
+        try:
+            w.show()
+            w.add_files(["data/fake_a.tif", "data/fake_b.tif"], select=False)
+            w.file_list.item(1).setCheckState(0, Qt.Checked)   # 只勾 B
+            QApplication.processEvents()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                w.calib_btn.click()
+            QApplication.processEvents()
+            self.assertIsNotNone(w.calib_dock)
+            self.assertIn("fake_b.tif", w.calib_dock.windowTitle(),
+                          "应该开勾选的 B，而不是第一条 A")
+            self.assertEqual(Path(w.calib_file_combo.currentData()).name,
+                             "fake_b.tif", "下拉要镜像实际打开的标样")
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_calibrant_selector_defaults_to_lab6(self):
         """校准页有标样下拉框：默认 LaB₆，环数默认 16（当前几何）。"""
         w = create_window()

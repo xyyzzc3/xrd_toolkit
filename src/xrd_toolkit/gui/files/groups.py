@@ -20,7 +20,7 @@ from xrd_toolkit.gui.files.selection import (
 from xrd_toolkit.gui.files.sorting import _set_current_keeping_scroll
 # 打开的图（2026-10-21 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.files.open_figures import (
-    OPEN_FIGURES_TITLE, _OPEN_ROW_BG, _open_dot, _open_dot_icon,
+    OPEN_FIGURES_TITLE, _open_dot, _open_dot_icon,
     _sync_open_figures, _top_groups, refresh_open_marks)
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.services import masked2d, stage_cache

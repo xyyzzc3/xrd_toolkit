@@ -152,11 +152,16 @@ def _enter_calib(window: QMainWindow) -> None:
     # 放在"没勾文件"的提前返回之前——没文件也要能退出去
     window.calib_exit_btn.setVisible(True)
     _refresh_calib_file_combo(window)
+    checked = gui_sources.first_checked_source(
+        window, (gui_sources.RAW,))
     path = _calib_standard_path(window)
     if path is None:
         _log(window, "请在上方「标样文件」选择一张原始图，或点 [打开…]")
         return
     _open_calib_panel(window, path)
+    if checked is not None and getattr(window, "calib_dock", None) is not None:
+        _log(window, f"校准：用文件栏勾选的第 1 张原始图 {checked.display}")
+    _refresh_calib_file_combo(window)   # 下拉镜像到实际打开的标样
     _refresh_config_name_prefill(window)   # 「条目名称」跟着这个标样重填
     _widen_dock_for_calib(window)
 
