@@ -398,17 +398,20 @@ class MaskWorkbench(QWidget):
             widget.valueChanged.connect(lambda *_: self._save_hot_params())
 
         self.fig = Figure(figsize=(10, 7.4))
+        self.fig.patch.set_facecolor("#c8c8c8")   # 首帧未画完前不露白
         # 2D 是主画布：预览只留一条（2026-11-11 用户："让 2D 图大一些"）。
         gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0],
                                    hspace=0.22)
         self.ax_img = self.fig.add_subplot(gs[0])
         self.ax_prev = self.fig.add_subplot(gs[1])
         self.ax_img.set_axis_off()
+        self.ax_img.set_facecolor("#c8c8c8")
         self.ax_prev.set_xlabel("2θ (°)", fontsize=8)
         self.ax_prev.set_ylabel("counts", fontsize=8)
         self.ax_prev.tick_params(labelsize=7)
         self.ax_prev.grid(alpha=0.25, linestyle=":")
         self.canvas = FigureCanvasQTAgg(self.fig)
+        self.canvas.setStyleSheet("background-color:#c8c8c8;")
         self.canvas.setFocusPolicy(Qt.StrongFocus)
         self.canvas.mpl_connect("button_press_event", self._on_press)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)

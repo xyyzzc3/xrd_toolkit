@@ -7,11 +7,10 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFileDialog, QMainWindow
+from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow
 
 from xrd_toolkit import config
 from xrd_toolkit.gui import sources as gui_sources
-from xrd_toolkit.gui.calib_model import CALIB_PANEL_RESERVE_PX
 from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _close_calib_panel, _open_calib_panel)
 from xrd_toolkit.gui.config_ops import _suggest_config_key
@@ -111,25 +110,17 @@ def _choose_calib_file(window: QMainWindow) -> None:
 
 
 def _enter_calib(window: QMainWindow) -> None:
-    """进入校准模式（[校准] 按下）：开校准面板 + 按校准页内容拉宽参数坞。
+    """进入校准模式（[校准] 按下）：露出参数坞 + 开校准面板。
 
     没选标样只记日志提示（不崩）——校准页顶部有「标样文件」下拉和
-    [打开…]，选了就开面板。宽度只在够得着时拉：给绘图区留
-    CALIB_PANEL_RESERVE_PX（点环选点是在图上做的，坞太宽就没法点了）。
+    [打开…]，选了就开面板。2026-11-12 起不再按内容拉宽参数坞（用户：
+    "开功能参数栏会拉伸"）；校准页自己的控件允许压窄/省略，普通坞宽
+    就能放下，绘图区不会忽宽忽窄。
     """
-    # 先让参数坞露出来再量宽：开局它是收起的（_clear_entrance），
-    # 隐藏时量到的是旧值/默认值 → 拉宽和"退出还原"都会拿假数字
-    # （[校准] 的 toggled 先于 clicked 触发，所以不能指望入口那边先
-    # 露坞——2026-09-26 实测：以前量出来 327 px，远没到该有的宽度）
+    # 开局参数坞可能是收起的（_clear_entrance）：进校准先露出来。
+    # 2026-11-12 起不再按内容拉宽坞（用户："开功能参数栏会拉伸"）——
+    # 校准页的下拉允许压窄、长文件名省略，页面最小宽度落在普通坞宽内。
     window.param_dock.setVisible(True)
-    # 拉宽**之前**记住分析模式的坞宽：退出时要还原到这条宽度，晚了量
-    # 拿到的是拉宽后的值（2026-11-11 实测测试里 178 → 360）。量宽前
-    # 手动走一遍布局（同 _widen_dock_for_calib）。
-    if getattr(window, "_dock_w_before", None) is None:
-        lay = window.layout()
-        if lay is not None:
-            lay.activate()
-        window._dock_w_before = window.param_dock.width()
     # 校准也是工作台：底部坐标/横排/缩放/全部关闭对校准页没有意义，
     # 整条隐藏（2026-11-05，与四个中央工作台同一口径）。放在"没勾文件"
     # 提前返回之前——没文件也要能退出，退出时统一恢复。
@@ -158,20 +149,23 @@ def _enter_calib(window: QMainWindow) -> None:
     if path is None:
         _log(window, "请在上方「标样文件」选择一张原始图，或点 [打开…]")
         return
-    _open_calib_panel(window, path)
-    if checked is not None and getattr(window, "calib_dock", None) is not None:
-        _log(window, f"校准：用文件栏勾选的第 1 张原始图 {checked.display}")
-    _refresh_calib_file_combo(window)   # 下拉镜像到实际打开的标样
-    _refresh_config_name_prefill(window)   # 「条目名称」跟着这个标样重填
-    _widen_dock_for_calib(window)
+    # 首次画 2048² 校正图要几百毫秒：亮等待光标，别让用户以为点空了
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        _open_calib_panel(window, path)
+        if (checked is not None
+                and getattr(window, "calib_dock", None) is not None):
+            _log(window,
+                 f"校准：用文件栏勾选的第 1 张原始图 {checked.display}")
+        _refresh_calib_file_combo(window)   # 下拉镜像到实际打开的标样
+        _refresh_config_name_prefill(window)   # 「条目名称」跟着标样重填
+    finally:
+        QApplication.restoreOverrideCursor()
 
 def _exit_calib(window: QMainWindow) -> None:
-    """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
+    """退出校准模式：关校准面板（关闭即遗忘）。"""
     window.calib_exit_btn.setVisible(False)
-    # 先关校准面板（子窗口），再还原坞宽：反过来会被重新布局把坞宽
-    # 覆盖回去（2026-11-11 实测退出后坞宽停在 360）。
     _close_calib_panel(window)
-    _restore_dock_width(window)
     _set_bottom_strip_visible(window, True)
     saved = getattr(window, "_calib_dock_saved", None)
     if saved:
@@ -179,41 +173,3 @@ def _exit_calib(window: QMainWindow) -> None:
         window._calib_dock_saved = None
         from xrd_toolkit.gui.app import _resync_docks   # 破循环
         _resync_docks(window)
-
-def _widen_dock_for_calib(window: QMainWindow) -> None:
-    """校准模式下把参数坞拉宽到"放下校准页所有内容"（不超过窗口上限）。"""
-    dock = getattr(window, "param_dock", None)
-    page = getattr(window, "calib_scroll", None)
-    if dock is None or page is None:
-        return
-    if getattr(window, "_dock_w_before", None) is None:
-        # 记住分析模式的宽度。参数坞开局是收起的（app._clear_entrance，
-        # 用户 2026-09-25 定），点 [校准] 时才刚由隐藏转可见、还没走
-        # 布局，此刻 width() 是旧值/默认值 → 先手动走一遍布局再量，
-        # 否则"退出校准还原宽度"会还原成一个假数字
-        lay = window.layout()
-        if lay is not None:
-            lay.activate()
-        window._dock_w_before = dock.width()
-    need = page.widget().sizeHint().width() + 24  # 滚动区边框/条余量
-    limit = max(360, window.width() - CALIB_PANEL_RESERVE_PX)
-    target = int(min(need, limit))
-    if dock.isFloating():
-        dock.resize(target, dock.height())
-    else:
-        window.resizeDocks([dock], [target], Qt.Horizontal)
-    if need > limit:
-        _log(window, f"校准页需要 {need} px，但为保住绘图区（点环用）只给到 "
-                     f"{target} px：窄窗口下校准页里可以横向滚动")
-
-def _restore_dock_width(window: QMainWindow) -> None:
-    """出校准模式：参数坞宽度还原成进之前那一条。"""
-    was = getattr(window, "_dock_w_before", None)
-    dock = getattr(window, "param_dock", None)
-    if was is None or dock is None:
-        return
-    if dock.isFloating():
-        dock.resize(was, dock.height())
-    else:
-        window.resizeDocks([dock], [was], Qt.Horizontal)
-    window._dock_w_before = None

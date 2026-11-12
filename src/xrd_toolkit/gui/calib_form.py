@@ -248,7 +248,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     std_row.setSpacing(4)
     window.calib_file_combo = QComboBox()
     window.calib_file_combo.setObjectName("calib_file_combo")
-    window.calib_file_combo.setMinimumWidth(220)
+    # 2026-11-12：不再按内容拉宽参数坞——下拉允许被压窄、长文件名省略，
+    # 页面最小宽度就能落在普通坞宽（~275 px）里，进校准不再"拉伸"。
+    window.calib_file_combo.setMinimumWidth(120)
     window.calib_file_combo.setToolTip(
         "校准用的标样原始图；换图立即切换校准面板")
     window.calib_file_combo.currentIndexChanged.connect(

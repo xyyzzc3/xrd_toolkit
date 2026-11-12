@@ -35,12 +35,19 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     """
     ax = window.calib_ax
     ax.clear()
+    ax.set_facecolor("#c8c8c8")   # 画布未铺图前是灰的，不闪白
     h, w = image.shape
-    lo, hi = _auto_contrast_values(image)
+    # 显示降采样（2026-11-12 性能）：面板只有几百像素，2048² 原图做
+    # LogNorm 要 0.6 s 以上、还会在进校准时白闪。块内取最大降到 ~1024，
+    # 用 extent 把坐标轴仍映射回原图像素，点环/理论环/选点全不受影响。
+    from xrd_toolkit.gui.image_utils import downsample_max
+    ds = max(1, int(np.ceil(max(h, w) / 1024)))
+    disp = downsample_max(image, ds) if ds > 1 else image
+    lo, hi = _auto_contrast_values(disp)
     vmin = max(1.0, lo)
     vmax = max(hi, vmin * 10.0)
-    ax.imshow(image, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
-              origin="lower")
+    ax.imshow(disp, cmap="magma", norm=LogNorm(vmin=vmin, vmax=vmax),
+              origin="lower", extent=(-0.5, w - 0.5, -0.5, h - 0.5))
     ax.set_aspect("equal")
     state = _calib_state(window)
     paths = theoretical_ring_paths(

@@ -559,7 +559,12 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     _highlight_entrance(window, None)
     window.mode_label.setText("掩膜模式")
     _set_bottom_strip_visible(window, False)
-    _open_mask_workbench(window)
+    # 首次构建掩膜台/载入 2048² 图要几百毫秒：亮等待光标
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        _open_mask_workbench(window)
+    finally:
+        QApplication.restoreOverrideCursor()
     # Home 键：工作台自己的 [复位视图] 接管；主窗口那条先让开，
     # 否则两个 WindowShortcut 同键 = Qt 判定歧义、两条都不触发
     main_home = getattr(window, "home_shortcut", None)

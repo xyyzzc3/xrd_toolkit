@@ -120,6 +120,5 @@ from xrd_toolkit.gui.calib_workers import (
 # 结果落地 / 模式进出（2026-10-22 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.calib_mode import (
     _default_config_name, _enter_calib, _exit_calib,
-    _refresh_config_name_prefill, _restore_dock_width,
-    _widen_dock_for_calib)
+    _refresh_config_name_prefill)
 from xrd_toolkit.gui.calib_result import _on_calib_result

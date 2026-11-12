@@ -2848,12 +2848,8 @@ class TestCalibFlow(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_dock_widens_on_enter_and_restores_on_exit(self):
-        """进校准模式按内容拉宽参数坞（给绘图区留 620 px），退出还原。
-
-        先点过 [1D]（参数坞可见）再进校准——开局它是收起的，量不到
-        "之前的宽度"，那种情况由下一条测试单独守。
-        """
+    def test_dock_width_unchanged_on_enter_and_exit(self):
+        """进/退校准不再拉宽参数坞（2026-11-12 用户：不要拉伸）。"""
         w = create_window()
         try:
             w.show()
@@ -2865,11 +2861,8 @@ class TestCalibFlow(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             QApplication.processEvents()
-            page = w.calib_scroll.widget()
-            self.assertGreaterEqual(w.param_dock.width(),
-                                    page.sizeHint().width())
-            self.assertLessEqual(w.param_dock.width(),
-                                 w.width() - gui_calib_model.CALIB_PANEL_RESERVE_PX + 2)
+            self.assertAlmostEqual(w.param_dock.width(), before, delta=2,
+                                   msg="进校准不许把参数坞拉宽")
             w.entrance_buttons["1D"].click()   # 点别的入口 = 退出校准
             QApplication.processEvents()
             self.assertAlmostEqual(w.param_dock.width(), before, delta=2)
@@ -2878,12 +2871,8 @@ class TestCalibFlow(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_calib_widens_dock_when_opened_first_thing(self):
-        """开局第一件事就点 [校准]（参数坞刚从隐藏转可见）也要按内容拉宽。
-
-        量宽度前先手动走一遍布局（app._clear_entrance 让坞开局收起，
-        刚 setVisible(True) 时 width() 还是旧值——2026-09-25 修）。
-        """
+    def test_calib_opened_first_thing_keeps_normal_width(self):
+        """开局第一件事点 [校准]：坞按正常宽度露出，不拉宽。"""
         w = create_window()
         try:
             w.show()
@@ -2893,11 +2882,8 @@ class TestCalibFlow(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             QApplication.processEvents()
-            page = w.calib_scroll.widget()
-            self.assertGreaterEqual(w.param_dock.width(),
-                                    page.sizeHint().width())
-            # 退出校准：没选过入口 → 坞收起；再点 [1D] 露出时必须是分析
-            # 模式的窄宽度（量错的"假宽度"会把坞撑到 640 上下）
+            # 旧版"按内容拉宽"会把它撑到 600+；现在不该再跳宽
+            self.assertLess(w.param_dock.width(), 450)
             w.entrance_buttons["1D"].click()
             QApplication.processEvents()
             self.assertTrue(w.param_dock.isVisible())

@@ -150,7 +150,9 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     scale = min(1.0, PANEL_SCALE / max(h, w))
     cw, ch = max(200, round(w * scale)), max(200, round(h * scale))
     fig = Figure(figsize=(cw / 100.0, ch / 100.0), dpi=100)
+    fig.patch.set_facecolor("#c8c8c8")   # 首帧未画完前不露白（与 MDI 同色）
     canvas = FigureCanvasQTAgg(fig)
+    canvas.setStyleSheet("background-color:#c8c8c8;")
     # 视野开关：[看环全貌] 勾上才把视野放大到包住全部理论环。默认关
     # ——图像是这张图上唯一不动的参照系（见 _draw_calib_image 的视野锁）；
     # 环跑到图像外时是它主动放大的唯一入口（2026-09-26 晚用户定）。
