@@ -457,6 +457,15 @@ def _exit_other_workbenches(window: QMainWindow, keep, *,
         btn = getattr(window, f"{name}_btn", None)
         if btn is not None and btn.isChecked():
             btn.setChecked(False)
+    # 防御（2026-11-12）：按钮可能已经被弹起、但校准面板还活着（卡顿/半
+    # 状态时点过一次切换）。只要目标不是校准，就把残留面板关干净，免得
+    # 后面的工作台子窗口被 MDI 的半状态挡住、看着像"打不开"。
+    calib_btn = getattr(window, "calib_btn", None)
+    if (keep != "calib"
+            and getattr(window, "calib_dock", None) is not None
+            and calib_btn is not None and not calib_btn.isChecked()):
+        from xrd_toolkit.gui.calib_mode import _exit_calib   # 破循环
+        _exit_calib(window)
 
 
 def _open_entry_in_workbench(window: QMainWindow, item) -> bool:

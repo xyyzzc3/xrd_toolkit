@@ -753,6 +753,23 @@ class TestMaskEditor(unittest.TestCase):
         self.assertTrue(item0.icon(0).isNull())
         self.assertTrue(item1.icon(0).isNull(), "退出掩膜蓝点收回")
 
+    def test_lingering_calibration_panel_is_closed_before_mask(self):
+        """半状态（校准按钮已灭、面板还活着）进掩膜：先关干净再开。"""
+        self.w.add_files([str(self.img_path)], select=False)
+        QApplication.processEvents()
+        self.w.calib_btn.click()
+        QApplication.processEvents()
+        self.assertIsNotNone(self.w.calib_dock, "前提：校准面板已开")
+        # 模拟卡顿留下的半状态：按钮已灭、面板没关
+        self.w.calib_btn.blockSignals(True)
+        self.w.calib_btn.setChecked(False)
+        self.w.calib_btn.blockSignals(False)
+        self.assertIsNotNone(self.w.calib_dock, "前提：按钮灭了面板还在")
+        self._open()
+        self.assertIsNone(self.w.calib_dock, "残留校准面板应被关掉")
+        self.assertTrue(self.w.mask_dock.isVisible())
+        self.assertTrue(self.w._mask_active)
+
     def test_image_combo_switches_image(self):
         other = Path(self._td.name) / "frame2.edf"
         _write_image(other)
