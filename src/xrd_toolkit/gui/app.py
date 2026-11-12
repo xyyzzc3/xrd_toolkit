@@ -112,10 +112,10 @@ from xrd_toolkit.gui.panels import (
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT,
     _apply_auto_contrast, _apply_auto_heatlim, _apply_auto_ylim,
-    _apply_config, _bg_geom_sig, _collect_geometry, _content,
+    _bg_geom_sig, _collect_geometry, _content,
     _family_label, _GRADIENT_FAMILY_ORDER, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
-    _reload_config_combo, _set_focus)
+    _reload_config_combo, _set_focus, set_geometry)
 from xrd_toolkit.gui.panel_layout import _maximize_subwindow
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
@@ -1381,13 +1381,10 @@ def create_window() -> QMainWindow:
     # 启动即应用预设里的几何条目（没有预设时就是内置默认）：参数坞
     # 初值来自注册表（如初始距离 1595.80 mm），而不是写死的占位默认值；
     # [删除] 按钮随选中条目同步置灰（默认条目是内置的 → 初始不可删）。
-    preset_idx = window.config_combo.findData(window.preset["geometry"])
-    if preset_idx < 0:
-        preset_idx = window.config_combo.findData(DEFAULT_CONFIG)
-    window.config_combo.blockSignals(True)
-    window.config_combo.setCurrentIndex(max(0, preset_idx))
-    window.config_combo.blockSignals(False)
-    _apply_config(window, window.config_combo.currentIndex())
+    preset_key = window.preset.get("geometry") or DEFAULT_CONFIG
+    if preset_key not in CONFIGS:
+        preset_key = DEFAULT_CONFIG
+    set_geometry(window, preset_key)
     _sync_del_config_btn(window)
     for warning in window.preset.get("warnings") or []:
         _log(window, f"预设提示：{warning}")

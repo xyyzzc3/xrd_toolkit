@@ -83,7 +83,7 @@ from xrd_toolkit.gui.state.focus import (
 # 配置应用/常量（2026-10-21 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.state.config import (
     CALIB_HOVER_KEY, DATA_PARAM_DEFAULTS, _AUX_GID_PREFIX, _apply_config,
-    _reload_config_combo)
+    _reload_config_combo, set_geometry)
 
 # 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为
 

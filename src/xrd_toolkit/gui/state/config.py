@@ -6,7 +6,7 @@ panel_state 再导出，app/calib/builder 照旧经 gui_panel_state 取用。
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow
 
-from xrd_toolkit.config import CONFIGS, entry_display
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui.state.base import _log
 
 
@@ -38,28 +38,56 @@ CALIB_HOVER_KEY = "校准图"
 # 统一走 _data_lines(ax)，别直接迭代 ax.lines。
 _AUX_GID_PREFIX = "bg:"
 
-def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:
-    """把下拉框选中的配置条目应用到参数面板。
+def set_geometry(window: QMainWindow, key, silent: bool = False) -> None:
+    """切换当前几何（唯一入口，2026-11-12 方案重构）。
 
-    几何值来自 config.py 注册表（标定值，不是占位默认值）：完整条目
-    （label / geometry / beam_center）挂在 window.config 上，_collect_
-    geometry、2D/剖面视图、校准页的借用起点都从它取。
-    面板这边只两件事：记住选中的 key，并把这条几何的读数写进"几何配置"
-    那一行的悬停提示（像素/波长/距离——原先它们各占一行灰色只读字段，
-    2026-09-26 用户定：只留下拉框这一行，读数改悬停）。
-    silent = 快照回放时的静默切换（用户没动手，不记日志）。
+    状态只写 window.config / window.config_name，**不读下拉框**。启动、
+    预设应用、焦点快照回放、校准保存、.poni 导入全部走这里；未知 key
+    退回默认条目并记日志。
+
+    B1 阶段坞顶的几何下拉还在，这里顺手把它同步到当前条目（屏蔽信号，
+    控件只做显示）。B2 把下拉搬进方案管理页后，这段自然变成空操作。
     """
-    key = window.config_combo.itemData(index)
-    cfg = CONFIGS[key]
+    key = str(key or "")
+    cfg = CONFIGS.get(key)
+    if cfg is None:
+        fallback = DEFAULT_CONFIG
+        if key and key != fallback:
+            _log(window, f"几何配置 {key!r} 不存在，已改用 {fallback}")
+        key = fallback
+        cfg = CONFIGS[key]
     window.config_name = key
     window.config = cfg   # 完整条目（label / geometry / beam_center）
-    # 坞顶那一行的悬停读数（像素/波长/距离）与置灰状态都由 app 的
-    # _sync_geom_row 一处写：这里是换了条目，叫它重画一遍
+    # B1 遗留：坞顶下拉仍在，保持它指向当前条目（状态由这里写）。
+    combo = getattr(window, "config_combo", None)
+    if combo is not None:
+        idx = combo.findData(key)
+        if idx >= 0 and idx != combo.currentIndex():
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(blocked)
+    # 坞顶那一行的悬停读数：_sync_geom_row 一处写（B2 后改成灰字刷新）
     sync = getattr(window, "_geom_row_sync", None)
     if sync is not None:
         sync()
+    # 方案管理页等界面订阅几何变化（B2 用；没订阅就是空操作）
+    notify = getattr(window, "_geometry_changed", None)
+    if callable(notify):
+        notify(key)
     if not silent:
         _log(window, f"已加载几何配置 {entry_display(key, cfg)}")
+
+
+def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:
+    """兼容旧调用：把几何下拉的第 index 项交给 set_geometry。
+
+    B1 之后状态不再从控件采集。这个包装只为「下拉框信号」和旧测试/
+    脚本保留；新代码一律直接调 set_geometry(key)。
+    """
+    combo = getattr(window, "config_combo", None)
+    if combo is None:
+        return
+    set_geometry(window, combo.itemData(index), silent=silent)
 
 def _reload_config_combo(window: QMainWindow,
                          select_key: str | None = None) -> None:
@@ -85,8 +113,7 @@ def _reload_config_combo(window: QMainWindow,
     idx = combo.findData(select_key)
     if idx < 0:
         idx = 0
-    if idx != combo.currentIndex():
-        combo.setCurrentIndex(idx)   # 索引变化 → currentIndexChanged → _apply_config
-    else:
-        _apply_config(window, idx)   # 索引没变信号不触发：手动应用
+    # 状态统一由 set_geometry 写；重建后的控件只做显示（索引变没变
+    # 都不再依赖 currentIndexChanged）。
+    set_geometry(window, combo.itemData(idx))
 

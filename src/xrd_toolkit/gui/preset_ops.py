@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import CONFIGS, entry_display
-from xrd_toolkit.gui.panel_state import _log
+from xrd_toolkit.gui.panel_state import _log, set_geometry
 from xrd_toolkit.gui.tasks import user_error_text
 from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, get_preset, is_builtin, preset_names,
@@ -204,9 +204,7 @@ def apply_preset(window, name, *, persist=True) -> bool:
             "、".join(busy) + " 工作台还有任务在跑。\n"
             "等它结束（或先停止）再切换预设。")
         return False
-    combo = getattr(window, "config_combo", None)
-    idx = combo.findData(preset["geometry"]) if combo is not None else -1
-    if idx < 0:
+    if preset["geometry"] not in CONFIGS:
         QMessageBox.warning(
             window, "项目预设",
             f"预设「{preset['name']}」里的几何配置 "
@@ -215,8 +213,7 @@ def apply_preset(window, name, *, persist=True) -> bool:
 
     window.preset_name = preset["name"]
     window.preset = preset
-    if combo.currentIndex() != idx:
-        combo.setCurrentIndex(idx)          # 触发 _apply_config
+    set_geometry(window, preset["geometry"])
     for attr, method in (("phase_editor", "apply_preset"),
                          ("refine_editor", "apply_preset"),
                          ("insitu_editor", "apply_preset"),

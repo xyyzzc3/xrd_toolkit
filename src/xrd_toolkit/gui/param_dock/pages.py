@@ -29,7 +29,7 @@ def _sync_geom_row(window: QMainWindow) -> None:
     读数（像素/波长/距离）来自 window.config（完整条目，_apply_config
     里挂上）；建坞阶段它还没设，此时只留条目名、提示留空。
     """
-    combo = window.config_combo
+    combo = getattr(window, "config_combo", None)
     cfg = getattr(window, "config", None)
     if cfg is None:
         tip = ""
@@ -44,7 +44,8 @@ def _sync_geom_row(window: QMainWindow) -> None:
     if window.param_stack.currentIndex() == window.PARAM_PAGES["校准"]:
         tip += ("\n（校准用的是本页「当前配置」那份几何；这里换的是"
                 "分析/积分用的条目）")
-    combo.setToolTip(tip)
+    if combo is not None:
+        combo.setToolTip(tip)
     window.geom_row.setToolTip(tip)
 
 def _sync_data_row(window: QMainWindow) -> None:

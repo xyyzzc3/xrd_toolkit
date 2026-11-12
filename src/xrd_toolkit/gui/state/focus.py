@@ -52,14 +52,10 @@ def _load_params_snapshot_body(window: QMainWindow, snap: dict) -> None:
     纵轴自动勾着时，最后按焦点图的实际数据重算并填回置灰输入框
     （同自动对比度的套路，见 _apply_auto_ylim）。
     """
-    idx = window.config_combo.findData(snap.get("config"))
-    if idx >= 0 and idx != window.config_combo.currentIndex():
-        # 静默切换：拦下 currentIndexChanged，手动应用（不记日志）
-        window.config_combo.blockSignals(True)
-        window.config_combo.setCurrentIndex(idx)
-        window.config_combo.blockSignals(False)
-        from xrd_toolkit.gui.panel_state import _apply_config  # 破循环
-        _apply_config(window, idx, silent=True)
+    if snap.get("config") and snap.get("config") != window.config_name:
+        # 静默切换：状态直接写 window.config，不经过任何下拉框（不记日志）
+        from xrd_toolkit.gui.panel_state import set_geometry  # 破循环
+        set_geometry(window, snap.get("config"), silent=True)
     auto = window.params.get("自动对比度")
     for name, value in snap.items():
         if name == "config" or name == "自动对比度":

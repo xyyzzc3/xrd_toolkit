@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit.gui.fit_view import (
     FIT_COLUMNS, clear_fit_results, copy_fit_table, delete_fit_rows,
     fit_selected_peaks, install_fit_view, selected_peak_rows)
-from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _apply_config, _log
+from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _log, set_geometry
 from xrd_toolkit.gui.param_dock.widgets import (
     _toggle_section, add_caption, add_float, add_range,
     add_section_toggle)
@@ -110,7 +110,7 @@ def build_1d_page(window, form_1d, btns_1d):
     btn_apply.clicked.connect(lambda: _apply_params(window))
 
     def reset_data():
-        _apply_config(window, window.config_combo.currentIndex())
+        set_geometry(window, window.config_name)
         for name, value in data_defaults.items():
             window.params[name].setValue(value)
         _log(window, "数据参数已恢复默认（未计算，点 [重算这张图] 生效）")

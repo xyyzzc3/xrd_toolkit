@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG
+from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui.app import create_window
 
 from xrd_toolkit.gui import watchdog as gui_watchdog
@@ -99,11 +99,10 @@ class TestConfigSwitch(unittest.TestCase):
     def test_switch_applies_new_geometry(self):
         w = create_window()
         try:
-            w.config_combo.addItem(self.FAKE_KEY, self.FAKE_KEY)
-            w.config_combo.setItemData(w.config_combo.count() - 1,
-                                       CONFIGS[self.FAKE_KEY]["label"],
-                                       Qt.ToolTipRole)
-            w.config_combo.setCurrentIndex(w.config_combo.count() - 1)
+            # setUp 已把假条目放进 CONFIGS，建窗时下拉里就有它；直接选中。
+            idx = w.config_combo.findData(self.FAKE_KEY)
+            self.assertGreaterEqual(idx, 0)
+            w.config_combo.setCurrentIndex(idx)
             self.assertEqual(w.config_name, self.FAKE_KEY)
             # 几何随条目换：window.config = 新条目的完整几何，坞顶那一行
             # 的悬停提示跟着换成新读数
@@ -113,11 +112,12 @@ class TestConfigSwitch(unittest.TestCase):
             self.assertIn("0.1500", tip)
             self.assertIn("150.0", tip)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
-            # 下拉框只放短 key，完整备注挂在条目的悬停提示上（说明行
-            # 已删除——与用户讨论定稿，见 test_gui_integration_processing 的
+            # 下拉文字 = key_备注；完整 label 仍挂在条目悬停提示上
+            # （见 test_gui_integration_processing 的
             # test_config_combo_carries_full_label_as_tooltip）
             self.assertEqual(
-                w.config_combo.currentText(), self.FAKE_KEY)
+                w.config_combo.currentText(),
+                entry_display(self.FAKE_KEY, CONFIGS[self.FAKE_KEY]))
             idx = w.config_combo.currentIndex()
             self.assertEqual(
                 w.config_combo.itemData(idx, Qt.ToolTipRole),
