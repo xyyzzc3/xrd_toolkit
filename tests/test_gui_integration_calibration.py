@@ -407,26 +407,24 @@ class TestCalibration(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_geom_row_stays_selectable_on_every_page(self):
-        """几何配置行：五页都能换条目，读数看悬停；校准页的提示补一句区别。
+    def test_geom_row_shows_current_on_every_page(self):
+        """灰字几何在所有页可见；校准页的提示补一句区别。
 
-        （2026-09-26 晚订正：先前在校准页把它置灰，结果 [删除] 正好住在
-        校准页、却在校准页换不了选中项——删条目得跨两页。）
+        （2026-11-12 方案重构：下拉搬进管理页，这里只显示当前几何；
+        换几何走 [管理…]。）
         """
         w = create_window()
         try:
             w.show()
             w.entrance_buttons["1D"].click()
-            self.assertTrue(w.config_combo.isEnabled())
+            self.assertEqual(w.geom_label.text(), w.config_name)
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
                 self._enter_with_fake_a(w)
-            self.assertTrue(w.config_combo.isEnabled())   # 校准页也能换
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
             self.assertIn("当前配置", w.geom_row.toolTip())  # 写明区别
             w.entrance_buttons["1D"].click()
-            self.assertTrue(w.config_combo.isEnabled())
             self.assertNotIn("当前配置", w.geom_row.toolTip())
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
@@ -1503,7 +1501,7 @@ class TestSaveCalibConfig(unittest.TestCase):
                 w.close()
 
     def test_save_adds_to_combo_and_selects(self):
-        """保存 → 下拉框出现新条目并自动选中（读数跟到几何行 + 落盘）。
+        """保存 → 管理页几何下拉出现新条目并自动选中（读数跟到灰字 + 落盘）。
 
         2026-10-07 起保存表单只有一个「条目名称」框：名字就是备注，
         命令行标识由它洗出来（名字本身合法时两者相同，下拉框显示 = 名字）。
@@ -1514,12 +1512,16 @@ class TestSaveCalibConfig(unittest.TestCase):
             self._auto_calib(w)
             w.calib_name_edit.setText("lmfp2_lab6")
             w.calib_save_btn.click()
-            # 下拉框：新条目出现 + 自动选中（显示一条 = 这个名字）
-            idx = w.config_combo.findData("lmfp2_lab6")
+            # 新条目进管理页几何下拉；当前几何 = 新条目（方案还没写回，
+            # 所以下拉默认仍指方案里那条 lmfp1_lab6）
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            idx = dlg.geom_combo.findData("lmfp2_lab6")
             self.assertGreaterEqual(idx, 0)
-            self.assertEqual(w.config_combo.currentIndex(), idx)
-            self.assertEqual(w.config_combo.currentText(), "lmfp2_lab6")
+            self.assertEqual(dlg.geom_combo.itemText(idx), "lmfp2_lab6")
+            self.assertEqual(dlg.geom_combo.currentData(), "lmfp1_lab6")
+            dlg.close()
             self.assertEqual(w.config_name, "lmfp2_lab6")
+            self.assertIn("未写进方案", w.geom_label.text())
             # 几何跟到坞顶：悬停读数 = 校准结果（1595.80，不是初值 1600）
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
             # 条目内容：结果几何 + 参数坞像素/波长 + 新拟合束心 B
@@ -1552,9 +1554,12 @@ class TestSaveCalibConfig(unittest.TestCase):
                           "非字母数字该换下划线、去掉首尾")
             entry = config_mod.USER_CONFIGS["LMFP_2"]
             self.assertEqual(entry["label"], "LMFP 第 2 批")
-            idx = w.config_combo.findData("LMFP_2")
-            self.assertEqual(w.config_combo.itemText(idx), "LMFP_2_LMFP 第 2 批",
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            idx = dlg.geom_combo.findData("LMFP_2")
+            self.assertEqual(dlg.geom_combo.itemText(idx),
+                             "LMFP_2_LMFP 第 2 批",
                              "key 与备注不同时显示成一条 key_备注")
+            dlg.close()
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):

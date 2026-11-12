@@ -869,7 +869,7 @@ class MaskWorkbench(QWidget):
         掩膜跟几何走（与原位 mask 同一条规矩）：几何不一致时不认。
         该图自己的掩膜/本会话缓存优先，预设只作兜底。
         """
-        self._load_hot_params()      # 预设可能刚换了几何配置
+        self._load_hot_params()      # 方案可能刚换了几何配置
         preset = preset or {}
         raw = str(preset.get("mask_recipe") or "").strip()
         geom = str(preset.get("geometry") or "")
@@ -880,17 +880,17 @@ class MaskWorkbench(QWidget):
             return
         path = Path(raw).expanduser()
         if not path.is_file():
-            self._say(f"预设的掩膜工程不存在：{path}")
+            self._say(f"方案的掩膜工程不存在：{path}")
             return
         if not is_recipe(path):
-            self._say(f"预设的掩膜工程不是 .mask.npz：{path}")
+            self._say(f"方案的掩膜工程不是 .mask.npz：{path}")
             return
         self.preset_mask_recipe = path
         if self.image is not None and self._apply_recipe_file(path):
-            self._say(f"已载入预设的掩膜工程：{path.name}")
+            self._say(f"已载入方案的掩膜工程：{path.name}")
 
     def _preset_recipe_for_image(self, shape):
-        """该图没有自己的掩膜工程时，用预设掩膜工程兜底。"""
+        """该图没有自己的掩膜工程时，用方案掩膜工程兜底。"""
         path = self.preset_mask_recipe
         if path is None or not path.is_file():
             return None
@@ -986,7 +986,7 @@ class MaskWorkbench(QWidget):
                        f"（{img.shape[0]}×{img.shape[1]} px）")
         if (self.preset_mask_recipe is not None
                 and self.mask_path == self.preset_mask_recipe):
-            self._say(f"掩膜：用预设掩膜工程兜底（{self.mask_path.name}）")
+            self._say(f"掩膜：用方案掩膜工程兜底（{self.mask_path.name}）")
 
     def _display_ds(self):
         """显示降采样倍数：屏幕上 1 px 不必对应多于 ~1 个图像块。"""

@@ -38,8 +38,7 @@ from xrd_toolkit.gui.calib_calibrant import (
     _pixel_ok, _set_pixel_ok, _sync_calibrant_widgets, _update_ring_count,
     _warn_pixel_unchecked)
 from xrd_toolkit.gui.config_ops import (
-    _delete_config, _import_poni, _save_calib_config, _save_poni,
-    _suggest_config_key, _sync_del_config_btn)
+    _save_calib_config, _suggest_config_key)
 
 from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
@@ -207,7 +206,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     """参数坞第 0 页：校准功能。
 
     布局（自上而下）：
-      操作区  [编辑…] [导入][保存] / [删除][存为配置] + 条目 key/备注
+      操作区  [编辑当前配置…] / [保存为配置] + 条目名称
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
       手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
@@ -223,11 +222,11 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     手动区在自动区**上面**（用户 2026-10-13："校准顺序调为手动在上，自动在下"）：
     手动选点是常用路径，打开校准页第一眼就看到它。
 
-    操作区排在最上面（用户 2026-09-26 晚定）：里面的 [加载参数][保存参数]
-    [删除] 作用的就是坞顶「几何配置」那一行选中的条目，紧挨着它才看得出
-    "先选条目、再对条目动手"；原先这栏压在 13 行对比表下面，得先滚下去。
+    操作区只留"对校准当前几何动手"的两项（编辑当前配置 / 保存为配置）；
+    导入/导出 .poni、删除条目等"对注册表动手"的动作 2026-11-12 搬进
+    方案管理页的几何区，和几何选择器挨着。
 
-    出口 [返回分析模式] 与几何配置一行不在这里：两者都固定在参数坞顶部
+    出口 [返回分析模式] 与灰字几何行不在这里：两者都固定在参数坞顶部
     （app._build_param_dock 建，window.calib_exit_btn）——出口原先钉在本页
     最底部，窗口不高时要滚好几百像素才看得见（用户 2026-09-26 报"没有
     退出校准的按钮了"）。像素确认也搬上来挨着"当前配置"那行（它确认的
@@ -285,41 +284,17 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
                         "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
     btn_edit.clicked.connect(lambda: _edit_current(window))
     ops.addWidget(btn_edit)
-    row1 = QHBoxLayout()
-    row1.setSpacing(2)
-    btn_poni = QPushButton("加载几何…")
-    btn_poni.setObjectName("poni_btn")    # 保持历史 objectName（测试引用）
-    btn_poni.setToolTip("加载 .poni：读 pyFAI 交换格式几何文件，存成配置"
-                        "条目并自动选中；同时作为当前配置的起点")
-    btn_poni.clicked.connect(lambda: _import_poni(window))
-    btn_save_poni = QPushButton("保存几何…")
-    btn_save_poni.setObjectName("save_poni_btn")
-    btn_save_poni.setToolTip("保存 .poni 几何文件：把<b>当前配置</b>（本页表里"
-                             "第一列那个，含手输/自定义）的几何写成 pyFAI 交换"
-                             "格式——与 [保存为配置] 取的是同一份几何")
-    btn_save_poni.clicked.connect(lambda: _save_poni(window))
-    btn_del = QPushButton("删除")
-    btn_del.setObjectName("del_config_btn")
-    btn_del.setToolTip("删除参数面板「几何配置」里当前选中的<b>用户</b>"
-                       "配置条目（内置条目不可删）")
-    btn_del.clicked.connect(lambda: _delete_config(window))
-    window.del_config_btn = btn_del
-    row2 = QHBoxLayout()
-    row2.setSpacing(2)
+    # 2026-11-12 方案重构：加载/保存 .poni、删除条目搬进方案管理页的
+    # 几何区（和几何选择器挨着）；校准页只留 [编辑当前配置…]（改校准
+    # 当前几何）和 [保存为配置]（把校准结果存成条目）。
     btn_save_cfg = QPushButton("保存为配置")
     btn_save_cfg.setObjectName("save_calib_config")
     btn_save_cfg.setToolTip("把<b>当前配置</b>存成命名配置条目（本地文件，"
-                            "不进 git），保存后参数面板「几何配置」下拉框"
-                            "自动选中")
+                            "不进 git），保存后方案管理页的几何下拉自动选中")
     btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
     window.calib_save_btn = btn_save_cfg
-    for btn in (btn_poni, btn_save_poni, btn_del, btn_save_cfg):
-        btn.setStyleSheet("padding: 2px 5px;")   # 紧凑内边距
-    for btn in (btn_poni, btn_save_poni, btn_del):
-        row1.addWidget(btn, 1)
-    row2.addWidget(btn_save_cfg, 1)
-    ops.addLayout(row1)
-    ops.addLayout(row2)
+    btn_save_cfg.setStyleSheet("padding: 2px 5px;")
+    ops.addWidget(btn_save_cfg)
     lay.addWidget(ops_box)
 
     # 像素尺寸确认：单独一行，钉在「操作」组下面（页面顶部区域）。
@@ -663,5 +638,4 @@ def _calib_sync(window: QMainWindow) -> None:
         if has_cur else "还没有可保存的几何")
     _sync_slot_combos(window)
     _refresh_table(window)
-    _sync_del_config_btn(window)
 

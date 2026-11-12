@@ -1149,7 +1149,7 @@ class TestRecipeReuse(unittest.TestCase):
             self.assertEqual(saved["insitu_dir"], "~/keep_frames")
             self.assertEqual(saved["insitu_mask_name"], "keep_mask.npy")
             self.assertEqual(saved["phase_library"], "~/keep_phases")
-            self.assertIn("处理设置已存进预设：按钮预设",
+            self.assertIn("处理设置已存进方案：按钮预设",
                           w.log_text.toPlainText())
 
             # 存进一个新名字 = 以当前预设为模板，只换 processing
@@ -1188,7 +1188,7 @@ class TestRecipeReuse(unittest.TestCase):
             QApplication.processEvents()      # 不再手动调 _sync_bg_rows
             self.assertIn("本图上次处理", w.bg_prov_lbl.text(),
                           "来处那行也该跟着新鲜")
-            self.assertIn("当前预设", w.preset_proc_lbl.text())
+            self.assertIn("当前方案", w.preset_proc_lbl.text())
         finally:
             w.close()
 

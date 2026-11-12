@@ -269,7 +269,7 @@ def build_processing_page(window, form_bg, btns_bg):
     # ── 预设处理设置（小节，**放在整页最下方**）──────────────────
     # 2026-11-11 起不再有独立的"配方"概念：处理设置只跟着项目预设走。
     # 这里只留三样：本图上次处理（只读）、当前预设的处理设置、两个动作。
-    add_caption(form_bg, "预设处理设置")
+    add_caption(form_bg, "方案处理设置")
     bg_prov_lbl = QLabel("")
     bg_prov_lbl.setStyleSheet("color: gray;")
     bg_prov_lbl.setWordWrap(True)
@@ -280,18 +280,18 @@ def build_processing_page(window, form_bg, btns_bg):
     preset_proc_lbl.setWordWrap(True)
     window.preset_proc_lbl = preset_proc_lbl
     form_bg.addRow(preset_proc_lbl)
-    preset_apply_btn = QPushButton("套用当前预设")
+    preset_apply_btn = QPushButton("套用当前方案")
     preset_apply_btn.setObjectName("preset_proc_apply_btn")
     preset_apply_btn.setToolTip(
-        "把顶部当前预设里的处理设置用到<b>编辑对象</b>这张图上："
+        "把顶部当前方案里的处理设置用到<b>编辑对象</b>这张图上："
         "锚点位置照搬、强度按本图曲线重取，其余设置填进本页控件并立刻重画。"
-        "切换预设时不会自动套用——这一下必须由你按。")
+        "切换方案时不会自动套用——这一下必须由你按。")
     preset_apply_btn.clicked.connect(lambda: _apply_preset_processing(window))
-    preset_save_btn = QPushButton("存进预设…")
+    preset_save_btn = QPushButton("存进方案…")
     preset_save_btn.setObjectName("preset_proc_save_btn")
     preset_save_btn.setToolTip(
-        "把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）写进一份预设；"
-        "该预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值。"
+        "把<b>本页当前这套设置</b>（背景 / 平滑 / 裁剪）写进一份方案；"
+        "该方案的几何 / 相库 / 原位目录 / 掩膜工程保持原值。"
         "要把结果留下用下面的 [存成产物]")
     preset_save_btn.clicked.connect(
         lambda: _save_processing_to_preset_dialog(window))
@@ -342,7 +342,7 @@ def build_processing_page(window, form_bg, btns_bg):
                              "用到勾选的每一份（锚点只传 2θ 位置、强度逐文件"
                              "重取）；一个都没勾 = 存编辑对象这一张。结果都进"
                              "文件栏「处理产物 …」，对比 / 热图 / 导出直接复用；"
-                             "存的是数据，要存「这套设置」用最下面的 [存进预设…]")
+                             "存的是数据，要存「这套设置」用最下面的 [存进方案…]")
     btn_proc_save.clicked.connect(lambda: _proc_save(window))
     window.proc_save_btn = btn_proc_save
     # 兼容别名：旧名（测试与探针按它们找按钮）现在都指向这一颗，行为 = 合并语义

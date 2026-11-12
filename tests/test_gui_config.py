@@ -24,6 +24,8 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui.app import create_window
+from xrd_toolkit.gui import preset_ops as gui_preset_ops
+from xrd_toolkit.gui.panel_state import set_geometry
 
 from xrd_toolkit.gui import watchdog as gui_watchdog
 
@@ -38,12 +40,15 @@ class TestConfigSelector(unittest.TestCase):
     """下拉框内容与默认选中（不修改注册表，只读检查）。"""
 
     def test_entries_match_registry(self):
+        """几何选择器现在住在方案管理页：条目 = CONFIGS。"""
         w = create_window()
         try:
-            combo = w.config_combo
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            combo = dlg.geom_combo
             self.assertEqual(combo.count(), len(CONFIGS))
             keys = [combo.itemData(i) for i in range(combo.count())]
             self.assertEqual(set(keys), set(CONFIGS))
+            dlg.close()
         finally:
             w.close()
 
@@ -99,29 +104,29 @@ class TestConfigSwitch(unittest.TestCase):
     def test_switch_applies_new_geometry(self):
         w = create_window()
         try:
-            # setUp 已把假条目放进 CONFIGS，建窗时下拉里就有它；直接选中。
-            idx = w.config_combo.findData(self.FAKE_KEY)
-            self.assertGreaterEqual(idx, 0)
-            w.config_combo.setCurrentIndex(idx)
+            # 唯一入口 = set_geometry(key)：状态写 window.config，灰字跟着换。
+            set_geometry(w, self.FAKE_KEY)
             self.assertEqual(w.config_name, self.FAKE_KEY)
-            # 几何随条目换：window.config = 新条目的完整几何，坞顶那一行
-            # 的悬停提示跟着换成新读数
             self.assertEqual(w.config, CONFIGS[self.FAKE_KEY])
             tip = w.geom_row.toolTip()
             self.assertIn("1200.00 mm", tip)
             self.assertIn("0.1500", tip)
             self.assertIn("150.0", tip)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
-            # 下拉文字 = key_备注；完整 label 仍挂在条目悬停提示上
-            # （见 test_gui_integration_processing 的
-            # test_config_combo_carries_full_label_as_tooltip）
+            self.assertTrue(w.geom_label.text().startswith(self.FAKE_KEY),
+                            "灰字应变成新几何；它不在方案里，会带偏离提示")
+            # 方案管理页的几何下拉：文字 = key_备注，完整 label 在悬停提示
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            combo = dlg.geom_combo
+            idx = combo.findData(self.FAKE_KEY)
+            self.assertGreaterEqual(idx, 0)
             self.assertEqual(
-                w.config_combo.currentText(),
+                combo.itemText(idx),
                 entry_display(self.FAKE_KEY, CONFIGS[self.FAKE_KEY]))
-            idx = w.config_combo.currentIndex()
             self.assertEqual(
-                w.config_combo.itemData(idx, Qt.ToolTipRole),
+                combo.itemData(idx, Qt.ToolTipRole),
                 CONFIGS[self.FAKE_KEY]["label"])
+            dlg.close()
         finally:
             w.close()
 

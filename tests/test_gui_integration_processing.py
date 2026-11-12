@@ -1684,7 +1684,7 @@ class TestParamSnapshot(unittest.TestCase):
             self.assertEqual(w.params["2θ 上限 (°)"].value(), 7.0)
             self.assertEqual(w.params["输出点数"].value(), 2500)
             # 配置条目也回放（注册表只有一条，至少不串台）
-            self.assertEqual(w.config_combo.currentData(), w.config_name)
+            self.assertEqual(w.config_name, gui_app.DEFAULT_CONFIG)
         finally:
             w.close()
 
@@ -1953,18 +1953,18 @@ class TestLongNames(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_config_combo_carries_full_label_as_tooltip(self):
-        """几何配置说明行已删除（与用户讨论定稿：不单独占一行）——
-        完整批次备注改为挂在配置下拉框各项的悬停提示上
-        （悬停闭合下拉框 = 显示当前项的提示）。"""
+    def test_geometry_combo_carries_full_label_as_tooltip(self):
+        """几何选择搬进方案管理页后，完整批次备注仍挂在条目悬停提示上。"""
         w = create_window()
         try:
             w.show()
-            combo = w.config_combo
-            idx = combo.currentIndex()
-            self.assertEqual(combo.itemData(idx), gui_app.DEFAULT_CONFIG)
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            combo = dlg.geom_combo
+            idx = combo.findData(gui_app.DEFAULT_CONFIG)
+            self.assertGreaterEqual(idx, 0)
             self.assertEqual(
                 combo.itemData(idx, Qt.ToolTipRole),
                 gui_app.CONFIGS[gui_app.DEFAULT_CONFIG]["label"])
+            dlg.close()
         finally:
             w.close()   # 没画图，关窗不会弹询问

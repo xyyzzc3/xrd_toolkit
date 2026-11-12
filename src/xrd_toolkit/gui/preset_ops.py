@@ -1,4 +1,8 @@
-"""项目预设的 GUI 操作（v0.2.1 B1，2026-11-10）。
+"""方案（内部仍叫 preset）的 GUI 操作（v0.2.1 B1，2026-11-10）。
+
+2026-11-12 起界面叫「方案」；几何下拉从坞顶搬进 [管理…] 的方案页，
+改完点 [保存方案] 立即生效（活动方案），坞顶只留灰字当前几何。
+
 
 分工：
   * `presets.py` 管数据（内置/用户预设、读写 `presets_user.json`）；
@@ -12,7 +16,7 @@
     已经退回默认；这里只按退回后的值应用。
   * 预设只改默认输入，不重跑任何计算；已有结果留着，物相旧候选会被
     清掉（相库/第二相变了，旧候选不再对应）。
-  * 预设内嵌的处理设置只显示在「处理」页，点 [套用当前预设] 才生效；
+  * 预设内嵌的处理设置只显示在「处理」页，点 [套用当前方案] 才生效；
     掩膜工程只在 Mask 工作台按图兜底，不生成掩膜 2D。
   * 当前几何偏离预设时，下拉顶部显示「（当前设置）」虚拟项（只提示、
     不可应用）；校准/导入新几何后用日志提示怎么把它接回预设。
@@ -21,11 +25,15 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout)
+    QComboBox, QDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSizePolicy,
+    QVBoxLayout)
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import CONFIGS, entry_display
+from xrd_toolkit.gui.config_ops import (
+    _delete_config, _edit_entry, _import_poni, _save_poni,
+    _sync_del_config_btn)
 from xrd_toolkit.gui.panel_state import _log, set_geometry
 from xrd_toolkit.gui.tasks import user_error_text
 from xrd_toolkit.presets import (
@@ -200,13 +208,13 @@ def apply_preset(window, name, *, persist=True) -> bool:
     busy = _busy_workbenches(window)
     if busy:
         QMessageBox.information(
-            window, "项目预设",
+            window, "方案",
             "、".join(busy) + " 工作台还有任务在跑。\n"
             "等它结束（或先停止）再切换预设。")
         return False
     if preset["geometry"] not in CONFIGS:
         QMessageBox.warning(
-            window, "项目预设",
+            window, "方案",
             f"预设「{preset['name']}」里的几何配置 "
             f"{preset['geometry']!r} 不在当前注册表里。")
         return False
@@ -235,14 +243,14 @@ def apply_preset(window, name, *, persist=True) -> bool:
     extras = []
     if preset.get("processing"):
         extras.append("处理设置：" + process.chain_label(preset["processing"])
-                      + "（点 [套用当前预设] 才生效）")
+                      + "（点 [套用当前方案] 才生效）")
     raw_mask = str(preset.get("mask_recipe") or "").strip()
     if raw_mask:
         mask_path = Path(raw_mask).expanduser()
         extras.append("掩膜工程：" + mask_path.name
                       + ("" if mask_path.is_file() else "（未找到）"))
     tail = f"；{'；'.join(extras)}" if extras else ""
-    _log(window, f"已应用项目预设：{preset['name']}"
+    _log(window, f"已应用方案：{preset['name']}"
                  f"（几何 {preset['geometry']}{tail}）")
     return True
 
@@ -302,9 +310,9 @@ def save_current_preset(window, name, values=None) -> bool:
             name, values if values is not None
             else current_preset_values(window))
     except (OSError, ValueError) as err:
-        QMessageBox.warning(window, "项目预设", user_error_text(err))
+        QMessageBox.warning(window, "方案", user_error_text(err))
         return False
-    _log(window, f"预设已{'新建' if is_new else '更新'}：{name}")
+    _log(window, f"方案已{'新建' if is_new else '更新'}：{name}")
     # apply_preset 成功时会刷新下拉；失败（工作台忙）时保持"已偏离"
     # 的真实状态，不把下拉伪造成选中的预设名
     if not apply_preset(window, name):
@@ -324,12 +332,12 @@ def save_preset_dialog(window) -> None:
         return
     if is_builtin(name):
         QMessageBox.warning(
-            window, "项目预设",
+            window, "方案",
             f"「{name}」是内置预设，不能覆盖；换个名字。")
         return
     if name in preset_names():
         answer = QMessageBox.question(
-            window, "项目预设",
+            window, "方案",
             f"用户预设「{name}」已存在，覆盖它？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
@@ -392,34 +400,22 @@ def _summary_text(preset) -> str:
     return _fields_text(preset)
 
 
-def _current_summary_text(window) -> str:
-    """管理弹窗里「（当前设置）」虚拟行的说明 + 实际值。
-
-    只显示这次真正设置过的输入：没打开过的工作台、没有控件的第二相
-    留空（显示「（未设置）」/「（无）」），不借用预设或内置默认值。
-    """
-    return ("未保存为预设——当前窗口实际设置（没打开过的工作台留空）：\n"
-            + _fields_text(current_preset_values(window),
-                           empty_library="（未设置）")
-            + "\n\n选中一个用户预设后，可用 [用当前设置更新] 写回。")
-
-
 class PresetManagerDialog(QDialog):
-    """[管理…]：查看 / 应用 / 删除预设；内置预设只读。"""
+    """[管理…]：查看 / 编辑几何 / 应用 / 删除方案；内置方案只读。"""
 
     def __init__(self, window):
         super().__init__(window)
-        self.setWindowTitle("管理项目预设")
-        self.setMinimumSize(560, 420)
+        self.setWindowTitle("管理方案")
+        self.setMinimumSize(640, 500)
         self.window = window
+        window._preset_manager = self      # _reload_config_combo 的刷新入口
 
         root = QVBoxLayout(self)
         hint = QLabel(
-            "预设保存七项输入：几何配置、第二相 CIF、原位帧目录、"
-            "原位掩膜、相库目录、处理设置、掩膜工程。\n"
-            "处理设置在切换预设后点 [套用当前预设] 才生效；"
-            "掩膜工程在 Mask 工作台按图兜底。\n"
-            "先把工作台里的目录/掩膜/处理设置调好，再点 [保存当前…]。")
+            "方案保存七项输入：几何、第二相 CIF、原位帧目录、原位掩膜、"
+            "相库目录、处理设置、掩膜工程。\n"
+            "这轮只有「几何」可以直接改：选好条目点 [保存方案] 立即生效；"
+            "其余项先用当前设置调好再 [保存当前…]。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
@@ -428,30 +424,65 @@ class PresetManagerDialog(QDialog):
         self.list = QListWidget()
         self.list.currentRowChanged.connect(self._on_selected)
         body.addWidget(self.list, 1)
+        right = QVBoxLayout()
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
         self.summary.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.summary.setMinimumWidth(260)
+        self.summary.setMinimumWidth(280)
         self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        body.addWidget(self.summary, 1)
+        right.addWidget(self.summary, 1)
+        geom_box = QGroupBox("几何")
+        gl = QVBoxLayout(geom_box)
+        geom_row = QHBoxLayout()
+        geom_row.addWidget(QLabel("条目"))
+        self.geom_combo = QComboBox()
+        self.geom_combo.setObjectName("preset_geom_combo")
+        self.geom_combo.setSizePolicy(QSizePolicy.Ignored,
+                                      QSizePolicy.Preferred)
+        self.geom_combo.currentIndexChanged.connect(self._on_geom_changed)
+        geom_row.addWidget(self.geom_combo, 1)
+        gl.addLayout(geom_row)
+        geom_btns = QHBoxLayout()
+        self.geom_edit_btn = QPushButton("编辑…")
+        self.geom_edit_btn.clicked.connect(self._edit_geometry)
+        self.geom_load_btn = QPushButton("加载几何…")
+        self.geom_load_btn.clicked.connect(self._load_geometry)
+        self.geom_save_btn = QPushButton("保存几何…")
+        self.geom_save_btn.clicked.connect(self._save_geometry)
+        self.geom_del_btn = QPushButton("删除")
+        self.geom_del_btn.setObjectName("del_config_btn")
+        self.geom_del_btn.clicked.connect(self._delete_geometry)
+        window.del_config_btn = self.geom_del_btn   # _sync_del_config_btn 共用
+        for btn in (self.geom_edit_btn, self.geom_load_btn,
+                    self.geom_save_btn, self.geom_del_btn):
+            btn.setStyleSheet("padding: 2px 5px;")
+            geom_btns.addWidget(btn, 1)
+        gl.addLayout(geom_btns)
+        right.addWidget(geom_box)
+        body.addLayout(right, 1)
         root.addLayout(body, 1)
 
         buttons = QHBoxLayout()
         self.apply_btn = QPushButton("应用")
         self.apply_btn.clicked.connect(self._apply)
+        self.save_scheme_btn = QPushButton("保存方案")
+        self.save_scheme_btn.setToolTip(
+            "把上面选中的几何写进当前方案；如果它正是活动方案，立即生效")
+        self.save_scheme_btn.clicked.connect(self._save_scheme)
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
             "用当前窗口的几何 / 相库 / 原位目录 / 掩膜 / 处理设置 / "
-            "掩膜工程覆盖选中的用户预设；"
-            "没打开的工作台与第二相保留该预设原值")
+            "掩膜工程覆盖选中的用户方案；"
+            "没打开的工作台与第二相保留该方案原值")
         self.update_btn.clicked.connect(self._update)
-        self.delete_btn = QPushButton("删除")
+        self.delete_btn = QPushButton("删除方案")
         self.delete_btn.clicked.connect(self._delete)
         save_btn = QPushButton("保存当前…")
         save_btn.clicked.connect(self._save_current)
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
         buttons.addWidget(self.apply_btn)
+        buttons.addWidget(self.save_scheme_btn)
         buttons.addWidget(self.update_btn)
         buttons.addWidget(self.delete_btn)
         buttons.addWidget(save_btn)
@@ -461,29 +492,32 @@ class PresetManagerDialog(QDialog):
 
         self._refresh()
 
+    def closeEvent(self, event):
+        if getattr(self.window, "_preset_manager", None) is self:
+            self.window._preset_manager = None
+        super().closeEvent(event)
+
+    def done(self, result):
+        if getattr(self.window, "_preset_manager", None) is self:
+            self.window._preset_manager = None
+        super().done(result)
+
     def _refresh(self, select=None):
         current = (select
                    or getattr(self.window, "preset_name", DEFAULT_PRESET_NAME))
-        dirty = not preset_geometry_matches(self.window)
         self.list.blockSignals(True)
         self.list.clear()
-        if dirty:
-            item = QListWidgetItem(CURRENT_PRESET_TEXT + "    （未保存）")
-            item.setData(Qt.UserRole, None)   # 虚拟行：不对应任何文件条目
-            item.setToolTip("当前窗口实际使用的七项输入；未保存为预设")
-            self.list.addItem(item)
         for name in preset_names():
             item = QListWidgetItem(
                 name + ("    （内置）" if is_builtin(name) else ""))
             item.setData(Qt.UserRole, name)
             self.list.addItem(item)
         self.list.blockSignals(False)
-        row = 0                           # 偏离时默认看「（当前设置）」
-        if select or not dirty:
-            for i in range(self.list.count()):
-                if self.list.item(i).data(Qt.UserRole) == current:
-                    row = i
-                    break
+        row = 0
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole) == current:
+                row = i
+                break
         self.list.setCurrentRow(row)
         if self.list.count() == 0:
             self._on_selected(-1)
@@ -493,25 +527,104 @@ class PresetManagerDialog(QDialog):
         return item.data(Qt.UserRole) if item is not None else None
 
     def _on_selected(self, _row):
-        item = self.list.currentItem()
-        name = item.data(Qt.UserRole) if item is not None else None
-        if item is not None and name is None:
-            # 虚拟行「（当前设置）」：显示实际值，但不能应用/更新/删除
-            self.summary.setText(_current_summary_text(self.window))
-            self.apply_btn.setEnabled(False)
-            self.update_btn.setEnabled(False)
-            self.delete_btn.setEnabled(False)
-            return
+        name = self._selected_name()
         if not name:
             self.summary.setText("")
             self.apply_btn.setEnabled(False)
-            self.update_btn.setEnabled(False)
-            self.delete_btn.setEnabled(False)
+            self._set_editable(False)
+            self.refresh_geometry_combo(None)
             return
-        self.summary.setText(_summary_text(get_preset(name)))
+        preset = get_preset(name)
+        self.summary.setText(_summary_text(preset))
         self.apply_btn.setEnabled(True)
-        self.update_btn.setEnabled(not is_builtin(name))
-        self.delete_btn.setEnabled(not is_builtin(name))
+        self._set_editable(not is_builtin(name))
+        self.refresh_geometry_combo(preset.get("geometry"))
+
+    def _set_editable(self, on: bool) -> None:
+        # on 只表示“当前方案可写”；几何注册表级的操作（加载/编辑/保存
+        # .poni）对内建方案也可用——它们改的是条目，不是方案本身。
+        self.save_scheme_btn.setEnabled(on)
+        self.update_btn.setEnabled(on)
+        self.delete_btn.setEnabled(on)
+        self.geom_combo.setEnabled(on)
+        for btn in (self.geom_edit_btn, self.geom_load_btn,
+                    self.geom_save_btn):
+            btn.setEnabled(True)
+        self._on_geom_changed()   # 删除按钮按选中条目是否内置决定
+
+    def refresh_geometry_combo(self, select_key=None) -> None:
+        """重建几何下拉（注册表变化 / 选中方案变化时用）。
+
+        和主窗口的灰字读同一份 CONFIGS；选中项只是“方案里要写哪条”，
+        保存方案前不改变当前会话几何。
+        """
+        combo = getattr(self, "geom_combo", None)
+        if combo is None:
+            return
+        if select_key is None:
+            select_key = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for name, entry in CONFIGS.items():
+            combo.addItem(entry_display(name, entry), name)
+            tip = entry["label"]
+            if "residual_deg" in entry:
+                tip += f"（残差 {entry['residual_deg']:.4f}°）"
+            combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
+        idx = combo.findData(select_key) if select_key else -1
+        if idx < 0:
+            idx = 0
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        self._on_geom_changed()
+
+    def _geom_key(self):
+        item = self.geom_combo.currentData()
+        return item
+
+    def _on_geom_changed(self, *_a) -> None:
+        key = self._geom_key()
+        _sync_del_config_btn(self.window, key=key)
+        self.geom_save_btn.setToolTip(f"把「{key}」的几何导出成 .poni")
+
+    def _edit_geometry(self) -> None:
+        key = self._geom_key()
+        if key and _edit_entry(self.window, key):
+            self.refresh_geometry_combo(key)
+
+    def _load_geometry(self) -> None:
+        _import_poni(self.window, apply_now=False)
+
+    def _save_geometry(self) -> None:
+        key = self._geom_key()
+        if key:
+            _save_poni(self.window, key=key)
+
+    def _delete_geometry(self) -> None:
+        key = self._geom_key()
+        if key:
+            _delete_config(self.window, key=key)
+            self.refresh_geometry_combo()
+
+    def _save_scheme(self) -> None:
+        """把几何下拉的选中项写进当前方案；活动方案保存即生效（A）。"""
+        name = self._selected_name()
+        if not name or is_builtin(name):
+            return
+        key = self._geom_key()
+        if not key:
+            return
+        preset = dict(get_preset(name))
+        preset["geometry"] = key
+        try:
+            save_user_preset(name, preset)
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "方案", user_error_text(err))
+            return
+        _log(self.window, f"方案已更新：{name}（几何 {key}）")
+        if getattr(self.window, "preset_name", None) == name:
+            apply_preset(self.window, name)
+        self._refresh(select=name)
 
     def _update(self):
         """用当前窗口的七项输入覆盖选中的用户预设。
@@ -534,9 +647,9 @@ class PresetManagerDialog(QDialog):
         try:
             save_user_preset(name, values)
         except (OSError, ValueError) as err:
-            QMessageBox.warning(self, "项目预设", user_error_text(err))
+            QMessageBox.warning(self, "方案", user_error_text(err))
             return
-        _log(self.window, f"预设已更新：{name}")
+        _log(self.window, f"方案已更新：{name}")
         if getattr(self.window, "preset_name", None) == name:
             apply_preset(self.window, name)
         self._refresh(select=name)
@@ -559,9 +672,9 @@ class PresetManagerDialog(QDialog):
         try:
             remove_user_preset(name)
         except (OSError, ValueError) as err:
-            QMessageBox.warning(self, "项目预设", user_error_text(err))
+            QMessageBox.warning(self, "方案", user_error_text(err))
             return
-        _log(self.window, f"预设已删除：{name}")
+        _log(self.window, f"方案已删除：{name}")
         if getattr(self.window, "preset_name", None) == name:
             apply_preset(self.window, DEFAULT_PRESET_NAME)
         self._refresh()

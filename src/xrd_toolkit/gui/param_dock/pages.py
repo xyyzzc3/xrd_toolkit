@@ -12,24 +12,13 @@ from xrd_toolkit.gui.plot_views import _plot_view, _refresh_proc
 
 
 def _sync_geom_row(window: QMainWindow) -> None:
-    """坞顶"几何配置"那一行的悬停读数（换条目 / 翻页时刷新）。
+    """坞顶灰字「几何」那一行（换几何 / 翻页 / 方案切换时刷新）。
 
-    一行管一件事：分析/积分用哪条几何条目（_collect_geometry 取
-    window.config）。五个入口页共用一个下拉框，选它就换分析用的几何
-    （currentIndexChanged → _apply_config → 再回调本函数刷新读数）。
-
-    校准页上**照样能换**：校准用的是那一页自己的「当前配置」（借用 /
-    手改 / 校准结果），换这里的条目不会动它——提示里写明这层区别。
-    2026-09-26 晚订正：先前把这一行在校准页做成置灰（"只显示不能改"），
-    结果 [删除] 正好住在校准页、却在校准页换不了选中项，删条目要
-    "去分析页选中 → 回校准页点删除"跨两页（用户问"现在几何配置怎么
-    删除"）。用户原话"只留能选的那一行，不能改"指的是几何**数值**不
-    能改，不是不能换条目，遂放开置灰。
-
-    读数（像素/波长/距离）来自 window.config（完整条目，_apply_config
-    里挂上）；建坞阶段它还没设，此时只留条目名、提示留空。
+    2026-11-12 方案重构：几何下拉搬进 [管理…] 的方案页；坞顶只剩
+    灰字**显示**当前几何（set_geometry 写 window.config/config_name，
+    这里只负责把它画出来）。工具提示给像素/波长/距离；当前几何和
+    方案里记的不一致时，灰字变橙并标「未写进方案」。
     """
-    combo = getattr(window, "config_combo", None)
     cfg = getattr(window, "config", None)
     if cfg is None:
         tip = ""
@@ -42,10 +31,23 @@ def _sync_geom_row(window: QMainWindow) -> None:
         if cfg.get("calibrant"):
             tip += f"\n标样 {cfg['calibrant']}"
     if window.param_stack.currentIndex() == window.PARAM_PAGES["校准"]:
-        tip += ("\n（校准用的是本页「当前配置」那份几何；这里换的是"
+        tip += ("\n（校准用的是本页「当前配置」那份几何；这里显示的是"
                 "分析/积分用的条目）")
-    if combo is not None:
-        combo.setToolTip(tip)
+    # 当前几何与方案里记的对不上：灰字变橙并点名，提示去方案管理页
+    # [保存方案]。只做提示，不偷偷写回（2026-11-12 用户选 A）。
+    preset = getattr(window, "preset", None) or {}
+    want = str(preset.get("geometry") or "")
+    key = str(getattr(window, "config_name", "") or "")
+    drift = bool(want and key and want != key)
+    if drift:
+        tip += f"\n（当前几何 {key} 未写进方案，方案里是 {want}）"
+    label = key or "—"
+    if drift:
+        label += "（未写进方案）"
+    geom_label = getattr(window, "geom_label", None)
+    if geom_label is not None:
+        geom_label.setText(label)
+        geom_label.setStyleSheet("color: %s;" % ("#c0392b" if drift else "gray"))
     window.geom_row.setToolTip(tip)
 
 def _sync_data_row(window: QMainWindow) -> None:

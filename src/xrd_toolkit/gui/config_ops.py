@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
+from PySide6.QtWidgets import (
+    QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
+    QMainWindow, QMessageBox, QPushButton)
 
 from xrd_toolkit import config, paths
 from xrd_toolkit.gui.calib_model import _calib_state, _result_by_name
@@ -16,7 +18,7 @@ from xrd_toolkit.gui.panel_state import _log, _reload_config_combo
 from xrd_toolkit.gui.tasks import user_error_text
 
 
-def _import_poni(window: QMainWindow) -> None:
+def _import_poni(window: QMainWindow, apply_now: bool = True) -> None:
     """[加载参数]：读 .poni 交换格式几何文件 → 存成用户配置条目。
 
     .poni 是 pyFAI 生态通用的几何交换格式（别的工具/命令行标定的
@@ -85,22 +87,36 @@ def _import_poni(window: QMainWindow) -> None:
     except ValueError as err:
         _log(window, f".poni 导入失败（{err}）")
         return
-    _reload_config_combo(window, key)
-    # 导入的几何同时成为"当前配置"的起点（新批次的导入通道），并把像素
-    # 确认清掉——像素值换了必须重新确认
-    window.calib_pixel_ok_m = None
-    _borrow_entry(window, key)
-    _log(window, f"已导入 .poni → 配置条目 {key}"
-                 f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
-                 f"重启后仍在）；注意 .poni 不携带标样信息，校准时仍按"
-                 f"当前「标样」选择（默认 LaB₆）")
-    _calib_sync(window)
-    from xrd_toolkit.gui import preset_ops     # 破循环：见模块说明
-    preset_ops.hint_geometry_outside_preset(window)
+    if apply_now:
+        _reload_config_combo(window, key)
+        # 导入的几何同时成为"当前配置"的起点（新批次的导入通道），并把
+        # 像素确认清掉——像素值换了必须重新确认
+        window.calib_pixel_ok_m = None
+        _borrow_entry(window, key)
+        _log(window, f"已导入 .poni → 配置条目 {key}"
+                     f"（{'新增' if is_new else '覆盖同名条目'}，已自动选中，"
+                     f"重启后仍在）；注意 .poni 不携带标样信息，校准时仍按"
+                     f"当前「标样」选择（默认 LaB₆）")
+        _calib_sync(window)
+        from xrd_toolkit.gui import preset_ops     # 破循环：见模块说明
+        preset_ops.hint_geometry_outside_preset(window)
+    else:
+        # 方案管理页里导入：只加条目并选中，不偷偷换当前几何；
+        # 用户点 [保存方案] 才生效。
+        manager = getattr(window, "_preset_manager", None)
+        refresh = getattr(manager, "refresh_geometry_combo", None)
+        if callable(refresh):
+            refresh(key)
+        _log(window, f"已导入 .poni → 配置条目 {key}"
+                     f"（{'新增' if is_new else '覆盖同名条目'}，"
+                     f"已加入方案几何下拉，点 [保存方案] 生效）")
 
 
-def _save_poni(window: QMainWindow) -> None:
-    """[保存参数]：把**当前配置**的几何写成标准 .poni 文件。
+def _save_poni(window: QMainWindow, key=None) -> None:
+    """[保存参数]：把几何写成标准 .poni 文件。
+
+    key 给定 = 方案管理页里选中的那条几何条目（不动校准当前配置）；
+    不给 = 老口径：优先校准页「当前配置」，否则当前几何条目。
 
     用户 2026-09-28 第 2 条（2甲①）查出来的：这个按钮原先存的是**坞顶
     「几何配置」选中条目**的几何——手输/手改过当前配置之后按它，导出的
@@ -119,16 +135,21 @@ def _save_poni(window: QMainWindow) -> None:
     [加载参数] 共用一套读写口径（pyFAI 只在点击时导入，CLI/测试
     不为启动背依赖）。
     """
-    state = getattr(window, "calib_state", None) or {}
-    from_calib = state.get("current_geom") is not None
-    if from_calib:
-        geom = state["current_geom"]
-        src_txt = "校准页「当前配置」"
-    else:
-        cfg = window.config   # 当前选中条目（label / geometry / beam_center）
+    if key is not None:
+        cfg = config.CONFIGS[key]
         geom = cfg["geometry"]
-        src_txt = f"配置条目「{window.config_name}」"
-    default = str(paths.OUTPUTS_DIR / f"{window.config_name}.poni")
+        src_txt = f"配置条目「{key}」"
+    else:
+        state = getattr(window, "calib_state", None) or {}
+        from_calib = state.get("current_geom") is not None
+        if from_calib:
+            geom = state["current_geom"]
+            src_txt = "校准页「当前配置」"
+        else:
+            cfg = window.config   # 当前选中条目（label / geometry / beam_center）
+            geom = cfg["geometry"]
+            src_txt = f"配置条目「{window.config_name}」"
+    default = str(paths.OUTPUTS_DIR / f"{key or window.config_name}.poni")
     path_str, _ = QFileDialog.getSaveFileName(
         window, "保存几何参数（.poni）", default,
         "pyFAI 几何 (*.poni);;所有文件 (*)")
@@ -162,44 +183,113 @@ def _save_poni(window: QMainWindow) -> None:
                  f"rot2={geom['rot2_deg']:.4f}°；.poni 不写标样信息）")
 
 
-def _sync_del_config_btn(window: QMainWindow) -> None:
-    """[删除] 按钮置灰同步 + 提示写明删哪一条。
+def _edit_entry(window: QMainWindow, key: str) -> bool:
+    """编辑一条用户几何条目（方案管理页的 [编辑…]）。
 
-    删除的对象是**坞顶"几何配置"下拉框当前选中的那条**（用户条目；
-    内置条目是 config.py 人工登记的注册表，不可删）。下拉框住在坞顶、
-    按钮住在校准页——两处隔着半屏，所以提示里直接把条目名写出来，
-    免得点下去才知道删的是谁。
+    内置条目只读；用户条目改完按同一个 key 写回 config_user.json，
+    并刷新灰字/管理页下拉。对话框字段与校准页 [编辑当前配置…] 同口径
+    （像素/波长/距离/PONI/倾斜/束心）。
+    """
+    if key in config.BUILTIN_CONFIGS:
+        _log(window, f"内置条目 {key} 只读，不能编辑")
+        return False
+    entry = config.USER_CONFIGS.get(key)
+    if entry is None:
+        _log(window, f"用户条目 {key} 不存在，无法编辑")
+        return False
+    g = entry["geometry"]
+    px = float(g["pixel_size_m"])
+    beam = entry.get("beam_center") or (0.0, 0.0)
+    dlg = QDialog(window)
+    dlg.setWindowTitle(f"编辑几何条目：{key}")
+    form = QFormLayout(dlg)
+    specs = (
+        ("像素尺寸 (µm)", "pixel_um", px * 1e6, 3),
+        ("波长 (Å)", "wavelength_a", g["wavelength_m"] * 1e10, 4),
+        ("距离 (mm)", "dist_mm", g["dist_m"] * 1e3, 4),
+        ("PONI1 (px)", "poni1_px", g["poni1_m"] / px, 2),
+        ("PONI2 (px)", "poni2_px", g["poni2_m"] / px, 2),
+        ("rot1 (°)", "rot1_deg", g["rot1_deg"], 4),
+        ("rot2 (°)", "rot2_deg", g["rot2_deg"], 4),
+        ("束心行 (px)", "beam_row", beam[0], 2),
+        ("束心列 (px)", "beam_col", beam[1], 2),
+    )
+    boxes = {}
+    for text, name, value, dec in specs:
+        box = QDoubleSpinBox()
+        box.setRange(-1e5, 1e5)
+        box.setDecimals(dec)
+        box.setValue(float(value))
+        form.addRow(text, box)
+        boxes[name] = box
+    row = QHBoxLayout()
+    ok_btn = QPushButton("确定")
+    cancel_btn = QPushButton("取消")
+    ok_btn.clicked.connect(dlg.accept)
+    cancel_btn.clicked.connect(dlg.reject)
+    row.addWidget(ok_btn)
+    row.addWidget(cancel_btn)
+    form.addRow(row)
+    if dlg.exec() != QDialog.Accepted:
+        return False
+    pixel = boxes["pixel_um"].value() * 1e-6
+    new_entry = dict(entry)
+    new_entry["geometry"] = {
+        "pixel_size_m": pixel,
+        "wavelength_m": boxes["wavelength_a"].value() * 1e-10,
+        "dist_m": boxes["dist_mm"].value() * 1e-3,
+        "poni1_m": boxes["poni1_px"].value() * pixel,
+        "poni2_m": boxes["poni2_px"].value() * pixel,
+        "rot1_deg": boxes["rot1_deg"].value(),
+        "rot2_deg": boxes["rot2_deg"].value(),
+    }
+    new_entry["beam_center"] = (boxes["beam_row"].value(),
+                                boxes["beam_col"].value())
+    try:
+        config.save_user_config(key, new_entry)
+    except ValueError as err:
+        QMessageBox.warning(window, "编辑几何条目", user_error_text(err))
+        return False
+    if key == getattr(window, "config_name", None):
+        _reload_config_combo(window, key)
+    else:
+        manager = getattr(window, "_preset_manager", None)
+        refresh = getattr(manager, "refresh_geometry_combo", None)
+        if callable(refresh):
+            refresh(key)
+    _log(window, f"已更新几何条目 {config.entry_display(key, new_entry)}")
+    return True
 
-    下拉框当前索引变化时由连接调用；_reload_config_combo 重建下拉
-    框后索引不变不触发信号，调用方（_delete_config / _calib_sync）
-    再显式补一次。
+
+def _sync_del_config_btn(window: QMainWindow, key=None) -> None:
+    """[删除] 按钮置灰同步 + 提示写明删哪一条（方案管理页的几何区）。
+
+    删除的对象是**方案管理页几何下拉当前选中的那条**（用户条目；
+    内置条目是 config.py 人工登记的注册表，不可删）。key 不给时用
+    当前几何 window.config_name。
     """
     btn = getattr(window, "del_config_btn", None)
-    combo = getattr(window, "config_combo", None)
-    if btn is None or combo is None:
-        # 版面还没建全（校准页先于分析页建，此刻没有下拉框）——安全忽略，
-        # 分析页建好后会自己再同步一次
+    if btn is None:
         return
-    idx = combo.currentIndex()
-    key = combo.itemData(idx) if idx >= 0 else None
+    if key is None:
+        key = getattr(window, "config_name", None)
     deletable = bool(key) and key not in config.BUILTIN_CONFIGS
     btn.setEnabled(deletable)
-    btn.setToolTip(f"删除参数面板「几何配置」里当前选中的用户条目「{key}」"
+    btn.setToolTip(f"删除几何条目「{key}」"
                    f"（内置条目人工登记，不可删）"
                    if deletable else
                    f"「{key}」是内置条目（人工登记），不可删")
 
 
-def _delete_config(window: QMainWindow) -> None:
-    """[删除]：把当前选中的用户配置条目从注册表与磁盘移除。
+def _delete_config(window: QMainWindow, key=None) -> None:
+    """[删除]：把选中的用户配置条目从注册表与磁盘移除。
 
     只删用户条目（.poni 导入 / [保存为配置] 产生）——内置条目是
     config.py 人工登记的注册表，按钮置灰 + 处理函数双保险拒绝。
-    删除前弹确认框；删后下拉框重建并切回默认条目（删除的对象是
-    "当前选中"条目，删完当前选中已不存在）。
+    key 不给时删当前几何。删除前弹确认框；删后切回默认条目。
     """
-    combo = window.config_combo
-    key = combo.itemData(combo.currentIndex())
+    if key is None:
+        key = getattr(window, "config_name", None)
     if key in config.BUILTIN_CONFIGS:
         _log(window, f"内置条目 {key} 不可删除（人工登记的注册表）")
         return
@@ -222,10 +312,17 @@ def _delete_config(window: QMainWindow) -> None:
     if not removed:
         _log(window, f"用户条目 {key} 不存在，无需删除")
         return
-    _reload_config_combo(window, config.DEFAULT_CONFIG)
-    _sync_del_config_btn(window)
-    _log(window, f"已删除配置条目 {config.entry_display(key, entry)}，"
-                 f"已切回默认条目 {config.DEFAULT_CONFIG}")
+    active = key == getattr(window, "config_name", None)
+    if active:
+        _reload_config_combo(window, config.DEFAULT_CONFIG)
+    else:
+        manager = getattr(window, "_preset_manager", None)
+        refresh = getattr(manager, "refresh_geometry_combo", None)
+        if callable(refresh):
+            refresh()
+    _sync_del_config_btn(window, key=window.config_name)
+    _log(window, f"已删除配置条目 {config.entry_display(key, entry)}"
+                 + (f"，已切回默认条目 {config.DEFAULT_CONFIG}" if active else ""))
 
 
 def _suggest_config_key(current_key: str) -> str:

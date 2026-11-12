@@ -3,7 +3,6 @@
 2026-10-21 从 panel_state.py 原样搬出（只改结构，不动逻辑）。
 panel_state 再导出，app/calib/builder 照旧经 gui_panel_state 取用。
 """
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
@@ -58,15 +57,7 @@ def set_geometry(window: QMainWindow, key, silent: bool = False) -> None:
         cfg = CONFIGS[key]
     window.config_name = key
     window.config = cfg   # 完整条目（label / geometry / beam_center）
-    # B1 遗留：坞顶下拉仍在，保持它指向当前条目（状态由这里写）。
-    combo = getattr(window, "config_combo", None)
-    if combo is not None:
-        idx = combo.findData(key)
-        if idx >= 0 and idx != combo.currentIndex():
-            blocked = combo.blockSignals(True)
-            combo.setCurrentIndex(idx)
-            combo.blockSignals(blocked)
-    # 坞顶那一行的悬停读数：_sync_geom_row 一处写（B2 后改成灰字刷新）
+    # 坞顶灰字 / 方案管理页都从这里刷新（同一份状态，不读控件）
     sync = getattr(window, "_geom_row_sync", None)
     if sync is not None:
         sync()
@@ -74,46 +65,33 @@ def set_geometry(window: QMainWindow, key, silent: bool = False) -> None:
     notify = getattr(window, "_geometry_changed", None)
     if callable(notify):
         notify(key)
+    # 几何换了 → 顶部方案下拉检查是否偏离（显示「（当前设置）」）
+    from xrd_toolkit.gui.preset_ops import refresh_preset_combo  # 破循环
+    refresh_preset_combo(window)
     if not silent:
         _log(window, f"已加载几何配置 {entry_display(key, cfg)}")
 
 
-def _apply_config(window: QMainWindow, index: int, silent: bool = False) -> None:
-    """兼容旧调用：把几何下拉的第 index 项交给 set_geometry。
-
-    B1 之后状态不再从控件采集。这个包装只为「下拉框信号」和旧测试/
-    脚本保留；新代码一律直接调 set_geometry(key)。
-    """
-    combo = getattr(window, "config_combo", None)
-    if combo is None:
-        return
-    set_geometry(window, combo.itemData(index), silent=silent)
 
 def _reload_config_combo(window: QMainWindow,
                          select_key: str | None = None) -> None:
-    """配置下拉框与 CONFIGS 注册表同步（GUI 保存新条目后调用）。
+    """几何注册表变化后刷新可见入口（GUI 保存/删除条目后调用）。
 
-    重建全部条目（内置在前、用户条目在后，按 CONFIGS 顺序），悬停
-    提示保留（用户条目附加残差），最后选中 select_key：索引变化触发
-    _apply_config 把几何填进参数坞（保存即生效）。select_key 为 None
-    时保持当前选择不变。
+    2026-11-12 起主窗口不再有几何下拉：`CONFIGS` 是数据，`set_geometry`
+    是唯一切换入口。这里只负责（可选）切到新条目、刷新坞顶灰字，并
+    通知已打开的方案管理页重建它的几何下拉。select_key 为 None 时
+    保持当前条目不变。
     """
-    combo = window.config_combo
     if select_key is None:
-        select_key = combo.itemData(combo.currentIndex())
-    combo.blockSignals(True)
-    combo.clear()
-    for name, entry in CONFIGS.items():
-        combo.addItem(entry_display(name, entry), name)   # 一条 key_备注，同 app 建库处
-        tip = entry["label"]
-        if "residual_deg" in entry:
-            tip += f"（残差 {entry['residual_deg']:.4f}°）"
-        combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
-    combo.blockSignals(False)
-    idx = combo.findData(select_key)
-    if idx < 0:
-        idx = 0
-    # 状态统一由 set_geometry 写；重建后的控件只做显示（索引变没变
-    # 都不再依赖 currentIndexChanged）。
-    set_geometry(window, combo.itemData(idx))
+        select_key = getattr(window, "config_name", None)
+    if select_key:
+        set_geometry(window, select_key)
+    else:
+        sync = getattr(window, "_geom_row_sync", None)
+        if sync is not None:
+            sync()
+    manager = getattr(window, "_preset_manager", None)
+    refresh = getattr(manager, "refresh_geometry_combo", None)
+    if callable(refresh):
+        refresh(select_key)
 

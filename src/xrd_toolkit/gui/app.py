@@ -102,7 +102,6 @@ from xrd_toolkit.gui.calib_panel import (
     _CalibSubWindow, _clear_calib_points, _close_calib_panel,
     _draw_calib_image, _on_calib_click, _open_calib_panel,
     _undo_calib_point)
-from xrd_toolkit.gui.config_ops import _sync_del_config_btn
 from xrd_toolkit.gui.customize import (
     _apply_customize, _build_customize_dialog, _open_customize_dialog)
 from xrd_toolkit.gui.panels import (
@@ -786,7 +785,7 @@ def _on_phase_mode(window: QMainWindow, on: bool) -> None:
         _exit_phase_mode(window)
 
 
-_INSITU_TIP = ("原位工作台（LMFP 三相·项目预设）：富锂 / 贫锂 / Al "
+_INSITU_TIP = ("原位工作台（LMFP 三相·方案）：富锂 / 贫锂 / Al "
                "批量精修，逐帧继承种子，结果表 + 趋势图")
 
 
@@ -838,7 +837,7 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
         # 还没有帧：直接用勾选（2026-11-12 用户：进入要跟随勾选）。
         editor._use_checked_frames()
     elif checked_raw:
-        # 已有文件夹/预设帧：不悄悄覆盖，提示可切换。
+        # 已有文件夹/方案帧：不悄悄覆盖，提示可切换。
         editor._set_status(
             f"文件栏有 {len(checked_raw)} 张勾选原始图；"
             "点 [用勾选的原始数据] 可改用它们")
@@ -1385,9 +1384,8 @@ def create_window() -> QMainWindow:
     if preset_key not in CONFIGS:
         preset_key = DEFAULT_CONFIG
     set_geometry(window, preset_key)
-    _sync_del_config_btn(window)
     for warning in window.preset.get("warnings") or []:
-        _log(window, f"预设提示：{warning}")
+        _log(window, f"方案提示：{warning}")
     # 出图按钮上的"勾选 N 个"与原图页那句构成说明：开局填一次（此时一条
     # 都没勾），之后每次勾选变化由 _sync_select_label 刷新。放在最后：
     # 按钮与那句说明都归参数坞，要等它建好

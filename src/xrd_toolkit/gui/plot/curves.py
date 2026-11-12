@@ -175,13 +175,13 @@ def _proc_recipe(settings: dict, source: str = None) -> dict:
     现在一起进 window.proc_recipes[path]。
 
     **形状就是 `_proc_settings` 那一套**（不是显示控件的键名）：这样
-    "本图上次处理"与预设里内嵌的 `processing` 是同一个形状，
+    "本图上次处理"与方案里内嵌的 `processing` 是同一个形状，
     保存与套用都只需一份转换——`chain` 是给人看的那行摘要，`anchor_source`
     是锚点来处（手点的记 None，界面上说"本图手点"）。
 
     **只作记录与展示，不回填面板**（用户 2026-09-27 晚："原始数据现在会被
     改变…按理来说原始数据应该打不开的，因为是原始 tif"）：打开原始条目就
-    该看到原始曲线，想套设置要显式按 [套用当前预设]（见 apply_recipe）。
+    该看到原始曲线，想套设置要显式按 [套用当前方案]（见 apply_recipe）。
     """
     return {**settings,
             "chain": process.chain_label(settings),
@@ -225,7 +225,7 @@ def _anchors_on_curve(xs, tth, intensity):
     return keep, dropped
 
 def apply_recipe(window: QMainWindow, dock, path, recipe: dict) -> None:
-    """把一份处理设置**显式**套到当前面板这张图上（[套用当前预设]）。
+    """把一份处理设置**显式**套到当前面板这张图上（[套用当前方案]）。
 
     与"打开就自动按配方回填"是两回事（那个已经删掉，见 _proc_recipe 的
     说明）：这里是用户按下去的动作，按了才动。
@@ -316,7 +316,7 @@ def _retarget_product_panel_to_source(window, dock) -> bool:
     ——重做吃的正是没扣过背景的那条曲线（见 stage_cache.load_proc_source），
     而不是在扣完的曲线上再扣一遍。
 
-    两个调用方：面板上按 [套用当前预设]（换设置重做，用户 2026-09-28 第 3 条）与
+    两个调用方：面板上按 [套用当前方案]（换设置重做，用户 2026-09-28 第 3 条）与
     [重算这张图]（`_apply_params`，用户 2026-09-30：产物面板按新范围重算前
     必须先摘掉产物身份，否则原始文件会被重积分画进这张产物面板）。
 
@@ -388,7 +388,7 @@ def _refresh_proc(window: QMainWindow) -> None:
     tick_path = _bg_path_of(dock) if dock is not None else None
     if tick_path is not None and not getattr(window, "_param_replaying", False):
         # 手调也算这个文件的配方（来处 = None = 本图手点）：处理页那行
-        # "本图上次处理"跟着显示，[套用当前预设] 时也用它。
+        # "本图上次处理"跟着显示，[套用当前方案] 时也用它。
         #
         # **回放快照期间不许写**（与上面那条同一个旗标）：切焦点时
         # _load_params_snapshot 会把控件逐个改成新面板的值，那些信号同样
@@ -399,7 +399,7 @@ def _refresh_proc(window: QMainWindow) -> None:
                          _proc_recipe(
                              _proc_settings(window, dock, tick_path),
                              source=None))
-    # 处理页底部两行（本图上次处理 + 当前预设的处理设置）跟着刷一遍：
+    # 处理页底部两行（本图上次处理 + 当前方案的处理设置）跟着刷一遍：
     # 记录是在上面那几行才写进 window.proc_recipes 的，原先写来处发生在
     # _sync_bg_rows 里、跑在这之前——刚调完参数时那行还是旧的（2026-09-28
     # 探针复现的用户报"套用无效"，现在由记录完就地回调解决）

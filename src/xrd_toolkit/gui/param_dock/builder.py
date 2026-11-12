@@ -6,17 +6,15 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QDockWidget, QDoubleSpinBox, QHBoxLayout, QLabel,
-    QMainWindow, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-    QVBoxLayout, QWidget)
+    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
+    QStackedWidget, QVBoxLayout, QWidget)
 
-from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.gui.calib import _build_calib_form
-from xrd_toolkit.gui.config_ops import _sync_del_config_btn
 from xrd_toolkit.gui.preset_ops import (
     _on_preset_combo, open_preset_manager, refresh_preset_combo,
     save_preset_dialog)
 from xrd_toolkit.gui.panel_state import (
-    DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT, _apply_config)
+    DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT)
 from xrd_toolkit.gui.panels import _FocusElideLabel
 from xrd_toolkit.gui.param_dock.helpers import (
     _connect_pending_hooks, _fit_max_width, _sync_bg_rows)
@@ -35,8 +33,8 @@ from xrd_toolkit.gui.param_dock.widgets import make_page
 # ══ 右侧：参数面板 ═════════════════════════════════════════
 
 def _build_param_dock(window: QMainWindow) -> QDockWidget:
-    """参数坞：顶部三行固定件（"编辑对象"名 / "项目预设" / "几何配置"
-    条目）+ 五个入口页（校准 │ 原图 / 1D / 处理 / 对比），翻页由工具栏那五个
+    """参数坞：顶部三行固定件（"编辑对象"名 / "方案" / 灰字当前几何）
+    + 五个入口页（校准 │ 原图 / 1D / 处理 / 对比），翻页由工具栏那五个
     入口按钮负责。
 
     固定件不随页面滚动：
@@ -66,7 +64,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)
 
-    # 参数坞 = 三行固定件（编辑对象 / 项目预设 / 几何配置）+ **五个入口页**（校准 │
+    # 参数坞 = 三行固定件（编辑对象 / 方案 / 灰字几何）+ **五个入口页**（校准 │
     # 原图 / 1D / 处理 / 对比）。工具栏那五个入口按钮翻页（位置 A =
     # 窗口顶部，见 _build_toolbar / _switch_entrance）。
     # 页 0 = 校准（校准表单，calib.py 建）；其余四页放本阶段的参数，
@@ -98,23 +96,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     preset_lay = QHBoxLayout(window.preset_row)
     preset_lay.setContentsMargins(0, 0, 0, 0)
     preset_lay.setSpacing(4)
-    preset_lay.addWidget(QLabel("预设"))
+    preset_lay.addWidget(QLabel("方案"))
     window.preset_combo = QComboBox()
     window.preset_combo.setObjectName("preset_combo")
     window.preset_combo.setToolTip(
-        "项目预设：几何配置 + 第二相 CIF + 原位帧目录/掩膜 + 相库目录"
-        " + 处理设置（点 [套用当前预设] 才生效）+ 掩膜工程（按图兜底）")
+        "方案：几何 + 第二相 CIF + 原位帧目录/掩膜 + 相库目录"
+        " + 处理设置（点 [套用当前方案] 才生效）+ 掩膜工程（按图兜底）")
     preset_lay.addWidget(window.preset_combo, 1)
     btn_preset_save = QPushButton("保存…")
     btn_preset_save.setObjectName("preset_save_btn")
     btn_preset_save.setToolTip(
         "把当前几何 / 相库 / 原位目录 / 掩膜 / 处理设置 / 掩膜工程"
-        "存成一份用户预设")
+        "存成一份方案")
     btn_preset_save.clicked.connect(lambda: save_preset_dialog(window))
     preset_lay.addWidget(btn_preset_save)
     btn_preset_manage = QPushButton("管理…")
     btn_preset_manage.setObjectName("preset_manage_btn")
-    btn_preset_manage.setToolTip("查看、应用或删除项目预设")
+    btn_preset_manage.setToolTip("查看、编辑、应用或删除方案")
     btn_preset_manage.clicked.connect(lambda: open_preset_manager(window))
     preset_lay.addWidget(btn_preset_manage)
     refresh_preset_combo(window)
@@ -127,41 +125,23 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 所以它得在做分析的每一页都看得见——2026-09-26 之前它住在校准页
     # 顶部，还被挤进一个 88 px 高的内嵌滚动区（视口 88 / 内容 130），
     # 波长和距离都看不全（用户："位置看不清"）。
-    # 一行三件：标签 + 下拉框（只放短 key）+ [返回分析模式（校准模式才显示）]；
-    # 像素/波长/距离这些只读值改走悬停提示（文案在 _sync_geom_row 里
-    # 拼），不再占三行灰色字段。提示同时挂在**整行容器**上：这样悬停
-    # "几何配置"这个标签也能看到读数（下拉框自己的提示只有悬停它才出）。
-    # 控件登记表：坞顶这几行（几何配置 / 数据参数）里的控件也要登记进来，
+    # 一行两件：灰字当前几何 + [返回分析模式（校准模式才显示）]。
+    # 2026-11-12 方案重构：几何下拉搬进 [管理…] 的方案页；这里只显示
+    # 当前几何条目名，悬停看像素/波长/距离（文案在 _sync_geom_row 里拼）。
+    # 控件登记表：坞顶这几行（几何 / 数据参数）里的控件也要登记进来，
     # 所以先建表再建行（下面页面那段不再重复建）
     window.params = {}
     window.geom_row = QWidget()
     geom_lay = QHBoxLayout(window.geom_row)
     geom_lay.setContentsMargins(0, 0, 0, 0)
     geom_lay.setSpacing(4)
-    geom_lay.addWidget(QLabel("几何配置"))
-    # 下拉框只显示短 key（如 lmfp1_lab6），完整批次备注挂在**条目**的
-    # 悬停提示上（下拉列表里逐条看）——**条目文字 2026-10-07 起统一写成
-    # `key_备注` 一条**（用户："旧条目也变成一条，key_备注的格式"、
-    # "都改，统一"，见 config.entry_display）；key 藏在 itemData 里给
-    # 程序用。超长时闭合框里会被裁掉尾巴，下拉列表与悬停里看全名。
-    # 完整条目（含 beam_center）挂在 window.config，2D/剖面视图直接取用。
-    # 注意顺序：先填条目、设默认，再连接信号——建坞阶段日志区还没建好，
-    # 信号此刻触发会去写一个还不存在的控件；默认值改由 create_window
-    # 收尾时显式调用 _apply_config 应用。
-    window.config_combo = QComboBox()
-    for name, entry in CONFIGS.items():
-        window.config_combo.addItem(entry_display(name, entry), name)
-        window.config_combo.setItemData(
-            window.config_combo.count() - 1, entry["label"], Qt.ToolTipRole)
-    window.config_combo.setCurrentIndex(
-        window.config_combo.findData(DEFAULT_CONFIG))
-    window.config_combo.currentIndexChanged.connect(
-        lambda i: (_apply_config(window, i),
-                   _sync_del_config_btn(window),
-                   # 几何换了 → 预设下拉检查是否已偏离，显示「（当前设置）」；
-                   # 放在 _apply_config 之后才读得到新的 config_name
-                   refresh_preset_combo(window)))
-    geom_lay.addWidget(window.config_combo, 1)
+    geom_lay.addWidget(QLabel("几何"))
+    window.geom_label = QLabel("—")
+    window.geom_label.setObjectName("geom_current_label")
+    window.geom_label.setStyleSheet("color: gray;")
+    window.geom_label.setSizePolicy(QSizePolicy.Ignored,
+                                    QSizePolicy.Preferred)
+    geom_lay.addWidget(window.geom_label, 1)
     # 校准页的显式出口：固定在坞顶、永远可见。以前它在校准表单的最
     # 底部（窗口 1000 高时按钮落在内容 y=1236，要往下滚 434 px），
     # 用户 2026-09-26 报"没有退出校准的按钮了"。按下的效果与工具栏

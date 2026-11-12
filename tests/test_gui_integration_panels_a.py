@@ -325,7 +325,7 @@ class TestParamDockSplitLayout(unittest.TestCase):
             # 几何这一节只剩坞顶那一行的标签（像素/波长/距离三行只读
             # 字段与它们的"标定几何（只读…）"标题 2026-09-26 撤了，
             # 读数改走那一行的悬停提示）
-            self.assertIn("几何配置", captions)
+            self.assertIn("几何", captions)
             self.assertNotIn("标定几何（只读：由几何配置决定）", captions)
             # 积分设置搬去坞顶第三行（所有分析页共用），不再是 1D 页的小标题
             self.assertNotIn("积分设置", captions)

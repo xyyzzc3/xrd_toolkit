@@ -24,9 +24,9 @@
     各记各的，新开面板从默认起步、重算保留自己的旧设置；
   - 焦点与回放：_set_focus（点面板/计算完成时切编辑对象）/
     _load_params_snapshot（把快照填回参数坞，只展示不计算）；
-  - _apply_config：几何配置条目应用到参数坞（PONI/倾斜角等完整
-    条目挂在 window.config 供后续接线）；
-  - _reload_config_combo：配置下拉框与 CONFIGS 注册表同步
+  - set_geometry：切换当前几何（唯一入口，写 window.config/config_name，
+    不读任何下拉框）；
+  - _reload_config_combo：几何注册表变化后刷新灰字/方案管理页
     （校准工作台保存新条目后调用，保存即选中生效）；
   - _collect_geometry：从参数坞收集积分几何（像素/波长/距离 +
     配置条目的 PONI/倾斜角）；
@@ -82,7 +82,7 @@ from xrd_toolkit.gui.state.focus import (
     _set_focus)
 # 配置应用/常量（2026-10-21 从本文件原样搬出；再导出）
 from xrd_toolkit.gui.state.config import (
-    CALIB_HOVER_KEY, DATA_PARAM_DEFAULTS, _AUX_GID_PREFIX, _apply_config,
+    CALIB_HOVER_KEY, DATA_PARAM_DEFAULTS, _AUX_GID_PREFIX,
     _reload_config_combo, set_geometry)
 
 # 渐变色系：同一种颜色的深浅渐变（用户 2026-10-13："对比图的颜色改为

@@ -924,22 +924,24 @@ class TestPoniImport(unittest.TestCase):
                      + "\n", encoding="utf-8")
         return p
 
-    def _click_poni(self, w, path):
+    def _click_poni(self, dlg, path):
         with mock.patch.object(QFileDialog, "getOpenFileName",
                                return_value=(str(path),
                                              "pyFAI 几何 (*.poni)")):
-            w.findChild(QPushButton, "poni_btn").click()
+            dlg.geom_load_btn.click()
 
     def test_import_adds_entry_and_selects(self):
         w = create_window()
         try:
             p = self._poni_file("mygeom.poni")
-            self._click_poni(w, p)
-            idx = w.config_combo.findData("mygeom")
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            self._click_poni(dlg, p)
+            idx = dlg.geom_combo.findData("mygeom")
             self.assertGreaterEqual(idx, 0)
-            self.assertEqual(w.config_combo.currentIndex(), idx)
-            self.assertEqual(w.config_name, "mygeom")
-            cfg = w.config
+            self.assertEqual(dlg.geom_combo.currentData(), "mygeom")
+            # 管理页导入只加条目，不偷偷改当前几何（[保存方案] 才生效）
+            self.assertEqual(w.config_name, config_mod.DEFAULT_CONFIG)
+            cfg = config_mod.CONFIGS["mygeom"]
             self.assertAlmostEqual(cfg["geometry"]["dist_m"], 1.5958)
             self.assertAlmostEqual(cfg["geometry"]["pixel_size_m"], 200e-6)
             self.assertAlmostEqual(cfg["geometry"]["rot1_deg"], -0.005)
@@ -955,19 +957,23 @@ class TestPoniImport(unittest.TestCase):
             self.assertTrue(self._path.is_file())
             self.assertIn("已导入 .poni → 配置条目 mygeom",
                           w.log_text.toPlainText())
+            dlg.close()
         finally:
             w.close()
 
     def test_key_sanitized_and_collision_suffixed(self):
         w = create_window()
         try:
-            self._click_poni(w, self._poni_file("123 weird name!.poni"))
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            self._click_poni(dlg, self._poni_file("123 weird name!.poni"))
             self.assertIn("poni_123_weird_name_", config_mod.USER_CONFIGS)
             # 与内置条目撞名：自动补 _poni1
-            self._click_poni(w, self._poni_file("lmfp1_lab6.poni"))
+            self._click_poni(dlg, self._poni_file("lmfp1_lab6.poni"))
             self.assertIn("lmfp1_lab6_poni1", config_mod.USER_CONFIGS)
-            self.assertEqual(w.config_name, "lmfp1_lab6_poni1")
+            self.assertEqual(dlg.geom_combo.currentData(),
+                             "lmfp1_lab6_poni1")
             self.assertIn("lmfp1_lab6_poni1", w.log_text.toPlainText())
+            dlg.close()
         finally:
             w.close()
 
@@ -980,8 +986,10 @@ class TestPoniImport(unittest.TestCase):
                 "Distance: 1.5958\nPoni1: 0.20904\nPoni2: 0.2044\n"
                 "Rot1: -8.7e-05\nRot2: -0.0028\nRot3: 0\n"
                 "Wavelength: 1.223e-11\n", encoding="utf-8")
-            self._click_poni(w, v1)
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            self._click_poni(dlg, v1)
             log = w.log_text.toPlainText()
+            dlg.close()
             self.assertIn("缺少几何字段", log)
             self.assertIn("pixel", log)
             self.assertNotIn("old", config_mod.USER_CONFIGS)
@@ -1048,86 +1056,80 @@ class TestDeleteConfig(unittest.TestCase):
         # 磁盘文件同步：不含已删条目
         self.assertNotIn("tmp_del", self._path.read_text(encoding="utf-8"))
 
-    def test_delete_button_removes_and_falls_back_to_default(self):
-        """选中用户条目 → [删除] 确认 → 条目消失 + 回退默认 + 按钮置灰。"""
+    def test_delete_geometry_from_manager_falls_back_to_default(self):
+        """管理页选中用户条目 → [删除] → 消失 + 回退默认 + 按钮置灰。"""
         config_mod.save_user_config("tmp_del", dict(self.ENTRY))
         w = create_window()
         try:
             w.show()
-            idx = w.config_combo.findData("tmp_del")
-            self.assertGreaterEqual(idx, 0)
-            w.config_combo.setCurrentIndex(idx)   # 选中用户条目 → 按钮可用
-            self.assertTrue(w.del_config_btn.isEnabled())
+            gui_panel_state.set_geometry(w, "tmp_del")
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            dlg.geom_combo.setCurrentIndex(dlg.geom_combo.findData("tmp_del"))
+            self.assertTrue(dlg.geom_del_btn.isEnabled())
             with mock.patch.object(gui_app.QMessageBox, "question",
                                    return_value=QMessageBox.Yes) as ask:
-                w.del_config_btn.click()
+                dlg.geom_del_btn.click()
             ask.assert_called_once()
-            # 注册表 + 下拉框 + 磁盘：条目消失
             self.assertNotIn("tmp_del", config_mod.USER_CONFIGS)
-            self.assertEqual(w.config_combo.findData("tmp_del"), -1)
+            self.assertEqual(dlg.geom_combo.findData("tmp_del"), -1)
             self.assertNotIn("tmp_del", self._path.read_text(encoding="utf-8"))
-            # 回退默认条目（内置）→ [删除] 重新置灰
-            self.assertEqual(w.config_combo.currentData(),
+            self.assertEqual(w.config_name, config_mod.DEFAULT_CONFIG)
+            self.assertEqual(dlg.geom_combo.currentData(),
                              config_mod.DEFAULT_CONFIG)
-            self.assertFalse(w.del_config_btn.isEnabled())
+            self.assertFalse(dlg.geom_del_btn.isEnabled())
             self.assertIn("已删除配置条目 tmp_del", w.log_text.toPlainText())
+            dlg.close()
         finally:
             self._close(w)
 
-    def test_delete_works_from_the_calibration_page(self):
-        """校准页上就地选条目、就地删（[删除] 就住在那页，不用跨页）。
-
-        2026-09-26 晚：这条是被用户问出来的——先前坞顶下拉框在校准页
-        被置灰，删条目得"去分析页选中 → 回校准页点删除"，两页来回。
-        """
+    def test_delete_non_active_geometry_keeps_current(self):
+        """删非当前条目：当前几何不动（管理页语义）。"""
         config_mod.save_user_config("tmp_del", dict(self.ENTRY))
         w = create_window()
         try:
             w.show()
-            w.calib_btn.click()              # 进校准页（不勾文件也行）
-            self.assertEqual(w.param_stack.currentIndex(),
-                             w.PARAM_PAGES["校准"])
-            self.assertTrue(w.config_combo.isEnabled())   # 校准页也能选
-            idx = w.config_combo.findData("tmp_del")
-            w.config_combo.setCurrentIndex(idx)
-            self.assertTrue(w.del_config_btn.isEnabled())
-            self.assertIn("tmp_del", w.del_config_btn.toolTip())   # 删哪条写明
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            dlg.geom_combo.setCurrentIndex(dlg.geom_combo.findData("tmp_del"))
             with mock.patch.object(gui_app.QMessageBox, "question",
                                    return_value=QMessageBox.Yes):
-                w.del_config_btn.click()
+                dlg.geom_del_btn.click()
             self.assertNotIn("tmp_del", config_mod.USER_CONFIGS)
-            self.assertIn("已删除配置条目 tmp_del", w.log_text.toPlainText())
+            self.assertEqual(w.config_name, config_mod.DEFAULT_CONFIG)
+            dlg.close()
         finally:
             self._close(w)
 
-    def test_builtin_selected_button_disabled_and_handler_refuses(self):
-        """内置条目选中：按钮置灰；直调处理函数也不弹框、注册表不动。"""
+    def test_builtin_geometry_delete_disabled_and_handler_refuses(self):
+        """内置条目：管理页删除按钮置灰；直调处理函数也被拒。"""
         w = create_window()
         try:
             w.show()
-            self.assertIn(w.config_combo.currentData(),
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            self.assertIn(dlg.geom_combo.currentData(),
                           config_mod.BUILTIN_CONFIGS)
-            self.assertFalse(w.del_config_btn.isEnabled())
-            # 置灰是体验层，处理函数是安全层：直调也被拒
+            self.assertFalse(dlg.geom_del_btn.isEnabled())
             with mock.patch.object(gui_app.QMessageBox, "question") as ask:
-                gui_config_ops._delete_config(w)   # 处理函数归校准页
+                gui_config_ops._delete_config(w)
             ask.assert_not_called()
             self.assertIn("内置条目", w.log_text.toPlainText())
+            dlg.close()
         finally:
             self._close(w)
 
     def test_delete_cancel_keeps_entry(self):
-        """确认框选 No：条目原样保留，选中不变。"""
+        """确认框选 No：条目原样保留，管理页选中不变。"""
         config_mod.save_user_config("tmp_del", dict(self.ENTRY))
         w = create_window()
         try:
             w.show()
-            w.config_combo.setCurrentIndex(w.config_combo.findData("tmp_del"))
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            dlg.geom_combo.setCurrentIndex(dlg.geom_combo.findData("tmp_del"))
             with mock.patch.object(gui_app.QMessageBox, "question",
                                    return_value=QMessageBox.No):
-                w.del_config_btn.click()
+                dlg.geom_del_btn.click()
             self.assertIn("tmp_del", config_mod.USER_CONFIGS)
-            self.assertEqual(w.config_combo.currentData(), "tmp_del")
+            self.assertEqual(dlg.geom_combo.currentData(), "tmp_del")
+            dlg.close()
         finally:
             self._close(w)
 
@@ -1140,14 +1142,13 @@ class TestSavePoni(unittest.TestCase):
     """
 
     def test_buttons_labelled_save_and_load(self):
-        """作业规格按钮名：[加载参数] + [保存参数]。"""
+        """几何文件的加载/保存在方案管理页的几何区。"""
         w = create_window()
         try:
-            self.assertEqual(w.findChild(QPushButton, "poni_btn").text(),
-                             "加载几何…")
-            self.assertEqual(
-                w.findChild(QPushButton, "save_poni_btn").text(),
-                "保存几何…")
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            self.assertEqual(dlg.geom_load_btn.text(), "加载几何…")
+            self.assertEqual(dlg.geom_save_btn.text(), "保存几何…")
+            dlg.close()
         finally:
             w.close()
 
@@ -1155,14 +1156,15 @@ class TestSavePoni(unittest.TestCase):
         w = create_window()
         try:
             out = Path(tempfile.mkdtemp()) / "sub" / "lmfp1_lab6.poni"
+            dlg = gui_preset_ops.PresetManagerDialog(w)
             with mock.patch.object(
                     QFileDialog, "getSaveFileName",
                     return_value=(str(out), "pyFAI 几何 (*.poni)")):
-                w.findChild(QPushButton, "save_poni_btn").click()
+                dlg.geom_save_btn.click()
             self.assertTrue(out.is_file())
             import pyFAI
             g = pyFAI.load(str(out))
-            cfg = w.config["geometry"]
+            cfg = config_mod.CONFIGS[config_mod.DEFAULT_CONFIG]["geometry"]
             self.assertAlmostEqual(g.dist, cfg["dist_m"])
             self.assertAlmostEqual(g.poni1, cfg["poni1_m"])
             self.assertAlmostEqual(g.poni2, cfg["poni2_m"])
@@ -1175,46 +1177,43 @@ class TestSavePoni(unittest.TestCase):
             self.assertIn("距离", log)
             self.assertIn("中心点 poni1", log)
             self.assertIn("倾斜 rot1", log)
+            dlg.close()
         finally:
             w.close()
 
     def test_save_cancel_writes_nothing(self):
         w = create_window()
         try:
+            dlg = gui_preset_ops.PresetManagerDialog(w)
             with mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=("", "")):
-                w.findChild(QPushButton, "save_poni_btn").click()
+                dlg.geom_save_btn.click()
             self.assertNotIn("已保存几何参数", w.log_text.toPlainText())
+            dlg.close()
         finally:
             w.close()
 
-    def test_save_writes_the_current_config_not_the_entry(self):
-        """校准页里按 [保存参数]：存的是**当前配置**（含手输），不是选中条目。
-
-        用户 2026-09-28 第 2 条（2甲①）报的就是这个：手输改完当前配置再按
-        保存，导出的还是那条旧条目的数字（"改完保存，文件里是旧的"）。
-        现在与同栏的 [保存为配置] 一个口径。
-        """
+    def test_save_exports_the_selected_entry(self):
+        """管理页 [保存几何…]：导出下拉里选中的那条，不掺校准当前配置。"""
         w = create_window()
         try:
-            out = Path(tempfile.mkdtemp()) / "current.poni"
-            entry = w.config["geometry"]
-            # 造一个与条目**明显不同**的当前配置（不弹对话框，直接进状态）
-            w.calib_state = {
-                "points": [], "results": [],
-                "slots": {"current": None, "A": None, "B": None},
-                "pinned": {"A": False, "B": False}, "next_slot": "A",
-                "current_geom": dict(entry, dist_m=entry["dist_m"] + 0.02),
-                "current_from": "手输", "current_metrics": None,
-                "current_error": None, "custom": True, "counters": {}}
+            entry = dict(config_mod.CONFIGS[config_mod.DEFAULT_CONFIG])
+            entry["label"] = "导出测试"
+            entry["geometry"] = dict(entry["geometry"], dist_m=1.7000)
+            config_mod.save_user_config("tmp_export", entry)
+            self.addCleanup(config_mod.remove_user_config, "tmp_export")
+            dlg = gui_preset_ops.PresetManagerDialog(w)
+            idx = dlg.geom_combo.findData("tmp_export")
+            dlg.geom_combo.setCurrentIndex(idx)
+            out = Path(tempfile.mkdtemp()) / "selected.poni"
             with mock.patch.object(QFileDialog, "getSaveFileName",
                                    return_value=(str(out), "pyFAI 几何 (*.poni)")):
-                w.findChild(QPushButton, "save_poni_btn").click()
+                dlg.geom_save_btn.click()
             import pyFAI
             g = pyFAI.load(str(out))
-            self.assertAlmostEqual(g.dist, entry["dist_m"] + 0.02,
-                                   msg="该存当前配置（校准页表里那一列）")
-            self.assertIn("校准页「当前配置」", w.log_text.toPlainText(),
-                          "日志要说清存的是哪一份")
+            self.assertAlmostEqual(g.dist, 1.7000,
+                                   msg="该存下拉选中的条目")
+            self.assertIn("配置条目「tmp_export」", w.log_text.toPlainText())
+            dlg.close()
         finally:
             w.close()

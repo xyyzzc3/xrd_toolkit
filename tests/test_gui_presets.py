@@ -30,6 +30,7 @@ except ModuleNotFoundError:  # 直接运行本文件
 from xrd_toolkit import paths, presets  # noqa: E402
 from xrd_toolkit.config import CONFIGS  # noqa: E402
 from xrd_toolkit.gui import preset_ops  # noqa: E402
+from xrd_toolkit.gui.panel_state import set_geometry  # noqa: E402
 from xrd_toolkit.gui.param_dock import helpers as dock_helpers  # noqa: E402
 from xrd_toolkit.gui.state import processing as gui_processing  # noqa: E402
 from xrd_toolkit.services.mask import save_recipe  # noqa: E402
@@ -185,7 +186,7 @@ class TestPresetWindow(unittest.TestCase):
             "Si_9008565.cif")
 
     def test_save_current_carries_processing_settings_only_on_apply(self):
-        """预设保存当前处理设置；切换只显示，点 [套用当前预设] 才改控件。"""
+        """预设保存当前处理设置；切换只显示，点 [套用当前方案] 才改控件。"""
         _prime_1d(self.w, ["data/fake_a.tif"])
         settings = {
             "mode": "anchor", "window_deg": 2.0,
@@ -203,10 +204,10 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(saved["processing"]["smooth_deg"], 0.15)
         self.assertNotIn("created", saved["processing"])
         # 只显示：处理页标签写明当前预设的设置，但控件没被改
-        self.assertIn("当前预设「带处理」", self.w.preset_proc_lbl.text())
+        self.assertIn("当前方案「带处理」", self.w.preset_proc_lbl.text())
         self.assertNotEqual(
             self.w.params["背景扣除模式"].currentData(), "anchor")
-        # 显式点 [套用当前预设] 才生效
+        # 显式点 [套用当前方案] 才生效
         dock_helpers._apply_preset_processing(self.w)
         self.assertEqual(
             self.w.params["背景扣除模式"].currentData(), "anchor")
@@ -275,7 +276,7 @@ class TestPresetWindow(unittest.TestCase):
             dialog.close()
 
     def test_geometry_drift_shows_current_item_and_recovers(self):
-        """手动换了几何 → 预设下拉显示「（当前设置）」→ 点回预设可恢复。"""
+        """手动换了几何 → 灰字标「未写进方案」→ 点回方案可恢复。"""
         CONFIGS["_test_drift_config"] = {
             "label": "漂移测试",
             "geometry": dict(pixel_size_m=150e-6, wavelength_m=0.15e-10,
@@ -283,41 +284,35 @@ class TestPresetWindow(unittest.TestCase):
             "beam_center": (100.0, 100.0),
         }
         self.addCleanup(CONFIGS.pop, "_test_drift_config", None)
-        combo = self.w.config_combo
-        combo.addItem("_test_drift_config", "_test_drift_config")
-        combo.setCurrentIndex(combo.count() - 1)
+        set_geometry(self.w, "_test_drift_config")
         QApplication.processEvents()
 
         self.assertEqual(self.w.config_name, "_test_drift_config")
         self.assertEqual(self.w.preset_name, presets.DEFAULT_PRESET_NAME)
+        self.assertIn("未写进方案", self.w.geom_label.text())
         self.assertEqual(self.w.preset_combo.currentText(),
                          preset_ops.CURRENT_PRESET_TEXT)
 
-        # 管理弹窗与主下拉一致：顶部也有「（当前设置）」，默认为它，
-        # 显示实际五项值且三个动作按钮都不可用
+        # 管理弹窗：列表里直接是真实方案（虚拟行已删）；几何下拉显示
+        # 方案里存的那条（不是当前偏离的），内置方案只读。
         dialog = preset_ops.PresetManagerDialog(self.w)
         try:
-            self.assertEqual(dialog.list.currentRow(), 0)
+            self.assertGreaterEqual(dialog.list.count(), 1)
             self.assertTrue(dialog.list.item(0).text().startswith(
-                preset_ops.CURRENT_PRESET_TEXT))
-            self.assertIn("未保存为预设", dialog.summary.text())
-            self.assertIn("_test_drift_config", dialog.summary.text())
-            # 没打开过工作台 / 没有第二相控件：留空，不借用预设默认值
-            self.assertIn("相库目录：（未设置）", dialog.summary.text())
-            self.assertIn("原位帧目录：（未设置）", dialog.summary.text())
-            self.assertIn("第二相 CIF：（无）", dialog.summary.text())
-            self.assertFalse(dialog.apply_btn.isEnabled())
-            self.assertFalse(dialog.update_btn.isEnabled())
-            self.assertFalse(dialog.delete_btn.isEnabled())
+                presets.DEFAULT_PRESET_NAME))
+            self.assertEqual(dialog.geom_combo.currentData(), "lmfp1_lab6")
+            self.assertFalse(dialog.save_scheme_btn.isEnabled())
+            self.assertFalse(dialog.geom_combo.isEnabled())
         finally:
             dialog.close()
 
         idx = self.w.preset_combo.findData(presets.DEFAULT_PRESET_NAME)
-        self.w.preset_combo.setCurrentIndex(idx)   # 点回真实预设
+        self.w.preset_combo.setCurrentIndex(idx)   # 点回真实方案
         QApplication.processEvents()
         self.assertEqual(self.w.config_name, "lmfp1_lab6")
         self.assertEqual(self.w.preset_combo.currentText(),
                          presets.DEFAULT_PRESET_NAME)
+        self.assertNotIn("未写进方案", self.w.geom_label.text())
 
     def test_hint_geometry_outside_preset(self):
         self.w.config_name = "_not_in_preset"
@@ -337,6 +332,40 @@ class TestPresetWindow(unittest.TestCase):
 
         self.w.config_name = "lmfp1_lab6"
         self.assertFalse(preset_ops.hint_geometry_outside_preset(self.w))
+
+    def test_manager_save_scheme_applies_geometry(self):
+        """管理页改几何 → [保存方案] → 写盘 + 活动方案立即生效（A）。"""
+        CONFIGS["_test_scheme_geom"] = {
+            "label": "方案几何测试",
+            "geometry": dict(pixel_size_m=200e-6, wavelength_m=1.2e-11,
+                             dist_m=1.3),
+            "beam_center": (100.0, 100.0),
+        }
+        self.addCleanup(CONFIGS.pop, "_test_scheme_geom", None)
+        presets.save_user_preset("方案A", {
+            "geometry": "lmfp1_lab6", "second_phase_cif": "",
+            "insitu_dir": "", "insitu_mask_name": "", "phase_library": "",
+        })
+        self.addCleanup(presets.remove_user_preset, "方案A")
+        preset_ops.apply_preset(self.w, "方案A")
+
+        dialog = preset_ops.PresetManagerDialog(self.w)
+        try:
+            for i in range(dialog.list.count()):
+                if dialog.list.item(i).data(Qt.UserRole) == "方案A":
+                    dialog.list.setCurrentRow(i)
+                    break
+            idx = dialog.geom_combo.findData("_test_scheme_geom")
+            self.assertGreaterEqual(idx, 0)
+            dialog.geom_combo.setCurrentIndex(idx)
+            dialog.save_scheme_btn.click()
+        finally:
+            dialog.close()
+
+        self.assertEqual(presets.get_preset("方案A")["geometry"],
+                         "_test_scheme_geom")
+        self.assertEqual(self.w.config_name, "_test_scheme_geom",
+                         "活动方案保存后应立即用新几何")
 
     def test_manager_update_uses_current_values(self):
         presets.save_user_preset("可更新", {

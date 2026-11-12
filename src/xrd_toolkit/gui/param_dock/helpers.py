@@ -109,7 +109,7 @@ def _sync_bg_rows(window: QMainWindow) -> None:
 
 
 def _sync_preset_proc_rows(window: QMainWindow) -> None:
-    """处理页底部两行：本图上次处理（只读）+ 当前预设的处理设置。
+    """处理页底部两行：本图上次处理（只读）+ 当前方案的处理设置。
 
     由 _refresh_proc 收尾时经 `window._preset_proc_rows_sync` 回调一次
     （与 _bg_rows_sync 同一套路，避免 plot_views 反向 import app）。
@@ -130,17 +130,17 @@ def _sync_preset_proc_rows(window: QMainWindow) -> None:
     proc = preset.get("processing")
     if isinstance(proc, dict):
         preset_lbl.setText(
-            f"当前预设「{name}」：{chain_label_of(proc)}\n"
-            "点 [套用当前预设] 把这套设置用到编辑对象；调好新设置后"
-            "点 [存进预设…] 写回去。")
+            f"当前方案「{name}」：{chain_label_of(proc)}\n"
+            "点 [套用当前方案] 把这套设置用到编辑对象；调好新设置后"
+            "点 [存进方案…] 写回去。")
     else:
         preset_lbl.setText(
-            f"当前预设「{name}」还没有处理设置；调好背景/平滑/裁剪后"
-            "点 [存进预设…]。")
+            f"当前方案「{name}」还没有处理设置；调好背景/平滑/裁剪后"
+            "点 [存进方案…]。")
 
 
 def _apply_preset_processing(window: QMainWindow) -> None:
-    """[套用当前预设]：把当前预设的 `processing` 用到编辑对象（显式动作）。
+    """[套用当前方案]：把当前方案的 `processing` 用到编辑对象（显式动作）。
 
     锚点位置照搬、强度按本图曲线重取；其余设置填进本页控件并立刻重画。
     面板打开时**不会**自动套用（见 plot_views._proc_recipe）。
@@ -148,8 +148,8 @@ def _apply_preset_processing(window: QMainWindow) -> None:
     preset = getattr(window, "preset", None) or {}
     recipe = preset.get("processing")
     if not isinstance(recipe, dict):
-        _log(window, "当前预设没有处理设置；先在「处理」页调好，"
-                     "再点 [存进预设…]")
+        _log(window, "当前方案没有处理设置；先在「处理」页调好，"
+                     "再点 [存进方案…]")
         return
     dock = window.plot_docks.get(window.focus_panel)
     path = getattr(dock, "panel_file", None)
@@ -158,8 +158,8 @@ def _apply_preset_processing(window: QMainWindow) -> None:
         return
     if recipe.get("mode") == "blank":
         # 空扫相减靠的是那张**空扫图**（window.bg_blank，在内存里、不进预设）
-        _log(window, "当前预设的处理设置是「空扫相减」：它靠的是那张"
-                     "空扫图，空扫图不在预设里，套不了")
+        _log(window, "当前方案的处理设置是「空扫相减」：它靠的是那张"
+                     "空扫图，空扫图不在方案里，套不了")
         return
     # 处理产物面板：**就地换成它底下的原始 1D 曲线**，设置照常往上套
     if not _retarget_product_panel_to_source(window, dock):
@@ -168,15 +168,15 @@ def _apply_preset_processing(window: QMainWindow) -> None:
 
 
 def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
-    """[存进预设…]：把编辑对象当前处理设置写进一份预设（只改 processing）。
+    """[存进方案…]：把编辑对象当前处理设置写进一份方案（只改 processing）。
 
-    预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值；用户预设已存在时
-    先问一次，内置预设不能覆盖（要另存新名字）。
+    方案的几何 / 相库 / 原位目录 / 掩膜工程保持原值；用户方案已存在时
+    先问一次，内置方案不能覆盖（要另存新名字）。
     """
     dock = window.plot_docks.get(window.focus_panel)
     path = getattr(dock, "panel_file", None)
     if dock is None or path is None:
-        _log(window, "先把一张 1D 图设为编辑对象，再把当前处理设置存进预设")
+        _log(window, "先把一张 1D 图设为编辑对象，再把当前处理设置存进方案")
         return
     settings = _proc_settings(window, dock, path)
     from xrd_toolkit.services import recipes
@@ -190,25 +190,25 @@ def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
     current = str(getattr(window, "preset_name", DEFAULT_PRESET_NAME))
     default = current if not is_builtin(current) else f"{current} 副本"
     name, ok = QInputDialog.getText(
-        window, "存进预设",
-        "预设名称（处理设置只写进这一份预设；几何/相库等保持原值）：",
+        window, "存进方案",
+        "方案名称（处理设置只写进这一份方案；几何/相库等保持原值）：",
         text=default)
     if not ok or not str(name).strip():
         return
     name = str(name).strip()
     if is_builtin(name):
-        _log(window, f"「{name}」是内置预设，不能覆盖；换个名字")
+        _log(window, f"「{name}」是内置方案，不能覆盖；换个名字")
         return
     existing = name in preset_names()
     if existing:
         answer = QMessageBox.question(
-            window, "存进预设",
-            f"把当前处理设置写进用户预设「{name}」？\n"
-            "该预设的几何 / 相库 / 原位目录 / 掩膜工程保持原值。",
+            window, "存进方案",
+            f"把当前处理设置写进用户方案「{name}」？\n"
+            "该方案的几何 / 相库 / 原位目录 / 掩膜工程保持原值。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
-    # 只改 processing：其余字段照抄目标预设（已有）或当前预设（新建副本）。
+    # 只改 processing：其余字段照抄目标预设（已有）或当前方案（新建副本）。
     # 不能走"当前设置快照"——那会把没打开的工作台清空、把几何漂移一并
     # 写进去，与按钮上"其他项保持原值"的承诺不符。
     from xrd_toolkit.presets import raw_preset
@@ -219,9 +219,9 @@ def _save_processing_to_preset_dialog(window: QMainWindow) -> None:
     try:
         save_user_preset(name, values)
     except (OSError, ValueError) as err:
-        QMessageBox.warning(window, "存进预设", str(err))
+        QMessageBox.warning(window, "存进方案", str(err))
         return
-    _log(window, f"处理设置已存进预设：{name}"
+    _log(window, f"处理设置已存进方案：{name}"
                  f"（{chain_label_of(snapshot)}）")
     from xrd_toolkit.gui.preset_ops import refresh_preset_combo
     refresh_preset_combo(window)          # 新建的预设立刻出现在下拉里
