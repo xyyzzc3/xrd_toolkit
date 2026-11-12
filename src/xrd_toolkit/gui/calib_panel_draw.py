@@ -35,7 +35,6 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     """
     ax = window.calib_ax
     ax.clear()
-    ax.set_facecolor("#c8c8c8")   # 画布未铺图前是灰的，不闪白
     h, w = image.shape
     # 显示降采样（2026-11-12 性能）：面板只有几百像素，2048² 原图做
     # LogNorm 要 0.6 s 以上、还会在进校准时白闪。块内取最大降到 ~1024，
