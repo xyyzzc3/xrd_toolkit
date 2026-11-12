@@ -263,60 +263,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     std_row.addWidget(btn_std_open)
     lay.addWidget(std_box)
 
-    # ── 操作区：编辑 / 配置条目进出 / 保存 ──────────────────
-    # 本页第一栏，紧跟坞顶「几何配置」那一行（用户 2026-09-26 晚定）：
-    # [加载参数][保存参数][删除] 作用的就是那一行选中的条目，摆在一起
-    # 才看得出"先在上面选条目、再对条目动手"这层关系；原先它们压在
-    # 13 行对比表下面，要滚下去才够得着，而选中项却远在坞顶。
-    ops_box = QGroupBox("操作")
-    ops = QVBoxLayout(ops_box)
-    btn_edit = QPushButton("编辑当前配置…")
-    btn_edit.setObjectName("edit_current_btn")
-    btn_edit.setToolTip("用已有条目预填，或直接改像素/波长/距离/"
-                        "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
-    btn_edit.clicked.connect(lambda: _edit_current(window))
-    ops.addWidget(btn_edit)
-    # 2026-11-12 方案重构：加载/保存 .poni、删除条目搬进方案管理页的
-    # 几何区（和几何选择器挨着）；校准页只留 [编辑当前配置…]（改校准
-    # 当前几何）和 [保存为配置]（把校准结果存成条目）。
-    btn_save_cfg = QPushButton("保存为配置")
-    btn_save_cfg.setObjectName("save_calib_config")
-    btn_save_cfg.setToolTip("把<b>当前配置</b>存成命名配置条目（本地文件，"
-                            "不进 git），保存后方案管理页的几何下拉自动选中")
-    btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
-    window.calib_save_btn = btn_save_cfg
-    btn_save_cfg.setStyleSheet("padding: 2px 5px;")
-    ops.addWidget(btn_save_cfg)
-    lay.addWidget(ops_box)
-
-    # 像素尺寸确认：单独一行，钉在「操作」组下面（页面顶部区域）。
-    # **2026-10-05 起它只是提醒，不是门禁**（用户："改为提醒的样式，不要求
-    # 用户必须选择了"）：没勾也照常跑/照常存，只是这行旁边常显一条橙色
-    # 提示、动作开始时日志再提醒一句（见 _warn_pixel_unchecked）。
-    # 位置来回搬过三趟：原挤在「操作」按钮堆里（用户 2026-09-26 报"容易被
-    # 忽视"，因为卡在参数坞可见区最下沿）→ 搬进数据表上方 → 2026-09-30
-    # 数据表挪到页面最下，它又跟着沉下去了（用户 2026-10-01："把像素尺寸
-    # 放上面，太下面了不方便"）→ 现在单独一行。
-    chk_pix = QCheckBox("已核对像素尺寸")
-    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
-                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
-                       "是错的。只在像素值变了时才清掉核对标记")
-    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
-                                        _calib_sync(window)))
-    # 短提醒（原因写在勾选框 tooltip 与动作时的日志里）：不把校准页撑宽
-    # ——参数坞宽度是按内容算的（_enter_calib），内容宽度关系到给绘图区
-    # 留的位置（CALIB_PANEL_RESERVE_PX），这行只当一个醒目的记号。
-    warn_pix = QLabel("⚠ 未核对，建议先核对")
-    warn_pix.setWordWrap(True)
-    warn_pix.setStyleSheet("color: #c0392b;")
-    pix_row = QHBoxLayout()
-    pix_row.addWidget(chk_pix)
-    pix_row.addWidget(warn_pix, 1)
-    lay.addLayout(pix_row)
-    window.calib_pixel_chk = chk_pix
-    window.calib_pixel_warn = warn_pix
-
-    # ── 标样 + 环数 ─────────────────────────────────────────
+    # ── 标样 + 环数（紧跟标样文件，2026-11-12 用户要求）──────────
     # 这两项一起决定"理论 2θ 阶梯"：标样给 d 值，环数给用前多少条。
     # 放在动作区之前——自动/手动/画环/指标全都吃它；换标样只清本次
     # 会话（选点/结果），当前几何保留（距离/PONI/倾斜角是仪器属性）。
@@ -347,6 +294,51 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     lay.addWidget(std_box)
     window.calib_standard_combo = combo
     window.calib_ring_count_spin = ring_count
+
+    # 像素尺寸确认：紧跟在标样/环数下面（确认的就是这套几何的像素值）。
+    # **2026-10-05 起它只是提醒，不是门禁**（用户："改为提醒的样式，不要求
+    # 用户必须选择了"）：没勾也照常跑/照常存，只是这行旁边常显一条橙色
+    # 提示、动作开始时日志再提醒一句（见 _warn_pixel_unchecked）。
+    chk_pix = QCheckBox("已核对像素尺寸")
+    chk_pix.setToolTip("环的位置只由 λ、像素尺寸、距离的组合决定：像素填错"
+                       "时拟合会把距离凑回来，环位偏差看着正常但报出的距离"
+                       "是错的。只在像素值变了时才清掉核对标记")
+    chk_pix.toggled.connect(lambda on: (_set_pixel_ok(window, on),
+                                        _calib_sync(window)))
+    warn_pix = QLabel("⚠ 未核对，建议先核对")
+    warn_pix.setWordWrap(True)
+    warn_pix.setStyleSheet("color: #c0392b;")
+    pix_row = QHBoxLayout()
+    pix_row.addWidget(chk_pix)
+    pix_row.addWidget(warn_pix, 1)
+    lay.addLayout(pix_row)
+    window.calib_pixel_chk = chk_pix
+    window.calib_pixel_warn = warn_pix
+
+    # ── 操作区：编辑 / 保存（2026-11-12：两个按钮并排一行，省高度）──
+    # 加载/保存 .poni、删除条目在方案管理页的几何区（和几何选择器挨着）；
+    # 校准页只留"改校准当前几何"和"存成条目"两个动作。
+    ops_box = QGroupBox("操作")
+    ops = QVBoxLayout(ops_box)
+    btn_edit = QPushButton("编辑当前配置…")
+    btn_edit.setObjectName("edit_current_btn")
+    btn_edit.setToolTip("用已有条目预填，或直接改像素/波长/距离/"
+                        "PONI/倾斜角；改过就是「自定义」，不再被自动替换")
+    btn_edit.clicked.connect(lambda: _edit_current(window))
+    btn_save_cfg = QPushButton("保存为配置")
+    btn_save_cfg.setObjectName("save_calib_config")
+    btn_save_cfg.setToolTip("把<b>当前配置</b>存成命名配置条目（本地文件，"
+                            "不进 git），保存后方案管理页的几何下拉自动选中")
+    btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
+    window.calib_save_btn = btn_save_cfg
+    for btn in (btn_edit, btn_save_cfg):
+        btn.setStyleSheet("padding: 2px 5px;")
+    btn_row = QHBoxLayout()
+    btn_row.setSpacing(2)
+    btn_row.addWidget(btn_edit, 1)
+    btn_row.addWidget(btn_save_cfg, 1)
+    ops.addLayout(btn_row)
+    lay.addWidget(ops_box)
 
     # 「条目名称」一个框（用户 2026-10-07："一个框，预填文件名的不含-
     # 后的长数字部分……两个框保存后最后变成一个连在一起的"）：名字本身
