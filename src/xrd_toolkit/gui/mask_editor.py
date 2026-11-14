@@ -225,6 +225,8 @@ class MaskWorkbench(QWidget):
                 first = self.image_combo.itemData(0)
                 if first:
                     self.load_image(Path(first))
+        # 2026-11-14 用户：生成范围默认 = 文件栏勾选的原始图
+        self._prefer_checked_scope()
 
     # ── 界面 ────────────────────────────────────────────────────────
     def _build(self):
@@ -534,15 +536,20 @@ class MaskWorkbench(QWidget):
         fl.addLayout(prev_row)
         fl.addWidget(QLabel("生成范围"))
         self.scope_combo = QComboBox()
+        # 2026-11-14 用户：默认 = 文件栏勾选的原始图（勾选=批量的统一
+        # 选择模型）；一个都没勾才回到「当前图像」
+        self.scope_combo.addItem("勾选的原始图", "checked")
         self.scope_combo.addItem("当前图像", "current")
         self.scope_combo.addItem("所有原始图", "all")
         self.scope_combo.addItem("选择文件…", "choose")
-        self.scope_combo.setCurrentIndex(0)      # 默认：只动当前图
+        self.scope_combo.setCurrentIndex(
+            self.scope_combo.findData("current"))
         self.scope_combo.setToolTip(
-            "生成掩膜 2D 的范围：当前图像 / 所有原始图 / 自己勾选一个清单；"
-            "换当前图像也可以在文件栏里双击")
+            "生成掩膜 2D 的范围：勾选的原始图（文件栏打对号的，默认）/ "
+            "当前图像 / 所有原始图 / 自己挑一个清单；"
+            "换当前图像可以在文件栏里双击")
         self._scope_paths = []
-        self._scope_prev_index = 0
+        self._scope_prev_index = self.scope_combo.currentIndex()
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         fl.addWidget(self.scope_combo)
         self.btn_apply = QPushButton("生成掩膜 2D")
@@ -628,9 +635,33 @@ class MaskWorkbench(QWidget):
         except Exception:                              # noqa: BLE001
             return []
 
+    def _checked_raw_paths(self):
+        """文件栏里打了对号的原始图（按树上的先后顺序）。"""
+        try:
+            return [s.path for s in gui_sources.checked_sources(self.main)
+                    if s.kind == gui_sources.RAW]
+        except Exception:                              # noqa: BLE001
+            return []
+
+    def _prefer_checked_scope(self):
+        """进工作台时把生成范围默认成「勾选的原始图」。
+
+        2026-11-14 用户："默认选勾选的"——勾选是唯一的批量选择表达；
+        一个都没勾才回到「当前图像」。只改下拉的选中项，不动用户之后
+        手动选的其它范围（每次重新进入工作台按当下勾选重算一次）。
+        """
+        if not hasattr(self, "scope_combo"):
+            return
+        data = "checked" if self._checked_raw_paths() else "current"
+        idx = self.scope_combo.findData(data)
+        if idx >= 0:
+            self.scope_combo.setCurrentIndex(idx)
+
     def _target_paths(self):
         """当前生成范围要写哪些原始图。"""
         data = self.scope_combo.currentData()
+        if data == "checked":
+            return self._checked_raw_paths()
         if data == "all":
             return self._raw_paths()
         if data == "selected":
@@ -1940,10 +1971,15 @@ class MaskWorkbench(QWidget):
 
     def _refresh_scope_items(self, *_args) -> None:
         n = len(self._raw_paths())
+        checked = len(self._checked_raw_paths())
         if hasattr(self, "scope_combo"):
             idx = self.scope_combo.findData("all")
             if idx >= 0:
                 self.scope_combo.setItemText(idx, f"所有原始图（{n}）")
+            idx = self.scope_combo.findData("checked")
+            if idx >= 0:
+                self.scope_combo.setItemText(
+                    idx, f"勾选的原始图（{checked}）")
         self._refresh_image_combo()
         self._update_generate_state()
 

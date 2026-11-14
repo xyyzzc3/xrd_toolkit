@@ -490,15 +490,43 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(len(self._products()), 2)
         self.assertEqual(self.ed.btn_apply.text(), "已生成（无改动）")
 
+    def test_default_scope_is_checked_files(self):
+        """2026-11-14 用户：进掩膜默认按文件栏勾选生成（没勾才当前图）。"""
+        other = Path(self._td.name) / "frame2.edf"
+        _write_image(other)
+        self.w.add_files([str(self.img_path), str(other)], select=True)
+        QApplication.processEvents()
+        self._open()
+        self.assertEqual(self.ed.scope_combo.currentData(), "checked",
+                         "有勾选时生成范围默认 = 勾选的原始图")
+        targets = {str(Path(p).expanduser().resolve())
+                   for p in self.ed._target_paths()}
+        self.assertEqual(
+            targets,
+            {str(self.img_path.resolve()), str(other.resolve())},
+            "默认目标 = 文件栏勾选的那几张")
+        self.ed._fill_rect((10, 10), (20, 20), True)
+        self.ed._update_status()
+        self.ed.btn_apply.click()
+        QApplication.processEvents()
+        self.assertEqual(len(self._products()), 2,
+                         "按勾选批量生成两条掩膜 2D")
+
+    def test_default_scope_falls_back_to_current_without_checks(self):
+        self._open()
+        self.assertEqual(self.ed.scope_combo.currentData(), "current",
+                         "一个都没勾时默认仍只看当前图像")
+
     def test_hot_params_remembered_per_geometry(self):
         """检测参数按几何配置落盘：改了记住，[恢复默认] 清回去。"""
         self._open()
         store = Path(self._td.name) / "mask_params.json"
+        config_name = self.w.config_name      # 活动方案可能不是 lmfp1_lab6
         with mock.patch.object(gui_mask_editor.mask_params, "STORE", store):
             self.ed.adv_ratio.setValue(12.0)
             QApplication.processEvents()
             self.assertEqual(
-                mask_params.load("lmfp1_lab6")["ratio"], 12.0)
+                mask_params.load(config_name)["ratio"], 12.0)
             self.ed.adv_ratio.blockSignals(True)   # 假装新会话重新载入
             self.ed.adv_ratio.setValue(8.0)
             self.ed.adv_ratio.blockSignals(False)
@@ -507,7 +535,7 @@ class TestMaskEditor(unittest.TestCase):
             self.ed._reset_hot_params()
             self.assertEqual(self.ed.adv_ratio.value(), 8.0)
             self.assertEqual(
-                mask_params.load("lmfp1_lab6")["ratio"], 8.0)
+                mask_params.load(config_name)["ratio"], 8.0)
 
     def test_flush_overlay_blits_without_error(self):
         self._open()
