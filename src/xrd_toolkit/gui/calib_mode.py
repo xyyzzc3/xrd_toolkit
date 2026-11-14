@@ -15,7 +15,9 @@ from xrd_toolkit.gui.calib_panel import (
     _calib_standard_path, _close_calib_panel, _open_calib_panel)
 from xrd_toolkit.gui.config_ops import _suggest_config_key
 from xrd_toolkit.gui.files.model import FILE_FILTER
-from xrd_toolkit.gui.panel_layout import _set_bottom_strip_visible
+from xrd_toolkit.gui.panel_layout import (
+    _restore_param_dock_width, _set_bottom_strip_visible,
+    _widen_param_dock_for_task)
 from xrd_toolkit.gui.panel_state import _log
 
 
@@ -148,6 +150,8 @@ def _enter_calib(window: QMainWindow) -> None:
     path = _calib_standard_path(window)
     if path is None:
         _log(window, "请在上方「标样文件」选择一张原始图，或点 [打开…]")
+        # 还没有图可量：按"给绘图区留 620 px"折算，能拉多少拉多少
+        _widen_param_dock_for_task(window)
         return
     # 首次画 2048² 校正图要几百毫秒：亮等待光标，别让用户以为点空了
     QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -159,13 +163,20 @@ def _enter_calib(window: QMainWindow) -> None:
                  f"校准：用文件栏勾选的第 1 张原始图 {checked.display}")
         _refresh_calib_file_combo(window)   # 下拉镜像到实际打开的标样
         _refresh_config_name_prefill(window)   # 「条目名称」跟着标样重填
+        # 2026-11-14 用户：校准页在默认坞宽下太挤；按"不缩小中央 2D
+        # 图"的余量拉宽（吃图两侧的空白，最多 380 px）
+        _widen_param_dock_for_task(
+            window, getattr(window, "calib_ax", None))
     finally:
         QApplication.restoreOverrideCursor()
 
 def _exit_calib(window: QMainWindow) -> None:
-    """退出校准模式：关校准面板（关闭即遗忘）。"""
+    """退出校准模式：关校准面板（关闭即遗忘）+ 参数坞宽度还原。"""
     window.calib_exit_btn.setVisible(False)
+    # 先关校准面板（子窗口），再还原坞宽；顺序反过来会被重新布局覆盖
     _close_calib_panel(window)
+    # 要在坞还露着时还原：隐藏后 resizeDocks 不生效（2026-11-14 实测）
+    _restore_param_dock_width(window)
     _set_bottom_strip_visible(window, True)
     saved = getattr(window, "_calib_dock_saved", None)
     if saved:

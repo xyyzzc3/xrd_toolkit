@@ -1,13 +1,16 @@
-"""掩膜中央工作台（2026-10-27；2026-10-30 改为嵌入主窗口）。
+"""掩膜工作台（2026-10-27；2026-10-30 改为嵌入主窗口）。
 
-从工具栏 [校准] 旁边的 [掩膜] 打开：内容装进中央 MDI 子窗口（不是
-独立窗口，也不是参数坞的一页）。它要同时看 2D 图、画掩膜、跑自动
-检测、预览 mask 前后的 1D，塞进参数页会太挤；进入时参数坞和日志坞
-收起，工作台自带消息行/状态行。
+2026-11-14 用户：改成和校准一样的格局——中央 MDI 子窗口只放 2D 图
+（+ 下方 1D 预览）和视野/保存按钮；画掩膜、自动检测、掩膜文件、
+生成范围等**调整控件全部搬进参数坞新增的「掩膜」页**。进入掩膜时
+参数坞自动露出并拉宽到不缩小中央 2D 图的宽度（最多 380 px，见
+panel_layout._widen_param_dock_for_task），日志坞继续收起；工作台
+底部保留消息行和状态行（看图时的反馈）。
 
 流程（对应 Week 9 任务一）：
-  1. 打开编辑器：自动载入第一张原始图，顶部下拉可以换图；文件栏在
-     这个工作台里收起，图像/生成范围都由工作台自己选；
+  1. 打开编辑器：自动载入文件栏勾选的第一张原始图；参数坞「掩膜」
+     页顶部的「图像」下拉可以换图（与文件栏双击互为镜像）；文件栏
+     保留（勾选 = 批量范围）；
   2. 手动画：画笔、橡皮、矩形；或点 [孤立坏点（局部）]。
      [整环离群（实验性）] 与 GSAS-II 的自动斑点掩膜（spot mask）同一思路，
      真实环可能被误标，只作参考（见 services/mask.py）；
@@ -43,9 +46,10 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
-    QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QMdiSubWindow, QSpinBox,
-    QVBoxLayout, QWidget)
+    QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
+    QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QMessageBox, QPushButton, QMdiSubWindow, QScrollArea, QSizePolicy,
+    QSpinBox, QVBoxLayout, QWidget)
 
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
@@ -101,11 +105,12 @@ def _preview_worker(image, mask, geom, npt, unmasked):
 
 
 class MaskWorkbench(QWidget):
-    """掩膜中央工作台的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
+    """掩膜中央子窗口的内容（由主窗口装进 MDI 子窗口，2026-10-30）。
 
-    不再是独立窗口：工具栏 [掩膜] 把它开在中央绘图区，参数坞和日志坞
-    收起（工作台自带状态行/消息行）；退出/关闭只隐藏子窗口，掩膜状态
-    留着，下次再点 [掩膜] 继续。
+    2026-11-14 起与校准同格局：这里只放**图**（2D + 1D 预览 + 视野
+    按钮 + 状态行）；调整控件住在参数坞「掩膜」页（self.param_page，
+    首次创建时挂进主窗口 param_stack）。退出/关闭只隐藏子窗口，掩膜
+    状态留着，下次再点 [掩膜] 继续。
     """
 
     TOOL_BRUSH = "brush"
@@ -185,8 +190,15 @@ class MaskWorkbench(QWidget):
         self._preview_timer.timeout.connect(self._refresh_preview)
 
         self._build()
+        # 调整控件全部在参数坞「掩膜」页（2026-11-14）：懒创建、只在
+        # 第一次打开掩膜工作台时挂进主窗口的页面栈
+        self.param_page = self._build_param_page()
+        self._install_param_page()
         self._wire_checked_count()
         self._load_hot_params()
+        for btn in (self.findChildren(QPushButton)
+                    + self.param_page.findChildren(QPushButton)):
+            btn.setAutoDefault(False)
         # Home = 复位视野（与主窗口 app.py 同一套：绑在窗口上、WindowShortcut，
         # 焦点在数值框里时 QAbstractSpinBox 会拦下 Home 当前的光标键——两个
         # 笔刷/σ 输入框里按 Home 不会突然把图缩回去）
@@ -216,103 +228,205 @@ class MaskWorkbench(QWidget):
 
     # ── 界面 ────────────────────────────────────────────────────────
     def _build(self):
+        """中央子窗口：顶部视野行 + 2D 画布（含 1D 预览）+ 底部状态行。
+
+        2026-11-14 用户：掩膜改成和校准一样的格局——中间只放图，所有
+        调整控件搬进参数坞「掩膜」页（见 _build_param_page）；视野操作
+        和 [保存图片…] 留在图旁边，和校准面板顶栏同一姿势。
+        """
         root = QVBoxLayout(self)
+        root.setContentsMargins(4, 2, 4, 2)
+        root.setSpacing(2)
 
-        # ── 图像行：工作台自带的原始图下拉（与文件栏双击互为镜像）──
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("图像"))
-        self.image_combo = QComboBox()
-        self.image_combo.setMinimumWidth(260)
-        self.image_combo.setToolTip("文件栏里的全部原始数据；换图不用关窗口")
-        self.image_combo.activated.connect(self._on_image_combo)
-        row1.addWidget(self.image_combo)
-        row1.addStretch(1)
-        self.btn_load = QPushButton("打开掩膜…")
-        self.btn_load.setToolTip(
-            "读回<b>掩膜工程</b>（.mask.npz，含来源分层与元数据，可继续改）"
-            "或<b>通用掩膜</b>（.npy/.edf，只有遮/不遮）")
-        self.btn_load.clicked.connect(self._import_mask)
-        row1.addWidget(self.btn_load)
-        self.btn_save = QPushButton("保存掩膜工程…")
-        self.btn_save.setToolTip(
-            "保存 .mask.npz <b>掩膜工程</b>：掩膜、来源分层和参数一起存，"
-            "以后可 [打开掩膜…] 继续改；给外部软件用请选 [导出通用掩膜…]")
-        self.btn_save.clicked.connect(self._save_recipe)
-        row1.addWidget(self.btn_save)
-        self.btn_save_generic = QPushButton("导出通用掩膜…")
-        self.btn_save_generic.setToolTip(
-            "另存 .npy/.edf，给 pyFAI-drawmask 等外部工具用"
-            "（不含来源分层）")
-        self.btn_save_generic.clicked.connect(self._export_generic)
-        row1.addWidget(self.btn_save_generic)
-        root.addLayout(row1)
-
-        # ── 第二行：视图 + 绘制工具（撤销/清空紧挨画笔）────────────
-        row2 = QHBoxLayout()
+        # ── 顶部：视野操作 + 保存图片（与校准面板顶栏同款）──────────
+        top = QHBoxLayout()
         self.btn_home = QPushButton("复位视图")
         self.btn_home.setToolTip("复位 2D 视图（Home 键同效）")
         self.btn_home.clicked.connect(self._reset_view)
-        row2.addWidget(self.btn_home)
+        top.addWidget(self.btn_home)
         self.btn_zoom = QPushButton("放大镜")
         self.btn_zoom.setCheckable(True)
         self.btn_zoom.setToolTip(
             "点亮 = 滚轮以光标为中心缩放、左键拖 = 框选放大；"
             "熄灭 = 左键画掩膜；中键或 ⌥/Shift + 左键平移")
         self.btn_zoom.toggled.connect(self._on_zoom_toggled)
-        row2.addWidget(self.btn_zoom)
-        row2.addSpacing(16)
+        top.addWidget(self.btn_zoom)
+        top.addStretch(1)
+        self.btn_save = QPushButton("保存图片…")
+        self.btn_save.setToolTip(
+            "把当前掩膜画布（2D + 1D 预览）存成 PNG/TIF/PDF/SVG")
+        self.btn_save.clicked.connect(self._save_figure)
+        top.addWidget(self.btn_save)
+        root.addLayout(top)
+
+        self.fig = Figure(figsize=(10, 7.4))
+        # 2D 是主画布：预览只留一条（2026-11-11 用户："让 2D 图大一些"）。
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0],
+                                   hspace=0.22)
+        self.ax_img = self.fig.add_subplot(gs[0])
+        self.ax_prev = self.fig.add_subplot(gs[1])
+        self.ax_img.set_axis_off()
+        self.ax_prev.set_xlabel("2θ (°)", fontsize=8)
+        self.ax_prev.set_ylabel("counts", fontsize=8)
+        self.ax_prev.tick_params(labelsize=7)
+        self.ax_prev.grid(alpha=0.25, linestyle=":")
+        self.canvas = FigureCanvasQTAgg(self.fig)
+        self.canvas.setFocusPolicy(Qt.StrongFocus)
+        self.canvas.mpl_connect("button_press_event", self._on_press)
+        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+        self.canvas.mpl_connect("button_release_event", self._on_release)
+        self.canvas.mpl_connect("scroll_event", self._on_scroll)
+        self.canvas.mpl_connect("resize_event", self._on_resize)
+        self.canvas.mpl_connect("draw_event", self._on_draw)
+        self.canvas.mpl_connect("key_press_event", self._on_canvas_key)
+        root.addWidget(self.canvas, stretch=1)
+
+        # ── 底部：状态 + 图例 + 消息（与图一起看，不放参数栏）──────
+        status_row = QHBoxLayout()
+        self.lbl_status = QLabel("未载入图像：从参数栏「图像」下拉选一张原始图")
+        self.lbl_status.setWordWrap(True)
+        status_row.addWidget(self.lbl_status, stretch=1)
+        self.lbl_legend = QLabel(
+            '<span style="color:#e53935">■</span> 手动 '
+            '<span style="color:#00e5ff">■</span> 孤立坏点 '
+            '<span style="color:#76ff03">■</span> 整环离群')
+        self.lbl_legend.setToolTip(
+            "红色 = 画笔/矩形；青色 = 孤立坏点（局部）；"
+            "绿色 = 整环离群（实验性）。橡皮擦掉的就是没遮。")
+        status_row.addWidget(self.lbl_legend)
+        root.addLayout(status_row)
+        self.lbl_hint = QLabel("")
+        self.lbl_hint.setStyleSheet("color: #5a6068;")
+        self.lbl_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_hint.setWordWrap(True)
+        root.addWidget(self.lbl_hint)
+
+    def _build_param_page(self):
+        """参数坞「掩膜」页：调整控件全部住这里（2026-11-14）。
+
+        按 275–380 px 排：工具/按钮两列、下拉允许压窄（长文件名省略），
+        进工作台时参数坞按"不缩小中央 2D 图"的余量拉宽到最多 380 px
+        （见 panel_layout._widen_param_dock_for_task）。
+        """
+        page = QWidget()
+        page.setObjectName("mask_param_page")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(4)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        box = QVBoxLayout(body)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+
+        # ── 图像：文件栏全部原始数据的镜像（双击 = 换图）───────────
+        grp = QGroupBox("图像")
+        gl = QVBoxLayout(grp)
+        self.image_combo = QComboBox()
+        self.image_combo.setObjectName("mask_image_combo")
+        self.image_combo.setMinimumWidth(120)
+        # 水平 Ignored：长文件名不把参数坞撑宽；垂直 Fixed：别被页面
+        # 的剩余高度拉成一个大方块（2026-11-14 截图抓到的）
+        self.image_combo.setSizePolicy(QSizePolicy.Ignored,
+                                       QSizePolicy.Fixed)
+        self.image_combo.setToolTip("文件栏里的全部原始数据；换图不用关工作台")
+        self.image_combo.activated.connect(self._on_image_combo)
+        gl.addWidget(self.image_combo)
+        box.addWidget(grp)
+
+        # ── 掩膜文件：工程（可再改） vs 通用掩膜（给外部软件）────
+        grp = QGroupBox("掩膜文件")
+        grid = QGridLayout(grp)
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(3)
+        self.btn_load = QPushButton("打开掩膜…")
+        self.btn_load.setToolTip(
+            "读回<b>掩膜工程</b>（.mask.npz，含来源分层与元数据，可继续改）"
+            "或<b>通用掩膜</b>（.npy/.edf，只有遮/不遮）")
+        self.btn_load.clicked.connect(self._import_mask)
+        grid.addWidget(self.btn_load, 0, 0)
+        self.btn_save_recipe = QPushButton("保存掩膜工程…")
+        self.btn_save_recipe.setToolTip(
+            "保存 .mask.npz <b>掩膜工程</b>：掩膜、来源分层和参数一起存，"
+            "以后可 [打开掩膜…] 继续改；给外部软件用请选 [导出通用掩膜…]")
+        self.btn_save_recipe.clicked.connect(self._save_recipe)
+        grid.addWidget(self.btn_save_recipe, 0, 1)
+        self.btn_save_generic = QPushButton("导出通用掩膜…")
+        self.btn_save_generic.setToolTip(
+            "另存 .npy/.edf，给 pyFAI-drawmask 等外部工具用"
+            "（不含来源分层）")
+        self.btn_save_generic.clicked.connect(self._export_generic)
+        grid.addWidget(self.btn_save_generic, 1, 0, 1, 2)
+        box.addWidget(grp)
+
+        # ── 绘制：工具两列 + 笔刷 + 撤销/清空 ──────────────────────
+        grp = QGroupBox("绘制")
+        grid = QGridLayout(grp)
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(3)
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
         self.tool_buttons = {}
-        for text, tool in (("画笔", self.TOOL_BRUSH),
-                           ("橡皮", self.TOOL_ERASER),
-                           ("矩形", self.TOOL_RECT),
-                           ("椭圆", self.TOOL_ELLIPSE),
-                           ("套索", self.TOOL_LASSO)):
+        tools = (("画笔", self.TOOL_BRUSH), ("橡皮", self.TOOL_ERASER),
+                 ("矩形", self.TOOL_RECT), ("椭圆", self.TOOL_ELLIPSE),
+                 ("套索", self.TOOL_LASSO))
+        for i, (text, tool) in enumerate(tools):
             btn = QPushButton(text)
             btn.setCheckable(True)
+            btn.setToolTip({
+                self.TOOL_BRUSH: "自由涂抹；笔刷大小在下面",
+                self.TOOL_ERASER: "擦掉画过的掩膜",
+                self.TOOL_RECT: "按住拖一个矩形",
+                self.TOOL_ELLIPSE: "按住拖一个椭圆",
+                self.TOOL_LASSO: "沿轮廓拖动，松开后围住的区域被遮",
+            }[tool])
             btn.clicked.connect(lambda _checked=False, t=tool:
                                 self._set_tool(t))
             self.tool_group.addButton(btn)
             self.tool_buttons[tool] = btn
-            row2.addWidget(btn)
+            grid.addWidget(btn, i // 2, i % 2)
         self.tool_buttons[self.TOOL_BRUSH].setChecked(True)
-        row2.addWidget(QLabel("笔刷"))
+        grid.addWidget(QLabel("笔刷"), 3, 0)
         self.brush = QSpinBox()
         self.brush.setRange(1, 201)
         self.brush.setValue(11)
         self.brush.setSuffix(" px")
-        row2.addWidget(self.brush)
+        grid.addWidget(self.brush, 3, 1)
         self.btn_undo = QPushButton("撤销")
         self.btn_undo.clicked.connect(self._undo_last)
-        row2.addWidget(self.btn_undo)
+        grid.addWidget(self.btn_undo, 4, 0)
         self.btn_clear = QPushButton("清空")
         self.btn_clear.setToolTip("清空编辑器里的当前掩膜（已生成的 "
                                   "掩膜 2D 产物不受影响）")
         self.btn_clear.clicked.connect(self._clear)
-        row2.addWidget(self.btn_clear)
-        row2.addStretch(1)
-        root.addLayout(row2)
+        grid.addWidget(self.btn_clear, 4, 1)
+        box.addWidget(grp)
 
-        # ── 第三行：自动检测 ───────────────────────────────────────
-        row3 = QHBoxLayout()
+        # ── 自动检测 ───────────────────────────────────────────────
+        grp = QGroupBox("自动检测")
+        gl = QVBoxLayout(grp)
         self.btn_hot = QPushButton("孤立坏点（局部，推荐）")
         self.btn_hot.setToolTip(
             "15×15 局部中值 + 小连通域：只抓孤立亮团/坏点簇，"
             "不碰真实衍射环（生产路径）")
         self.btn_hot.clicked.connect(self._auto_hot)
-        row3.addWidget(self.btn_hot)
+        gl.addWidget(self.btn_hot)
         self.btn_radial = QPushButton("整环离群（实验性，勿遮真实环）")
         self.btn_radial.setToolTip(
             "按径向环带找离群像素（与 GSAS-II 的自动斑点掩膜（spot mask）同一思路）；"
             "真实衍射环的强弧段/织构（如强织构基片）会被误标，只作参考")
         self.btn_radial.clicked.connect(self._auto_radial)
-        row3.addWidget(self.btn_radial)
+        gl.addWidget(self.btn_radial)
+        row = QHBoxLayout()
         self.n_sigma_label = QLabel("nσ（仅整环离群）")
         self.n_sigma_label.setToolTip(
             "整环离群的阈值：稳健 σ 的倍数。越小越激进（标得越多）；"
             "孤立坏点检测不用这个值")
-        row3.addWidget(self.n_sigma_label)
+        row.addWidget(self.n_sigma_label, 1)
         self.n_sigma = QDoubleSpinBox()
         self.n_sigma.setRange(1.0, 20.0)
         self.n_sigma.setSingleStep(0.5)
@@ -320,30 +434,27 @@ class MaskWorkbench(QWidget):
         self.n_sigma.setToolTip(
             "整环离群阈值（稳健 σ 倍数）：越小越激进；"
             "孤立坏点检测不用这个值")
-        row3.addWidget(self.n_sigma)
+        row.addWidget(self.n_sigma)
+        gl.addLayout(row)
         self.btn_locate = QPushButton("查看改动")
         self.btn_locate.setToolTip(
             "缩放到上一次自动检测新增的像素；重复点按依次看各处")
         self.btn_locate.setEnabled(False)
         self.btn_locate.clicked.connect(self._locate_changes)
-        row3.addWidget(self.btn_locate)
-        row3.addStretch(1)
-        root.addLayout(row3)
+        gl.addWidget(self.btn_locate)
+        box.addWidget(grp)
 
         # ── 高级：孤立坏点的检测参数（默认收起）───────────────────
-        adv_toggle = QHBoxLayout()
         self.btn_adv = QPushButton("高级（孤立坏点参数）")
         self.btn_adv.setCheckable(True)
         self.btn_adv.setToolTip(
             "中值窗口 / 亮斑倍数 / 面积上限 / 峰值下限 / 扩张 px；"
-            "默认值按当前数据面板调过")
-        adv_toggle.addWidget(self.btn_adv)
-        adv_toggle.addStretch(1)
-        root.addLayout(adv_toggle)
+            "默认值按当前几何配置调过")
+        box.addWidget(self.btn_adv)
         self.adv_panel = QWidget()
-        adv = QHBoxLayout(self.adv_panel)
-        adv.setContentsMargins(0, 0, 0, 0)
-        adv.setSpacing(6)
+        adv = QFormLayout(self.adv_panel)
+        adv.setContentsMargins(2, 0, 2, 0)
+        adv.setSpacing(3)
         self.adv_window = QSpinBox()
         self.adv_window.setRange(3, 51)
         self.adv_window.setSingleStep(2)
@@ -379,63 +490,34 @@ class MaskWorkbench(QWidget):
                              ("面积上限", self.adv_max_area),
                              ("峰值下限", self.adv_min_peak),
                              ("扩张", self.adv_grow)):
-            adv.addWidget(QLabel(text))
-            adv.addWidget(widget)
+            adv.addRow(text, widget)
         self.btn_hot_defaults = QPushButton("恢复默认")
         self.btn_hot_defaults.setObjectName("hot_defaults_btn")
         self.btn_hot_defaults.setToolTip(
             "把孤立坏点/整环离群参数恢复成默认值（按当前几何配置记住）")
         self.btn_hot_defaults.clicked.connect(self._reset_hot_params)
-        adv.addWidget(self.btn_hot_defaults)
-        adv.addStretch(1)
+        adv.addRow(self.btn_hot_defaults)
         self.adv_panel.setVisible(False)
         self.btn_adv.toggled.connect(self.adv_panel.setVisible)
-        root.addWidget(self.adv_panel)
+        box.addWidget(self.adv_panel)
         # 参数按几何配置记忆：动一下就写盘（值很小，不必防抖）
         self._loading_hot = False
         for widget in (self.adv_window, self.adv_ratio, self.adv_max_area,
                        self.adv_min_peak, self.adv_grow, self.n_sigma):
             widget.valueChanged.connect(lambda *_: self._save_hot_params())
+        # 多余高度留在页面底部：不加这条，滚动区会把每组都拉高，
+        # 组里控件之间出现大片空白（2026-11-14 截图抓到的）
+        box.addStretch(1)
 
-        self.fig = Figure(figsize=(10, 7.4))
-        # 2D 是主画布：预览只留一条（2026-11-11 用户："让 2D 图大一些"）。
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0],
-                                   hspace=0.22)
-        self.ax_img = self.fig.add_subplot(gs[0])
-        self.ax_prev = self.fig.add_subplot(gs[1])
-        self.ax_img.set_axis_off()
-        self.ax_prev.set_xlabel("2θ (°)", fontsize=8)
-        self.ax_prev.set_ylabel("counts", fontsize=8)
-        self.ax_prev.tick_params(labelsize=7)
-        self.ax_prev.grid(alpha=0.25, linestyle=":")
-        self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setFocusPolicy(Qt.StrongFocus)
-        self.canvas.mpl_connect("button_press_event", self._on_press)
-        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
-        self.canvas.mpl_connect("button_release_event", self._on_release)
-        self.canvas.mpl_connect("scroll_event", self._on_scroll)
-        self.canvas.mpl_connect("resize_event", self._on_resize)
-        self.canvas.mpl_connect("draw_event", self._on_draw)
-        self.canvas.mpl_connect("key_press_event", self._on_canvas_key)
-        root.addWidget(self.canvas, stretch=1)
+        scroll.setWidget(body)
+        lay.addWidget(scroll, 1)
 
-        # ── 底部：消息行 + 状态 + 预览 + 生成（范围二选一）────────
-        self.lbl_hint = QLabel("")
-        self.lbl_hint.setStyleSheet("color: #5a6068;")
-        self.lbl_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        root.addWidget(self.lbl_hint)
-        row4 = QHBoxLayout()
-        self.lbl_status = QLabel("未载入图像：从上方「图像」下拉选一张原始图")
-        self.lbl_status.setWordWrap(True)
-        row4.addWidget(self.lbl_status, stretch=1)
-        self.lbl_legend = QLabel(
-            '<span style="color:#e53935">■</span> 手动 '
-            '<span style="color:#00e5ff">■</span> 孤立坏点 '
-            '<span style="color:#76ff03">■</span> 整环离群')
-        self.lbl_legend.setToolTip(
-            "红色 = 画笔/矩形；青色 = 孤立坏点（局部）；"
-            "绿色 = 整环离群（实验性）。橡皮擦掉的就是没遮。")
-        row4.addWidget(self.lbl_legend)
+        # ── 固定页底：预览 + 生成范围/按钮（不随滚动走）───────────
+        foot = QWidget()
+        fl = QVBoxLayout(foot)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(3)
+        prev_row = QHBoxLayout()
         self.chk_preview = QCheckBox("实时预览")
         self.chk_preview.setChecked(True)
         self.chk_preview.setToolTip(
@@ -443,17 +525,14 @@ class MaskWorkbench(QWidget):
         self.chk_preview.toggled.connect(
             lambda on: self._schedule_preview() if on
             else self._preview_timer.stop())
-        row4.addWidget(self.chk_preview)
+        prev_row.addWidget(self.chk_preview, 1)
         self.btn_preview = QPushButton("预览效果")
         self.btn_preview.setToolTip(
             "立即重算掩膜前/后的 1D 对比；实时预览开着时会自动更新")
         self.btn_preview.clicked.connect(self._preview_effect)
-        row4.addWidget(self.btn_preview)
-        self.btn_save = QPushButton("保存图片…")
-        self.btn_save.setToolTip(
-            "把当前掩膜画布（2D + 1D 预览）存成 PNG/TIF/PDF/SVG")
-        self.btn_save.clicked.connect(self._save_figure)
-        row4.addWidget(self.btn_save)
+        prev_row.addWidget(self.btn_preview)
+        fl.addLayout(prev_row)
+        fl.addWidget(QLabel("生成范围"))
         self.scope_combo = QComboBox()
         self.scope_combo.addItem("当前图像", "current")
         self.scope_combo.addItem("所有原始图", "all")
@@ -465,16 +544,32 @@ class MaskWorkbench(QWidget):
         self._scope_paths = []
         self._scope_prev_index = 0
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
-        row4.addWidget(self.scope_combo)
+        fl.addWidget(self.scope_combo)
         self.btn_apply = QPushButton("生成掩膜 2D")
         self.btn_apply.setToolTip(
             "为选定范围生成「掩膜后的 2D」产物（原始像素 + 掩膜）")
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self._generate_current)
-        row4.addWidget(self.btn_apply)
-        for btn in self.findChildren(QPushButton):
-            btn.setAutoDefault(False)
-        root.addLayout(row4)
+        fl.addWidget(self.btn_apply)
+        lay.addWidget(foot)
+        return page
+
+    def _install_param_page(self):
+        """把掩膜页挂进主窗口的参数栈（首次创建掩膜工作台时）。
+
+        校准页住在栈的第 0 页；掩膜页同样是一页，只是**懒创建**——
+        掩膜工作台第一次打开时才建，不拖慢启动。
+        """
+        stack = getattr(self.main, "param_stack", None)
+        pages = getattr(self.main, "PARAM_PAGES", None)
+        if stack is None or pages is None:
+            return
+        idx = pages.get("掩膜")
+        if (idx is None or idx >= stack.count()
+                or stack.widget(idx) is not self.param_page):
+            stack.addWidget(self.param_page)
+            pages["掩膜"] = stack.count() - 1
+        self.main.mask_param_page = self.param_page
 
     # ── 工具/状态 ───────────────────────────────────────────────────
     def _set_tool(self, tool):
@@ -2098,9 +2193,10 @@ class MaskWorkbench(QWidget):
 class _MaskSubWindow(QMdiSubWindow):
     """掩膜工作台的中央子窗口（2026-10-30）。
 
-    × 关闭 = 退出掩膜模式（参数坞/日志坞恢复），但**不销毁内容**：
-    mask、撤销栈和掩膜文件路径都留着，下次点 [掩膜] 原样继续。子窗口
-    只是 hide，真正的销毁随主窗口一起走。
+    2026-11-14 起这里只装图（MaskWorkbench = 画布 + 状态行）；调整
+    控件在参数坞「掩膜」页。× 关闭 = 退出掩膜模式（参数坞/日志坞恢复），
+    但**不销毁内容**：mask、撤销栈和掩膜文件路径都留着，下次点 [掩膜]
+    原样继续。子窗口只是 hide，真正的销毁随主窗口一起走。
     """
 
     def __init__(self, window):

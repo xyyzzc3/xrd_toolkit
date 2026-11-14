@@ -735,9 +735,10 @@ def shot_mask(window) -> None:
     editor.btn_preview.click()                   # 预览是独立按钮
     wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
     settle(500)
+    # 2026-11-14 起调整控件在参数坞「掩膜」页：截整窗才看得到新格局
     path = OUT / "gui_mask.png"
-    editor.grab().save(str(path))
-    print(f"  ✓ {path.relative_to(ROOT)}  (1400×1000)")
+    window.grab().save(str(path))
+    print(f"  ✓ {path.relative_to(ROOT)}  ({window.width()}×{window.height()})")
 
 
 def shot_mask2d(window) -> None:

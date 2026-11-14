@@ -33,6 +33,8 @@ def _sync_geom_row(window: QMainWindow) -> None:
     if window.param_stack.currentIndex() == window.PARAM_PAGES["校准"]:
         tip += ("\n（校准用的是本页「当前配置」那份几何；这里显示的是"
                 "分析/积分用的条目）")
+    elif window.param_stack.currentIndex() == window.PARAM_PAGES.get("掩膜"):
+        tip += "\n（掩膜预览/后续 1D 积分用这条几何）"
     # 当前几何与方案里记的对不上：灰字变橙并点名，提示去方案管理页
     # [保存方案]。只做提示，不偷偷写回（2026-11-12 用户选 A）。
     preset = getattr(window, "preset", None) or {}

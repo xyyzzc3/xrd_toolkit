@@ -377,3 +377,95 @@ def _maximize_subwindow(dock) -> None:
         return
     if not dock.isMaximized():
         dock.showMaximized()
+
+
+# ══ 校准 / 掩膜：参数坞按"不缩小中央 2D 图"拉宽（2026-11-14 用户口径）══
+# 用户要的是：校准页和掩膜页在 281 px 下太挤，但拉宽不能把中间的 2D 图
+# 挤小。2D 图按等比例画、居中，两侧本来就有空白——参数坞只吃这块空白，
+# 吃完了就停。目标 380 px（旧版校准页自己想要的 ~371 附近），上限 420。
+TASK_DOCK_WIDTH = 380      # 两个工作台里参数坞的舒适宽度
+TASK_DOCK_MAX = 420        # 上限（用户拍板）
+TASK_DOCK_MARGIN = 8       # 拉宽后给图的边缘留一点余量
+TASK_DOCK_MIN_GAIN = 20    # 增量小于这个数就不动，免得白跳一下
+TASK_PLOT_RESERVE_PX = 620  # 没有 2D 图可量时，给绘图区至少留这么宽
+
+
+def _image_free_width(ax) -> float:
+    """2D 图两侧的空白：参数坞还能吃多少像素而不缩小图。
+
+    等比例（aspect equal）的图在轴框里居中，轴框比图宽时多出来的就是
+    空白。轴框随画布宽度按 subplot 的 (right - left) 比例缩放，所以
+    "能吃的坞宽 = 空白 / (right - left)"。量不出来（还没画完/没有图）
+    就返回 0，调用方据此保持不动。
+    """
+    try:
+        fig = ax.figure
+        frac = float(fig.subplotpars.right - fig.subplotpars.left)
+        alloc = float(ax.get_position(original=True).width * fig.bbox.width)
+        shown = float(ax.get_window_extent().width)
+    except Exception:                                  # noqa: BLE001
+        return 0.0
+    if frac <= 0.01 or alloc <= 0.0 or shown <= 1.0:
+        return 0.0
+    return max(0.0, (alloc - shown) / frac)
+
+
+def _widen_param_dock_for_task(window, ax=None, *, comfort=TASK_DOCK_WIDTH,
+                               cap=TASK_DOCK_MAX) -> int:
+    """进入校准/掩膜：把参数坞拉宽到不缩中央 2D 图（用户 2026-11-14）。
+
+    只吃 2D 图两侧的空白：空白有多少就拉多少，到舒适宽 380 px 为止；
+    窄窗口下可能只拉得动几十像素，甚至不拉。没有 2D 图可量时（还没
+    选标样/图）按"给绘图区留 TASK_PLOT_RESERVE_PX"折算。返回最终
+    宽度；0 = 没动。退出时用 _restore_param_dock_width 还原。
+    """
+    dock = getattr(window, "param_dock", None)
+    if dock is None:
+        return 0
+    # 先让布局把刚露出来的坞摆好：隐藏时 width() 是旧值，拿它当"进入前
+    # 宽度"会把还原宽度记错（同 2026-11 旧版 _widen_dock_for_calib 的坑）
+    lay = window.layout()
+    if lay is not None:
+        lay.activate()
+    for _ in range(2):
+        QApplication.processEvents()
+    current = dock.width()
+    if getattr(window, "_task_dock_w_before", None) is None:
+        window._task_dock_w_before = current
+    if ax is not None:
+        free = _image_free_width(ax)
+    else:
+        file_dock = getattr(window, "file_dock", None)
+        file_w = file_dock.width() if file_dock is not None else 0
+        free = (min(comfort, window.width() - file_w
+                    - TASK_PLOT_RESERVE_PX) - current)
+    if free <= 0:
+        return 0
+    target = int(min(cap, max(current, min(comfort,
+                                           current + free - TASK_DOCK_MARGIN))))
+    if target - current < TASK_DOCK_MIN_GAIN:
+        return 0
+    if dock.isFloating():
+        dock.resize(target, dock.height())
+    else:
+        window.resizeDocks([dock], [target], Qt.Horizontal)
+    if target < comfort:
+        _log(window, f"参数栏拉宽到 {target} px（再宽会缩小中央图）")
+    return target
+
+
+def _restore_param_dock_width(window) -> None:
+    """退出校准/掩膜：参数坞宽度还原到进入前那一条。
+
+    要在坞还露着时调用：QDockWidget 隐藏后 resizeDocks 不生效
+    （2026-11-14 实测），所以进出函数里都先还原宽度、再按意图收坞。
+    """
+    was = getattr(window, "_task_dock_w_before", None)
+    window._task_dock_w_before = None
+    dock = getattr(window, "param_dock", None)
+    if was is None or was <= 0 or dock is None:
+        return
+    if dock.isFloating():
+        dock.resize(was, dock.height())
+    else:
+        window.resizeDocks([dock], [was], Qt.Horizontal)

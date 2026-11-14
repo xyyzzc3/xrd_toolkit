@@ -609,29 +609,83 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(save.call_count, 1)
         self.assertIn("已保存 mask.png", self.ed.lbl_hint.text())
 
-    def test_workbench_collapses_and_restores_docks(self):
-        self.w.param_dock.setVisible(True)
-        self.w.log_dock.setVisible(True)
-        self.w._dock_intent["参数"] = True
-        self.w._dock_intent["日志"] = True
-        self._open()
-        self.assertFalse(self.w.param_dock.isVisible())
-        self.assertFalse(self.w.log_dock.isVisible())
-        self.assertTrue(self.w.file_dock.isVisible(),
-                        "2026-11-11 起工作台保留文件栏（双击 = 当前对象）")
-        self.assertEqual(self.w.mode_label.text(), "掩膜模式")
-        self.assertEqual(self.w.mask_btn.text(), "退出掩膜")
-        self.assertTrue(self.w._bottom_strip.isHidden(),
-                        "工作台里底部横带应隐藏")
-        self.w.mask_btn.click()
+    def test_workbench_shows_mask_param_page_and_restores_docks(self):
+        """2026-11-14：掩膜与校准同格局——图在中央、控件在参数坞掩膜页。
+
+        进入：参数坞露出并翻到「掩膜」页、日志坞收起、文件栏保留、
+        参数坞拉宽到舒适宽且不缩小中央 2D 图；退出：页/宽度/坞都还原。
+        """
+        w = self.w
+        w.log_dock.setVisible(True)
+        w._dock_intent["日志"] = True
+        # 走用户路径：原始图先进文件栏并勾选（进工作台自动载入，宽度
+        # 才有 2D 图可量）
+        w.add_files([str(self.img_path)], select=True)
+        w.entrance_buttons["1D"].click()      # 参数坞露出来，量进入前宽度
         QApplication.processEvents()
-        self.assertTrue(self.w.param_dock.isVisible())
-        self.assertTrue(self.w.log_dock.isVisible())
-        self.assertTrue(self.w.file_dock.isVisible())
-        self.assertEqual(self.w.mode_label.text(), "分析模式")
-        self.assertEqual(self.w.mask_btn.text(), "掩膜")
-        self.assertFalse(self.w._bottom_strip.isHidden(),
+        before = w.param_dock.width()
+        self._open()
+        self.assertIsNotNone(self.ed.image, "进掩膜应自动载入勾选图")
+        page_idx = w.PARAM_PAGES["掩膜"]
+        page = w.param_stack.widget(page_idx)
+        self.assertTrue(w.param_dock.isVisible())
+        self.assertFalse(w.log_dock.isVisible())
+        self.assertTrue(w.file_dock.isVisible(),
+                        "2026-11-11 起工作台保留文件栏（双击 = 当前对象）")
+        self.assertEqual(w.param_stack.currentIndex(), page_idx)
+        for widget in (self.ed.btn_apply, self.ed.image_combo,
+                       self.ed.btn_hot, self.ed.scope_combo):
+            self.assertTrue(page.isAncestorOf(widget),
+                            "调整控件应住在参数坞「掩膜」页里")
+        self.assertFalse(self.ed.isAncestorOf(self.ed.btn_apply),
+                         "调整控件不该再住在中央工作台里")
+        self.assertTrue(w.mask_exit_btn.isVisible(),
+                        "坞顶应有 [退出掩膜]（与 [退出校准] 对称）")
+        self.assertGreater(w.param_dock.width(), before,
+                           "进掩膜应把参数坞拉宽")
+        self.assertLessEqual(w.param_dock.width(), 380 + 4,
+                             "拉宽上限 380 px（用户 2026-11-14 拍板）")
+        # 拉宽只许吃 2D 图两侧的空白：图本身一像素都不许缩
+        w.resizeDocks([w.param_dock], [281], Qt.Horizontal)
+        QApplication.processEvents()
+        self.ed.canvas.draw()
+        e1 = self.ed.ax_img.get_window_extent()
+        w.resizeDocks([w.param_dock], [380], Qt.Horizontal)
+        QApplication.processEvents()
+        self.ed.canvas.draw()
+        e2 = self.ed.ax_img.get_window_extent()
+        self.assertAlmostEqual(min(e2.width, e2.height),
+                               min(e1.width, e1.height), delta=2.0,
+                               msg="参数坞拉宽不许缩小中央 2D 图")
+        self.assertEqual(w.mode_label.text(), "掩膜模式")
+        self.assertEqual(w.mask_btn.text(), "退出掩膜")
+        self.assertTrue(w._bottom_strip.isHidden(),
+                        "工作台里底部横带应隐藏")
+        w.mask_btn.click()
+        QApplication.processEvents()
+        self.assertTrue(w.param_dock.isVisible())
+        self.assertTrue(w.log_dock.isVisible())
+        self.assertTrue(w.file_dock.isVisible())
+        self.assertEqual(w.param_stack.currentIndex(),
+                         w.PARAM_PAGES["1D"], "退出应翻回进入前的页")
+        self.assertFalse(w.mask_exit_btn.isVisible())
+        self.assertAlmostEqual(w.param_dock.width(), before, delta=3,
+                               msg="退出掩膜应还原参数坞宽度")
+        self.assertEqual(w.mode_label.text(), "分析模式")
+        self.assertEqual(w.mask_btn.text(), "掩膜")
+        self.assertFalse(w._bottom_strip.isHidden(),
                          "退出工作台应恢复底部横带")
+
+    def test_dock_exit_button_leaves_mask_mode(self):
+        """参数坞顶的 [退出掩膜] 与工具栏那颗同源（2026-11-14）。"""
+        self._open()
+        self.assertTrue(self.w.mask_exit_btn.isVisible())
+        self.w.mask_exit_btn.click()
+        QApplication.processEvents()
+        self.assertFalse(self.w.mask_btn.isChecked())
+        self.assertFalse(self.w.mask_exit_btn.isVisible())
+        self.assertFalse(self.w.mask_dock.isVisible())
+        self.assertEqual(self.w.mode_label.text(), "分析模式")
 
     def test_mask_and_calibration_are_mutually_exclusive(self):
         self.w.calib_btn.setChecked(True)

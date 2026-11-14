@@ -2848,8 +2848,12 @@ class TestCalibFlow(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
-    def test_dock_width_unchanged_on_enter_and_exit(self):
-        """进/退校准不再拉宽参数坞（2026-11-12 用户：不要拉伸）。"""
+    def test_dock_widens_on_enter_without_shrinking_image_and_restores(self):
+        """进校准：参数坞按"不缩中央 2D 图"的余量拉宽；退出还原。
+
+        用户 2026-11-14 拍板：默认 281 px 太挤，拉宽到 380 为上限，
+        但只许吃图两侧的空白——图本身一像素都不许缩。
+        """
         w = create_window()
         try:
             w.show()
@@ -2861,18 +2865,33 @@ class TestCalibFlow(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             QApplication.processEvents()
-            self.assertAlmostEqual(w.param_dock.width(), before, delta=2,
-                                   msg="进校准不许把参数坞拉宽")
+            entered = w.param_dock.width()
+            self.assertGreater(entered, before, "进校准应把参数坞拉宽")
+            self.assertLessEqual(entered, 380 + 4,
+                                 "拉宽上限 380 px（用户 2026-11-14 拍板）")
+            # 图不缩：把坞分别放到进入前/拉宽后的宽度，比较渲染出来的图
+            w.resizeDocks([w.param_dock], [before], Qt.Horizontal)
+            QApplication.processEvents()
+            w.calib_canvas.draw()
+            e1 = w.calib_ax.get_window_extent()
+            w.resizeDocks([w.param_dock], [entered], Qt.Horizontal)
+            QApplication.processEvents()
+            w.calib_canvas.draw()
+            e2 = w.calib_ax.get_window_extent()
+            self.assertAlmostEqual(min(e2.width, e2.height),
+                                   min(e1.width, e1.height), delta=2.0,
+                                   msg="拉宽参数坞不许缩小校准 2D 图")
             w.entrance_buttons["1D"].click()   # 点别的入口 = 退出校准
             QApplication.processEvents()
-            self.assertAlmostEqual(w.param_dock.width(), before, delta=2)
+            self.assertAlmostEqual(w.param_dock.width(), before, delta=3,
+                                   msg="退出校准应还原参数坞宽度")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):
                 w.close()
 
-    def test_calib_opened_first_thing_keeps_normal_width(self):
-        """开局第一件事点 [校准]：坞按正常宽度露出，不拉宽。"""
+    def test_calib_opened_first_thing_widens_then_restores(self):
+        """开局第一件事点 [校准]：坞露出来并拉宽，退出回到正常宽度。"""
         w = create_window()
         try:
             w.show()
@@ -2882,13 +2901,17 @@ class TestCalibFlow(unittest.TestCase):
                 add_checked(w, ["data/fake_a.tif"])
                 w.calib_btn.click()
             QApplication.processEvents()
-            # 旧版"按内容拉宽"会把它撑到 600+；现在不该再跳宽
-            self.assertLess(w.param_dock.width(), 450)
+            self.assertLessEqual(w.param_dock.width(), 380 + 4,
+                                 "拉宽上限 380（旧版按内容拉宽会到 600+）")
+            self.assertGreater(w.param_dock.width(),
+                               w.param_dock.minimumSizeHint().width(),
+                               "进校准应拉宽")
             w.entrance_buttons["1D"].click()
             QApplication.processEvents()
             self.assertTrue(w.param_dock.isVisible())
             self.assertLessEqual(w.param_dock.width(),
-                                 w.param_dock.minimumSizeHint().width() + 20)
+                                 w.param_dock.minimumSizeHint().width() + 20,
+                                 "退出应还原成普通坞宽")
         finally:
             with mock.patch.object(gui_app, "_confirm_close",
                                    return_value="discard"):

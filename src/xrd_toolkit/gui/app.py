@@ -115,7 +115,9 @@ from xrd_toolkit.gui.panel_state import (
     _family_label, _GRADIENT_FAMILY_ORDER, _log,
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
     _reload_config_combo, _set_focus, set_geometry)
-from xrd_toolkit.gui.panel_layout import _maximize_subwindow
+from xrd_toolkit.gui.panel_layout import (
+    _maximize_subwindow, _restore_param_dock_width, _settle,
+    _widen_param_dock_for_task)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
@@ -541,18 +543,24 @@ def _open_mask_workbench(window: QMainWindow) -> None:
 
 
 def _enter_mask_mode(window: QMainWindow) -> None:
-    """进入掩膜工作台：收起参数/日志坞，中央换成掩膜工作台。"""
+    """进入掩膜工作台：露出参数坞「掩膜」页，中央换成掩膜工作台。
+
+    2026-11-14 用户：和校准一样——中间只放图，调整控件在参数栏。
+    日志坞继续收起（工作台自带消息/状态行），文件栏保留（双击 =
+    换当前图像），参数坞按"不缩小中央 2D 图"的余量拉宽。
+    """
     if getattr(window, "_mask_active", False):
         return
     # 五种工作台互斥：先把校准/精修/物相/原位退掉（各自恢复自己的状态）
     _exit_other_workbenches(window, "mask")
     window._mask_active = True
     window._mask_prev_entrance = getattr(window, "_last_entrance", None)
+    window._mask_param_prev = window.param_stack.currentIndex()
     window._mask_dock_saved = {
         name: window._dock_intent.get(name, False)
         for name in ("文件", "参数", "日志")}
     window._dock_intent["文件"] = True
-    window._dock_intent["参数"] = False
+    window._dock_intent["参数"] = True
     window._dock_intent["日志"] = False
     _resync_docks(window)
     # 五个分析入口熄灯（参数页不动，退出时按 _mask_prev_entrance 复原）
@@ -563,6 +571,15 @@ def _enter_mask_mode(window: QMainWindow) -> None:
     QApplication.setOverrideCursor(Qt.WaitCursor)
     try:
         _open_mask_workbench(window)
+        mask_page = window.PARAM_PAGES.get("掩膜")
+        if mask_page is not None:
+            window.param_stack.setCurrentIndex(mask_page)
+        mask_exit = getattr(window, "mask_exit_btn", None)
+        if mask_exit is not None:
+            mask_exit.setVisible(True)
+        _settle(window)          # 页面/子窗口先摆好，下面量宽度才准
+        _widen_param_dock_for_task(
+            window, getattr(window.mask_editor, "ax_img", None))
     finally:
         QApplication.restoreOverrideCursor()
     # Home 键：工作台自己的 [复位视图] 接管；主窗口那条先让开，
@@ -592,6 +609,18 @@ def _exit_mask_mode(window: QMainWindow) -> None:
     main_home = getattr(window, "home_shortcut", None)
     if main_home is not None:
         main_home.setEnabled(True)
+    # 参数坞翻回进入前的页、宽度还原（2026-11-14）。宽度要在坞还露着
+    # 时还原：QDockWidget 隐藏后 resizeDocks 不生效。
+    pages = getattr(window, "PARAM_PAGES", {})
+    prev_page = getattr(window, "_mask_param_prev", None)
+    window._mask_param_prev = None
+    if prev_page is None or prev_page == pages.get("掩膜"):
+        prev_page = pages.get("1D", 0)
+    window.param_stack.setCurrentIndex(prev_page)
+    mask_exit = getattr(window, "mask_exit_btn", None)
+    if mask_exit is not None:
+        mask_exit.setVisible(False)
+    _restore_param_dock_width(window)
     saved = getattr(window, "_mask_dock_saved", None) or {}
     for name, want in saved.items():
         window._dock_intent[name] = want

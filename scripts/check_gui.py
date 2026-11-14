@@ -794,9 +794,11 @@ def check_mask_editor(window, lmfp: str) -> None:
            and window.mask_dock.isVisible()
            and window.mask_dock.mdiArea() is window.mdi,
            "工作台住在中央 MDI 区（不是独立窗口）")
-    report(not window.param_dock.isVisible()
+    report(window.param_dock.isVisible()
+           and window.param_stack.currentIndex()
+           == window.PARAM_PAGES.get("掩膜")
            and not window.log_dock.isVisible(),
-           "进入掩膜模式收起参数坞和日志坞")
+           "进入掩膜模式露出参数坞「掩膜」页、收起日志坞")
     ok = wait_until(lambda: editor.image is not None, timeout_s=60)
     report(ok, "打开工作台自动载入勾选的第一张原始图",
            f"{Path(editor.image_path).name if editor.image_path else None}")

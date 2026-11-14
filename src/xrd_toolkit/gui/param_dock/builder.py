@@ -154,6 +154,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     btn_exit.setVisible(False)      # 只在校准模式显示（_enter/_exit_calib）
     geom_lay.addWidget(btn_exit)
     window.calib_exit_btn = btn_exit
+    # 掩膜工作台的显式出口（2026-11-14）：参数坞在掩膜模式下是露着的，
+    # 给一颗和校准对称的按钮，鼠标不用跑回工具栏（两颗互斥、各自显隐）
+    btn_mask_exit = QPushButton("退出掩膜")
+    btn_mask_exit.setObjectName("exit_mask_btn")
+    btn_mask_exit.setToolTip("退出掩膜工作台，回到分析模式")
+    btn_mask_exit.clicked.connect(lambda: window.mask_btn.setChecked(False))
+    btn_mask_exit.setVisible(False)   # 只在掩膜模式显示（_enter/_exit_mask_mode）
+    geom_lay.addWidget(btn_mask_exit)
+    window.mask_exit_btn = btn_mask_exit
     lay.addWidget(window.geom_row)        # 固定第二行，不随页面滚动
 
     # 数据参数（2θ 积分范围 + 输出点数）：**所有分析页共用**，固定在坞顶
@@ -272,7 +281,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     head_min = (max(window.focus_label.minimumSizeHint().width(),
                     window.preset_row.minimumSize().width() + 8,
                     window.geom_row.minimumSize().width()
-                    + window.calib_exit_btn.sizeHint().width() + 8,
+                    + max(window.calib_exit_btn.sizeHint().width(),
+                          window.mask_exit_btn.sizeHint().width()) + 8,
                     window.data_row.minimumSize().width() + 8,
                     # 「未应用」灰字平时隐藏（隐藏件不计入 minimumSize）：
                     # 一亮就多占一行宽，坞的宽下限要预留它，否则它出现
