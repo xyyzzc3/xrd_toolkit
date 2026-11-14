@@ -6,6 +6,7 @@ tests/test_data_export.py::TestPaths 钉着（OUTPUTS_DIR == 仓库/outputs）�
 """
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -57,7 +58,14 @@ class TestUserConfigPath(unittest.TestCase):
         self.assertEqual(got, Path(config.__file__).with_name(
             "config_user.json"))
 
-    def test_current_process_reads_the_real_file(self):
-        """本进程（开发模式）读的就是包目录里那份——现状未变。"""
-        self.assertEqual(config.USER_CONFIG_PATH,
-                         Path(config.__file__).with_name("config_user.json"))
+    def test_current_process_reads_the_configured_file(self):
+        """本进程读的是 USER_CONFIG_PATH：默认 = 包目录那份。
+
+        2026-11-14 起测试运行器用 `XRD_USER_CONFIG` 把它统一指到临时
+        目录（不读开发机真实用户状态）；纯函数分支由
+        test_dev_stays_next_to_module 继续钉着。
+        """
+        override = os.environ.get("XRD_USER_CONFIG")
+        want = (Path(override).expanduser() if override
+                else Path(config.__file__).with_name("config_user.json"))
+        self.assertEqual(config.USER_CONFIG_PATH, want)

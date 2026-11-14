@@ -39,6 +39,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# 测试状态隔离（2026-11-14）：测试**不许读开发机真实的** presets_user.json /
+# config_user.json / mask_params.json / instrument_baseline.json。用户手测时
+# 新建的方案（活动几何可能不是 lmfp1_lab6）会让测试依赖真实状态——
+# test_mask_editor 的 hot params 用例就这么挂过。这里在测试模块 import
+# xrd_toolkit 之前把四个路径整体指到临时目录；--jobs 的子进程继承环境，
+# setdefault 不会覆盖显式指定的路径。
+_TEST_STATE = Path(tempfile.mkdtemp(prefix="xrd_test_state_"))
+os.environ.setdefault("XRD_USER_PRESETS",
+                      str(_TEST_STATE / "presets_user.json"))
+os.environ.setdefault("XRD_USER_CONFIG",
+                      str(_TEST_STATE / "config_user.json"))
+os.environ.setdefault("XRD_MASK_PARAMS",
+                      str(_TEST_STATE / "mask_params.json"))
+os.environ.setdefault("XRD_INSTRUMENT_BASELINE",
+                      str(_TEST_STATE / "instrument_baseline.json"))
+
 # --fast 跳过的模块前缀：GUI 集成套件（594 条，占全量约 99% 时间）。
 # 不带下划线，旧的单文件 test_gui_integration.py 和拆分后的
 # test_gui_integration_*.py 都覆盖；静态护栏 test_gui_static_guards.py
