@@ -2358,6 +2358,33 @@ class TestStageCacheFlow(unittest.TestCase):
         finally:
             w.close()
 
+    def test_product_rows_follow_file_bar_order(self):
+        """1D 产物组内行序 = 文件栏行序，不是缓存键（哈希）顺序。
+
+        2026-11-14 修：排序用的行号表原来只数顶层条目，原始数据在
+        「原始数据」组里 → 表里没有它们，排序变空操作，行序跟着缓存键走。
+        """
+        w = create_window()
+        try:
+            files = _tmp_files(3, prefix="order_")
+            stored = {str(p): _store_product(w, p) for p in files}
+            # 文件栏按"缓存键倒序"加，确保和哈希顺序不同
+            add_order = sorted(files, key=lambda p: stored[str(p)],
+                               reverse=True)
+            w.add_files([str(p) for p in add_order], select=False)
+            QApplication.processEvents()
+            w.refresh_groups()
+            grp = _group_by_text(w, "1D 产物")
+            self.assertIsNotNone(grp)
+            got = [grp.child(i).text(0).split(" · ")[0]
+                   for i in range(grp.childCount())]
+            raw = w.file_list.raw_group
+            want = [raw.child(i).text(0) for i in range(raw.childCount())]
+            self.assertEqual(got, want,
+                             "组内行序应跟文件栏走，不是缓存键顺序")
+        finally:
+            w.close()
+
     def test_changing_the_range_misses_the_cache(self):
         """换了积分 2θ 范围 = 另一个键 → 老老实实重算（缓存不会串味）。"""
         w = create_window()

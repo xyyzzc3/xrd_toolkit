@@ -26,12 +26,19 @@ from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.services import masked2d, stage_cache
 
 def _walk_items(tree):
-    """文件栏全部条目（含组内叶子）；映射产物路径时不能只看顶层。"""
-    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-    while stack:
-        item = stack.pop()
+    """文件栏全部条目（含组内叶子），按**可见顺序**（先序深度优先）。
+
+    映射产物路径时不能只看顶层；排序编号又必须和用户看到的行序一致。
+    2026-11-14：原实现用栈 pop，同一组里的叶子是**反序**出来的——
+    1D/处理/掩膜 2D 组内排序按它编号时，行序和文件栏看到的正好相反。
+    """
+    def walk(item):
         yield item
-        stack.extend(item.child(i) for i in range(item.childCount()))
+        for i in range(item.childCount()):
+            yield from walk(item.child(i))
+
+    for i in range(tree.topLevelItemCount()):
+        yield from walk(tree.topLevelItem(i))
 
 
 def _oned_sig(meta, lo, hi) -> tuple:
@@ -372,8 +379,11 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         for sig in sorted(groups_1d, key=lambda s: (not _oned_sig_is_current(s, cur),
                                                     s[2], s[3])):
             rows = groups_1d[sig]
-            # 组内按**文件栏的行序**排（同一文件的两份产物都在时也能对上眼）
-            order = {id(tree.item(i)): i for i in range(tree.count())}
+            # 组内按**文件栏的行序**排（同一文件的两份产物都在时也能对上眼）。
+            # 2026-11-14：必须用 _walk_items 连组内叶子一起编号——原始数据
+            # 在「原始数据」组里，只数顶层的话 order 里根本没有它们，排序
+            # 变成空操作，行序跟着缓存键（哈希）走，看起来就是"乱掉了"。
+            order = {id(it): i for i, it in enumerate(_walk_items(tree))}
             rows.sort(key=lambda r: order.get(id(r[0]), 10 ** 9))
             group = _make_group(_oned_group_title(sig, cur),
                                 _oned_group_tip(sig, cur))
@@ -384,7 +394,9 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         # ② 处理：一次 [批量处理] = 一组（台账，新的在上）
         # 组内行序 = **文件栏行序**（2026-10-08 用户拍板：与 1D 产物组同
         # 口径；原先按路径字符串排，文件栏一排序就与其它组对不上）
-        row_of = {id(tree.item(i)): i for i in range(tree.count())}
+        # 同 1D 组：连组内叶子一起编号（2026-11-14；顶层编号会让原始数据
+        # 全部落到默认位，组内行序跟着缓存顺序走）
+        row_of = {id(it): i for i, it in enumerate(_walk_items(tree))}
         raw_batches = stage_cache.list_batches("bg")
         batches = stage_cache.list_batches("bg", prune=True)
         if sum(len(n["items"]) for n in raw_batches) != \
