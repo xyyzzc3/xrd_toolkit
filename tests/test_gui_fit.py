@@ -126,6 +126,44 @@ class TestFitView(unittest.TestCase):
             self.assertIsNotNone(save_wh_plot(self.w, self.dock, out))
             self.assertTrue(out.is_file() and out.stat().st_size > 0)
 
+    def test_wh_section_auto_expands_on_first_result(self):
+        """2026-11-14 用户选 C：首个 W-H 结果出现时自动展开卡片。"""
+        self._open_panel()
+        self.assertFalse(self.w.wh_section_toggle.isChecked(),
+                         "还没拟合时 W-H 保持收起")
+        self._fit_all()
+        self.assertTrue(self.w.wh_section_toggle.isChecked(),
+                        "首个 W-H 结果出现时自动展开")
+        self.assertTrue(self.w.wh_note_label.parentWidget().isVisible())
+        # 用户手动收起后，后续刷新（改仪器/勾选峰）不抢回来
+        self.w.wh_section_toggle.setChecked(False)
+        QApplication.processEvents()
+        self.w.params["W-H 仪器 FWHM (°)"].setValue(0.01)
+        QApplication.processEvents()
+        self.assertFalse(self.w.wh_section_toggle.isChecked(),
+                         "用户收起后不该再自动弹开")
+
+    def test_wh_gray_text_height_follows_long_text(self):
+        """2026-11-14：W-H 灰字变长（警告/仪器说明）要完整显示，不许裁。"""
+        self._open_panel()
+        self._fit_all()
+        long_scherrer = (
+            "Scherrer（K=0.9）：31.8–35.8 nm，中位 34.0 nm（20 根）；"
+            "未扣仪器，D 为下限；3 根比仪器还窄")
+        long_note = (
+            "20/20 根参与；仪器 LaB₆ 基线；警告：拟合截距为负，"
+            "D 不可辨识，请检查参与峰或仪器宽度")
+        labels = (self.w.wh_scherrer_label, self.w.wh_note_label)
+        for label, text in zip(labels, (long_scherrer, long_note)):
+            label.setText(text)
+        QApplication.processEvents()
+        for label in labels:
+            need = label.heightForWidth(label.width())
+            self.assertGreaterEqual(label.minimumHeight(), need,
+                                    "自动换行标签要按实际宽度撑高")
+            self.assertGreaterEqual(label.height(), need,
+                                    "灰字最后一行不许被裁")
+
     def test_scherrer_block_tracks_instrument_and_checks(self):
         self._open_panel()
         self._fit_all()

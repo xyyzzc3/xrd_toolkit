@@ -276,7 +276,15 @@ def refresh_wh(window, dock):
         if view_btn is not None:
             view_btn.setEnabled(False)
         return
+    before = getattr(dock, "wh_result", None)
     result = compute_wh(window, dock)
+    # 2026-11-14 用户选 C：首个 W-H 结果出现时自动展开卡片（之前默认
+    # 收起，数字算出来也看不见）。只在"无 → 有"那一下展开；用户手动
+    # 收起后，后续刷新（改仪器/勾选峰）不再抢回来。
+    toggle = getattr(window, "wh_section_toggle", None)
+    if (result is not None and before is None
+            and toggle is not None and not toggle.isChecked()):
+        toggle.setChecked(True)
     if save_btn is not None:
         save_btn.setEnabled(result is not None)
     if view_btn is not None:

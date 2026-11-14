@@ -73,6 +73,39 @@ class _ElideLabel(QLabel):
         super().setText(self.fontMetrics().elidedText(
             self._full, self._mode, self.width()))
 
+
+class _WrappedLabel(QLabel):
+    """自动换行、按实际宽度撑高的标签（2026-11-14）。
+
+    `QLabel.setWordWrap(True)` 只在首个布局时算一次高度；运行中文本变长
+    （W-H 卡片的 Scherrer / 参与·警告那两行灰字）时，QFormLayout 的行高
+    不会跟着长，最后一行被裁——用户报"W-H 灰字显示不全"。这里在 setText /
+    宽度变化时把最小高度设成 `heightForWidth(当前宽度)`，行高随文本和
+    参数坞宽度一起更新；宽度仍用 Ignored，长文本不会反过来撑宽坞。
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+    def _sync_height(self) -> None:
+        if self.width() <= 0:
+            return
+        height = self.heightForWidth(self.width())
+        if height > 0 and height != self.minimumHeight():
+            self.setMinimumHeight(height)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self._sync_height()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_height()
+
+
 class _CoordReadout(_ElideLabel):
     """横带里的坐标读数格（见 _COORD_SLOT_W 的尺寸说明）。
 

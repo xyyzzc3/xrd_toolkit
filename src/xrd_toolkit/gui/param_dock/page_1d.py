@@ -12,6 +12,7 @@ from xrd_toolkit.gui.fit_view import (
     FIT_COLUMNS, clear_fit_results, copy_fit_table, delete_fit_rows,
     fit_selected_peaks, install_fit_view, selected_peak_rows)
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _log, set_geometry
+from xrd_toolkit.gui.panel_widgets import _WrappedLabel
 from xrd_toolkit.gui.param_dock.widgets import (
     _toggle_section, add_caption, add_float, add_range,
     add_section_toggle)
@@ -429,19 +430,14 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_vals.setContentsMargins(0, 0, 0, 0)
     wh_vals.addWidget(wh_d_label, 1)
     wh_vals.addWidget(wh_e_label, 1)
-    wh_scherrer = QLabel("Scherrer：—")
+    # 2026-11-14：自动换行 + 按实际宽度撑高（长警告/仪器说明曾把最后一行裁掉）
+    wh_scherrer = _WrappedLabel("Scherrer：—")
     wh_scherrer.setToolTip(
         "用一样的勾选峰和仪器宽度逐峰算 D = Kλ/(β cosθ)（K=0.9）；"
         "只统计有限值，范围与中位便于和 W-H 结果对照")
-    wh_scherrer.setWordWrap(True)
     wh_scherrer.setStyleSheet("color: gray;")
-    wh_scherrer.setMinimumWidth(0)
-    wh_scherrer.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-    wh_note = QLabel("再拟合几根峰（至少 3 根）")
-    wh_note.setWordWrap(True)
+    wh_note = _WrappedLabel("再拟合几根峰（至少 3 根）")
     wh_note.setStyleSheet("color: gray;")
-    wh_note.setMinimumWidth(0)
-    wh_note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     wh_view = QPushButton("查看 W-H 图")
     wh_view.setEnabled(False)
     wh_view.setToolTip("在窗口里看 W-H 图（参与/排除的点、拟合线、R²）")
