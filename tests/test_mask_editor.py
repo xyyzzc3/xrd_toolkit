@@ -227,6 +227,9 @@ class TestMaskEditor(unittest.TestCase):
         self.assertEqual(len(self._products()), 1)
 
     def test_apply_adds_masked2d_entry_to_file_dock(self):
+        # 2026-11-14 A1：掩膜 2D 只在原图还在文件栏里时显示
+        self.w.add_files([str(self.img_path)], select=False)
+        QApplication.processEvents()
         self._open()
         self.ed.load_image(self.img_path)
         self.ed._fill_rect((10, 10), (20, 20), True)

@@ -291,10 +291,16 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
         # ① 掩膜后的 2D：manifest（原图 + 掩膜）当**源数据**条目
         #    （2026-10-28）。它们和原始数据一样能出 2D/1D；1D 产物会按
         #    manifest 路径挂回这一条（见下面 by_path_name）。
+        #    2026-11-14 用户 A1：只列**原图还在文件栏里**的 manifest，
+        #    与 1D/处理产物同一口径——否则只导入三张图，缓存里以前生成
+        #    的掩膜 2D 会全部冒出来（原图不在文件栏的标"（不在文件栏）"
+        #    也不该显示）。旧产物仍在缓存里，重新导入原图就会出现。
         masked_rows = []
         for meta in masked2d.list_products():
             raw_item = by_path.get(
                 str(Path(meta.get("raw_path") or "").resolve()))
+            if raw_item is None:
+                continue        # 原图不在当前文件栏 → 不显示
             masked_rows.append((raw_item, meta))
         if masked_rows:
             order = {id(it): i for i, it in enumerate(_walk_items(tree))}
@@ -307,10 +313,7 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
             for raw_item, meta in masked_rows:
                 label = str(meta.get("label") or "").strip()
                 tag = f"（{label}）" if label else ""
-                raw_name = Path(meta.get("raw_path") or "").name
-                base_text = (raw_item.text(0) if raw_item is not None
-                             else f"{raw_name}（不在文件栏）")
-                leaf = FileItem([f"{base_text} · 掩膜 2D{tag}"])
+                leaf = FileItem([f"{raw_item.text(0)} · 掩膜 2D{tag}"])
                 leaf.setFlags(leaf.flags() | Qt.ItemIsUserCheckable)
                 leaf.setCheckState(0, Qt.Unchecked)
                 gui_sources.set_item_source(
@@ -319,9 +322,8 @@ def refresh_product_groups(window: QMainWindow, quiet: bool = False) -> None:
                 px = int(meta.get("masked_pixels") or 0)
                 tot = int(meta.get("total_pixels") or 0)
                 pct = 100.0 * px / tot if tot else 0.0
-                tip = (raw_item.toolTip(0) if raw_item is not None else "")
                 leaf.setToolTip(
-                    0, f"{tip}\n掩膜后的 2D：{px} px"
+                    0, f"{raw_item.toolTip(0)}\n掩膜后的 2D：{px} px"
                        f"（{pct:.2f}%），原始图 {meta.get('raw_path')}")
                 mgroup.addChild(leaf)
                 by_path[str(Path(meta["path"]).resolve())] = leaf

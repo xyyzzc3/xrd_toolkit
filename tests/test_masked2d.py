@@ -23,7 +23,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from xrd_toolkit.gui import panel_state as gui_state  # noqa: E402
 from xrd_toolkit.gui import sources as gui_sources  # noqa: E402
 from xrd_toolkit.gui.app import create_window  # noqa: E402
-from xrd_toolkit.gui.files.actions import _open_entry_view  # noqa: E402
+from xrd_toolkit.gui.files.actions import (  # noqa: E402
+    _open_entry_view, _remove_from_list)
+from xrd_toolkit.gui.files.model import GROUP_MASKED2D_ROLE  # noqa: E402
 from xrd_toolkit.gui import plot_export as gui_export  # noqa: E402
 from xrd_toolkit.gui.plot import curves as gui_curves  # noqa: E402
 from xrd_toolkit.gui.files.menus import _drop_masked2d  # noqa: E402
@@ -146,6 +148,19 @@ class TestManifest(unittest.TestCase):
         np.testing.assert_allclose(y1, y2, rtol=0, atol=0)
 
 
+def _masked_group_labels(window):
+    """文件栏「掩膜后的 2D」组里的条目文字（没有组 = 空表）。"""
+    out = []
+    tree = window.file_list
+    for i in range(tree.topLevelItemCount()):
+        top = tree.topLevelItem(i)
+        if not top.data(0, GROUP_MASKED2D_ROLE):
+            continue
+        for j in range(top.childCount()):
+            out.append(top.child(j).text(0))
+    return out
+
+
 class TestMasked2DGui(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
@@ -202,6 +217,35 @@ class TestMasked2DGui(unittest.TestCase):
         img = self.w.plot_docks[key].last_image
         self.assertTrue(np.ma.isMaskedArray(img))
         self.assertGreater(int(np.ma.getmaskarray(img).sum()), 0)
+
+    def test_masked2d_group_only_lists_imported_raw(self):
+        """2026-11-14 A1：原图不在文件栏的掩膜 2D 不再显示。"""
+        other = Path(self._td.name) / "other.edf"
+        img = _image(seed=7)
+        _write(other, img)
+        mask = np.zeros(img.shape, bool)
+        mask[10, 10] = True
+        masked2d.create(other, mask, label="old")
+        self.w.refresh_groups()
+        QApplication.processEvents()
+        labels = _masked_group_labels(self.w)
+        self.assertTrue(any("frame.edf" in t for t in labels), labels)
+        self.assertFalse(any("other.edf" in t for t in labels),
+                         "原图不在文件栏的掩膜 2D 不该显示")
+        # 导入它的原图 → 重新出现
+        self.w.add_files([str(other)], select=False)
+        QApplication.processEvents()
+        labels = _masked_group_labels(self.w)
+        self.assertTrue(any("other.edf" in t for t in labels),
+                        "导入原图后应恢复显示")
+        # 再把原图移出文件栏 → 又隐藏
+        src = next(s for s in gui_sources.all_sources(self.w)
+                   if Path(s.path).resolve() == other.resolve())
+        _remove_from_list(self.w, [src.item])
+        QApplication.processEvents()
+        labels = _masked_group_labels(self.w)
+        self.assertFalse(any("other.edf" in t for t in labels),
+                         "移出文件栏后该条也不再显示")
 
     def test_2d_overlay_keeps_lone_hot_pixel_at_odd_coords(self):
         """>1.5M 像素按 ds=2 显示：奇坐标上的单个 mask 像素也要显示。
