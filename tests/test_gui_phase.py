@@ -230,6 +230,14 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertIn("不写回 CIF", text)
         self.assertIn("cell refinement", text)
         self.assertIn("cubic", text)
+        # 2026-11-14：精修晶胞要接到叠加图上（只改显示，不改 CIF/候选）
+        self.assertIn("叠加图已按", text)
+        row = editor.rows[0]
+        self.assertIsNotNone(row.refined_tth,
+                             "精修后该相应改用精修晶胞的理论峰位")
+        legend = editor.fig.axes[0].get_legend()
+        labels = [t.get_text() for t in legend.get_texts()]
+        self.assertTrue(any("精修晶胞" in s for s in labels), labels)
         from xrd_toolkit.gui import phase_workbench as gui_phase
         save = next(b for b in dlg.findChildren(QPushButton)
                     if b.text() == "保存报告…")

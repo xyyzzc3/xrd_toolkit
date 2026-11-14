@@ -85,6 +85,11 @@ class PhaseRow:
     purity: float
     tth: np.ndarray
     intensity: np.ndarray
+    # 2026-11-14：峰位精修晶胞之后，用精修晶胞+零位重算的理论峰位（只改
+    # 叠图显示，不改 score/scale/CIF）。None = 还没精修，画筛相那份。
+    refined_tth: np.ndarray = None
+    refined_intensity: np.ndarray = None
+    refined_note: str = ""
 
 
 def _screen_worker(tth, y, lib, elements, wavelength, tol,
@@ -740,15 +745,22 @@ class PhaseWorkbench(QWidget):
         amp = 0.55 * span if span > 0 else 1.0
         y0 = float(np.nanmin(y))
         for i, row in enumerate(rows):
-            keep = row.intensity >= 0.02
-            sticks_t = row.tth[keep]
-            sticks_i = row.intensity[keep]
+            if row.refined_tth is not None:
+                raw_t = np.asarray(row.refined_tth, dtype=float)
+                raw_i = np.asarray(row.refined_intensity, dtype=float)
+                label = f"{row.path.stem} 理论峰位（精修晶胞）"
+            else:
+                raw_t = np.asarray(row.tth, dtype=float)
+                raw_i = np.asarray(row.intensity, dtype=float)
+                label = f"{row.path.stem} 理论峰位"
+            keep = raw_i >= 0.02
+            sticks_t = raw_t[keep]
+            sticks_i = raw_i[keep]
             in_range = (sticks_t >= tth.min()) & (sticks_t <= tth.max())
             sticks_t, sticks_i = sticks_t[in_range], sticks_i[in_range]
             color = _PHASE_COLORS[i % len(_PHASE_COLORS)]
             ax.vlines(sticks_t, y0, y0 + sticks_i * amp,
-                      color=color, lw=1.0, alpha=0.9,
-                      label=f"{row.path.stem} 理论峰位")
+                      color=color, lw=1.0, alpha=0.9, label=label)
         if len(rows) == 1:
             row = rows[0]
             ax.set_title(
@@ -832,16 +844,59 @@ class PhaseWorkbench(QWidget):
             self._set_status(f"峰位精修晶胞失败：{user_error_text(err)}")
             _log(self.main, f"峰位精修晶胞失败：{user_error_text(err)}")
             return None
-        self._show_cell_refine(result, row)
+        # 2026-11-14：精修结果不写回 CIF/候选，但**叠加图**改用它重画——
+        # 筛相的 scale 是粗扫的各向同性缩放，非立方相/晶胞略有差异时会
+        # 把理论峰间距拉宽（低角偏左、高角偏右）；精修晶胞+零位能对齐。
+        applied = False
+        sticks = self._refined_sticks(row, result, float(wavelength))
+        if sticks is not None:
+            row.refined_tth, row.refined_intensity = sticks
+            row.refined_note = f"精修晶胞 a={result.cell.get('a', float('nan')):.4f}"
+            applied = True
+            self._draw_selected()
+        self._show_cell_refine(result, row, applied=applied)
         self._set_status(
             f"峰位精修晶胞：{row.path.stem} {result.system}，"
-            f"匹配 {len(result.matches)} 根，RMS {result.rms_deg:.4f}°")
+            f"匹配 {len(result.matches)} 根，RMS {result.rms_deg:.4f}°"
+            + ("；叠加图已按精修晶胞重画" if applied else ""))
         _log(self.main, f"峰位精修晶胞：{row.path.stem}（{result.system}）"
                         f" 匹配 {len(result.matches)} 根，"
-                        f"RMS {result.rms_deg:.4f}°")
+                        f"RMS {result.rms_deg:.4f}°"
+                        + ("；叠加图已按精修晶胞重画" if applied else ""))
         return result
 
-    def _show_cell_refine(self, result, row):
+    def _refined_sticks(self, row, result, wavelength):
+        """用精修晶胞 + 零位重算该相的理论峰位（只给叠图用）。"""
+        try:
+            from pymatgen.core import Lattice, Structure
+            from xrd_toolkit.simulation import load_structure
+            from xrd_toolkit.simulation import phase_search as ps
+            structure = load_structure(str(row.path))
+            cell = result.cell
+            lattice = Lattice.from_parameters(
+                float(cell["a"]), float(cell["b"]), float(cell["c"]),
+                float(cell["alpha"]), float(cell["beta"]),
+                float(cell["gamma"]))
+            refined = Structure(
+                lattice, structure.species, structure.frac_coords,
+                site_properties=structure.site_properties,
+                coords_are_cartesian=False)
+            if self.curve is None or len(self.curve[0]) == 0:
+                return None
+            tth = np.asarray(self.curve[0], dtype=float)
+            d0, inten = ps.reflection_data(
+                refined, float(wavelength), float(np.min(tth)),
+                float(np.max(tth)))
+            st, si = ps.scaled_positions(
+                d0, inten, float(wavelength), 1.0,
+                float(result.zero_deg))
+            return (np.asarray(st, dtype=float),
+                    np.asarray(si, dtype=float))
+        except Exception as err:                   # noqa: BLE001
+            _log(self.main, f"精修晶胞叠图失败：{user_error_text(err)}")
+            return None
+
+    def _show_cell_refine(self, result, row, applied=False):
         old = getattr(self, "_cell_dialog", None)
         if old is not None:
             try:
@@ -852,7 +907,11 @@ class PhaseWorkbench(QWidget):
         dlg.setWindowTitle(f"峰位精修晶胞：{row.path.stem}")
         dlg.resize(760, 560)
         lay = QVBoxLayout(dlg)
-        note = "结果不写回 CIF/候选，只作检查与交接。\n\n"
+        note = (
+            "结果不写回 CIF/候选；叠加图已按这次精修的晶胞 + 零位重画"
+            "（只改显示，重新筛相后恢复筛相晶胞）。\n\n"
+            if applied else
+            "结果不写回 CIF/候选，只作检查与交接（叠加图未改）。\n\n")
         text = note + result.report()
         view = QPlainTextEdit()
         view.setReadOnly(True)
