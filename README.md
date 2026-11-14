@@ -25,14 +25,18 @@ launch once: Windows *More info → Run anyway*; macOS *right-click → Open*.
 Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) — the zip also carries a Chinese quick-start (`使用说明.html`, also under Help → 使用说明, F1) and third-party license notices (`THIRD_PARTY_NOTICES.txt`, also under Help → 关于).
 Requires macOS 13+ / Windows 10+; ~150 MB download, ~340 MB installed.
 
-## Three steps
+## Quick start
 
 1. **Open** — `[打开…]` → pick your `.tif` / `.edf` / `.cbf` images (a whole folder works too)
-2. **Plot** — check the files → `[1D]` → `[出图（勾选文件）]`
-3. **Export** — `[导出数据]` → two-column txt / `.chi` / a combined CSV
+2. **Calibrate and mask (optional)** — calibrate the geometry on `[校准]` against the selected standard (LaB₆ by default; CeO₂, Si and other common standards are built in), or import a pyFAI `.poni`; then use `[Mask]` to remove the beam-stop shadow, module gaps and fixed hot pixels before integration
+3. **Plot** — check the files → `[1D]` → `[出图（勾选文件）]`
+4. **Export** — `[导出数据]` → two-column txt / `.chi` / a combined CSV
 
-Geometry comes from a built-in config for the first LMFP batch; calibrate your
-own on the `[校准]` page against the selected standard (LaB₆ by default; common alternatives are built in), or import a pyFAI `.poni`.
+The built-in geometry covers the first LMFP batch. Skip step 2 if your data are already calibrated and clean.
+
+## Mask workbench
+
+Masking is the step between calibration and integration. The toolbar has a central **Mask** workbench next to **Calibrate** (the parameter and log docks collapse while it is open, while the file bar stays for double-click image switching, and everything comes back on exit): it opens on the first raw image (a drop-down lists every raw file), draws/erases beamstop, module gaps and hot pixels, auto-detects isolated hot pixels with a locate-changes view (thresholds are remembered per geometry configuration and can be reset), previews the 1D pattern before/after masking, and exports a `.mask.npz` *mask file* (mask + provenance layers + metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask writes a small **Mask 2D** product (raw image + mask manifest) into the file dock, for the current image, every raw file, or a hand-picked list; files whose shape does not match the mask are skipped with a log entry. Double-click the Mask 2D product for a 2D view, or integrate it to 1D. Masked and unmasked 1D results are distinct sources that can be compared side by side. **Mask quick start:** the Mask chapter of the Chinese manual (`docs/使用说明.html`, section 5).
 
 ## At a glance
 
@@ -52,8 +56,8 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="showcase/lab6/sector_waterfall.png" width="100%"><br>
-      <sub>36-sector waterfall — azimuthal uniformity; the staircase edge marks where the detector clips each ring</sub>
+      <img src="showcase/gui/gui_mask.png" width="100%"><br>
+      <sub>Mask workbench before integration — paint or auto-detect the beam-stop shadow, module gaps and fixed hot pixels; the lower panel previews the 1D pattern before and after masking</sub>
     </td>
     <td align="center" width="50%">
       <img src="showcase/gui/gui_main.png" width="100%"><br>
@@ -71,7 +75,11 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
     </td>
   </tr>
   <tr>
-    <td align="center" colspan="2">
+    <td align="center" width="50%">
+      <img src="showcase/lab6/sector_waterfall.png" width="100%"><br>
+      <sub>36-sector waterfall — azimuthal uniformity; the staircase edge marks where the detector clips each ring</sub>
+    </td>
+    <td align="center" width="50%">
       <img src="showcase/gui/gui_compare_heat.png" width="100%"><br>
       <sub>A whole batch at a glance — eight background-subtracted frames stacked beside their 2θ × sample heatmap</sub>
     </td>
@@ -96,17 +104,19 @@ own on the `[校准]` page against the selected standard (LaB₆ by default; com
 
 - **Calibrated 2D → 1D integration** — geometric refinement against the selected standard (LaB₆ by default, using pyFAI's LaB₆ values; certificate not recorded; CeO₂, Si, α-Al₂O₃ and other common standards are built in), followed by full 0°–360° azimuthal integration into a standard two-column powder pattern `(2θ(deg), intensity)`, ready for peak finding, profile fitting and PDF analysis.
 - **Calibration metrics that catch what the fit residual cannot** — every run reports the median ring-position deviation, how many of the 16 rings came out complete, and the per-ring lattice-constant dispersion: a run can print a 0.0000° residual while its rings sit 10 px off the real ones.
+- **Mask workbench before integration** — paint or auto-detect the beam-stop shadow, module gaps and fixed hot pixels; preview the 1D pattern before and after masking; write a traceable **Mask 2D** product; masked and unmasked 1D results remain distinct sources.
+- **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
 - **Background subtraction, live** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors that set the level while the auto baseline supplies the shape; smoothing (boxcar / Savitzky–Golay) and interval cuts on top. Negatives are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ.
 - **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
-- **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
-- **Desktop app over the same engine** — five stage entrances, a live parameter panel, on-curve peak finding with a peak table, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF/PDF/SVG export (vector formats for papers).
-- **Four analysis workbenches** — Mask (paint + hot spots + mask files → Mask 2D product), phase screening (bundled 40-phase library or your own CIF folder, periodic-table element filter, multi-phase overlay, CSV), full-pattern refinement (extra phases, LaB₆ instrument baseline, adopt-as-panel) and the in-situ three-phase batch (per-frame table + trend plot), plus a generic multi-phase entry (any CIF list, sequential fit, CSV). They share the same engines as the CLI scripts. Entering a workbench collapses the parameter and log docks but keeps the file bar: double-click an entry to operate on it, check entries for batch ranges, and the previous layout returns on exit.
+- **Peak finding and single-peak profile fitting** — automatic peak detection with a robust noise estimate, prominence/height thresholds, minimum spacing and optional FWHM filtering (`services/peak_finding.py`); Gaussian, Lorentzian, pseudo-Voigt and split-Pearson VII single-peak fits with local backgrounds (`scripts/fit_peaks.py`), plus per-peak Scherrer size and instrument-corrected Williamson–Hall analysis (quadrature or linear subtraction of a LaB₆ standard's width, or the saved LaB₆ baseline in the GUI).
+- **Phase screening and cell refinement** — match observed peak positions against a bundled 41-phase library or your own CIF folder, filter by the periodic table, overlay several candidates, and refine the cell for all seven crystal systems including a 2θ zero (`scripts/refine_cell.py`, or `[精修晶胞]` in the phase workbench).
+- **Full-pattern fitting of measured standard patterns** — an independent implementation of the Thompson–Cox–Hastings pseudo-Voigt profile with Caglioti/Lorentzian width terms, following the GSAS-II PXC parameter conventions and units (Caglioti, Paoletti & Ricci, 1958; Thompson, Cox & Hastings, 1987; Toby & Von Dreele, 2013), with the profile cross-checked against GSAS-II simulations. Supports Le Bail or structural fits, extra phases, symmetry-constrained atomic-coordinate and site-occupancy refinement, and fixed-pixel hot-spot masking. The LaB₆ standard fixes the instrument profile and its own pattern is fitted with Le Bail intensities (Rwp 4.24%), and the fit reports Rietveld-scale wt% for the crystalline phases (Z·M·V; amorphous or unknown phases are excluded). Example: `showcase/simulation/sim_xrd_fit_LaB6.png`.
+- **In-situ three-phase batch and generic multi-phase** — refine an LMFP sequence with three phases (Li-rich LMFP, Li-poor heterosite, Al reference), two-start robust fitting (previous seed + CIF end-member), seed re-locking, anomaly flags, a CSV summary and split timings; the GUI adds trends, a summary, single-frame fits and a model-independent check, with minority-phase cells faded. A generic multi-phase entry accepts any CIF list, sequential fit and CSV. A three-frame GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction trends.
+- **Workbench workflow** — phase screening, refinement and the in-situ batch share the same engine as the CLI. Entering a workbench collapses the parameter and log docks but keeps the file bar: double-click an entry to operate on it, check entries for batch ranges, and the previous layout returns on exit.
 - **One-click analysis report** — collects the current session's 1D curve, peak table, single-peak fits, W–H, phase screening, whole-pattern refinement and in-situ three-phase batch into a self-contained HTML (figures embedded; print to PDF from the browser). Missing sections are marked "not run", and the report states the quantitative caveats (wt% vs. f_rich, background bias, minority-phase cells).
 - **Named project presets** — a preset bundles geometry, second-phase CIF, in-situ frame directory/mask, the phase library, plus optional **processing settings** (background/smoothing/crop snapshot) and a **mask file** (`.mask.npz` path); switch/save/manage from the parameter dock. Processing settings take effect only when you click `[套用当前预设]`, and `[存进预设…]` writes the current set back into a preset; a mask file is a per-image fallback in the mask workbench. Legacy named recipes in `outputs/recipes.json` are migrated once to user presets on startup. The built-in LMFP preset is read-only; user presets live in `presets_user.json` and the last-used one is restored on startup. A geometry change made outside the preset (e.g. a fresh calibration) is flagged as "current settings" in the dropdown and can be folded back into a user preset from the manager.
 - **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is part of the core dependencies since 0.2, since the GUI workbenches need it — the `[simulation]` extra remains as an alias).
-- **Peak finding and single-peak profile fitting** — automatic peak detection with a robust noise estimate, prominence/height thresholds, minimum spacing and optional FWHM filtering (`services/peak_finding.py`); Gaussian, Lorentzian, pseudo-Voigt and split-Pearson VII single-peak fits with local backgrounds (`scripts/fit_peaks.py`), plus per-peak Scherrer size and instrument-corrected Williamson–Hall analysis (quadrature or linear subtraction of a LaB₆ standard's width, or the saved LaB₆ baseline in the GUI).
-- **Quantitative phase fractions and cell refinement** — Rietveld-scale wt% for the crystalline phases in the fit (`Z·M·V` from the CIF and refined cell; amorphous/unknown phases are excluded and stated in the report), and peak-position cell refinement for all seven crystal systems including a refined 2θ zero (`scripts/refine_cell.py`, or `[精修晶胞]` in the phase workbench).
-- **Full-pattern fitting of measured standard patterns** — an independent implementation of the Thompson–Cox–Hastings pseudo-Voigt profile with Caglioti/Lorentzian width terms, following the GSAS-II PXC parameter conventions and units (Caglioti, Paoletti & Ricci, 1958; Thompson, Cox & Hastings, 1987; Toby & Von Dreele, 2013), with the profile cross-checked against GSAS-II simulations. Supports Le Bail or structural fits, extra phases, symmetry-constrained atomic-coordinate and site-occupancy refinement, and fixed-pixel hot-spot masking. The LaB₆ standard fixes the instrument profile and its own pattern is fitted with Le Bail intensities (Rwp 4.24%); example: `showcase/simulation/sim_xrd_fit_LaB6.png`.
+- **Desktop app over the same engine** — five stage entrances, a live parameter panel, on-curve peak finding with a peak table, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF/PDF/SVG export (vector formats for papers).
 
 ## Install (from source)
 
@@ -143,21 +153,7 @@ python scripts/run_tests.py --jobs 8   # split GUI suite, 8 worker processes
 
 Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
 
-## Mask and in-situ three-phase batch
-
-The toolbar now has a central **Mask** workbench next to **Calibrate**
-(the parameter and log docks collapse while it is open, while the file
-bar stays for double-click image switching, and everything comes back on exit): it opens on the first raw image (a drop-down lists every raw file),
-draws/erases beamstop, module gaps and hot pixels, auto-detects isolated hot
-pixels with a locate-changes view (thresholds are remembered per geometry
-configuration and can be reset), previews the 1D pattern before/after
-masking, and exports a `.mask.npz` *mask file* (mask + provenance layers +
-metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask
-writes a small **Mask 2D** product (raw image + mask manifest) into the file
-dock, for the current image, every raw file, or a hand-picked list; files
-whose shape does not match the mask are skipped with a log entry.
-Double-click it for a 2D view, or integrate it to 1D. Masked and unmasked 1D results are distinct
-sources that can be compared side by side.
+## In-situ three-phase batch
 
 `scripts/fit_insitu.py` refines an in-situ LMFP sequence with three phases
 (Li-rich LMFP, Li-poor heterosite, Al reference), two-start robust fitting
@@ -166,10 +162,8 @@ summary and split timings; the GUI in-situ workbench shows trends, a summary,
 single-frame fits and a model-independent check, with minority-phase cells
 faded. A three-frame GSAS-II cross-check
 (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
-trends against our fit. **Mask quick start:** the Mask chapter of the Chinese manual
-(`docs/使用说明.html`, section 8). Fit parameters, the in-situ
-results and the cross-check: [docs/NOTES.md](docs/NOTES.md)
-(`#mask-and-mask-2d-products`, `#lmfp-in-situ-three-phase-batch`).
+trends against our fit. Fit parameters, the in-situ results and the cross-check:
+[docs/NOTES.md](docs/NOTES.md) (`#lmfp-in-situ-three-phase-batch`).
 
 ## Roadmap
 
