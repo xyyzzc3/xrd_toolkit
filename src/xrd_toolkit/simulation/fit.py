@@ -1116,6 +1116,30 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         raise ValueError("tth 与 intensity 长度不一致")
     order = np.argsort(tth)
     tth, y_raw = tth[order], y_raw[order]
+    # 固定背景 / 权重数组跟着数据一起排序，后面才能按同一掩膜裁剪。
+    if background is not None and not isinstance(
+            background, (int, np.integer)):
+        bg_in = np.asarray(background, dtype=float)
+        background = bg_in[order] if bg_in.shape == order.shape else background
+    if not isinstance(weights, str):
+        w_in = np.asarray(weights, dtype=float)
+        weights = w_in[order] if w_in.shape == order.shape else weights
+    # 非有限点（处理页裁剪区间留下的 NaN、坏像素）不参与拟合：它们会让
+    # 权重和残差变成 NaN，`least_squares` 的 SVD 直接失败——用户
+    # 2026-11-16 在"处理后的数据"上看到的 "SVD did not converge" 就是
+    # 这条路（裁掉 2.8–3.1° 后 129 个 NaN 点进了权重 `1/max(y,1)`）。
+    # 显式 two_theta_range 保持调用方给的范围，自动范围用剩下的有效点。
+    good = np.isfinite(tth) & np.isfinite(y_raw)
+    if not good.all():
+        if isinstance(background, np.ndarray) \
+                and background.shape == good.shape:
+            background = background[good]
+        if not isinstance(weights, str) \
+                and getattr(weights, "shape", None) == good.shape:
+            weights = weights[good]
+        tth, y_raw = tth[good], y_raw[good]
+        if tth.size < 10:
+            raise ValueError("去掉 NaN/Inf 后有效点太少，无法精修")
     if two_theta_range is None:
         two_theta_range = (float(tth[0]), float(tth[-1]))
 

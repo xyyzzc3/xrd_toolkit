@@ -173,6 +173,31 @@ class TestFitRecovery(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertGreaterEqual(res.params["scale"], 0.0)
 
+    def test_nan_cut_range_is_ignored(self):
+        """裁剪区间（NaN）不能把 Jacobian 弄成 NaN（2026-11-16 用户报错）。"""
+        tth, y = _synth(self.st, zero_deg=0.012, u=0.0, v=0.0,
+                        w=18.0, x=0.0, y=0.0)
+        bg = 20.0 + 0.3 * (tth - 10.0)
+        y = y + bg
+        cut = (tth >= 30.0) & (tth <= 31.0)
+        y[cut] = np.nan
+        res = fit_pattern(
+            self.st, tth, y, background=bg, weights="uniform",
+            free=("zero", "w"), initial={"w": 18.0},
+            stages=[("zero", "w")])
+        self.assertTrue(res.success)
+        self.assertLess(res.rwp, 0.05)
+        self.assertFalse(np.isnan(res.y_obs).any())
+        self.assertEqual(res.tth.size, int((~cut).sum()),
+                         "NaN 点应从拟合数组里去掉")
+        self.assertEqual(res.y_calc.size, res.tth.size)
+
+    def test_all_nan_raises_clear_error(self):
+        tth, _y = _synth(self.st)
+        y = np.full(tth.size, np.nan)
+        with self.assertRaisesRegex(ValueError, "有效点太少"):
+            fit_pattern(self.st, tth, y, weights="uniform", free=())
+
 
 class TestOlivineComposition(unittest.TestCase):
     def test_6_4_cif_has_expected_mn_fe_ratio(self):
