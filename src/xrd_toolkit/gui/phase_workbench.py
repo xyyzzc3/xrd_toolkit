@@ -99,10 +99,12 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     不碰界面控件。pymatgen 是可选依赖，缺了要保留它自己的安装提示，
     所以 ImportError 转成 RuntimeError（否则会被当成内部 bug 包装掉）。
     skip_names 是"不参与主相候选"的第二相文件名（预设给的）。
+
+    寻峰交给 `phase_search.observed_peaks`：按裁剪区间（NaN）分段、
+    显著度按界面给的 kσ、只留最强 20 根。见那里的注释——用全局最大残差
+    当阈值下限会让"挖没挖坏点峰"改变整个峰表（2026-11-16 用户反馈）。
     """
     try:
-        from xrd_toolkit.services.background import estimate_baseline_sliding
-        from xrd_toolkit.services.peak_finding import find_peaks_1d
         from xrd_toolkit.simulation import phase_search as ps
     except ImportError as err:
         raise RuntimeError(str(err)) from err
@@ -110,20 +112,16 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     tth = np.asarray(tth, dtype=float)
     y = np.asarray(y, dtype=float)
     good = np.isfinite(tth) & np.isfinite(y)
-    tth, y = tth[good], y[good]
-    if tth.size < 20:
+    if int(good.sum()) < 20:
         raise RuntimeError("这条曲线的有效点太少，无法筛相")
-    background = estimate_baseline_sliding(tth, y, 0.2)
-    peaks = find_peaks_1d(
-        tth, y, baseline=background,
-        prominence_factor=float(prominence),
-        min_distance_deg=float(min_distance), max_peaks=80)
-    obs_t = np.array([p.center for p in peaks], dtype=float)
+    obs_t = ps.observed_peaks(
+        tth, y, prominence=float(prominence),
+        min_distance=float(min_distance))
     if obs_t.size < 3:
         raise RuntimeError("观测峰少于 3 根，无法筛相（可降低显著度）")
 
     lam = float(wavelength)
-    tmin, tmax = float(tth.min()), float(tth.max())
+    tmin, tmax = float(tth[good].min()), float(tth[good].max())
     matches = ps.screen_phases(
         obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
         tol=float(tol), skip_names=skip_names)

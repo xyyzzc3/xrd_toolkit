@@ -7,7 +7,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from xrd_toolkit.services.peak_finding import find_peaks_1d  # noqa: E402
+from xrd_toolkit.services.peak_finding import (  # noqa: E402
+    finite_runs, find_peaks_1d)
 
 
 def _gauss(x, center, fwhm, height):
@@ -111,6 +112,31 @@ class TestFindPeaks(unittest.TestCase):
             find_peaks_1d(x, y, min_prominence=-1.0)
         with self.assertRaises(ValueError):
             find_peaks_1d(np.ones((5, 5)), np.ones((5, 5)))
+
+
+class TestFiniteRuns(unittest.TestCase):
+    def test_splits_at_nan_gaps(self):
+        """裁剪区间是 NaN；两侧不能当成同一段连续网格。"""
+        x = np.arange(1.0, 3.0, 0.001)
+        y = np.sin(x)
+        y[(x >= 1.5) & (x <= 1.6)] = np.nan
+        runs = list(finite_runs(x, y))
+        self.assertEqual(len(runs), 2)
+        self.assertLess(runs[0][0].max(), 1.5)
+        self.assertGreater(runs[1][0].min(), 1.6)
+        # 每段自身 2θ 严格递增、没有 NaN
+        for seg_t, seg_y in runs:
+            self.assertTrue(np.all(np.isfinite(seg_y)))
+            self.assertTrue(np.all(np.diff(seg_t) > 0))
+
+    def test_short_runs_are_skipped(self):
+        x = np.arange(0.0, 1.0, 0.001)
+        y = np.ones(x.size)
+        y[(x >= 0.5) & (x <= 0.599)] = np.nan   # 中间挖掉 100 点
+        y[(x >= 0.101) & (x <= 0.498)] = np.nan  # 只剩 101 点 + 501 点
+        runs = list(finite_runs(x, y, min_points=200))
+        self.assertEqual(len(runs), 1)
+        self.assertGreaterEqual(runs[0][0].size, 200)
 
 
 if __name__ == "__main__":

@@ -109,5 +109,56 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
                         matches[0].path.name)
 
 
+def _gauss(x, center, fwhm, height):
+    return height * np.exp(-4.0 * np.log(2.0) * ((x - center) / fwhm) ** 2)
+
+
+class TestObservedPeaks(unittest.TestCase):
+    """筛相用的观测峰：裁剪坏点区间后峰表必须稳定（2026-11-16）。"""
+
+    @staticmethod
+    def _curve(with_spike):
+        rng = np.random.default_rng(7)
+        x = np.arange(1.0, 8.0, 0.002)
+        y = 40.0 + 2.0 * rng.standard_normal(x.size)
+        strong = (1.42, 1.86, 2.40, 3.25, 3.79, 4.44, 4.88, 5.20,
+                  5.72, 5.98)
+        for c in strong:
+            y = y + _gauss(x, c, 0.02, 300.0)
+        # 一批弱峰：旧阈值的全局下限把它们藏起来/放出来，正是问题本身
+        for k, c in enumerate(np.linspace(1.3, 7.6, 30)):
+            y = y + _gauss(x, c, 0.02, 30.0 + 2.0 * k)
+        if with_spike:
+            # 探测器坏点：比真峰强 10 倍以上，旧阈值被它抬到 2%×6000
+            y = y + _gauss(x, 2.90, 0.008, 6.0e3)
+        return x, y
+
+    def test_cutting_detector_spike_keeps_the_same_peak_table(self):
+        x, y_ref = self._curve(with_spike=False)
+        _, y_spike = self._curve(with_spike=True)
+        y_cut = y_spike.copy()
+        y_cut[(x >= 2.8) & (x <= 3.1)] = np.nan
+        ref = ps.observed_peaks(x, y_ref)
+        got = ps.observed_peaks(x, y_cut)
+        self.assertLessEqual(got.size, ps.SCREEN_MAX_PEAKS)
+        self.assertTrue(np.all(np.abs(got - 2.95) > 0.15),
+                        "裁剪区间里不应再报峰")
+        np.testing.assert_allclose(got, ref, atol=0.01,
+                                   err_msg="挖掉坏点后峰表变了")
+
+    def test_keeps_only_the_strongest_peaks(self):
+        x = np.arange(1.0, 2.0, 0.001)
+        y = np.full(x.size, 10.0)
+        centers = np.linspace(1.05, 1.95, 25)
+        for k, c in enumerate(centers):
+            y = y + _gauss(x, c, 0.008, 1000.0 - 20.0 * k)
+        peaks = ps.observed_peaks(x, y)
+        self.assertEqual(peaks.size, ps.SCREEN_MAX_PEAKS)
+        # 25 根高度递减，被砍掉的是最后 5 根（最矮）
+        self.assertAlmostEqual(peaks.min(), centers[0], delta=0.01)
+        self.assertAlmostEqual(peaks.max(),
+                               centers[ps.SCREEN_MAX_PEAKS - 1], delta=0.01)
+
+
 if __name__ == "__main__":
     unittest.main()

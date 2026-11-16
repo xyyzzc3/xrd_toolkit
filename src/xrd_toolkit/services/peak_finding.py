@@ -50,7 +50,7 @@ class FoundPeak:
     right: float        # 基区右端 2θ
 
 
-def _noise_sigma(signal):
+def noise_sigma(signal):
     """一阶差分的稳健噪声估计（对缓变背景不敏感）。"""
     d = np.diff(signal)
     if d.size == 0:
@@ -58,6 +58,32 @@ def _noise_sigma(signal):
     med = float(np.median(d))
     mad = float(np.median(np.abs(d - med)))
     return 1.4826 * mad / np.sqrt(2.0)
+
+
+def finite_runs(tth, intensity, *, min_points=10):
+    """按非有限点（NaN/Inf）把曲线拆成连续段，逐段 yield (2θ, 强度)。
+
+    处理页的"裁剪区间"是**只标空、不删点**（见 `process.cut_ranges`），
+    筛相/1D 页寻峰前必须先把这些空档切开：否则断点两侧的点在数组里
+    相邻，会被当成同一个连续区间（峰宽跨档、基线窗口跨档）。每段至少
+    `min_points` 点才返回——太短的段撑不起噪声估计与寻峰。
+
+    与 `gui.peak_view._finite_segments` / `gui.report_export._finite_runs`
+    同口径（这两个模块暂留自己的实现，改口径时三处一起看）。
+    """
+    t = np.asarray(tth, dtype=float)
+    y = np.asarray(intensity, dtype=float)
+    ok = np.isfinite(t) & np.isfinite(y)
+    start = None
+    for i, good in enumerate(ok):
+        if good and start is None:
+            start = i
+        elif not good and start is not None:
+            if i - start >= int(min_points):
+                yield t[start:i], y[start:i]
+            start = None
+    if start is not None and y.size - start >= int(min_points):
+        yield t[start:], y[start:]
 
 
 def find_peaks_1d(tth, intensity, *, baseline=None, min_prominence=None,
@@ -122,7 +148,7 @@ def find_peaks_1d(tth, intensity, *, baseline=None, min_prominence=None,
     if top <= 0:
         return []
     if min_prominence is None:
-        sigma = _noise_sigma(signal)
+        sigma = noise_sigma(signal)
         threshold = max(prominence_factor * sigma,
                         min_peak_fraction * top)
     else:

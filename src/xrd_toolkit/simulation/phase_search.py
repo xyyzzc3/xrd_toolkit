@@ -8,7 +8,9 @@
              + 0.2 × purity（理论峰被匹配的比例）
 
 打分只看**峰位**；强度只用来挑出理论强峰（intensity ≥ 0.02），不参与
-相似度——计算强度受织构/择优取向影响，定性阶段信不过。
+相似度——计算强度受织构/择优取向影响，定性阶段信不过。观测峰也对称地
+只留最强的 20 根（`observed_peaks`）：裁剪区间会改变全谱最大残差，寻峰
+阈值若跟着走，同一张图在原始/处理两条路径上会差出几十根弱峰。
 
 `phase_library` 默认跳过 `Al_metal.cif`：它是集流体第二相，放进主相
 候选会让“纯 Al 样品”拿最高分。`phase_candidates` 支持按元素集合剪枝
@@ -22,6 +24,9 @@ from pathlib import Path
 import numpy as np
 
 from xrd_toolkit.presets import PROJECT_PRESET
+from xrd_toolkit.services.background import estimate_baseline_sliding
+from xrd_toolkit.services.peak_finding import (
+    finite_runs, find_peaks_1d, noise_sigma)
 from xrd_toolkit.simulation import core
 from xrd_toolkit.simulation.core import load_structure
 
@@ -29,6 +34,9 @@ AL_CIF_NAME = PROJECT_PRESET["second_phase_cif"]
 # 粗扫晶胞缩放：固溶体、温度/成分导致的小幅晶胞变化都落在这个范围
 DEFAULT_SCALE_RANGE = (0.96, 1.05)
 DEFAULT_N_SCALES = 91
+# 筛相只认最强的这么多根观测峰（与 1D 页 [寻峰] 默认"最多根数"一致，
+# 也是 Hanawalt 定性匹配只看最强线的老规矩）。理由见 observed_peaks。
+SCREEN_MAX_PEAKS = 20
 
 
 def _element_set(elements):
@@ -166,6 +174,47 @@ def estimate_zero(obs_t, structure, lam, tmin, tmax, *, scale=1.0,
         return 0.0
     zero = float(np.median(shifts))
     return zero if abs(zero) <= search_deg else 0.0
+
+
+def observed_peaks(tth, intensity, *, prominence=5.0, min_distance=0.008,
+                   max_peaks=SCREEN_MAX_PEAKS):
+    """筛相用的观测峰位（2θ 升序）：按 NaN 断点分段寻峰，只留最强几根。
+
+    输入可以是原始曲线，也可以是处理产物（扣背景/平滑/裁剪后）。
+    裁剪区间是 NaN（`process.cut_ranges` 只标空不删点），这里按段寻峰，
+    与 1D 页 / 报告同一口径（`peak_finding.finite_runs`）。
+
+    显著度用**明确的 kσ 阈值**（σ 由一阶差分的 MAD 稳健估计），不用
+    `find_peaks_1d` 默认的 `max(kσ, 2%×全谱最大残差)`：那个全局下限会
+    被一根异常强峰绑住。实测（2026-11-16，LMFP 帧）：2.8–3.1° 的探测器
+    坏点峰最强残差 2417 counts，把阈值抬到 48；处理页把这段挖掉后最强
+    残差只剩 427，阈值塌到 12，同一张图从 20 根峰变成 55 根——coverage
+    的分母是观测峰数，排序跟着翻（heterosite → FePO4）。筛相只看峰位，
+    强度只在"挑出强峰"时用；只保留最强的 `max_peaks` 根（默认 20）后，
+    挖不挖坏点得到同一套候选。
+
+    参数：
+        tth, intensity : 曲线；NaN 表示裁剪掉、没有数据的区间
+        prominence     : 噪声倍数（与界面"显著度 σ"同口径）
+        min_distance   : 两峰最小间距（度）
+        max_peaks      : 最多留几根（按峰高挑，再按 2θ 排序）
+
+    返回：`np.ndarray`，峰位（度）；没有有效峰时为空数组。
+    """
+    tth = np.asarray(tth, dtype=float)
+    y = np.asarray(intensity, dtype=float)
+    found = []
+    for seg_t, seg_y in finite_runs(tth, y):
+        background = estimate_baseline_sliding(seg_t, seg_y, 0.2)
+        sigma = noise_sigma(seg_y - background)
+        threshold = float(prominence) * sigma
+        found.extend(find_peaks_1d(
+            seg_t, seg_y, baseline=background,
+            min_prominence=threshold if threshold > 0 else None,
+            min_distance_deg=float(min_distance)))
+    if max_peaks is not None and len(found) > int(max_peaks):
+        found = sorted(found, key=lambda p: -p.height)[:int(max_peaks)]
+    return np.array(sorted(p.center for p in found), dtype=float)
 
 
 def screen_phases(obs_t, lib, lam, tmin, tmax, zero, elements=(),
