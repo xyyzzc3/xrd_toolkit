@@ -91,6 +91,29 @@ class TestCalibration(unittest.TestCase):
         self.assertIsNotNone(w.calib_dock)
         w.calib_pixel_chk.setChecked(True)   # 校准前置：确认像素尺寸
 
+    def test_calib_plot_uses_more_of_the_canvas(self):
+        """2026-11-16："图再大一点"——白边收窄后坐标区占画布的高度要够大。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                self._enter_with_fake_a(w)
+                QApplication.processEvents()
+                canvas, fig = w.calib_canvas, w.calib_canvas.figure
+                fig.canvas.draw()
+                ax = w.calib_ax
+                _x, _y, _w, height = ax.get_window_extent().bounds
+                self.assertGreater(
+                    height / min(canvas.width(), canvas.height()), 0.80,
+                    "校准 2D 图应占画布短边的 80% 以上（白边收窄）")
+                label = ax.xaxis.label.get_window_extent(
+                    fig.canvas.get_renderer())
+                self.assertGreaterEqual(label.y0, 0.0,
+                                        "xlabel 不能被裁到画布外")
+        finally:
+            w.close()
+
     def test_enter_mode_opens_panel_and_exit_restores(self):
         w = create_window()
         try:

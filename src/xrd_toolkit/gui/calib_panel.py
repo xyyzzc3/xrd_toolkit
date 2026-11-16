@@ -22,10 +22,10 @@ from xrd_toolkit.services.data_loader import load_diffraction_image
 # gui_calib_panel 取用）
 from xrd_toolkit.gui.calib_panel_draw import (
     _add_calib_marker, _cache_calib_bg, _calib_zoom_on, _draw_calib_image,
-    _fit_view_to_rings, _new_marker_artists, _rebuild_calib_markers,
-    _redraw_calib, _redraw_calib_if_open, _refresh_calib_markers,
-    _set_calib_zoom, _set_fit_rings, _warn_rings_off_image,
-    reset_calib_view)
+    _fit_view_to_rings, _new_marker_artists, _on_calib_resize,
+    _rebuild_calib_markers, _redraw_calib, _redraw_calib_if_open,
+    _refresh_calib_markers, _set_calib_zoom, _set_fit_rings,
+    _warn_rings_off_image, reset_calib_view)
 from xrd_toolkit.gui.calib_panel_interaction import (
     _apply_selected_ring, _blit_calib_box, _clear_calib_points,
     _draw_calib_box, _normalize_selection, _on_calib_click, _on_calib_motion,
@@ -246,6 +246,8 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     # 整幅画完就拍一帧当贴图底图（选点走增量贴图，见 _add_calib_marker）
     window.calib_bg = None
     canvas.mpl_connect("draw_event", lambda ev: _cache_calib_bg(window, ev))
+    # 窗口缩放 → 按新尺寸重算白边（2026-11-16）
+    canvas.mpl_connect("resize_event", _on_calib_resize)
     # 显式 resize + 级联摆位（同 _open_plot_panel 套路：子窗口不会
     # 自动适配内容）；不进 plot_docks，级联只数已开的图面板数
     hint = sub.sizeHint()

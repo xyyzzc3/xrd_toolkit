@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import __version__
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.files.open_figures import set_workbench_open
+from xrd_toolkit.gui.figure_layout import compact_margins
 from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
@@ -79,6 +80,12 @@ SRC_RADIAL = 1
 
 MIN_VIEW_SPAN = 8.0             # 最多放大到 8×8 图像像素
 MAX_DS = 8                      # 显示降采样上限
+
+# 掩膜画布白边（像素）：预览的 ylabel 实测贴到画布左缘（x=0），留 50；
+# 底边 44 给 xlabel/刻度（实测 xlabel 底距 7 px）；hspace 随画布算。
+# 见 figure_layout.compact_margins / 2026-11-16 用户"图再大一点"。
+_MASK_MARGINS = {"left_px": 50, "right_px": 6, "bottom_px": 44,
+                 "top_px": 8, "hspace": 0.08}
 
 # 来源值 → RGBA 的查表（0 = 没遮，全透明）；降采样后一次 gather 上色
 _MASK_LUT = np.zeros((256, 4), dtype=np.uint8)
@@ -263,10 +270,12 @@ class MaskWorkbench(QWidget):
 
         self.fig = Figure(figsize=(10, 7.4))
         # 2D 是主画布：预览只留一条（2026-11-11 用户："让 2D 图大一些"）。
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0],
-                                   hspace=0.22)
+        # hspace 不在这里写死：留给 compact_margins 随画布尺寸调（显式给
+        # 了 hspace 的 GridSpec 不再跟 subplots_adjust 走，2026-11-16 实测）。
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[4.8, 1.0])
         self.ax_img = self.fig.add_subplot(gs[0])
         self.ax_prev = self.fig.add_subplot(gs[1])
+        compact_margins(self.fig, **_MASK_MARGINS)
         self.ax_img.set_axis_off()
         self.ax_prev.set_xlabel("2θ (°)", fontsize=8)
         self.ax_prev.set_ylabel("counts", fontsize=8)
@@ -1432,6 +1441,9 @@ class MaskWorkbench(QWidget):
 
     def _on_resize(self, event):
         self._bg = None
+        # 画布尺寸变了 → 按新的像素尺寸重算白边（窗口小时别裁标签，
+        # 窗口大时别留一圈白边）。视野由 _view_timer 单独保。
+        compact_margins(self.fig, **_MASK_MARGINS)
         if self.image is not None:
             self._view_timer.start()
 

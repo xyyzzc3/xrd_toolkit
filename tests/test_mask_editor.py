@@ -996,6 +996,19 @@ class TestMaskEditor(unittest.TestCase):
         self.ed._flush_overlay()
         self.assertTrue(np.array_equal(before, rgb()))   # 擦干净，无残留
 
+    def test_2d_canvas_uses_most_of_the_short_side(self):
+        """2026-11-16："图再大一点"——白边收窄后 2D 轴要占画布短边的大头。"""
+        self._open()
+        self.ed.load_image(self.img_path)
+        QApplication.processEvents()
+        QApplication.processEvents()
+        ed = self.ed
+        ed.fig.canvas.draw()
+        _x, _y, _w, height = ed.ax_img.get_window_extent().bounds
+        short = min(ed.canvas.width(), ed.canvas.height())
+        self.assertGreater(height / short, 0.70,
+                           "掩膜 2D 图应占画布短边的 70% 以上（白边收窄）")
+
     def test_run_1d_uses_cache_for_masked2d(self):
         path = Path("/tmp/x.mask2d.npz")
         key = f"1D|{path}"

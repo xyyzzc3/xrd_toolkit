@@ -12,8 +12,14 @@ from PySide6.QtWidgets import QMainWindow
 from xrd_toolkit.gui.calib_model import (
     CP_COLOR, RING_COLOR, SELECT_COLOR, _calib_state, _metrics_dev,
     _result_by_name, _slot_label)
+from xrd_toolkit.gui.figure_layout import compact_margins
 from xrd_toolkit.gui.panel_state import _auto_contrast_values, _log
 from xrd_toolkit.services.integrator import theoretical_ring_paths
+
+# 校准图四边白边（像素）：xlabel 实测会伸到画布外 6 px，48 px 才不裁；
+# 两行标题占 38 px，留 46。见 figure_layout.compact_margins。
+_CALIB_MARGINS = {"left_px": 56, "right_px": 8,
+                  "bottom_px": 48, "top_px": 46}
 
 
 def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
@@ -120,7 +126,20 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     elif view is None:
         ax.set_xlim(-0.5, w - 0.5)
         ax.set_ylim(-0.5, h - 0.5)
+    # 白边收窄（2026-11-16 用户："图可以再大一点，白边还挺大"）：默认
+    # subplot 参数是画布百分比，工作台铺满后四周白边 200+ px。按标签/
+    # 刻度的像素需求折算，坐标区立刻变大；视野（xlim/ylim）不动。
+    compact_margins(ax.figure, **_CALIB_MARGINS)
     window.calib_canvas.draw_idle()
+
+
+def _on_calib_resize(event) -> None:
+    """画布尺寸变了 → 按新尺寸重算白边（窗口小时别裁标签）。
+
+    只改坐标区位置，不动视野（xlim/ylim 已经锁在图像框上）。resize_event
+    不因重画再次触发，不会形成循环。
+    """
+    compact_margins(event.canvas.figure, **_CALIB_MARGINS)
 
 
 def _set_fit_rings(window: QMainWindow, on: bool) -> None:
