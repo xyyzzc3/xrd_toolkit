@@ -28,6 +28,9 @@ class TestPresetService(unittest.TestCase):
         preset = presets.get_preset(presets.DEFAULT_PRESET_NAME)
         self.assertEqual(preset["geometry"], "lmfp1_lab6")
         self.assertEqual(preset["second_phase_cif"], "Al_metal.cif")
+        # 内置 LMFP 方案自带完整样品元素（含 Mn 与 Al 集流体），防止
+        # 用户漏写 Mn 时把 LiMn0.6Fe0.4PO4 挡在候选外（2026-11-16）。
+        self.assertEqual(preset["sample_elements"], "Li Mn Fe P O Al")
         self.assertIn(presets.DEFAULT_PRESET_NAME,
                       presets.preset_names())
         self.assertTrue(presets.is_builtin(presets.DEFAULT_PRESET_NAME))
@@ -38,6 +41,7 @@ class TestPresetService(unittest.TestCase):
             "geometry": "lmfp1_lab6", "second_phase_cif": "",
             "insitu_dir": "~/frames", "insitu_mask_name": "",
             "phase_library": "/tmp/library",
+            "sample_elements": "Li Mn Fe P O",
         }
         self.assertTrue(presets.save_user_preset("我的项目", values,
                                                  path=path))
@@ -45,6 +49,7 @@ class TestPresetService(unittest.TestCase):
         preset = presets.get_preset("我的项目", path)
         self.assertEqual(preset["insitu_dir"], "~/frames")
         self.assertEqual(preset["phase_library"], "/tmp/library")
+        self.assertEqual(preset["sample_elements"], "Li Mn Fe P O")
         # 再存同名 = 覆盖
         self.assertFalse(presets.save_user_preset("我的项目", values,
                                                   path=path))
@@ -58,6 +63,10 @@ class TestPresetService(unittest.TestCase):
         preset = presets.get_preset("稀疏预设", path)
         for key, value in presets.DEFAULTS.items():
             self.assertEqual(preset[key], value, key)
+        # 旧预设/没写这一项 = 不筛，不能被补成 LMFP 的元素表
+        self.assertEqual(preset["sample_elements"], "")
+        self.assertIsNone(preset["processing"])
+        self.assertEqual(preset["mask_recipe"], "")
 
     def test_bad_geometry_falls_back_with_warning(self):
         preset = presets.resolve_preset(

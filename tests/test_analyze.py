@@ -108,6 +108,42 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
         self.assertTrue(matches[0].path.name.startswith("LaB6"),
                         matches[0].path.name)
 
+    def test_element_filter_reports_near_misses(self):
+        """元素表漏 Mn 时，Mn 相不能静默消失，要进 near_miss 并带 extra。"""
+        kept, near = ps.phase_candidates_report(
+            ap.STRUCT, ["Li", "Fe", "P", "O"])
+        kept_names = {path.name for path, _st in kept}
+        near_map = {path.name: extra for path, _st, extra in near}
+        self.assertIn("LiFePO4_olivine.cif", kept_names)
+        self.assertIn("LiMn0.6Fe0.4PO4_olivine.cif", near_map,
+                      "漏写 Mn 时 LMFP 相必须出现在相近相里")
+        self.assertIn("Mn0.6Fe0.4PO4_heterosite.cif", near_map)
+        self.assertEqual(near_map["LiMn0.6Fe0.4PO4_olivine.cif"], ("Mn",))
+
+        kept2, near2 = ps.phase_candidates_report(
+            ap.STRUCT, ["Li", "Mn", "Fe", "P", "O", "Al"])
+        self.assertEqual(near2, [], "元素表完整时不应再有相近相")
+        self.assertIn("LiMn0.6Fe0.4PO4_olivine.cif",
+                      {path.name for path, _st in kept2})
+
+    def test_screen_phases_report_scores_near_misses(self):
+        """相近相照样打分——界面靠这个分数判断"它比当前最佳还高"。"""
+        lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
+        _, _, tth, inten = core.reflection_table(
+            lab6, wavelength=CU_KA, two_theta_range=(10.0, 80.0), nmax=10)
+        inten = inten / inten.max()
+        obs = tth[inten >= 0.02]
+        matches, near = ps.screen_phases_report(
+            obs, ap.STRUCT, CU_KA, 10.0, 80.0, 0.0,
+            elements=["Li", "Fe", "P", "O"])
+        self.assertTrue(matches)
+        self.assertTrue(near, "漏 Mn 时应带回 Mn 相近相")
+        by_name = {m.path.stem: m for m in near}
+        self.assertEqual(by_name["LiMn0.6Fe0.4PO4_olivine"].extra, ("Mn",))
+        self.assertEqual(by_name["Mn0.6Fe0.4PO4_heterosite"].extra, ("Mn",))
+        scores = [m.score for m in near]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
 
 def _gauss(x, center, fwhm, height):
     return height * np.exp(-4.0 * np.log(2.0) * ((x - center) / fwhm) ** 2)

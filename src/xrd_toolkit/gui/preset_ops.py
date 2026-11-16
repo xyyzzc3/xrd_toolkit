@@ -112,6 +112,13 @@ def current_preset_values(window, base_name=None) -> dict:
         phase_lib = Path(editor.lib_dir)
     elif base:
         phase_lib = preset_phase_library(base)
+    # 样品元素：物相工作台开着就如实读输入框；没开 = 未设置（更新预设时
+    # 保留目标预设原来的值，不在用户没看的时候把它清掉）。
+    elements_box = getattr(getattr(window, "phase_editor", None),
+                           "elements_edit", None)
+    sample_elements = (elements_box.text().strip()
+                       if elements_box is not None
+                       else str(base.get("sample_elements") or ""))
     values = {
         "geometry": (str(getattr(window, "config_name", "") or "")
                      or str(base.get("geometry") or "")),
@@ -123,6 +130,7 @@ def current_preset_values(window, base_name=None) -> dict:
             else _portable_dir(phase_lib)),
         "processing": base.get("processing"),
         "mask_recipe": str(base.get("mask_recipe") or ""),
+        "sample_elements": sample_elements,
     }
     insitu = getattr(window, "insitu_editor", None)
     if insitu is not None:
@@ -365,7 +373,7 @@ def save_preset_dialog(window) -> None:
 
 
 def _fields_text(values, *, empty_library=None) -> str:
-    """七项输入的摘要文本（预设与「当前设置」共用）。
+    """八项输入的摘要文本（预设与「当前设置」共用）。
 
     empty_library：相库字段为空时显示什么。预设里空＝随包参考 CIF 目录
     （显示实际路径）；「当前设置」里空＝这次没设置过（显示「（未设置）」）。
@@ -392,6 +400,7 @@ def _fields_text(values, *, empty_library=None) -> str:
         f"原位帧目录：{values.get('insitu_dir') or '（未设置）'}\n"
         f"原位掩膜：{values.get('insitu_mask_name') or '（不遮）'}\n"
         f"相库目录：{library}\n"
+        f"样品元素：{values.get('sample_elements') or '（不筛）'}\n"
         f"处理设置：{proc_text}\n"
         f"掩膜工程：{mask_text}")
 
@@ -412,8 +421,8 @@ class PresetManagerDialog(QDialog):
 
         root = QVBoxLayout(self)
         hint = QLabel(
-            "方案保存七项输入：几何、第二相 CIF、原位帧目录、原位掩膜、"
-            "相库目录、处理设置、掩膜工程。\n"
+            "方案保存八项输入：几何、第二相 CIF、原位帧目录、原位掩膜、"
+            "相库目录、样品元素、处理设置、掩膜工程。\n"
             "这轮只有「几何」可以直接改：选好条目点 [保存方案] 立即生效；"
             "其余项先用当前设置调好再 [保存当前…]。")
         hint.setWordWrap(True)

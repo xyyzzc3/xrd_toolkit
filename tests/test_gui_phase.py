@@ -79,6 +79,10 @@ class TestPhaseWorkbench(unittest.TestCase):
         self._open_panel()
         self.w.phase_btn.click()
         QApplication.processEvents()
+        # 默认方案是 LMFP 三相，构造工作台时会带出它的「样品元素」
+        # （Li Mn Fe P O Al）；这些用例测的是通用筛相（合成 LaB6），
+        # 先清空元素表 = 不筛。
+        self.w.phase_editor.elements_edit.clear()
         self.w.phase_editor.screen_btn.click()
         ok = _wait_until(lambda: len(self.w.phase_editor.rows) > 0,
                          timeout_ms=30000)
@@ -282,6 +286,7 @@ class TestPhaseWorkbench(unittest.TestCase):
             self.assertTrue(editor.load_curve_file(path))
             self.assertEqual(editor.curve_combo.currentData(),
                              f"file:{path}")
+            editor.elements_edit.clear()   # 合成 LaB6 不属于 LMFP 元素表
             editor.screen_btn.click()
             ok = _wait_until(lambda: len(editor.rows) > 0,
                              timeout_ms=30000)
@@ -358,6 +363,34 @@ class TestPhaseWorkbench(unittest.TestCase):
                          f"1D|{PANEL_PATH}")
         self.assertEqual(self.w.refine_editor.cif_combo.currentData(),
                          str(chosen))
+
+
+class TestScreenNearMissReport(unittest.TestCase):
+    """元素表漏 Mn 时，被删的 Mn 相近相要带回来并照样打分（2026-11-16）。"""
+
+    @staticmethod
+    def _worker(elements):
+        from xrd_toolkit.gui.phase_workbench import _screen_worker
+        tth, y = _synth(PANEL_PATH, {"wavelength_m": 1.223e-11}, 3000)
+        return _screen_worker(
+            tth, y, ROOT / "data" / "structures", elements,
+            0.1223, 0.04, 5.0, 0.008)
+
+    def test_missing_mn_reports_scored_near_misses(self):
+        obs, rows, _zero, near = self._worker("Li Fe P O")
+        self.assertGreaterEqual(obs.size, 3)
+        self.assertTrue(rows)
+        by_name = {r.name: r for r in near}
+        self.assertIn("LiMn0.6Fe0.4PO4_olivine", by_name,
+                      "漏写 Mn 时 LMFP 相必须进相近相")
+        self.assertIn("Mn0.6Fe0.4PO4_heterosite", by_name)
+        self.assertEqual(by_name["LiMn0.6Fe0.4PO4_olivine"].extra, ("Mn",))
+        self.assertTrue(all(r.score > 0 for r in near))
+
+    def test_full_elements_have_no_near_misses(self):
+        _obs, rows, _zero, near = self._worker("Li Mn Fe P O Al")
+        self.assertTrue(rows)
+        self.assertEqual(near, [])
 
 
 if __name__ == "__main__":

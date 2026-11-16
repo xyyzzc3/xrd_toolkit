@@ -52,11 +52,15 @@ _FIELDS = tuple(DEFAULTS)
 OPTIONAL_DEFAULTS = {
     "processing": None,       # 内嵌处理设置 dict，或 None
     "mask_recipe": "",        # .mask.npz 路径（可写 ~/…），或空
+    # 物相筛选的「样品元素」白名单（空格分隔，空 = 不筛）。LMFP 预设
+    # 带上完整化学（含 Mn 和 Al 集流体），避免用户漏写元素把真相相挡掉。
+    "sample_elements": "",
 }
 
 BUILTIN_PRESETS = {
     DEFAULT_PRESET_NAME: {"name": DEFAULT_PRESET_NAME, **DEFAULTS,
-                          **OPTIONAL_DEFAULTS},
+                          **OPTIONAL_DEFAULTS,
+                          "sample_elements": "Li Mn Fe P O Al"},
 }
 # 旧代码直接读 PROJECT_PRESET；保留为内置预设的副本（不随用户选择变化）
 PROJECT_PRESET = dict(BUILTIN_PRESETS[DEFAULT_PRESET_NAME])
@@ -94,7 +98,7 @@ def _clean_processing(raw):
 
 
 def _clean_preset(raw, fallback_name="") -> dict:
-    """校验并规范化一份预设：核心五项补默认、两项可选保持"未设置"。
+    """校验并规范化一份预设：核心五项补默认、三项可选保持"未设置"。
 
     非法结构抛 ValueError；字段类型不对时用默认值（不因为一个手写
     JSON 的笔误把整份预设丢掉）。名称从 raw["name"] 或 fallback_name
@@ -112,6 +116,9 @@ def _clean_preset(raw, fallback_name="") -> dict:
     out["processing"] = _clean_processing(raw.get("processing"))
     mask = raw.get("mask_recipe", "")
     out["mask_recipe"] = mask.strip() if isinstance(mask, str) else ""
+    elements = raw.get("sample_elements", "")
+    out["sample_elements"] = (elements.strip()
+                              if isinstance(elements, str) else "")
     return out
 
 
@@ -183,6 +190,8 @@ def _write_state(state, path=None) -> None:
                 **{key: preset.get(key, DEFAULTS[key]) for key in _FIELDS},
                 "processing": preset.get("processing"),
                 "mask_recipe": str(preset.get("mask_recipe") or ""),
+                "sample_elements": str(
+                    preset.get("sample_elements") or "").strip(),
             }
             for name, preset in (state.get("presets") or {}).items()
         },
@@ -327,6 +336,7 @@ def migrate_legacy_recipes(path=None) -> int:
         values = {field: base.get(field, DEFAULTS[field]) for field in _FIELDS}
         values["processing"] = recipe
         values["mask_recipe"] = str(base.get("mask_recipe") or "")
+        values["sample_elements"] = str(base.get("sample_elements") or "")
         clean = _clean_preset({**values, "name": key}, fallback_name=key)
         if not clean.get("processing"):
             continue

@@ -92,6 +92,21 @@ class PhaseRow:
     refined_note: str = ""
 
 
+@dataclass(frozen=True)
+class NearMissRow:
+    """被"样品元素"表误删的相近相（不画理论峰，只提示）。
+
+    2026-11-16 用户反馈：元素表漏了 Mn 时 LMFP 相被静默删掉，顶上来的
+    Fe 系相看起来"永远是 LiFePO4"。这里带上的 score 是照样打分的结果，
+    用来判断"它其实比当前最佳还高"。
+    """
+    name: str
+    score: float
+    coverage: float
+    purity: float
+    extra: tuple
+
+
 def _screen_worker(tth, y, lib, elements, wavelength, tol,
                    prominence, min_distance, skip_names=None):
     """后台线程：寻峰 → 对相库打分 → 返回每相的理论峰位。
@@ -103,6 +118,10 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     寻峰交给 `phase_search.observed_peaks`：按裁剪区间（NaN）分段、
     显著度按界面给的 kσ、只留最强 20 根。见那里的注释——用全局最大残差
     当阈值下限会让"挖没挖坏点峰"改变整个峰表（2026-11-16 用户反馈）。
+
+    返回值第 4 项是"被样品元素表排除的相近相"（`NearMissRow` 列表）：
+    元素表是白名单，漏写一个 Mn 就会把真相相静默删掉；这些"只多出几个
+    元素"的相照样打分带回来，让界面能提示"元素表可能漏了元素"。
     """
     try:
         from xrd_toolkit.simulation import phase_search as ps
@@ -122,7 +141,7 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
 
     lam = float(wavelength)
     tmin, tmax = float(tth[good].min()), float(tth[good].max())
-    matches = ps.screen_phases(
+    matches, near = ps.screen_phases_report(
         obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
         tol=float(tol), skip_names=skip_names)
     # 拿最佳候选估一个全局 2θ 零位，只用于叠图/后续输出——不重新跑一遍
@@ -142,7 +161,9 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
             match.path, match.score, match.scale, match.coverage,
             match.purity, np.asarray(sticks_t, dtype=float),
             np.asarray(sticks_i, dtype=float)))
-    return obs_t, rows, zero
+    near_rows = [NearMissRow(m.path.stem, m.score, m.coverage, m.purity,
+                             tuple(m.extra)) for m in near]
+    return obs_t, rows, zero, near_rows
 
 
 class PhaseWorkbench(QWidget):
@@ -156,6 +177,7 @@ class PhaseWorkbench(QWidget):
         self.lib_dir = self._library_for_preset(
             getattr(main_window, "preset", None) or PROJECT_PRESET)
         self.rows = []
+        self.near = []
         self.curve = None
         self.obs_t = None
         self._zero_used = None
@@ -181,14 +203,19 @@ class PhaseWorkbench(QWidget):
         return preset_phase_library(preset or PROJECT_PRESET)
 
     def apply_preset(self, preset):
-        """应用项目预设：换相库 + 更新第二相提示 + 清掉旧候选。"""
+        """应用项目预设：换相库 + 样品元素 + 清掉旧候选。"""
         requested = str(preset.get("phase_library") or "").strip()
         self.lib_dir = self._library_for_preset(preset)
+        self.elements_edit.setText(
+            str((preset or {}).get("sample_elements") or "").strip())
         self.rows = []
+        self.near = []
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
         self.best_label.setStyleSheet("color: gray;")
+        self.near_label.clear()
+        self.near_label.setVisible(False)
         self._refresh_lib_label()
         status = (f"已应用预设「{preset.get('name', '')}」："
                   f"相库 {self.lib_dir.name}")
@@ -263,12 +290,18 @@ class PhaseWorkbench(QWidget):
 
         row2 = QHBoxLayout()
         row2.setSpacing(6)
-        row2.addWidget(QLabel("元素"))
+        row2.addWidget(QLabel("样品元素"))
         self.elements_edit = QLineEdit()
         self.elements_edit.setPlaceholderText(
-            "点 [周期表…] 勾选，或直接输入 Fe Co Ni（留空不筛）")
+            "样品、杂质、衬底里可能存在的全部元素；留空 = 不筛")
         self.elements_edit.setToolTip(
-            "只保留元素全在这张表里的相；留空 = 相库里全部参与")
+            "白名单：相里的元素必须全部在这张表内。请把样品、杂质、衬底中"
+            "可能存在的元素都写上（如 LMFP 要含 Mn）；不确定就留空。"
+            "漏写的元素会把真正的相挡在候选外——被挡的相近相会单独提示")
+        # 预设自带「样品元素」（LMFP 预设含 Mn 与 Al），新建工作台就按
+        # 当前预设填好；用户预设没写这一项 = 留空不筛。
+        self.elements_edit.setText(
+            str(self._preset().get("sample_elements") or "").strip())
         row2.addWidget(self.elements_edit, 1)
         self.periodic_btn = QPushButton("周期表…")
         self.periodic_btn.setToolTip(
@@ -325,6 +358,11 @@ class PhaseWorkbench(QWidget):
         self.best_label.setWordWrap(True)
         self.best_label.setStyleSheet("color: gray;")
         left_lay.addWidget(self.best_label)
+        self.near_label = QLabel("")
+        self.near_label.setWordWrap(True)
+        self.near_label.setStyleSheet("color: gray;")
+        self.near_label.setVisible(False)
+        left_lay.addWidget(self.near_label)
         self.send_btn = QPushButton("送去精修")
         self.send_btn.setEnabled(False)
         self.send_btn.setToolTip("把当前曲线和选中的 CIF 带进精修工作台")
@@ -462,6 +500,7 @@ class PhaseWorkbench(QWidget):
             # 换曲线后旧候选不再对应这条曲线（[送去精修] 会送错配对），
             # 清空结果等用户重新筛；进入工作台时的 refresh 不清（状态保留）
             self.rows = []
+            self.near = []
             self.obs_t = None
             self.table.setRowCount(0)
             self.send_btn.setEnabled(False)
@@ -469,6 +508,8 @@ class PhaseWorkbench(QWidget):
             self.export_default_btn.setEnabled(True)
             self.best_label.setText("还没有筛相")
             self.best_label.setStyleSheet("color: gray;")
+            self.near_label.clear()
+            self.near_label.setVisible(False)
             if curve is not None:
                 self.curve = (np.asarray(curve[0], dtype=float),
                               np.asarray(curve[1], dtype=float))
@@ -562,10 +603,13 @@ class PhaseWorkbench(QWidget):
         self.lib_dir = paths.phase_library_dir()
         self._refresh_lib_label()
         self.rows = []
+        self.near = []
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
         self.best_label.setStyleSheet("color: gray;")
+        self.near_label.clear()
+        self.near_label.setVisible(False)
         self._set_status("已切换到内置精选相库，点 [开始筛相]")
 
     def _choose_lib(self):
@@ -577,10 +621,13 @@ class PhaseWorkbench(QWidget):
         self._refresh_lib_label()
         # 换库后旧候选不再对应当前库，清空结果，等用户重新筛
         self.rows = []
+        self.near = []
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
         self.best_label.setStyleSheet("color: gray;")
+        self.near_label.clear()
+        self.near_label.setVisible(False)
         self._set_status("相库已切换，点 [开始筛相]")
 
     def _open_periodic_table(self):
@@ -632,8 +679,8 @@ class PhaseWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.screen_btn.setEnabled(True)
-            obs_t, rows, zero = payload
-            self._on_screen_done(obs_t, rows, zero)
+            obs_t, rows, zero, near = payload
+            self._on_screen_done(obs_t, rows, zero, near)
 
         def error(message):
             self.main._tasks.remove(task)
@@ -654,8 +701,9 @@ class PhaseWorkbench(QWidget):
         self.main._tasks.append(task)
         task.start()
 
-    def _on_screen_done(self, obs_t, rows, zero=0.0):
+    def _on_screen_done(self, obs_t, rows, zero=0.0, near=()):
         self.rows = rows
+        self.near = list(near)
         self.obs_t = np.asarray(obs_t, dtype=float)
         self._zero_used = float(zero)
         self.table.blockSignals(True)
@@ -687,7 +735,9 @@ class PhaseWorkbench(QWidget):
             self._set_status(
                 f"筛相完成：{len(rows)} 个候选，观测峰 {obs_t.size} 根"
                 + (f"；已对齐 2θ 零位 {zero:+.3f}°"
-                   if abs(zero) > 0.005 else ""))
+                   if abs(zero) > 0.005 else "")
+                + (f"；样品元素表排除 {len(near)} 张相近相"
+                   if near else ""))
             _log(self.main, f"物相筛选完成：{len(rows)} 个候选，"
                             f"最佳 {best.path.stem}（score {best.score:.3f}）")
         else:
@@ -697,7 +747,42 @@ class PhaseWorkbench(QWidget):
             self.cell_btn.setEnabled(False)
             self.export_default_btn.setEnabled(True)
             self._set_status("筛相完成：没有候选相")
+        self._show_near_misses(rows, near)
         self._draw_selected()
+
+    def _show_near_misses(self, rows, near):
+        """被"样品元素"表排除的相近相：可能只是元素表漏写了元素。
+
+        2026-11-16 用户反馈：元素表漏了 Mn，LMFP 相被静默删掉，结果
+        看起来"永远是 LiFePO4"。这里把这类"只多出几个元素"的相带回
+        界面并点名，分数高于当前最佳时给出橙色警告。
+        """
+        if not near:
+            self.near_label.clear()
+            self.near_label.setVisible(False)
+            return
+        best_near = near[0]
+        extra = "、".join(best_near.extra)
+        text = f"被样品元素表排除：{best_near.name}"
+        if extra:
+            text += f"（多 {extra}）"
+        text += f"，score {best_near.score:.3f}"
+        if len(near) > 1:
+            text += f"；另有 {len(near) - 1} 张相近相见日志"
+        if rows and best_near.score > rows[0].score:
+            text = ("⚠ 元素表可能漏了元素：" + text +
+                    f"，高于当前最佳 {rows[0].score:.3f}；"
+                    "若样品确实含这些元素，把它们加进「样品元素」再筛")
+            self.near_label.setStyleSheet(
+                "color: #b35c00; font-weight: 600;")
+        else:
+            self.near_label.setStyleSheet("color: gray;")
+        self.near_label.setText(text)
+        self.near_label.setVisible(True)
+        _log(self.main, "被样品元素表排除的相近相："
+             + "；".join(
+                 f"{r.name}（多 {'、'.join(r.extra) or '—'}，"
+                 f"score {r.score:.3f}）" for r in near))
 
     # ── 画图 ────────────────────────────────────────────────
     def _draw_placeholder(self):
@@ -1024,6 +1109,11 @@ class PhaseWorkbench(QWidget):
                 fh.write(
                     "# elements: "
                     f"{self.elements_edit.text().strip() or '(all)'}\n")
+                for miss in getattr(self, "near", []):
+                    fh.write(
+                        f"# excluded_by_elements: {miss.name}"
+                        f" (extra {'/'.join(miss.extra) or '-'})"
+                        f" score={miss.score:.6f}\n")
                 fh.write("# wavelength_A: "
                          f"{float(self._last_wavelength or 0.0):.6f}\n")
                 fh.write("# generated: "

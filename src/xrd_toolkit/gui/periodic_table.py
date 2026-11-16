@@ -87,7 +87,11 @@ class PeriodicTableDialog(QDialog):
             ' background-color: #2f6fd0; color: white; }')
 
         root = QVBoxLayout(self)
-        hint = QLabel("点元素 = 勾选，再点一下取消；留空 = 不按元素筛选")
+        hint = QLabel(
+            "点元素 = 勾选，再点一下取消。请勾选样品、杂质、衬底里可能"
+            "存在的全部元素——相里的元素必须全在勾选内；漏勾的元素会"
+            "把真正的相挡在候选外。不确定就留空（= 不按元素筛选）。")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
 

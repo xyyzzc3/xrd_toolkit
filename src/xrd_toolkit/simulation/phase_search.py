@@ -37,6 +37,11 @@ DEFAULT_N_SCALES = 91
 # 筛相只认最强的这么多根观测峰（与 1D 页 [寻峰] 默认"最多根数"一致，
 # 也是 Hanawalt 定性匹配只看最强线的老规矩）。理由见 observed_peaks。
 SCREEN_MAX_PEAKS = 20
+# "被元素表排除的相近相"判据：与元素表的**对称差**不超过这么多元素。
+# 用户漏写/多写一两个元素是常态（LMFP 漏 Mn 时，富锂相多 1 个、贫锂
+# heterosite 多 Mn 又少 Li = 差 2 个）；差得多的相属于别的化学体系，
+# 报出来只会淹没提示。
+NEAR_MISS_MAX_DIFF = 3
 
 
 def _element_set(elements):
@@ -65,17 +70,27 @@ def phase_library(lib, skip_names=None):
             if p.is_file() and p.name not in skip]
 
 
-def phase_candidates(lib, elements=(), preferred=(), skip_names=None):
-    """扫描相库并读结构，按元素集合剪枝；返回 [(path, Structure)]。
+def phase_candidates_report(lib, elements=(), preferred=(), skip_names=None,
+                            max_near_miss=10):
+    """扫描相库，返回 `(kept, near_miss)` 两组相。
 
-    elements 为空 = 不筛；给了集合时只保留**元素全部落在集合里**的相。
+    elements 为空 = 不筛。给了集合时按"样品元素白名单"剪枝：只保留
+    元素**全部落在表内**的相（kept）。同时把与元素表**只差几个元素**
+    的相收进 near_miss —— 这类相正是用户漏写元素时被误删的真相（例：
+    元素表 `Li Fe P O` 漏了 Mn：富锂相 `含 Mn、少 0`，贫锂 heterosite
+    `含 Mn、少 Li`，两者都只差 1–2 个元素，会以"多 Mn"的身份进入
+    near_miss 而不是静默消失；差 6 个元素的 LaB6 之类不会混进来）。
+    near_miss 的每项是 `(path, Structure, extra_symbols)`，按对称差
+    从小到大、再按文件名排序，最多 `max_near_miss` 个（大库只评分最
+    接近的那几张）。
+
     读不出来的 CIF 跳过，不让一张坏卡片打断整批分析。preferred 里的
     文件名排在最前（只影响同分时的先后，不参与打分）。skip_names 的
     含义见 phase_library。
     """
     wanted = _element_set(elements)
     rank = {str(name): i for i, name in enumerate(preferred)}
-    out = []
+    kept, near_scored = [], []
     for path in phase_library(lib, skip_names=skip_names):
         try:
             structure = load_structure(str(path))
@@ -84,11 +99,34 @@ def phase_candidates(lib, elements=(), preferred=(), skip_names=None):
         if wanted:
             have = {el.symbol for el in structure.composition.elements}
             if not have.issubset(wanted):
+                extra = have - wanted
+                missing = wanted - have
+                diff = len(extra) + len(missing)
+                if diff <= NEAR_MISS_MAX_DIFF:
+                    near_scored.append(
+                        (diff, len(extra), path, structure,
+                         tuple(sorted(extra))))
                 continue
-        out.append((path, structure))
-    out.sort(key=lambda item: (rank.get(item[0].name, len(rank)),
-                               item[0].name))
-    return out
+        kept.append((path, structure))
+    kept.sort(key=lambda item: (rank.get(item[0].name, len(rank)),
+                                item[0].name))
+    near_scored.sort(key=lambda item: (item[0], item[1], item[2].name))
+    near = [(path, structure, extra)
+            for _diff, _n, path, structure, extra in near_scored]
+    if max_near_miss is not None:
+        near = near[:int(max_near_miss)]
+    return kept, near
+
+
+def phase_candidates(lib, elements=(), preferred=(), skip_names=None):
+    """扫描相库并读结构，按元素集合剪枝；返回 [(path, Structure)]。
+
+    只要保留组；"被元素表漏写误删"的相近相见 `phase_candidates_report`。
+    """
+    kept, _near = phase_candidates_report(
+        lib, elements=elements, preferred=preferred,
+        skip_names=skip_names, max_near_miss=0)
+    return kept
 
 
 def reflection_data(structure, lam, tmin, tmax):
@@ -140,13 +178,18 @@ def score_phase(obs_t, structure, lam, tmin, tmax, zero, tol=0.04,
 
 @dataclass
 class PhaseMatch:
-    """一个候选相的筛选结果（路径、结构、分数与晶胞缩放）。"""
+    """一个候选相的筛选结果（路径、结构、分数与晶胞缩放）。
+
+    `extra` 只对"被元素表排除的相近相"非空：它比元素表多出来的元素
+    （例：元素表漏了 Mn 时，LiMn0.6Fe0.4PO4 的 extra=('Mn',)）。
+    """
     path: Path
     structure: object
     score: float
     scale: float
     coverage: float
     purity: float
+    extra: tuple = ()
 
 
 def estimate_zero(obs_t, structure, lam, tmin, tmax, *, scale=1.0,
@@ -217,22 +260,50 @@ def observed_peaks(tth, intensity, *, prominence=5.0, min_distance=0.008,
     return np.array(sorted(p.center for p in found), dtype=float)
 
 
+def _score_candidates(obs_t, items, lam, tmin, tmax, zero, tol):
+    """给 [(path, Structure, extra), ...] 打分，返回按分数降序的 PhaseMatch。"""
+    matches = []
+    for path, structure, extra in items:
+        result = score_phase(obs_t, structure, lam, tmin, tmax, zero, tol=tol)
+        if result is None:
+            continue
+        score, scale, coverage, purity = result
+        matches.append(PhaseMatch(path, structure, score, scale,
+                                  coverage, purity, extra))
+    matches.sort(key=lambda m: -m.score)
+    return matches
+
+
+def screen_phases_report(obs_t, lib, lam, tmin, tmax, zero, elements=(),
+                         preferred=(), tol=0.04, skip_names=None,
+                         max_near_miss=10):
+    """对整个相库打分，返回 `(matches, near_misses)`。
+
+    near_misses 是"被样品元素表排除、但只多出几个元素"的相近相
+    （`PhaseMatch.extra` 记录多出来的元素）。它们是用户漏写元素时最
+    可能被误删的真相，所以照样打分——GUI 用它提示"元素表可能漏了 X"。
+    正常相表元素为空时 near_misses 也一定是空的。
+    """
+    kept, near = phase_candidates_report(
+        lib, elements=elements, preferred=preferred,
+        skip_names=skip_names, max_near_miss=max_near_miss)
+    matches = _score_candidates(
+        obs_t, [(path, st, ()) for path, st in kept],
+        lam, tmin, tmax, zero, tol)
+    near_matches = _score_candidates(obs_t, near, lam, tmin, tmax, zero, tol)
+    return matches, near_matches
+
+
 def screen_phases(obs_t, lib, lam, tmin, tmax, zero, elements=(),
                   preferred=(), tol=0.04, skip_names=None):
     """对整个相库打分，按分数从高到低返回 PhaseMatch 列表。
 
     同分时保持 `phase_candidates` 的先后（preferred 优先、其余按文件名）。
     skip_names 传给 phase_candidates；None = 默认跳过 Al_metal.cif。
+    只返回保留组；需要"被元素表排除的相近相"用 `screen_phases_report`。
     """
-    matches = []
-    for path, structure in phase_candidates(
-            lib, elements=elements, preferred=preferred,
-            skip_names=skip_names):
-        result = score_phase(obs_t, structure, lam, tmin, tmax, zero, tol=tol)
-        if result is None:
-            continue
-        score, scale, coverage, purity = result
-        matches.append(PhaseMatch(path, structure, score, scale,
-                                  coverage, purity))
-    matches.sort(key=lambda m: -m.score)
+    matches, _near = screen_phases_report(
+        obs_t, lib, lam, tmin, tmax, zero, elements=elements,
+        preferred=preferred, tol=tol, skip_names=skip_names,
+        max_near_miss=0)
     return matches

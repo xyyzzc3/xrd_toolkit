@@ -224,12 +224,20 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     lib = Path(a.lib)
     allowed = [e for e in re.split(r"[,\s]+", a.elements) if e]
-    candidates = psearch.phase_candidates(lib, allowed, preferred=PREFERRED)
+    candidates, near_candidates = psearch.phase_candidates_report(
+        lib, allowed, preferred=PREFERRED, max_near_miss=10)
     if not candidates:
         ap.error(f"相库里没有可用的 CIF：{lib}"
                  + (f"（元素筛选：{a.elements}）" if allowed else ""))
     print(f"相库 {lib}：{len(psearch.phase_library(lib))} 张 CIF，"
           f"元素筛选后 {len(candidates)} 张")
+    if near_candidates:
+        # 元素表是白名单：漏写一个元素会把真相相静默删掉（LMFP 漏 Mn 时
+        # 只剩 Fe 系橄榄石）。这些"只多出几个元素"的相近相照样打分，
+        # 高于当前最佳时点名警告——与 GUI 的提示同一口径。
+        print("  元素表排除的相近相："
+              + "、".join(f"{p.stem}（多 {'、'.join(extra)}）"
+                         for p, _st, extra in near_candidates))
     inst = instrument_profile(geom, lam)
     print(f"几何 {a.config}：λ={lam:.4f} Å；"
           + (f"仪器来自 LaB₆（Rwp {inst.rwp:.2f}%）" if inst else
@@ -266,6 +274,22 @@ def main():
         for (sc, scale_i, cov, pur), cif, _st in ranked[:3]:
             print(f"    {cif.name:34} score {sc:.3f} "
                   f"scale {scale_i:.4f} coverage {cov:.2f} purity {pur:.2f}")
+        if near_candidates:
+            near_ranked = []
+            for cif, structure, extra in near_candidates:
+                sc = psearch.score_phase(obs_t, structure, lam,
+                                         a.tmin, a.tmax, zero)
+                if sc:
+                    near_ranked.append((sc, cif, extra))
+            if near_ranked:
+                near_ranked.sort(key=lambda x: -x[0][0])
+                best_near = near_ranked[0]
+                if best_near[0][0] > top[0][0]:
+                    print(f"  警告：被元素表排除的 {best_near[1].stem}"
+                          f"（多 {'、'.join(best_near[2])}）"
+                          f"score {best_near[0][0]:.3f} > 当前最佳 "
+                          f"{top[0][0]:.3f}；若样品确实含这些元素，"
+                          f"请把它们加进 --elements 再跑")
         al_cif = lib / AL_CIF.name
         exclude = al_substrate_ranges(
             obs_t, obs_h, lam, a.tmin, a.tmax, zero, top[1], scale,
