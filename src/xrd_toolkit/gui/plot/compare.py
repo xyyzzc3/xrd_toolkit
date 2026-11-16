@@ -79,6 +79,33 @@ def _redraw_compare(window: QMainWindow, key: str) -> None:
                 # 用户自己定行距（2026-10-05："让用户自己改 y offset"）：
                 # 按倍数缩放自动行距——只动显示，1.00 = 与自动相同
                 step *= float(_panel_param(window, dock, "行距倍数", 1.0))
+            # 行距换台阶 → 堆叠里缩放钉下的 y 窗口一起换算（× 新/旧 step），
+            # 保留**同一批行**留在视野里（与瀑布 2026-10-13 同一套修法）。
+            # 不换算的话先放大再调行距，旧台阶的坐标会被原样当成新台阶
+            # 套回去——视野里换成另一段行，看起来"行距没生效"（用户
+            # 2026-11-16 报的「调整行间距与放大镜之间」）。
+            snap = getattr(dock, "params_snapshot", None)
+            prev_step = getattr(dock, "_cmp_step", None)
+            if (snap is not None and prev_step is not None
+                    and np.isfinite(prev_step) and float(prev_step) > 0
+                    and np.isfinite(step) and float(step) > 0):
+                rng = snap.get("堆叠视图 y 范围")
+                lo = hi = None
+                try:
+                    lo, hi = float(rng[0]), float(rng[1])
+                except (TypeError, IndexError, ValueError):
+                    pass
+                if lo is not None and lo < hi:
+                    home_stack = getattr(dock, "view_home_stack", None)
+                    if (home_stack is not None and len(home_stack) >= 2
+                            and np.isclose(lo, home_stack[1][0], rtol=1e-6)
+                            and np.isclose(hi, home_stack[1][1], rtol=1e-6)):
+                        snap.pop("堆叠视图 y 范围", None)   # ≈ 天然窗口 → 重新量程
+                    else:
+                        ratio = float(step) / float(prev_step)
+                        if abs(ratio - 1.0) > 1e-12:
+                            snap["堆叠视图 y 范围"] = [lo * ratio, hi * ratio]
+            dock._cmp_step = float(step)
             offsets = [i * step for i in range(len(curves))]
             for (tth, shown, display, i, _ref), off in zip(curves, offsets):
                 color = _gradient_color(family, rank.get(i, i), n_color)

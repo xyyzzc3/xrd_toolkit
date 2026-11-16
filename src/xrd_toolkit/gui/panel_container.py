@@ -24,6 +24,10 @@ _PANEL_ATTRS = (
     # plot_panels._refresh_home）；对比堆叠还有自己一份"家"
     # （view_home_stack，取消堆叠后回平铺那份，2026-10-15）
     "view_home", "view_home_stack", "_view_from_gesture",
+    # 行距台阶（瀑布 / 对比堆叠）：缩放后调行距要按新旧行距换算钉住的
+    # y 窗口（见 plot.drawing / plot.compare）；弹出/收回丢了就等于
+    # "先缩放后调行距"再犯一次（2026-11-16）。
+    "_wf_step", "_cmp_step",
     # Customize 对话框保护记账（重画不覆盖用户改动，见 _draw_1d）
     "_title_ours", "_title_display", "_xlabel_ours", "_ylabel_ours",
     "_yscale_ours", "_yscale_param",

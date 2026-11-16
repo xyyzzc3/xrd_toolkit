@@ -367,6 +367,48 @@ class TestCompareStackView(unittest.TestCase):
         finally:
             w.close()
 
+    def test_row_step_rescales_the_pinned_stack_window(self):
+        """堆叠里缩放后调行距：钉住的 y 窗口按新/旧行距换算（2026-11-16）。
+
+        不换算的话，旧台阶的坐标会被原样套到新台阶上——视野里换成另
+        一段行，看起来"行距没生效"（与瀑布 2026-10-13 同一类 bug）。
+        """
+        w = create_window()
+        try:
+            key, ax = self._plot_compare(w)
+            dock = w.plot_docks[key]
+            # 平铺时每条曲线的第一个点（用来从叠放后的 y 反推行偏移）
+            flat0 = float(np.asarray(ax.lines[0].get_ydata())[0])
+            flat1 = float(np.asarray(ax.lines[1].get_ydata())[0])
+
+            def _step():
+                return (float(np.asarray(ax.lines[1].get_ydata())[0]) - flat1
+                        - float(np.asarray(ax.lines[0].get_ydata())[0])
+                        + flat0)
+
+            w.params["对比堆叠"].setChecked(True)
+            QApplication.processEvents()
+            self._wheel(w, key, ax)
+            lo0, hi0 = dock.params_snapshot["堆叠视图 y 范围"]
+            span0, center0 = hi0 - lo0, (lo0 + hi0) / 2
+            step0 = _step()
+            w.params["手动行距"].setChecked(True)
+            w.params["行距倍数"].setValue(2.0)
+            QApplication.processEvents()
+            lo1, hi1 = dock.params_snapshot["堆叠视图 y 范围"]
+            step1 = _step()
+            self.assertAlmostEqual(step1 / step0, 2.0, places=6,
+                                   msg="前置：手动倍数确实把行距翻倍")
+            self.assertAlmostEqual((hi1 - lo1) / span0, step1 / step0,
+                                   places=6, msg="视野跨度按行距同比放大")
+            self.assertAlmostEqual(((lo1 + hi1) / 2) / step1,
+                                   center0 / step0, places=6,
+                                   msg="视野中心仍是同一批行")
+            self.assertAlmostEqual(ax.get_ylim()[0], lo1, places=6)
+            self.assertAlmostEqual(ax.get_ylim()[1], hi1, places=6)
+        finally:
+            w.close()
+
     def test_unstack_returns_to_the_flat_view(self):
         """平铺缩放（窗口 W）→ 堆叠 → 堆叠里缩放 → 取消堆叠：视图回到
         平铺那份 W（堆叠坐标的窗口不许套进来）。"""
