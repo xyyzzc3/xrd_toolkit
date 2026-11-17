@@ -38,6 +38,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
+from xrd_toolkit.gui.figure_appearance import (
+    apply_figure_appearance, edit_figure_appearance)
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.plot_export import save_figure_with_options
@@ -148,6 +150,7 @@ class InSituWorkbench(QWidget):
         # 模型无关视图的按帧缓存：每次新帧/新批次清空
         self._mi_rows = None
         self._mi_len = -1
+        self._appearances = [{}, {}, {}, {}]   # 四视图各自的图外观
 
         self._build_ui()
         self._refresh_mask_label()
@@ -360,6 +363,11 @@ class InSituWorkbench(QWidget):
         self.stop_btn.setToolTip("当前帧算完后停，已完成的帧保留")
         self.stop_btn.clicked.connect(self._stop_run)
         left_lay.addWidget(self.stop_btn)
+        self.appearance_btn = QPushButton("图外观…")
+        self.appearance_btn.setToolTip(
+            "改当前标签页的标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
+        self.appearance_btn.clicked.connect(self._edit_appearance)
+        left_lay.addWidget(self.appearance_btn)
         self.save_btn = QPushButton("保存当前图…")
         self.save_btn.setToolTip(
             "保存当前标签页的图（趋势 / 汇总 / 单帧拟合 / 峰窗跟踪）")
@@ -636,6 +644,7 @@ class InSituWorkbench(QWidget):
         self._clear_fit_view()
         self._mi_rows = None
         self._mi_len = -1
+        self._appearances = [{}, {}, {}, {}]   # 四视图各自的图外观
         self.copy_report_btn.setEnabled(False)
         self.view_tabs.setCurrentIndex(0)
         self._draw_trends()
@@ -721,6 +730,7 @@ class InSituWorkbench(QWidget):
         # 任意新帧都会让模型无关缓存失效；趋势图始终跟着更新
         self._mi_rows = None
         self._mi_len = -1
+        self._appearances = [{}, {}, {}, {}]   # 四视图各自的图外观
         self._draw_trends()
         if self.view_tabs.currentIndex() != 0:
             self._refresh_active_view()
@@ -787,6 +797,21 @@ class InSituWorkbench(QWidget):
     def _on_view_changed(self, _index):
         self._refresh_active_view()
 
+    def _active_fig(self):
+        index = self.view_tabs.currentIndex()
+        return [self.fig, self.summary_fig, self.fit_fig,
+                self.mi_fig][max(0, min(3, index))]
+
+    def _edit_appearance(self):
+        index = max(0, min(3, self.view_tabs.currentIndex()))
+        opts = edit_figure_appearance(
+            self, self._active_fig(), self._appearances[index])
+        if opts is None:
+            return
+        self._appearances[index] = opts
+        self._refresh_active_view()
+        self._set_status("图外观已应用（保存当前图也用这套外观）")
+
     def _refresh_active_view(self):
         index = self.view_tabs.currentIndex()
         if index == 0:
@@ -808,6 +833,7 @@ class InSituWorkbench(QWidget):
             draw_multi_trends)
         rows = (self.batch.rows if self.batch is not None else [])
         draw_multi_trends(self.fig, rows, self._phase_set())
+        apply_figure_appearance(self.fig, self._appearances[0])
         self.canvas.draw_idle()
 
     def _draw_summary(self):
@@ -815,6 +841,7 @@ class InSituWorkbench(QWidget):
             draw_multi_summary)
         rows = (self.batch.rows if self.batch is not None else [])
         draw_multi_summary(self.summary_fig, rows, self._phase_set())
+        apply_figure_appearance(self.summary_fig, self._appearances[1])
         self.summary_canvas.draw_idle()
 
     def _fit_title(self):
@@ -837,6 +864,7 @@ class InSituWorkbench(QWidget):
         else:
             draw_fit(self.fit_fig, self._fit_res, self._fit_title(),
                      bragg="auto")
+        apply_figure_appearance(self.fit_fig, self._appearances[2])
         self.fit_canvas.draw_idle()
 
     def _draw_model_independent(self):
@@ -845,6 +873,7 @@ class InSituWorkbench(QWidget):
             draw_window_tracker)
         rows = (self.batch.rows if self.batch is not None else [])
         draw_window_tracker(self.mi_fig, rows, self._phase_set())
+        apply_figure_appearance(self.mi_fig, self._appearances[3])
         self.mi_canvas.draw_idle()
 
     def _clear_fit_view(self):
@@ -929,6 +958,7 @@ class InSituWorkbench(QWidget):
                 return
             fig = Figure(figsize=(11.0, 7.0))
             draw_multi_trends(fig, self.batch.rows, self._phase_set())
+            apply_figure_appearance(fig, self._appearances[0])
             name = "insitu_trends"
         elif index == 1:
             if self.batch is None or not self.batch.rows:
@@ -936,6 +966,7 @@ class InSituWorkbench(QWidget):
                 return
             fig = Figure(figsize=(12.5, 8.0))
             draw_multi_summary(fig, self.batch.rows, self._phase_set())
+            apply_figure_appearance(fig, self._appearances[1])
             name = "insitu_summary"
         elif index == 2:
             if self._fit_res is None:
@@ -943,6 +974,7 @@ class InSituWorkbench(QWidget):
                 return
             fig = Figure(figsize=(11.5, 7.6))
             draw_fit(fig, self._fit_res, self._fit_title(), bragg="auto")
+            apply_figure_appearance(fig, self._appearances[2])
             name = f"insitu_fit_frame_{self._fit_frame:03d}"
         else:
             if self.batch is None or not self.batch.rows:
@@ -950,6 +982,7 @@ class InSituWorkbench(QWidget):
                 return
             fig = Figure(figsize=(12.0, 8.0))
             draw_window_tracker(fig, self.batch.rows, self._phase_set())
+            apply_figure_appearance(fig, self._appearances[3])
             name = "insitu_peak_windows"
         stamp = time.strftime("%Y%m%d-%H%M%S")
         saved = save_figure_with_options(

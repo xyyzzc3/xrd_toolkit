@@ -281,6 +281,18 @@ class TestInSituWorkbench(unittest.TestCase):
             self.assertTrue(out.is_file())
             self.assertGreater(out.stat().st_size, 1000)
 
+    def test_workbench_appearance_is_reapplied(self):
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        editor._appearances[0] = {"title": "Custom in-situ",
+                                  "xlabel": "Q", "grid": True}
+        editor._draw_trends()
+        ax = editor.fig.axes[0]
+        self.assertEqual(ax.get_title(), "Custom in-situ")
+        self.assertEqual(ax.get_xlabel(), "Q")
+        self.assertEqual(ax.get_yscale(), "linear")
+
     def test_top_row_labels_are_not_covered(self):
         """长数据路径不能把右上角的 mask 灰字压到按钮底下（2026-11-03）。"""
         self.w.resize(1600, 1000)
