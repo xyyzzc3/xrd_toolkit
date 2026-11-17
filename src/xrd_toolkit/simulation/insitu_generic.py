@@ -24,6 +24,8 @@ from pathlib import Path
 import numpy as np
 
 from xrd_toolkit.simulation import b_iso_from_cif, fit_pattern, load_structure
+from xrd_toolkit.simulation.phase_set import (
+    BatchPolicy, PhaseSet, PhaseSpec, REFERENCE, SAMPLE, _safe_label)
 from xrd_toolkit.simulation.insitu import frames_in_dir, load_frame
 from xrd_toolkit.services.mask import load_mask
 
@@ -54,16 +56,9 @@ def cell_free_params(structure):
     return ("a", "b", "c")
 
 
-@dataclass
-class GenericPhase:
-    """通用模式里的一相：CIF + 是否放开晶胞 + 额外相是否 Le Bail。"""
-
-    path: Path
-    structure: object
-    label: str
-    cell_free: bool = True
-    lebail: bool = False       # 额外相峰强是否逐反射自由（Le Bail）
-    b_iso: float = 0.0
+# 兼容旧名字：PhaseSpec 就是通用相描述（额外加了 display_name/role/
+# include_in_fraction 等字段）。旧代码读 `.lebail` 的用 property 映射。
+GenericPhase = PhaseSpec
 
 
 def make_phases(paths, *, cell_free=True, lebail=False):
@@ -74,20 +69,30 @@ def make_phases(paths, *, cell_free=True, lebail=False):
         path = Path(path)
         structure = load_structure(str(path))
         phases.append(GenericPhase(
-            path=path, structure=structure,
-            label=_safe_label(path, used),
-            cell_free=bool(cell_free), lebail=bool(lebail and i > 0),
+            structure=structure, label=_safe_label(path, used),
+            path=path, display_name=Path(path).stem,
+            role=SAMPLE, cell_free=bool(cell_free),
+            intensity="lebail" if (lebail and i > 0) else "structure",
+            include_in_fraction=True,
             b_iso=b_iso_from_cif(str(path)) or 0.0))
     if not phases:
         raise ValueError("至少需要一张 CIF")
     return phases
 
 
+def _main_label(phases):
+    for phase in phases:
+        if phase.is_sample():
+            return phase.label
+    return phases[0].label if phases else None
+
+
 def _cells(result, phases, seed):
     """从结果取每相晶胞；没参与精修的轴退回种子值。"""
     out = {}
-    for i, phase in enumerate(phases):
-        prefix = "" if i == 0 else f"{phase.label}:"
+    main_label = _main_label(phases)
+    for phase in phases:
+        prefix = "" if phase.label == main_label else f"{phase.label}:"
         vals = []
         for j, key in enumerate(("a", "b", "c")):
             try:
@@ -101,14 +106,17 @@ def _cells(result, phases, seed):
 def _amplitudes(result, phases):
     """每相的绝对散射强度 A_i（与 insitu._fractions 同口径）。"""
     amps = {}
-    main = phases[0]
+    main_label = _main_label(phases)
+    main = next((p for p in phases if p.label == main_label), None)
     try:
         amps[main.label] = (float(result.scale)
                             * float(np.sum(result.peak_table_intensities))
                             * float(result.peak_table_norm) / 100.0)
     except (AttributeError, TypeError, ValueError):
         amps[main.label] = float("nan")
-    for phase in phases[1:]:
+    for phase in phases:
+        if phase is main:
+            continue
         try:
             if phase.lebail:
                 block = result.extra_lebail[phase.label]
@@ -125,23 +133,38 @@ def _amplitudes(result, phases):
 
 
 def fractions(result, phases):
-    """每相相对强度分数 f_i = A_i / ΣA；全非有限时返回全 NaN。"""
+    """每相相对强度分数 f_i = A_i / ΣA（只除计入分母的相）。
+
+    参考相（Al 等）默认 `include_in_fraction=False`：它的 A_i 仍算出来，
+    但 f 记 NaN、不参与样品相归一；调用方可用 `amplitudes` 单独报告。
+    全非有限时返回全 NaN。
+    """
     amps = _amplitudes(result, phases)
-    total = sum(v for v in amps.values() if math.isfinite(v) and v > 0)
+    included = {p.label for p in phases
+                if getattr(p, "include_in_fraction", True)}
+    total = sum(v for label, v in amps.items()
+                if label in included and math.isfinite(v) and v > 0)
     if not (math.isfinite(total) and total > 0):
         return {label: float("nan") for label in amps}
-    return {label: (value / total if math.isfinite(value) and value > 0
-                    else float("nan"))
+    return {label: (value / total
+                    if label in included and math.isfinite(value)
+                    and value > 0 else float("nan"))
             for label, value in amps.items()}
 
 
-def _status(result, cells, seed, max_rwp):
+def _status(result, cells, seed, max_rwp, phases=(), policy=None):
     if result is None:
         return "error"
     if not math.isfinite(float(result.rwp)) or result.rwp > max_rwp:
         return f"high_rwp({float(result.rwp):.1f}%)"
-    for label, got in cells.items():
-        if any(abs(a - b) > CELL_JUMP for a, b in zip(got, seed[label])):
+    default = (policy.cell_jump_default if policy is not None else CELL_JUMP)
+    for phase in phases or ():
+        label = phase.label
+        got = cells.get(label)
+        if got is None:
+            continue
+        tol = phase.jump_tol if phase.jump_tol is not None else default
+        if any(abs(a - b) > tol for a, b in zip(got, seed[label])):
             return "cell_jump"
     return "ok" if bool(getattr(result, "success", True)) else "ok_soft"
 
@@ -152,11 +175,28 @@ class GenericBatch:
     def __init__(self, phase_paths, geom, wavelength, *, instrument=None,
                  mask=None, max_rwp=20.0, first_nfev=120, frame_nfev=40,
                  npt=3000, tth_min=1.0, tth_max=8.0, outdir=None,
-                 extra_lebail=False, extra_cell=False):
-        self.phases = make_phases(phase_paths)
-        for i, phase in enumerate(self.phases):
-            phase.cell_free = True if i == 0 else bool(extra_cell)
-            phase.lebail = bool(extra_lebail and i > 0)
+                 extra_lebail=False, extra_cell=False,
+                 phases=None, phase_set=None, policy=None):
+        """phase_paths（旧接口）或 phases/phase_set（PhaseSpec）二选一。
+
+        旧接口保持原行为：第一相主相、其余额外相，额外相的 Le Bail/
+        晶胞由两个全局开关决定。新接口直接用 PhaseSpec 的 role/cell_free/
+        intensity/include_in_fraction，全局开关不再生效。
+        """
+        self.phase_set = phase_set
+        if phase_set is not None:
+            self.phases = list(phase_set.phases)
+            base_policy = phase_set.policy
+        elif phases is not None:
+            self.phases = list(phases)
+            base_policy = policy or BatchPolicy.generic()
+        else:
+            self.phases = make_phases(phase_paths)
+            for i, phase in enumerate(self.phases):
+                phase.cell_free = True if i == 0 else bool(extra_cell)
+                phase.lebail = bool(extra_lebail and i > 0)
+            base_policy = policy or BatchPolicy.generic()
+        self.policy = base_policy
         self.geom = dict(geom)
         self.lam = float(wavelength)
         self.instrument = dict(instrument or {})
@@ -169,14 +209,24 @@ class GenericBatch:
         self.tth_max = float(tth_max)
         self.outdir = Path(outdir) if outdir else None
         self.rows = []
+        self.fitted = []          # [(i, path, result, fracs, status)]
         self.frame_no = 0
-        self.seed = {phase.label: tuple(float(x)
-                                        for x in phase.structure.lattice.abc)
+        self.seed = {phase.label: (tuple(float(x) for x in phase.cell0)
+                                   if getattr(phase, "cell0", None)
+                                   else tuple(float(x) for x in
+                                              phase.structure.lattice.abc))
                      for phase in self.phases}
+
+    def _main_phase(self):
+        """第一张样品相是 fit_pattern 的 main；其余相（含样品相）走 extra。"""
+        for phase in self.phases:
+            if phase.is_sample():
+                return phase
+        raise ValueError("至少要有一张样品相（role=sample）")
 
     # ── 拟合一帧 ────────────────────────────────────────────
     def _fit_once(self, t, y, bg, max_nfev):
-        main = self.phases[0]
+        main = self._main_phase()
         main_free = cell_free_params(main.structure) if main.cell_free else ()
         # 样品展宽必须放开：固定成"无限大晶粒"会把真实峰的宽度算错，
         # 实测 Rwp 会从几个百分点冲到 60% 以上。
@@ -191,11 +241,15 @@ class GenericBatch:
         for j, key in enumerate(("a", "b", "c")):
             init[key] = float(self.seed[main.label][j])
         extras = []
-        for phase in self.phases[1:]:
+        for phase in self.phases:
+            if phase is main:
+                continue
             spec = {
                 "structure": phase.structure,
                 "label": phase.label,
                 "b_iso": float(phase.b_iso),
+                "size_um": float(phase.size_um),
+                "mustrain": float(phase.mustrain),
                 "refine_intensities": bool(phase.lebail),
                 "refine_cell": bool(phase.cell_free
                                     and cell_free_params(phase.structure)),
@@ -204,11 +258,14 @@ class GenericBatch:
                 spec[key] = float(self.seed[phase.label][j])
             extras.append(spec)
         return fit_pattern(
-            main.structure, t, y, wavelength=self.lam, b_iso=0.0,
+            main.structure, t, y, wavelength=self.lam,
+            b_iso=float(main.b_iso),
             background=bg, background_knots=0.25, background_smooth=0.1,
             weights="poisson", cell_refine=bool(main_free),
             extra_phases=extras, phase_label=main.label,
-            free=free, initial=init, max_nfev=int(max_nfev))
+            free=free, initial=init, max_nfev=int(max_nfev),
+            xtol=self.policy.xtol, ftol=self.policy.ftol,
+            gtol=self.policy.gtol)
 
     def fit_frame(self, path):
         """跑一帧，返回 row dict；异常也返回 error 行，不抛出。"""
@@ -228,7 +285,8 @@ class GenericBatch:
                 self.first_nfev if i == 1 else self.frame_nfev)
             timers["fit"] = time.perf_counter() - t0
             cells = _cells(result, self.phases, self.seed)
-            status = _status(result, cells, self.seed, self.max_rwp)
+            status = _status(result, cells, self.seed, self.max_rwp,
+                             self.phases, self.policy)
         except Exception as err:                       # noqa: BLE001
             status = f"error: {type(err).__name__}: {err}"
             cells = {phase.label: self.seed[phase.label]
@@ -237,6 +295,8 @@ class GenericBatch:
             else {phase.label: self.seed[phase.label] for phase in self.phases}
         fracs = (fractions(result, self.phases) if result is not None
                  else {phase.label: float("nan") for phase in self.phases})
+        amps = (_amplitudes(result, self.phases) if result is not None
+                else {phase.label: float("nan") for phase in self.phases})
         row = {"frame": i, "file": path.name, "status": status,
                "usable": (result is not None
                           and not status.startswith(("error", "high_rwp"))
@@ -247,11 +307,13 @@ class GenericBatch:
                       else float("nan"))}
         for phase in self.phases:
             row[f"f_{phase.label}"] = fracs.get(phase.label, float("nan"))
+            row[f"a_{phase.label}"] = amps.get(phase.label, float("nan"))
             for key, value in zip(("a", "b", "c"), cells[phase.label]):
                 row[f"{phase.label}_{key}"] = float(value)
         for key in ("load", "integrate", "bg", "fit", "total"):
             row[f"t_{key}_s"] = float(timers.get(key, float("nan")))
         self.rows.append(row)
+        self.fitted.append((i, path, result, fracs, status))
         if row["usable"] and status != "cell_jump":
             self.seed = {label: tuple(cells[label])
                          for label in cells}
@@ -262,6 +324,7 @@ class GenericBatch:
         cols = ["frame", "file", "status", "usable", "rwp", "rp"]
         for phase in self.phases:
             cols.append(f"f_{phase.label}")
+            cols.append(f"a_{phase.label}")
             cols += [f"{phase.label}_{key}" for key in ("a", "b", "c")]
         cols += [f"t_{key}_s" for key in ("load", "integrate", "bg", "fit",
                                           "total")]

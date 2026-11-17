@@ -14,10 +14,11 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDoubleSpinBox, QFileDialog,
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
+    QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import get_config
@@ -25,20 +26,36 @@ from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.tasks import BackgroundTask
 
 
-def _prepare_worker(phase_paths, folder, config_name, mask_path, instrument,
-                    max_rwp, limit, npt, tth_min, tth_max,
-                    extra_lebail, extra_cell):
-    """后台准备：读结构/mask、列帧。不能碰界面控件。"""
+def _prepare_worker(phase_specs, folder, config_name, mask_path, instrument,
+                    max_rwp, limit, npt, tth_min, tth_max, policy):
+    """后台准备：按每相 PhaseSpec 读结构/mask、列帧。不能碰界面控件。"""
     from xrd_toolkit.simulation.insitu_generic import (
         GenericBatch, frames_for_dir, load_mask_file)
+    from xrd_toolkit.simulation.phase_set import (
+        BatchPolicy, PhaseSet, spec_from_path)
     geom = dict(get_config(config_name)["geometry"])
     lam = float(geom["wavelength_m"]) * 1e10
     mask = load_mask_file(mask_path) if mask_path else None
+    phases = [spec_from_path(
+        item["path"], label=item.get("label"), display_name=item.get(
+            "display_name", ""), role=item.get("role", "sample"),
+        cell_free=item.get("cell_free", True),
+        intensity=item.get("intensity", "structure"),
+        include_in_fraction=item.get("include_in_fraction", True),
+        b_iso=item.get("b_iso"), size_um=item.get("size_um", 1e4),
+        mustrain=item.get("mustrain", 0.0),
+        cell_bounds=item.get("cell_bounds"), jump_tol=item.get("jump_tol"),
+        color=item.get("color")) for item in phase_specs]
+    pol = BatchPolicy.generic()
+    for key, value in (policy or {}).items():
+        if hasattr(pol, key):
+            setattr(pol, key, value)
     batch = GenericBatch(
-        phase_paths, geom, lam, instrument=instrument, mask=mask,
-        max_rwp=max_rwp, first_nfev=120, frame_nfev=60,
-        npt=npt, tth_min=tth_min, tth_max=tth_max,
-        extra_lebail=bool(extra_lebail), extra_cell=bool(extra_cell))
+        [], geom, lam, instrument=instrument, mask=mask,
+        max_rwp=max_rwp, phase_set=PhaseSet(name="通用多相", phases=phases,
+                                            policy=pol),
+        first_nfev=pol.first_nfev, frame_nfev=pol.frame_nfev,
+        npt=npt, tth_min=tth_min, tth_max=tth_max)
     frames = frames_for_dir(folder, limit=limit)
     return batch, frames
 
@@ -100,16 +117,29 @@ class GenericInsituDialog(QDialog):
         root.addLayout(row)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("相（第一行 = 主相）"))
-        self.phase_list = QListWidget()
-        self.phase_list.setMaximumHeight(110)
-        self.phase_list.setToolTip(
-            "第一张 CIF = 主相（用结构因子算强度）；后面的都是额外相")
-        row.addWidget(self.phase_list, 1)
+        row.addWidget(QLabel("相"), 0)
+        self.phase_table = QTableWidget(0, 5)
+        self.phase_table.setObjectName("generic_phase_table")
+        self.phase_table.setHorizontalHeaderLabels(
+            ["角色", "相", "晶胞", "强度", "计入分数"])
+        self.phase_table.verticalHeader().setVisible(False)
+        self.phase_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.phase_table.setSelectionMode(
+            QAbstractItemView.SingleSelection)
+        self.phase_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.phase_table.setMaximumHeight(130)
+        hh = self.phase_table.horizontalHeader()
+        for col in (0, 2, 3, 4):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.phase_table.setToolTip(
+            "每相一行：角色（样品相/参考相）、晶胞是否自由、强度用结构因子"
+            "还是 Le Bail、是否计入样品分数分母。新加的相默认是样品相。")
+        row.addWidget(self.phase_table, 1)
         side = QVBoxLayout()
         for text, slot in (("加 CIF…", self._add_phases),
                            ("移除", self._remove_phase),
-                           ("设为主相", self._set_main_phase)):
+                           ("切换角色", self._toggle_role)):
             btn = QPushButton(text)
             btn.clicked.connect(slot)
             side.addWidget(btn)
@@ -118,17 +148,6 @@ class GenericInsituDialog(QDialog):
         root.addLayout(row)
 
         opts = QHBoxLayout()
-        self.chk_lebail = QCheckBox("额外相峰强自由（Le Bail）")
-        self.chk_lebail.setToolTip(
-            "未知相/织构强时勾上：每根峰强度单独解出；不勾 = 用 CIF 结构因子")
-        self.chk_lebail.setChecked(False)
-        opts.addWidget(self.chk_lebail)
-        self.chk_extra_cell = QCheckBox("额外相晶胞自由")
-        self.chk_extra_cell.setToolTip(
-            "勾上 = 额外相的 a/b/c 也参与精修（只对正交/立方相开放）；"
-            "默认固定，避免少相晶胞漂移")
-        self.chk_extra_cell.setChecked(False)
-        opts.addWidget(self.chk_extra_cell)
         opts.addWidget(QLabel("帧数上限"))
         self.limit = QSpinBox()
         self.limit.setRange(0, 9999)
@@ -215,50 +234,117 @@ class GenericInsituDialog(QDialog):
                 f"仪器基线：已加载（λ {self._current_wavelength():.4f} Å）")
 
     def _seed_phases(self):
+        """默认带入原位工作台的三相：rich/poor 样品相、Al 参考相。"""
         paths_now = getattr(self.workbench, "phase_paths", {}) or {}
-        for path in paths_now.values():
+        for key in ("rich", "poor", "al"):
+            path = paths_now.get(key)
             if path and Path(path).is_file():
-                self._append_phase(Path(path))
+                is_al = key == "al"
+                self._append_phase(
+                    Path(path),
+                    role="reference" if is_al else "sample",
+                    cell_free=not is_al,
+                    intensity="lebail" if is_al else "structure",
+                    include_in_fraction=not is_al)
 
-    def _append_phase(self, path):
-        item = QListWidgetItem(str(path))
+    def _append_phase(self, path, *, role="sample", cell_free=True,
+                      intensity="structure", include_in_fraction=True):
+        table = self.phase_table
+        row = table.rowCount()
+        table.insertRow(row)
+        role_box = QComboBox()
+        role_box.addItem("样品相", "sample")
+        role_box.addItem("参考相", "reference")
+        role_box.setCurrentIndex(0 if role == "sample" else 1)
+        table.setCellWidget(row, 0, role_box)
+        item = QTableWidgetItem(Path(path).stem)
         item.setData(Qt.UserRole, str(path))
         item.setToolTip(str(path))
-        self.phase_list.addItem(item)
+        table.setItem(row, 1, item)
+        cell = QCheckBox()
+        cell.setChecked(bool(cell_free))
+        cell.setToolTip("勾上 = 该相 a/b/c 参与精修（只对正交/立方开放）")
+        table.setCellWidget(row, 2, cell)
+        kind = QComboBox()
+        kind.addItem("结构因子", "structure")
+        kind.addItem("Le Bail", "lebail")
+        kind.setCurrentIndex(0 if intensity == "structure" else 1)
+        kind.setToolTip("参考相/织构强时用 Le Bail：每根峰强度单独解出")
+        table.setCellWidget(row, 3, kind)
+        include = QCheckBox()
+        include.setChecked(bool(include_in_fraction))
+        include.setToolTip("参考相（如 Al）取消勾选：不进入样品分数分母")
+        table.setCellWidget(row, 4, include)
         self._refresh_phase_items()
 
     def _refresh_phase_items(self):
-        for i in range(self.phase_list.count()):
-            item = self.phase_list.item(i)
-            path = Path(item.data(Qt.UserRole))
-            prefix = "主相" if i == 0 else f"额外相 {i}"
-            item.setText(f"{prefix}：{path.stem}")
-            item.setToolTip(str(path))
+        # 角色/强度/勾选都在 cell widget 里；这里只保证行高与 tooltip
+        for row in range(self.phase_table.rowCount()):
+            item = self.phase_table.item(row, 1)
+            if item is not None:
+                item.setToolTip(item.data(Qt.UserRole) or "")
 
     def _add_phases(self):
         start = (str(paths.phase_library_dir())
                  if paths.phase_library_dir().is_dir()
                  else str(paths.structures_dir()))
         files, _ = QFileDialog.getOpenFileNames(
-            self, "加 CIF（按列表顺序：第一张是主相）", start,
+            self, "加 CIF（默认样品相，可再切换角色）", start,
             "CIF (*.cif);;所有文件 (*)")
         for name in files:
             self._append_phase(Path(name))
 
     def _remove_phase(self):
-        row = self.phase_list.currentRow()
+        row = self.phase_table.currentRow()
         if row >= 0:
-            self.phase_list.takeItem(row)
+            self.phase_table.removeRow(row)
             self._refresh_phase_items()
 
-    def _set_main_phase(self):
-        row = self.phase_list.currentRow()
-        if row <= 0:
+    def _toggle_role(self):
+        row = self.phase_table.currentRow()
+        if row < 0:
             return
-        item = self.phase_list.takeItem(row)
-        self.phase_list.insertItem(0, item)
-        self.phase_list.setCurrentRow(0)
+        role_box = self.phase_table.cellWidget(row, 0)
+        if role_box is None:
+            return
+        is_sample = role_box.currentData() == "sample"
+        role_box.setCurrentIndex(1 if is_sample else 0)
+        # 切角色时套默认：参考相 = 固定晶胞 + Le Bail + 不进分母
+        cell = self.phase_table.cellWidget(row, 2)
+        kind = self.phase_table.cellWidget(row, 3)
+        include = self.phase_table.cellWidget(row, 4)
+        if cell is not None:
+            cell.setChecked(not is_sample)
+        if kind is not None:
+            kind.setCurrentIndex(1 if is_sample else 0)
+        if include is not None:
+            include.setChecked(not is_sample)
         self._refresh_phase_items()
+
+    def _phase_specs(self):
+        """表格 → worker 用的 PhaseSpec 字典列表。"""
+        specs = []
+        for row in range(self.phase_table.rowCount()):
+            item = self.phase_table.item(row, 1)
+            if item is None:
+                continue
+            role_box = self.phase_table.cellWidget(row, 0)
+            cell = self.phase_table.cellWidget(row, 2)
+            kind = self.phase_table.cellWidget(row, 3)
+            include = self.phase_table.cellWidget(row, 4)
+            specs.append({
+                "path": item.data(Qt.UserRole),
+                "display_name": Path(item.data(Qt.UserRole)).stem,
+                "role": role_box.currentData() if role_box is not None
+                else "sample",
+                "cell_free": bool(cell.isChecked()) if cell is not None
+                else True,
+                "intensity": kind.currentData() if kind is not None
+                else "structure",
+                "include_in_fraction": bool(include.isChecked())
+                if include is not None else True,
+            })
+        return specs
 
     def _choose_folder(self):
         chosen = QFileDialog.getExistingDirectory(
@@ -282,8 +368,13 @@ class GenericInsituDialog(QDialog):
 
     # ── 运行 ───────────────────────────────────────────────
     def _phase_paths(self):
-        return [self.phase_list.item(i).data(Qt.UserRole)
-                for i in range(self.phase_list.count())]
+        """兼容旧测试/调用：表格里的 CIF 路径（按行）。"""
+        out = []
+        for row in range(self.phase_table.rowCount()):
+            item = self.phase_table.item(row, 1)
+            if item is not None:
+                out.append(item.data(Qt.UserRole))
+        return out
 
     def _start(self):
         if self._task is not None:
@@ -292,9 +383,12 @@ class GenericInsituDialog(QDialog):
         if not folder.is_dir():
             self._set_status("帧目录不存在")
             return
-        phase_paths = self._phase_paths()
-        if not phase_paths:
+        phase_specs = self._phase_specs()
+        if not phase_specs:
             self._set_status("先 [加 CIF…] 至少加一张相")
+            return
+        if not any(item.get("role") == "sample" for item in phase_specs):
+            self._set_status("至少要有一相是「样品相」（不能全是参考相）")
             return
         outdir = Path(self.out_edit.text()).expanduser()
         self._outdir = outdir
@@ -310,13 +404,14 @@ class GenericInsituDialog(QDialog):
         self._set_status("准备中（读结构 + 掩膜 + 列帧）…")
         _log(self.main, "通用原位多相：准备开始")
         self._task = BackgroundTask(
-            _prepare_worker, phase_paths, folder, self.main.config_name,
+            _prepare_worker, phase_specs, folder, self.main.config_name,
             self.mask_edit.text().strip(), self._instrument,
             float(self.max_rwp.value()), int(self.limit.value()),
             int(self.workbench.npt.value()),
             float(self.workbench.tth_min.value()),
             float(self.workbench.tth_max.value()),
-            self.chk_lebail.isChecked(), self.chk_extra_cell.isChecked(),
+            {"first_nfev": 120, "frame_nfev": 60,
+             "dual_start": "off", "pending_frames": 0},
             on_done=self._prepared, on_error=self._failed)
         self._task.start()
 
@@ -329,8 +424,9 @@ class GenericInsituDialog(QDialog):
             return
         self._build_table()
         self._show_progress(len(self._frames), 0)
+        samples = [p.display() for p in self.batch.phases if p.is_sample()]
         self._set_status(f"开始：{len(self._frames)} 帧，"
-                         f"主相 {self.batch.phases[0].label}")
+                         f"样品相 {'、'.join(samples)}")
         self._start_next()
 
     def _build_table(self):

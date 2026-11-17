@@ -1,4 +1,5 @@
 """通用多相原位模式的纯函数、批次行与入口（2026-11-11 用户第 14 条）。"""
+import math
 import sys
 import tempfile
 import unittest
@@ -92,6 +93,24 @@ class TestGenericEngine(unittest.TestCase):
         self.assertIn("f_LiFePO4_olivine", header)
         self.assertIn("Mn0_6Fe0_4PO4_heterosite_a", header)
 
+    def test_phase_set_roles_and_fraction_denominator(self):
+        """2026-11-17：rich/poor 样品相 + Al 参考相；Al 不进样品分数。"""
+        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        pset = lmfp_phase_set()
+        batch = gen.GenericBatch([], {}, 1.0, phase_set=pset)
+        self.assertEqual([p.role for p in batch.phases],
+                         ["sample", "sample", "reference"])
+        self.assertEqual(batch._main_phase().label, "rich")
+        labels = ["rich", "poor", "Al"]
+        duck = _duck(labels=("rich", "poor"))
+        duck.extra_phase_table_sum["Al"] = 10.0
+        duck.extra_phase_norm["Al"] = 100.0
+        duck.params["Al:scale"] = 1.0
+        fracs = gen.fractions(duck, batch.phases)
+        self.assertAlmostEqual(fracs["rich"], 100.0 / 150.0, places=6)
+        self.assertAlmostEqual(fracs["poor"], 50.0 / 150.0, places=6)
+        self.assertFalse(math.isfinite(fracs["Al"]), "参考相不进分母")
+
     def test_cell_jump_keeps_seed(self):
         batch = gen.GenericBatch([RICH, POOR], {}, 1.0)
         before = dict(batch.seed)
@@ -132,9 +151,16 @@ class TestGenericEntry(unittest.TestCase):
         QApplication.processEvents()
         dlg = self.w._generic_insitu_dialog
         self.assertIsNotNone(dlg)
-        self.assertEqual(dlg.phase_list.count(), 3,
+        self.assertEqual(dlg.phase_table.rowCount(), 3,
                          "默认应带入 LMFP 三相")
-        self.assertEqual(dlg.phase_list.item(0).text().split("：")[0], "主相")
+        roles = [dlg.phase_table.cellWidget(r, 0).currentData()
+                 for r in range(3)]
+        self.assertEqual(roles, ["sample", "sample", "reference"],
+                         "rich/poor 是样品相，Al 是参考相")
+        self.assertEqual(
+            dlg.phase_table.cellWidget(2, 3).currentData(), "lebail")
+        self.assertFalse(dlg.phase_table.cellWidget(2, 4).isChecked(),
+                         "参考相默认不进样品分数")
         dlg.close()
         QApplication.processEvents()
         self.assertIsNone(self.w._generic_insitu_dialog)
