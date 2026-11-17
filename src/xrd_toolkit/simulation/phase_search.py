@@ -71,7 +71,7 @@ def phase_library(lib, skip_names=None):
 
 
 def phase_candidates_report(lib, elements=(), preferred=(), skip_names=None,
-                            max_near_miss=10):
+                            max_near_miss=10, on_progress=None):
     """扫描相库，返回 `(kept, near_miss)` 两组相。
 
     elements 为空 = 不筛。给了集合时按"样品元素白名单"剪枝：只保留
@@ -87,27 +87,36 @@ def phase_candidates_report(lib, elements=(), preferred=(), skip_names=None,
     读不出来的 CIF 跳过，不让一张坏卡片打断整批分析。preferred 里的
     文件名排在最前（只影响同分时的先后，不参与打分）。skip_names 的
     含义见 phase_library。
+
+    `on_progress(done, total, label)` 可选：每读完一张 CIF 报一次
+    （2026-11-17：物相工作台的"读取 CIF k/n"进度条；后台线程里调用，
+    回调方自己保证线程安全）。
     """
     wanted = _element_set(elements)
     rank = {str(name): i for i, name in enumerate(preferred)}
     kept, near_scored = [], []
-    for path in phase_library(lib, skip_names=skip_names):
+    files = phase_library(lib, skip_names=skip_names)
+    for index, path in enumerate(files, start=1):
         try:
-            structure = load_structure(str(path))
-        except Exception:                          # noqa: BLE001
-            continue
-        if wanted:
-            have = {el.symbol for el in structure.composition.elements}
-            if not have.issubset(wanted):
-                extra = have - wanted
-                missing = wanted - have
-                diff = len(extra) + len(missing)
-                if diff <= NEAR_MISS_MAX_DIFF:
-                    near_scored.append(
-                        (diff, len(extra), path, structure,
-                         tuple(sorted(extra))))
+            try:
+                structure = load_structure(str(path))
+            except Exception:                      # noqa: BLE001
                 continue
-        kept.append((path, structure))
+            if wanted:
+                have = {el.symbol for el in structure.composition.elements}
+                if not have.issubset(wanted):
+                    extra = have - wanted
+                    missing = wanted - have
+                    diff = len(extra) + len(missing)
+                    if diff <= NEAR_MISS_MAX_DIFF:
+                        near_scored.append(
+                            (diff, len(extra), path, structure,
+                             tuple(sorted(extra))))
+                    continue
+            kept.append((path, structure))
+        finally:
+            if callable(on_progress):
+                on_progress(index, len(files), "读取 CIF")
     kept.sort(key=lambda item: (rank.get(item[0].name, len(rank)),
                                 item[0].name))
     near_scored.sort(key=lambda item: (item[0], item[1], item[2].name))
@@ -260,50 +269,70 @@ def observed_peaks(tth, intensity, *, prominence=5.0, min_distance=0.008,
     return np.array(sorted(p.center for p in found), dtype=float)
 
 
-def _score_candidates(obs_t, items, lam, tmin, tmax, zero, tol):
-    """给 [(path, Structure, extra), ...] 打分，返回按分数降序的 PhaseMatch。"""
+def _score_candidates(obs_t, items, lam, tmin, tmax, zero, tol,
+                      on_progress=None, label="打分"):
+    """给 [(path, Structure, extra), ...] 打分，返回按分数降序的 PhaseMatch。
+
+    `on_progress(done, total, label)` 可选：每打完一张报一次（同
+    `phase_candidates_report`，后台线程里调用）。
+    """
     matches = []
-    for path, structure, extra in items:
-        result = score_phase(obs_t, structure, lam, tmin, tmax, zero, tol=tol)
-        if result is None:
-            continue
-        score, scale, coverage, purity = result
-        matches.append(PhaseMatch(path, structure, score, scale,
-                                  coverage, purity, extra))
+    total = len(items)
+    for index, (path, structure, extra) in enumerate(items, start=1):
+        try:
+            result = score_phase(
+                obs_t, structure, lam, tmin, tmax, zero, tol=tol)
+            if result is None:
+                continue
+            score, scale, coverage, purity = result
+            matches.append(PhaseMatch(path, structure, score, scale,
+                                      coverage, purity, extra))
+        finally:
+            if callable(on_progress):
+                on_progress(index, total, label)
     matches.sort(key=lambda m: -m.score)
     return matches
 
 
 def screen_phases_report(obs_t, lib, lam, tmin, tmax, zero, elements=(),
                          preferred=(), tol=0.04, skip_names=None,
-                         max_near_miss=10):
+                         max_near_miss=10, on_progress=None):
     """对整个相库打分，返回 `(matches, near_misses)`。
 
     near_misses 是"被样品元素表排除、但只多出几个元素"的相近相
     （`PhaseMatch.extra` 记录多出来的元素）。它们是用户漏写元素时最
     可能被误删的真相，所以照样打分——GUI 用它提示"元素表可能漏了 X"。
     正常相表元素为空时 near_misses 也一定是空的。
+
+    `on_progress(done, total, label)` 可选：三个阶段各报一次进度——
+    "读取 CIF" → "打分候选" → "打分相近相"（后两段的范围各自从 0 起）。
     """
     kept, near = phase_candidates_report(
         lib, elements=elements, preferred=preferred,
-        skip_names=skip_names, max_near_miss=max_near_miss)
+        skip_names=skip_names, max_near_miss=max_near_miss,
+        on_progress=on_progress)
     matches = _score_candidates(
         obs_t, [(path, st, ()) for path, st in kept],
-        lam, tmin, tmax, zero, tol)
-    near_matches = _score_candidates(obs_t, near, lam, tmin, tmax, zero, tol)
+        lam, tmin, tmax, zero, tol, on_progress=on_progress,
+        label="打分候选")
+    near_matches = _score_candidates(
+        obs_t, near, lam, tmin, tmax, zero, tol,
+        on_progress=on_progress, label="打分相近相")
     return matches, near_matches
 
 
 def screen_phases(obs_t, lib, lam, tmin, tmax, zero, elements=(),
-                  preferred=(), tol=0.04, skip_names=None):
+                  preferred=(), tol=0.04, skip_names=None,
+                  on_progress=None):
     """对整个相库打分，按分数从高到低返回 PhaseMatch 列表。
 
     同分时保持 `phase_candidates` 的先后（preferred 优先、其余按文件名）。
     skip_names 传给 phase_candidates；None = 默认跳过 Al_metal.cif。
     只返回保留组；需要"被元素表排除的相近相"用 `screen_phases_report`。
+    `on_progress` 同 `screen_phases_report`（CLI 不传就是没有进度）。
     """
     matches, _near = screen_phases_report(
         obs_t, lib, lam, tmin, tmax, zero, elements=elements,
         preferred=preferred, tol=tol, skip_names=skip_names,
-        max_near_miss=0)
+        max_near_miss=0, on_progress=on_progress)
     return matches

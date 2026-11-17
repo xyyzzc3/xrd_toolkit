@@ -27,13 +27,13 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMdiSubWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget)
+    QMdiSubWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
@@ -130,7 +130,7 @@ def _element_note(have, required, possible) -> str:
 
 def _screen_worker(tth, y, lib, elements, wavelength, tol,
                    prominence, min_distance, skip_names=None,
-                   required="", possible=""):
+                   required="", possible="", progress=None):
     """后台线程：寻峰 → 对相库打分 → 返回每相的理论峰位。
 
     不碰界面控件。pymatgen 是可选依赖，缺了要保留它自己的安装提示，
@@ -138,6 +138,8 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     skip_names 是"不参与主相候选"的第二相文件名（预设给的）。
     elements = 一定有 + 可能有的并集（筛选资格）；required/possible
     只用于给每个候选写 `note`（见 `_element_note`）。
+    progress(done, total, label)：引擎每读完/打完一张 CIF 调一次
+    （2026-11-17 进度条）；它只是写一个共享 dict，不碰 Qt。
 
     寻峰交给 `phase_search.observed_peaks`：按裁剪区间（NaN）分段、
     显著度按界面给的 kσ、只留最强 20 根。见那里的注释——用全局最大残差
@@ -167,7 +169,7 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
     tmin, tmax = float(tth[good].min()), float(tth[good].max())
     matches, near = ps.screen_phases_report(
         obs_t, lib, lam, tmin, tmax, 0.0, elements=elements,
-        tol=float(tol), skip_names=skip_names)
+        tol=float(tol), skip_names=skip_names, on_progress=progress)
     # 拿最佳候选估一个全局 2θ 零位，只用于叠图/后续输出——不重新跑一遍
     # 全库打分：零位主要影响"看起来贴不贴"，排序仍是零位 0 下的结果；
     # 重打分会让大库筛相变慢一倍（2026-11-11 实测小库都跑超 30 s）。
@@ -215,6 +217,11 @@ class PhaseWorkbench(QWidget):
         self._last_wavelength = None
 
         self._build_ui()
+        # 筛相进度：worker 只写这个 dict，GUI 用定时器读（后台线程不碰 Qt）
+        self._screen_progress_state = {}
+        self._screen_timer = QTimer(self)
+        self._screen_timer.setInterval(100)
+        self._screen_timer.timeout.connect(self._poll_screen_progress)
         self.refresh_curves()
         self._refresh_lib_label()
 
@@ -499,11 +506,25 @@ class PhaseWorkbench(QWidget):
         # 工作台底部状态行（日志坞收起时它是唯一的口信）：常驻、不自动
         # 消失，下一条状态才覆盖它。可选中/复制 + 允许换行，长句不至于
         # 被窗口边缘截掉（2026-11-17 用户："存在时间太短，看不清"）。
+        # 右侧是筛相进度条（读取 CIF → 打分候选 → 打分相近相）。
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
         self.status = QLabel("选一条 1D 曲线，点 [开始筛相]")
         self.status.setStyleSheet("color: gray;")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        root.addWidget(self.status)
+        self.status.setSizePolicy(QSizePolicy.Ignored,
+                                  QSizePolicy.Preferred)
+        status_row.addWidget(self.status, 1)
+        self.screen_bar = QProgressBar()
+        self.screen_bar.setObjectName("phase_screen_progress")
+        self.screen_bar.setFixedWidth(190)
+        self.screen_bar.setMaximumHeight(14)
+        self.screen_bar.setFormat("%v/%m")
+        self.screen_bar.setVisible(False)
+        status_row.addWidget(self.screen_bar)
+        root.addLayout(status_row)
 
     # ── 曲线与相库 ──────────────────────────────────────────
     def refresh_curves(self):
@@ -755,16 +776,23 @@ class PhaseWorkbench(QWidget):
         self.cell_btn.setEnabled(False)
         self.export_default_btn.setEnabled(False)
         self._set_status("筛相中，请稍候…")
+        self._show_screen_progress(1)
         _log(self.main, f"物相筛选：{self.lib_dir} → "
                         f"{self.curve_combo.currentText()}"
                         f"（{self.elements_summary()}）")
 
         task = None
 
+        def report(done, total, label):
+            """worker 线程里调用：只写 dict，GUI 由定时器读。"""
+            self._screen_progress_state.update(
+                done=int(done), total=int(total), label=str(label))
+
         def done(payload):
             self.main._tasks.remove(task)
             self._task = None
             self.screen_btn.setEnabled(True)
+            self._hide_screen_progress()
             obs_t, rows, zero, near = payload
             self._on_screen_done(obs_t, rows, zero, near)
 
@@ -772,6 +800,7 @@ class PhaseWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.screen_btn.setEnabled(True)
+            self._hide_screen_progress()
             self._set_status(f"筛相失败：{message}")
             _log(self.main, f"物相筛选失败：{message}")
 
@@ -783,7 +812,7 @@ class PhaseWorkbench(QWidget):
             float(self.tolerance.value()), float(self.prominence.value()),
             float(self.min_distance.value()),
             (second,) if second else (),
-            required, possible,
+            required, possible, report,
             on_done=done, on_error=error)
         self._task = task
         self.main._tasks.append(task)
@@ -1270,6 +1299,38 @@ class PhaseWorkbench(QWidget):
 
     def _set_status(self, text):
         self.status.setText(text)
+
+    # ── 筛相进度条（2026-11-17）─────────────────────────────
+    def _show_screen_progress(self, total: int = 1) -> None:
+        bar = getattr(self, "screen_bar", None)
+        if bar is None:
+            return
+        self._screen_progress_state = {}
+        bar.setRange(0, max(1, int(total)))
+        bar.setValue(0)
+        bar.setFormat("筛相准备中…")
+        bar.setVisible(True)
+        self._screen_timer.start()
+
+    def _poll_screen_progress(self) -> None:
+        """定时器读 worker 写的共享 dict → 推进度条（不跨线程碰 Qt）。"""
+        bar = getattr(self, "screen_bar", None)
+        state = getattr(self, "_screen_progress_state", None) or {}
+        if bar is None or not state.get("total"):
+            return
+        total = max(1, int(state["total"]))
+        done = min(total, max(0, int(state.get("done", 0))))
+        bar.setRange(0, total)
+        bar.setValue(done)
+        bar.setFormat(f"{state.get('label') or '筛相'} %v/%m")
+
+    def _hide_screen_progress(self) -> None:
+        timer = getattr(self, "_screen_timer", None)
+        if timer is not None:
+            timer.stop()
+        bar = getattr(self, "screen_bar", None)
+        if bar is not None:
+            bar.setVisible(False)
 
 
 def _section(text):

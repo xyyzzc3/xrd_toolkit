@@ -126,6 +126,29 @@ class TestAutoAnalysisHelpers(unittest.TestCase):
         self.assertIn("LiMn0.6Fe0.4PO4_olivine.cif",
                       {path.name for path, _st in kept2})
 
+    def test_screen_phases_reports_progress(self):
+        """2026-11-17：引擎按 CIF 报进度（读取 → 打分候选 → 打分相近相）。"""
+        lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))
+        _, _, tth, inten = core.reflection_table(
+            lab6, wavelength=CU_KA, two_theta_range=(10.0, 80.0), nmax=10)
+        inten = inten / inten.max()
+        obs = tth[inten >= 0.02]
+        steps = []
+        ps.screen_phases_report(
+            obs, ap.STRUCT, CU_KA, 10.0, 80.0, 0.0,
+            elements=["Li", "Fe", "P", "O"],
+            on_progress=lambda done, total, label: steps.append(
+                (done, total, label)))
+        labels = {label for _done, _total, label in steps}
+        self.assertTrue({"读取 CIF", "打分候选", "打分相近相"} <= labels)
+        # 每个阶段的 done 从 1 开始递增、不超过该阶段的 total
+        for label in ("读取 CIF", "打分候选", "打分相近相"):
+            stage = [(d, t) for d, t, lab in steps if lab == label]
+            self.assertTrue(stage, label)
+            self.assertEqual([d for d, _t in stage],
+                             list(range(1, len(stage) + 1)))
+            self.assertTrue(all(t == stage[0][1] for _d, t in stage))
+
     def test_screen_phases_report_scores_near_misses(self):
         """相近相照样打分——界面靠这个分数判断"它比当前最佳还高"。"""
         lab6 = core.load_structure(str(ap.STRUCT / "LaB6_NIST660c.cif"))

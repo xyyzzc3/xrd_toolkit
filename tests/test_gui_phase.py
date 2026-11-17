@@ -85,9 +85,13 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.w.phase_editor.elements_edit.clear()
         self.w.phase_editor.elements_possible_edit.clear()
         self.w.phase_editor.screen_btn.click()
+        self.assertTrue(self.w.phase_editor.screen_bar.isVisible(),
+                        "筛相开始后应显示进度条")
         ok = _wait_until(lambda: len(self.w.phase_editor.rows) > 0,
                          timeout_ms=30000)
         self.assertTrue(ok, "筛相没有在 30 秒内完成")
+        self.assertFalse(self.w.phase_editor.screen_bar.isVisible(),
+                         "筛相完成后进度条应收起")
 
     def test_enter_exit_and_mutual_exclusion(self):
         self.w.phase_btn.click()
