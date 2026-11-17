@@ -164,6 +164,13 @@ class TestGenericEntry(unittest.TestCase):
             dlg.phase_table.cellWidget(2, 3).currentData(), "lebail")
         self.assertFalse(dlg.phase_table.cellWidget(2, 4).isChecked(),
                          "参考相默认不进样品分数")
+        self.assertEqual(dlg.phase_table.columnCount(), 6)
+        self.assertFalse(dlg.phase_table.cellWidget(1, 5).isChecked(),
+                         "额外相 B/峰宽默认固定")
+        dlg.phase_table.cellWidget(1, 5).setChecked(True)
+        specs = dlg._phase_specs()
+        self.assertEqual(specs[1]["free_extra"],
+                         ("b_iso", "size_um", "mustrain"))
         dlg.close()
         QApplication.processEvents()
         self.assertIsNone(self.w._generic_insitu_dialog)

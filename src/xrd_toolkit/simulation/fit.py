@@ -597,7 +597,7 @@ class _Model:
                               "polariz", "size_mix", "strain_mix")})
             # 额外相晶胞精修：label:a/b/c 在全局 free 里，写回 em.fixed
             # 后 em._parts 才会用新晶胞重算峰位。立方相只认 a。
-            for key in ("a", "b", "c"):
+            for key in ("a", "b", "c", "b_iso", "size_um", "mustrain"):
                 name = f"{label}:{key}"
                 if name in p:
                     em.fixed[key] = float(p[name])
@@ -1260,6 +1260,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     # 三相批量的 rich 用主相 a/b/c；poor 是额外相，需要自己的一套
     # 晶胞参数。Al 是立方参考相，只放开 a（或干脆不放开）。
     extra_cell_names = []
+    extra_free_names = []
     extra_cell_init = {}
     extra_cell_bounds = {}
     if extra_phases:
@@ -1269,11 +1270,32 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             if label in seen_extra_labels:
                 raise ValueError(f"extra_phases label 重复：{label}")
             seen_extra_labels.add(label)
-            if not spec.get("refine_cell", False):
-                continue
             st_extra = spec.get("structure")
             if st_extra is None:
                 raise ValueError("extra_phases 每项必须给 structure")
+            # 额外相可选自由 B / 尺寸 / 应变（L2 起步；坐标/占位仍只
+            # 支持主相）。名字用 label:key 进全局 free。
+            for key in spec.get("free", ()) or ():
+                if key not in ("b_iso", "size_um", "mustrain"):
+                    raise ValueError(
+                        f"额外相 {label} 不支持的 free 参数：{key}")
+                name = f"{label}:{key}"
+                if name in free:
+                    continue
+                free = free + (name,)
+                extra_free_names.append(name)
+                default = {"b_iso": float(spec.get("b_iso", 0.5)),
+                           "size_um": float(spec.get("size_um", 1e4)),
+                           "mustrain": float(spec.get("mustrain", 0.0))}[key]
+                extra_cell_init[name] = default
+                if key == "b_iso":
+                    extra_cell_bounds[name] = (-50.0, 50.0)
+                elif key == "size_um":
+                    extra_cell_bounds[name] = (1e-3, 1e5)
+                else:
+                    extra_cell_bounds[name] = (0.0, 1e5)
+            if not spec.get("refine_cell", False):
+                continue
             abc = [float(spec.get(k, st_extra.lattice.abc[i]))
                    for i, k in enumerate(("a", "b", "c"))]
             cubic_extra = max(abc) - min(abc) < 1e-4
@@ -1375,7 +1397,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
     dynamic_names = ([f"b_{e}" for e in elem_names]
                      + (["md_r"] if md_refine else [])
                      + list(site_params) + list(occ_params)
-                     + list(extra_cell_names))
+                     + list(extra_cell_names) + list(extra_free_names))
     bad = [n for n in free if n not in _ALLOWED and n not in dynamic_names]
     if bad:
         raise ValueError(f"不可精修的参数：{bad}")

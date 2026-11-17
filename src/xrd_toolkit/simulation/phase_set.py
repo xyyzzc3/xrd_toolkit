@@ -170,7 +170,7 @@ def spec_from_path(path, *, label=None, display_name="", plot_name="",
                    cell_free=True, width_free=True, intensity="structure",
                    include_in_fraction=True, b_iso=None,
                    size_um=1e4, mustrain=0.0, cell_bounds=None,
-                   jump_tol=None, color=None):
+                   jump_tol=None, color=None, free_extra=()):
     """读一张 CIF → PhaseSpec（label 不给就用文件名洗出来）。"""
     path = Path(path)
     structure = load_structure(str(path))
@@ -187,7 +187,8 @@ def spec_from_path(path, *, label=None, display_name="", plot_name="",
         include_in_fraction=bool(include_in_fraction), b_iso=float(b_iso),
         size_um=float(size_um), mustrain=float(mustrain),
         cell_bounds=dict(cell_bounds or {}),
-        jump_tol=jump_tol, color=color)
+        jump_tol=jump_tol, color=color,
+        free_extra=tuple(free_extra or ()))
     return spec
 
 

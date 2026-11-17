@@ -352,6 +352,26 @@ class TestFitModes(unittest.TestCase):
         # 铝 (111) 在 Cu Kα 下约 38.5°
         self.assertTrue(np.any((al_tt > 38.0) & (al_tt < 39.0)))
 
+    def test_extra_phase_can_free_b_iso_size_and_mustrain(self):
+        """L2 起步：额外相自己的 B/尺寸/应变也能进入 free（2026-11-17）。"""
+        main = core.load_structure(STRUCT_DIR / "LiFePO4_olivine.cif")
+        al = core.load_structure(STRUCT_DIR / "Al_metal.cif")
+        kw = dict(wavelength=CU_KA, two_theta_range=(10.0, 80.0),
+                  step_deg=0.01, w=18.033, size_um=1e5, mustrain=0.0)
+        tth, y1, _, _ = simulate_pattern_gsas(main, scale=1000.0, **kw)
+        _, y2, _, _ = simulate_pattern_gsas(al, scale=300.0, **kw)
+        res = fit_pattern(
+            main, tth, y1 + y2, background=None, weights="uniform",
+            free=("zero", "w"), max_nfev=8,
+            initial={"zero": 0.0, "u": 0.0, "v": 0.0, "w": 18.033},
+            extra_phases=[{
+                "structure": al, "label": "Al",
+                "a": 4.049, "b": 4.049, "c": 4.049,
+                "size_um": 1e4, "mustrain": 0.0, "b_iso": 0.5,
+                "free": ("b_iso", "size_um", "mustrain")}])
+        for key in ("Al:b_iso", "Al:size_um", "Al:mustrain"):
+            self.assertIn(key, res.params)
+
     def test_x_y_default_bounds_are_nonnegative(self):
         from xrd_toolkit.simulation.fit import DEFAULT_BOUNDS
         self.assertEqual(DEFAULT_BOUNDS["x"][0], 0.0)

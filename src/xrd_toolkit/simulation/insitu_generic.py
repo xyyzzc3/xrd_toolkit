@@ -274,7 +274,10 @@ class GenericBatch:
         # 样品展宽必须放开：固定成"无限大晶粒"会把真实峰的宽度算错，
         # 实测 Rwp 会从几个百分点冲到 60% 以上。
         free = ("zero",) + tuple(main_free) + (
-            ("size_um", "mustrain") if main.width_free else ())
+            ("size_um", "mustrain")
+            if (main.width_free or getattr(main, "free_extra", ())) else ())
+        if "b_iso" in (getattr(main, "free_extra", ()) or ()):
+            free = free + ("b_iso",)
         init = {"zero": float(self.instrument.get("zero", 0.0)),
                 "u": float(self.instrument.get("u", 0.0)),
                 "v": float(self.instrument.get("v", 0.0)),
@@ -303,6 +306,7 @@ class GenericBatch:
                 "refine_intensities": bool(phase.lebail),
                 "refine_cell": bool(phase.cell_free
                                     and cell_free_params(phase.structure)),
+                "free": tuple(getattr(phase, "free_extra", ()) or ()),
             }
             for j, key in enumerate(("a", "b", "c")):
                 spec[key] = float(seed[phase.label][j])

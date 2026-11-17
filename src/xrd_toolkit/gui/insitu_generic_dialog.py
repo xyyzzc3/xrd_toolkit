@@ -47,7 +47,8 @@ def _prepare_worker(phase_specs, folder, config_name, mask_path, instrument,
         b_iso=item.get("b_iso"), size_um=item.get("size_um", 1e4),
         mustrain=item.get("mustrain", 0.0),
         cell_bounds=item.get("cell_bounds"), jump_tol=item.get("jump_tol"),
-        color=item.get("color")) for item in phase_specs]
+        color=item.get("color"),
+        free_extra=item.get("free_extra", ())) for item in phase_specs]
     pol = BatchPolicy.generic()
     for key, value in (policy or {}).items():
         if hasattr(pol, key):
@@ -120,10 +121,10 @@ class GenericInsituDialog(QDialog):
 
         row = QHBoxLayout()
         row.addWidget(QLabel("相"), 0)
-        self.phase_table = QTableWidget(0, 5)
+        self.phase_table = QTableWidget(0, 6)
         self.phase_table.setObjectName("generic_phase_table")
         self.phase_table.setHorizontalHeaderLabels(
-            ["角色", "相", "晶胞", "强度", "计入分数"])
+            ["角色", "相", "晶胞", "强度", "计入分数", "B/峰宽"])
         self.phase_table.verticalHeader().setVisible(False)
         self.phase_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.phase_table.setSelectionMode(
@@ -131,7 +132,7 @@ class GenericInsituDialog(QDialog):
         self.phase_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.phase_table.setMaximumHeight(130)
         hh = self.phase_table.horizontalHeader()
-        for col in (0, 2, 3, 4):
+        for col in (0, 2, 3, 4, 5):
             hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
         self.phase_table.setToolTip(
@@ -275,7 +276,8 @@ class GenericInsituDialog(QDialog):
                     include_in_fraction=not is_al)
 
     def _append_phase(self, path, *, role="sample", cell_free=True,
-                      intensity="structure", include_in_fraction=True):
+                      intensity="structure", include_in_fraction=True,
+                      free_extra=False):
         table = self.phase_table
         row = table.rowCount()
         table.insertRow(row)
@@ -302,6 +304,11 @@ class GenericInsituDialog(QDialog):
         include.setChecked(bool(include_in_fraction))
         include.setToolTip("参考相（如 Al）取消勾选：不进入样品分数分母")
         table.setCellWidget(row, 4, include)
+        bfree = QCheckBox()
+        bfree.setChecked(bool(free_extra))
+        bfree.setToolTip(
+            "额外相自己的 B/尺寸/应变也参与精修；默认固定（更快、更稳）")
+        table.setCellWidget(row, 5, bfree)
         self._refresh_phase_items()
 
     def _refresh_phase_items(self):
@@ -359,6 +366,7 @@ class GenericInsituDialog(QDialog):
             cell = self.phase_table.cellWidget(row, 2)
             kind = self.phase_table.cellWidget(row, 3)
             include = self.phase_table.cellWidget(row, 4)
+            bfree = self.phase_table.cellWidget(row, 5)
             specs.append({
                 "path": item.data(Qt.UserRole),
                 "display_name": Path(item.data(Qt.UserRole)).stem,
@@ -370,6 +378,9 @@ class GenericInsituDialog(QDialog):
                 else "structure",
                 "include_in_fraction": bool(include.isChecked())
                 if include is not None else True,
+                "free_extra": (("b_iso", "size_um", "mustrain")
+                               if bfree is not None and bfree.isChecked()
+                               else ()),
             })
         return specs
 
