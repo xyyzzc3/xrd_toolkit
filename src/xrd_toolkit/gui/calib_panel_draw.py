@@ -10,16 +10,16 @@ from matplotlib.colors import LogNorm
 from PySide6.QtWidgets import QMainWindow
 
 from xrd_toolkit.gui.calib_model import (
-    CP_COLOR, RING_COLOR, SELECT_COLOR, _calib_state, _metrics_dev,
-    _result_by_name, _slot_label)
+    CP_COLOR, RING_COLOR, SELECT_COLOR, _calib_state, _result_by_name)
 from xrd_toolkit.gui.figure_layout import compact_margins
 from xrd_toolkit.gui.panel_state import _auto_contrast_values, _log
 from xrd_toolkit.services.integrator import theoretical_ring_paths
 
-# 校准图四边白边（像素）：xlabel 实测会伸到画布外 6 px，48 px 才不裁；
-# 两行标题占 38 px，留 46。见 figure_layout.compact_margins。
+# 校准图四边白边（像素）：xlabel 实测会伸到画布外 6 px，48 px 才不裁。
+# 上方没有标题了（2026-11-17 删掉，见 _draw_calib_image），只留一点呼吸位。
+# 见 figure_layout.compact_margins。
 _CALIB_MARGINS = {"left_px": 56, "right_px": 8,
-                  "bottom_px": 48, "top_px": 46}
+                  "bottom_px": 48, "top_px": 8}
 
 
 def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
@@ -84,23 +84,12 @@ def _draw_calib_image(window: QMainWindow, key: str, image, geometry,
     if ring_marks:
         for x, y, ring in ring_marks:
             window.calib_marker_artists += _new_marker_artists(ax, x, y, ring)
-    span = ("Ring radius %.0f–%.0f px" % (paths["r_min_px"], paths["r_max_px"])
-            if np.isfinite(paths["r_min_px"]) else "Ring radius: no solution")
     ax.set_xlabel("Horizontal (px)")
     ax.set_ylabel("Vertical (px)")
-    # 标题里写明"青环是谁画的"（用户 2026-09-30："加一个图上的[说明]……让用户
-    # 知道结果就是当前用的数据"）：青环 = 当前配置（哪条结果 + 它现在的环位
-    # 偏差）——图上看到的东西和"现在用的几何"从此对得上号
-    state = _calib_state(window)
-    dev = _metrics_dev(state.get("current_metrics"))
-    dev_txt = f" · ring deviation {dev:.2f} px" if dev is not None else ""
-    # 标题两行、字号收小（2026-10-10 用户："标题过长"——原先一行塞四段
-    # （文件名 · 青环是谁 · 环位偏差 · 环半径覆盖），面板一窄两头裁）。
-    # 第一行只留"青环=哪条结果 + 环位偏差"（看图的人真正要对的信息）；
-    # 文件名删掉（窗口标题栏已经写着），环半径覆盖挪到第二行。
-    ax.set_title(f"Cyan rings = current config: "
-                 f"{_slot_label(state, 'current')}{dev_txt}\n{span}",
-                 fontsize=10)
+    # 图上标题已删（2026-11-17 用户："校准的图上方的字被挡住了，如果不重要，
+    # 就删掉"）：白边收窄后两行标题超出画布顶被裁掉一截；标题里的"青环 =
+    # 当前配置 / 环位偏差"在参数栏的当前配置列和日志里都有，图上不再重复。
+    # 红字警告（_warn_rings_off_image）在坐标区里面，不受影响。
     if not paths["n_inside"]:
         _warn_rings_off_image(window, ax, image, paths, geometry)
     # 视野（必须在所有画线之后设），三档优先：
