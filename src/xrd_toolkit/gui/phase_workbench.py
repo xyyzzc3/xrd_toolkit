@@ -792,9 +792,16 @@ class PhaseWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.screen_btn.setEnabled(True)
-            self._hide_screen_progress()
+            # 进度条留到表/图都落地再收：之前先 hide 再填表，用户会看到
+            # "100% 了但结果过一会才出来"（2026-11-17 反馈）。
+            bar = getattr(self, "screen_bar", None)
+            if bar is not None:
+                bar.setFormat("整理结果…")
             obs_t, rows, zero, near = payload
-            self._on_screen_done(obs_t, rows, zero, near)
+            try:
+                self._on_screen_done(obs_t, rows, zero, near)
+            finally:
+                self._hide_screen_progress()
 
         def error(message):
             self.main._tasks.remove(task)

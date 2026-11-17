@@ -34,13 +34,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-    QMdiSubWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
-    QToolButton, QVBoxLayout, QWidget)
+    QMdiSubWindow, QMenu, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QTabWidget, QTableWidget,
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.files.open_figures import set_workbench_open
+from xrd_toolkit.gui.figure_appearance import (
+    apply_figure_appearance, edit_figure_appearance)
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.plot_export import save_figure_with_options
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
@@ -94,7 +96,7 @@ def _cell_free(structure, free):
 
 def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
                 max_nfev, extra_paths=(), extra_lebail=True,
-                instrument=None):
+                instrument=None, processed=False):
     """后台线程里的纯计算：读 CIF → 估背景 → 全谱最小二乘。
 
     不能碰任何界面控件（见 gui.tasks 的线程规则）。pymatgen 属可选
@@ -116,6 +118,11 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
     structure = load_structure(str(cif_path))
     free, note = _cell_free(structure, free)
     b_iso = b_iso_from_cif(str(cif_path)) or None
+    # 处理产物（BG）已经扣过背景/可能平滑过：不再二次扣背景，权重改等权。
+    # 这不是"更准"，而是承认输入已经不是原始计数，避免 Poisson 假设
+    # 和二次相减把峰强/晶胞拉偏（2026-11-17 用户讨论）。
+    if processed:
+        bg_window = 0.0
     background = None
     if bg_window > 0:
         background = estimate_baseline_sliding(tth, y, float(bg_window))
@@ -131,7 +138,7 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
         "wavelength": float(wavelength),
         "b_iso": b_iso,
         "background": background,
-        "weights": "poisson",
+        "weights": ("uniform" if processed else "poisson"),
         "refine_intensities": bool(lebail),
         "free": tuple(free),
         "max_nfev": int(max_nfev),
@@ -146,6 +153,9 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
     if lebail:
         # Le Bail 下晶胞不参与非线性优化，但要按 initial 的晶胞重建峰位
         kwargs["cell_refine"] = True
+    if processed:
+        note = (note + "；" if note else "") + (
+            "处理产物：不再扣背景、等权权重；Rwp/esd/wt% 仅供相对比较")
     return fit_pattern(structure, tth, y, **kwargs), note
 
 
@@ -163,6 +173,8 @@ class RefineWorkbench(QWidget):
         self._extra_cifs = []
         self._extra_phase_paths = []
         self._product_sources = {}     # 文件栏产物条目：key -> Source
+        self._processed_curve = False  # 当前曲线是否是处理产物（BG）
+        self._appearance = {}          # 工作台图外观（图外观…）
         # 结构参数（原子坐标/占位）：按当前 CIF 的空间群列轨道；None =
         # 还没算（小节展开时才建，见 _ensure_sites）
         self._site_model = None
@@ -242,6 +254,10 @@ class RefineWorkbench(QWidget):
         self.range_label.setWordWrap(True)
         self.range_label.setStyleSheet("color: gray;")
         left_lay.addWidget(self.range_label)
+        self.source_mode_label = QLabel("")
+        self.source_mode_label.setWordWrap(True)
+        self.source_mode_label.setStyleSheet("color: #b7791f;")
+        left_lay.addWidget(self.source_mode_label)
 
         left_lay.addWidget(_section("背景"))
         bg_row = QHBoxLayout()
@@ -379,6 +395,12 @@ class RefineWorkbench(QWidget):
         save_row.addWidget(self.save_btn, 1)
         save_row.addWidget(self.copy_btn, 1)
         left_lay.addLayout(save_row)
+        self.appearance_btn = QPushButton("图外观…")
+        self.appearance_btn.setToolTip(
+            "改标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
+        self.appearance_btn.setEnabled(False)
+        self.appearance_btn.clicked.connect(self._edit_appearance)
+        left_lay.addWidget(self.appearance_btn)
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -393,7 +415,7 @@ class RefineWorkbench(QWidget):
         split.addWidget(left_scroll)
 
         right = QSplitter(Qt.Vertical)
-        self.fig = Figure(figsize=(6.6, 4.4))
+        self.fig = Figure(figsize=(7.2, 5.2))
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right.addWidget(self.canvas)
@@ -428,9 +450,18 @@ class RefineWorkbench(QWidget):
         split.setStretchFactor(1, 1)
         split.setSizes([270, 760])
 
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
         self.status = QLabel("选一条 1D 曲线和一张 CIF，点 [开始精修]")
         self.status.setStyleSheet("color: gray;")
-        root.addWidget(self.status)
+        status_row.addWidget(self.status, 1)
+        self.fit_progress = QProgressBar()
+        self.fit_progress.setObjectName("refine_progress")
+        self.fit_progress.setFixedWidth(190)
+        self.fit_progress.setMaximumHeight(14)
+        self.fit_progress.setVisible(False)
+        status_row.addWidget(self.fit_progress)
+        root.addLayout(status_row)
 
     # ── 曲线与结构列表 ───────────────────────────────────────
     def refresh_curves(self):
@@ -646,6 +677,42 @@ class RefineWorkbench(QWidget):
             return None
         return getattr(self.main, "plot_docks", {}).get(key)
 
+    def _current_source(self):
+        key = self.curve_combo.currentData()
+        if key and str(key).startswith("product:"):
+            return self._product_sources.get(key)
+        return None
+
+    def _update_curve_mode(self):
+        """按来源切换背景/权重口径：处理产物不二次扣背景、等权。"""
+        if not self.curve_combo.currentData():
+            self._processed_curve = False
+            self.source_mode_label.clear()
+            return
+        source = self._current_source()
+        processed = bool(source is not None
+                         and source.kind == gui_sources.BG)
+        self._processed_curve = processed
+        if processed:
+            idx = self.bg_combo.findData("none")
+            if idx >= 0:
+                self.bg_combo.setCurrentIndex(idx)
+            self.bg_combo.setEnabled(False)
+            self.bg_window.setEnabled(False)
+            self.source_mode_label.setText(
+                "处理产物：已扣过背景/可能平滑过。本次不再次扣背景、"
+                "用等权；Rwp/esd/wt% 只作相对参考，定量请选 1D 产物。")
+        else:
+            self.bg_combo.setEnabled(True)
+            self.bg_window.setEnabled(True)
+            if self.bg_combo.currentData() == "none":
+                idx = self.bg_combo.findData("auto")
+                if idx >= 0:
+                    self.bg_combo.setCurrentIndex(idx)
+            self.source_mode_label.setText(
+                "1D 产物/面板积分曲线：原始计数数据，可用 Poisson 权重"
+                "和自动背景做全谱定量。")
+
     def _curve_data(self):
         """下拉里选中的曲线 → (2θ, 强度)；面板或文件栏产物都行。"""
         key = self.curve_combo.currentData()
@@ -713,6 +780,8 @@ class RefineWorkbench(QWidget):
             self.param_table.setRowCount(0)
             self.save_btn.setEnabled(False)
             self.copy_btn.setEnabled(False)
+        self.appearance_btn.setEnabled(curve is not None)
+        self._update_curve_mode()
         if self.result is None:
             self._draw_observed()
 
@@ -869,6 +938,7 @@ class RefineWorkbench(QWidget):
         self._last_wavelength = wavelength
         extra_paths = tuple(self._extra_phase_paths)
         extra_lebail = self.chk_extra_lebail.isChecked()
+        processed = bool(getattr(self, "_processed_curve", False))
         meta = {
             "curve_key": self.curve_combo.currentData(),
             "curve_title": self.curve_combo.currentText(),
@@ -880,10 +950,14 @@ class RefineWorkbench(QWidget):
             "extra_paths": [str(path) for path in extra_paths],
             "extra_lebail": bool(extra_lebail),
             "fixed": bool(fixed),
+            "processed": processed,
             "wavelength": float(wavelength),
         }
 
         self.run_btn.setEnabled(False)
+        self.fit_progress.setRange(0, 0)   # 忙碌条：引擎暂无回调，先给反馈
+        self.fit_progress.setFormat("精修中…")
+        self.fit_progress.setVisible(True)
         self._set_status("精修中，请稍候…")
         _log(self.main, f"精修：{Path(cif_path).name} → "
                         f"{self.curve_combo.currentText()}")
@@ -894,6 +968,7 @@ class RefineWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.run_btn.setEnabled(True)
+            self.fit_progress.setVisible(False)
             result, note = payload
             self._on_fit_done(result, note, meta)
 
@@ -901,12 +976,13 @@ class RefineWorkbench(QWidget):
             self.main._tasks.remove(task)
             self._task = None
             self.run_btn.setEnabled(True)
+            self.fit_progress.setVisible(False)
             self._set_status(f"精修失败：{message}")
             _log(self.main, f"精修失败：{message}")
 
         task = BackgroundTask(
             _fit_worker, cif_path, tth, y, wavelength, free, lebail,
-            bg_window, 800, extra_paths, extra_lebail, fixed,
+            bg_window, 800, extra_paths, extra_lebail, fixed, processed,
             on_done=done, on_error=error)
         self._task = task
         self.main._tasks.append(task)
@@ -919,9 +995,14 @@ class RefineWorkbench(QWidget):
             self._fit_result_note = str(note or "")
         self._draw(result)
         self._fill_params(result)
-        self.report_view.setPlainText(result.report())
+        report = result.report()
+        if note:
+            report += "\n\n【数据来源提示】" + str(note)
+        self.report_view.setPlainText(report)
+        processed = bool((meta or {}).get("processed"))
         self.rwp_label.setText(
-            f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%")
+            f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%"
+            + ("   （处理产物，相对）" if processed else ""))
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
         cif = self.cif_combo.currentData() or ""
@@ -952,6 +1033,7 @@ class RefineWorkbench(QWidget):
         ax.set_ylabel("Intensity (counts)", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.grid(alpha=0.25, linestyle=":")
+        apply_figure_appearance(self.fig, self._appearance)
         self.fig.subplots_adjust(left=0.11, right=0.98, top=0.93, bottom=0.12)
         self.canvas.draw_idle()
 
@@ -986,8 +1068,23 @@ class RefineWorkbench(QWidget):
         from xrd_toolkit.simulation.plots import draw_fit
         title = getattr(result, "phase_label", "") or "Whole-pattern fit"
         draw_fit(self.fig, result, title, bragg="auto")
-        self.fig.subplots_adjust(left=0.11, right=0.98, top=0.90, bottom=0.10)
+        # 工作台画布比导出的 11.5×7.6 小：把行距加大，别让 Difference
+        # 的 y 标签/刻度压到布拉格行（2026-11-17 用户反馈）。
+        apply_figure_appearance(self.fig, self._appearance)
+        self.fig.subplots_adjust(left=0.11, right=0.98, top=0.90,
+                                 bottom=0.10, hspace=0.22)
         self.canvas.draw_idle()
+
+    def _edit_appearance(self):
+        opts = edit_figure_appearance(self, self.fig, self._appearance)
+        if opts is None:
+            return
+        self._appearance = opts
+        if self.result is not None:
+            self._draw(self.result)
+        else:
+            self._draw_observed()
+        self._set_status("图外观已应用（保存图片也用这套外观）")
 
     def _fill_params(self, result):
         skip = {"scale", "size_mix", "strain_mix"}
@@ -1065,7 +1162,7 @@ class RefineWorkbench(QWidget):
     def _copy_report(self):
         if self.result is None:
             return
-        QApplication.clipboard().setText(self.result.report())
+        QApplication.clipboard().setText(self.report_view.toPlainText())
         self._set_status("报告已复制到剪贴板")
 
     def _set_status(self, text):

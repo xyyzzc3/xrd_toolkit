@@ -217,6 +217,37 @@ class TestRefineWorkbench(unittest.TestCase):
             # 拟合入口也认这条曲线（不是只画出来）
             self.assertIn("2θ", editor.range_label.text())
 
+    def test_processed_product_uses_no_background_and_uniform_weights(self):
+        """处理产物精修口径（2026-11-17）：不再扣背景、权重等权。"""
+        import types
+        from xrd_toolkit.gui import refine_workbench as gui_refine
+        self._enter()
+        editor = self.w.refine_editor
+        source = types.SimpleNamespace(
+            kind=gui_refine.gui_sources.BG, display="fake_bg.tif",
+            path="data/fake_bg.tif", key="deadbeef")
+        with mock.patch.object(
+                gui_refine.gui_sources, "all_sources", return_value=[source]):
+            editor.refresh_curves()
+        self.assertTrue(editor._processed_curve)
+        self.assertEqual(editor.bg_combo.currentData(), "none")
+        self.assertFalse(editor.bg_combo.isEnabled())
+        self.assertIn("处理产物", editor.source_mode_label.text())
+
+        tth = np.linspace(1.0, 8.0, 200)
+        y = np.ones(200)
+        with mock.patch(
+                "xrd_toolkit.simulation.fit_pattern",
+                return_value=object()) as fp, mock.patch.object(
+                    gui_refine, "estimate_baseline_sliding") as bg:
+            _result, note = gui_refine._fit_worker(
+                str(LAB6_CIF), tth, y, 1.54, [], False, 0.2, 10,
+                processed=True)
+        self.assertIsNone(fp.call_args.kwargs["background"])
+        self.assertEqual(fp.call_args.kwargs["weights"], "uniform")
+        bg.assert_not_called()
+        self.assertIn("处理产物", note)
+
     def test_cif_list_has_reference_structures(self):
         self._enter()
         combo = self.w.refine_editor.cif_combo
@@ -258,6 +289,20 @@ class TestRefineWorkbench(unittest.TestCase):
                 texts += [t.get_text() for t in legend.get_texts()]
         offenders = [t for t in texts if re.search(r"[一-鿿]", t)]
         self.assertEqual(offenders, [], "精修图里不应出现中文")
+
+    def test_workbench_figure_appearance_is_reapplied(self):
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        editor._appearance = {"title": "Custom title",
+                              "xlabel": "Q (1/A)", "ylabel": "Counts",
+                              "grid": True}
+        editor._draw_observed()
+        ax = editor.fig.axes[0]
+        self.assertEqual(ax.get_title(), "Custom title")
+        self.assertEqual(ax.get_xlabel(), "Q (1/A)")
+        self.assertEqual(ax.get_ylabel(), "Counts")
+        self.assertEqual(ax.get_yscale(), "linear")
 
     def test_copy_parameter_table(self):
         self._open_panel()

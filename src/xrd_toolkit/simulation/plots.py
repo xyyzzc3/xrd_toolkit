@@ -202,16 +202,16 @@ def draw_fit(fig, result, title, zoom=None, exclude_ranges=None,
     rows = _fit_bragg_rows(result, bragg)
     fig.clear()
     if rows:
-        gs = fig.add_gridspec(3, 1, height_ratios=[3.2, 0.95, 0.55],
-                              hspace=0.07)
+        gs = fig.add_gridspec(3, 1, height_ratios=[3.2, 1.0, 0.65],
+                              hspace=0.10)
         ax = fig.add_subplot(gs[0])
         axr = fig.add_subplot(gs[1], sharex=ax)
         axb = fig.add_subplot(gs[2], sharex=ax)
         ax.tick_params(labelbottom=False)
         axr.tick_params(labelbottom=False)
     else:
-        gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 0.95],
-                              hspace=0.07)
+        gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 1.0],
+                              hspace=0.10)
         ax = fig.add_subplot(gs[0])
         axr = fig.add_subplot(gs[1], sharex=ax)
         axb = None
