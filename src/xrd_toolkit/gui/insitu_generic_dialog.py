@@ -17,7 +17,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
     QSizePolicy, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget)
@@ -142,7 +143,8 @@ class GenericInsituDialog(QDialog):
         side = QVBoxLayout()
         for text, slot in (("加 CIF…", self._add_phases),
                            ("移除", self._remove_phase),
-                           ("切换角色", self._toggle_role)):
+                           ("切换角色", self._toggle_role),
+                           ("改名…", self._rename_phase)):
             btn = QPushButton(text)
             btn.clicked.connect(slot)
             side.addWidget(btn)
@@ -318,6 +320,18 @@ class GenericInsituDialog(QDialog):
             if item is not None:
                 item.setToolTip(item.data(Qt.UserRole) or "")
 
+    def _rename_phase(self):
+        row = self.phase_table.currentRow()
+        if row < 0:
+            return
+        item = self.phase_table.item(row, 1)
+        if item is None:
+            return
+        text, ok = QInputDialog.getText(
+            self, "相的名字", "界面/图里显示的名字：", text=item.text())
+        if ok and text.strip():
+            item.setText(text.strip())
+
     def _add_phases(self):
         start = (str(paths.phase_library_dir())
                  if paths.phase_library_dir().is_dir()
@@ -369,7 +383,7 @@ class GenericInsituDialog(QDialog):
             bfree = self.phase_table.cellWidget(row, 5)
             specs.append({
                 "path": item.data(Qt.UserRole),
-                "display_name": Path(item.data(Qt.UserRole)).stem,
+                "display_name": item.text(),
                 "role": role_box.currentData() if role_box is not None
                 else "sample",
                 "cell_free": bool(cell.isChecked()) if cell is not None
