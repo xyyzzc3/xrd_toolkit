@@ -1197,13 +1197,13 @@ class TestSaveOptions(unittest.TestCase):
     """保存选项弹窗：分辨率 dpi + 格式（PNG/TIF）贯穿单张与批量保存。"""
 
     def test_dialog_defaults(self):
-        """默认 300 dpi + PNG（论文/报告印刷的常用起步值）。"""
+        """默认 300 dpi + PDF（2026-11-17：导出图默认论文格式）。"""
         w = create_window()
         try:
             with mock.patch.object(gui_plot_export.QDialog, "exec",
                                    return_value=QDialog.Accepted):
                 self.assertEqual(gui_plot_export._ask_save_options(w),
-                                 {"dpi": 300, "fmt": "png"})
+                                 {"dpi": 300, "fmt": "pdf"})
         finally:
             w.close()
 

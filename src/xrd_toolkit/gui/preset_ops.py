@@ -1,7 +1,9 @@
 """方案（内部仍叫 preset）的 GUI 操作（v0.2.1 B1，2026-11-10）。
 
-2026-11-12 起界面叫「方案」；几何下拉从坞顶搬进 [管理…] 的方案页，
-改完点 [保存方案] 立即生效（活动方案），坞顶只留灰字当前几何。
+2026-11-12 起界面叫「方案」；2026-11-17 起管理页的**八项都能手动选**
+（几何 / 第二相 / 相库 / 原位帧目录 / 原位掩膜 / 掩膜工程 / 两态样品
+元素 / 处理设置），点 [保存方案] 一次写入；坞顶同时恢复了几何下拉
+（选中 = 立即换当前会话几何），与管理页那份"写进哪个方案"分工不同。
 
 
 分工：
@@ -17,17 +19,20 @@
   * 预设只改默认输入，不重跑任何计算；已有结果留着，物相旧候选会被
     清掉（相库/第二相变了，旧候选不再对应）。
   * 预设内嵌的处理设置只显示在「处理」页，点 [套用当前方案] 才生效；
-    掩膜工程只在 Mask 工作台按图兜底，不生成掩膜 2D。
+    掩膜工程只在掩膜工作台按图兜底，不生成掩膜 2D；原位掩膜接受
+    `.mask.npz` 掩膜工程与 `.npy/.edf` 通用掩膜（名字或完整路径）。
   * 当前几何偏离预设时，下拉顶部显示「（当前设置）」虚拟项（只提示、
     不可应用）；校准/导入新几何后用日志提示怎么把它接回预设。
 """
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSizePolicy,
-    QVBoxLayout)
+    QComboBox, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout,
+    QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import CONFIGS, entry_display
@@ -35,13 +40,14 @@ from xrd_toolkit.gui.config_ops import (
     _delete_config, _edit_entry, _import_poni, _save_poni,
     _sync_del_config_btn)
 from xrd_toolkit.gui.panel_state import _log, set_geometry
+from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import user_error_text
 from xrd_toolkit.presets import (
-    DEFAULT_PRESET_NAME, get_preset, is_builtin, preset_names,
-    preset_phase_library, remove_user_preset, save_user_preset,
-    set_active_preset)
+    DEFAULT_PRESET_NAME, get_preset, is_builtin, mask_ref, preset_names,
+    preset_phase_library, remove_user_preset, resolve_mask_ref,
+    save_user_preset, set_active_preset)
 from xrd_toolkit.services import process, recipes
-from xrd_toolkit.services.mask import is_recipe
+from xrd_toolkit.services.mask import RECIPE_SUFFIX, is_recipe
 
 
 # 预设下拉里的虚拟项：当前几何已经偏离预设时显示，只作状态提示，不可"应用"。
@@ -84,6 +90,11 @@ def _portable_dir(path) -> str:
     return "~" if str(rel) == "." else "~/" + str(rel)
 
 
+def _split_elements(text) -> list:
+    """手输的元素串 → 符号列表（逗号/空格/分号都认）。"""
+    return [s for s in re.split(r"[,\s;]+", str(text or "").strip()) if s]
+
+
 def _processing_snapshot(settings) -> dict:
     """当前处理设置 → 预设内嵌设置快照；三项全关 / 空扫相减返回 None。"""
     if not isinstance(settings, dict):
@@ -112,13 +123,25 @@ def current_preset_values(window, base_name=None) -> dict:
         phase_lib = Path(editor.lib_dir)
     elif base:
         phase_lib = preset_phase_library(base)
-    # 样品元素：物相工作台开着就如实读输入框；没开 = 未设置（更新预设时
-    # 保留目标预设原来的值，不在用户没看的时候把它清掉）。
-    elements_box = getattr(getattr(window, "phase_editor", None),
-                           "elements_edit", None)
-    sample_elements = (elements_box.text().strip()
-                       if elements_box is not None
-                       else str(base.get("sample_elements") or ""))
+    # 样品元素：物相工作台开着就如实读两个输入框（一定有 / 可能有）；
+    # 没开 = 未设置（更新预设时保留目标预设原来的值，不在用户没看的时候
+    # 把它清掉）。
+    editor = getattr(window, "phase_editor", None)
+    required_box = getattr(editor, "elements_edit", None)
+    possible_box = getattr(editor, "elements_possible_edit", None)
+    if required_box is not None:
+        elements_required = required_box.text().strip()
+        elements_possible = (possible_box.text().strip()
+                             if possible_box is not None else "")
+    else:
+        base_required = base.get("sample_elements_required")
+        base_possible = base.get("sample_elements_possible")
+        if base_required is None and base_possible is None:
+            elements_required = str(base.get("sample_elements") or "")
+            elements_possible = ""
+        else:
+            elements_required = str(base_required or "")
+            elements_possible = str(base_possible or "")
     values = {
         "geometry": (str(getattr(window, "config_name", "") or "")
                      or str(base.get("geometry") or "")),
@@ -130,7 +153,8 @@ def current_preset_values(window, base_name=None) -> dict:
             else _portable_dir(phase_lib)),
         "processing": base.get("processing"),
         "mask_recipe": str(base.get("mask_recipe") or ""),
-        "sample_elements": sample_elements,
+        "sample_elements_required": elements_required,
+        "sample_elements_possible": elements_possible,
     }
     insitu = getattr(window, "insitu_editor", None)
     if insitu is not None:
@@ -138,7 +162,7 @@ def current_preset_values(window, base_name=None) -> dict:
             _portable_dir(insitu.data_dir)
             if getattr(insitu, "_data_dir_set", True) and insitu.data_dir
             else "")
-        values["insitu_mask_name"] = (insitu.mask_path.name
+        values["insitu_mask_name"] = (mask_ref(insitu.mask_path)
                                       if insitu.mask_path else "")
 
     # 处理设置：只在真的有编辑对象（1D 面板）时读当前设置；
@@ -254,7 +278,7 @@ def apply_preset(window, name, *, persist=True) -> bool:
                       + "（点 [套用当前方案] 才生效）")
     raw_mask = str(preset.get("mask_recipe") or "").strip()
     if raw_mask:
-        mask_path = Path(raw_mask).expanduser()
+        mask_path = resolve_mask_ref(raw_mask)
         extras.append("掩膜工程：" + mask_path.name
                       + ("" if mask_path.is_file() else "（未找到）"))
     tail = f"；{'；'.join(extras)}" if extras else ""
@@ -389,18 +413,27 @@ def _fields_text(values, *, empty_library=None) -> str:
                  if isinstance(processing, dict) else "（未设置）")
     raw_mask = str(values.get("mask_recipe") or "").strip()
     if raw_mask:
-        mask_path = Path(raw_mask).expanduser()
+        mask_path = resolve_mask_ref(raw_mask)
         mask_text = str(mask_path) + (
             "" if mask_path.is_file() else "（未找到）")
     else:
         mask_text = "（未设置）"
+    required = values.get("sample_elements_required")
+    possible = values.get("sample_elements_possible")
+    if required is None and possible is None:        # 旧预设只有单表
+        required = values.get("sample_elements")
+        possible = ""
+    elements_text = (f"一定有 {required or '—'}；"
+                     f"可能有 {possible or '—'}")
+    if not required and not possible:
+        elements_text = "（不筛）"
     return (
         f"几何配置：{geom}\n"
         f"第二相 CIF：{values.get('second_phase_cif') or '（无）'}\n"
         f"原位帧目录：{values.get('insitu_dir') or '（未设置）'}\n"
         f"原位掩膜：{values.get('insitu_mask_name') or '（不遮）'}\n"
         f"相库目录：{library}\n"
-        f"样品元素：{values.get('sample_elements') or '（不筛）'}\n"
+        f"样品元素：{elements_text}\n"
         f"处理设置：{proc_text}\n"
         f"掩膜工程：{mask_text}")
 
@@ -410,36 +443,49 @@ def _summary_text(preset) -> str:
 
 
 class PresetManagerDialog(QDialog):
-    """[管理…]：查看 / 编辑几何 / 应用 / 删除方案；内置方案只读。"""
+    """[管理…]：查看 / 手动选八项 / 应用 / 删除方案；内置方案只读。"""
 
     def __init__(self, window):
         super().__init__(window)
         self.setWindowTitle("管理方案")
-        self.setMinimumSize(640, 500)
+        self.setMinimumSize(820, 680)
         self.window = window
         window._preset_manager = self      # _reload_config_combo 的刷新入口
+        self._processing = None
+        self._loading = False
 
         root = QVBoxLayout(self)
         hint = QLabel(
-            "方案保存八项输入：几何、第二相 CIF、原位帧目录、原位掩膜、"
-            "相库目录、样品元素、处理设置、掩膜工程。\n"
-            "这轮只有「几何」可以直接改：选好条目点 [保存方案] 立即生效；"
-            "其余项先用当前设置调好再 [保存当前…]。")
+            "方案 = 八项输入的一组快照：几何、第二相 CIF、相库目录、"
+            "样品元素（一定有 / 可能有）、处理设置、原位帧目录、原位掩膜、"
+            "掩膜工程。换方案 = 一起换，不用一项一项改。\n"
+            "每一项都能在下面手动选：选好点 [保存方案] 写进这份用户方案"
+            "（如果它正是当前方案，立即生效）。内置方案只读——先用 "
+            "[保存当前…] 另存一份再改。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
 
         body = QHBoxLayout()
         self.list = QListWidget()
+        self.list.setMinimumWidth(150)
         self.list.currentRowChanged.connect(self._on_selected)
         body.addWidget(self.list, 1)
         right = QVBoxLayout()
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
-        self.summary.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.summary.setMinimumWidth(280)
-        self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        right.addWidget(self.summary, 1)
+        self.summary.setStyleSheet("color: gray;")
+        right.addWidget(self.summary)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        hl = QVBoxLayout(host)
+        hl.setContentsMargins(0, 0, 4, 0)
+        hl.setSpacing(6)
+
+        # ── 几何 ────────────────────────────────────────────
         geom_box = QGroupBox("几何")
         gl = QVBoxLayout(geom_box)
         geom_row = QHBoxLayout()
@@ -467,8 +513,128 @@ class PresetManagerDialog(QDialog):
             btn.setStyleSheet("padding: 2px 5px;")
             geom_btns.addWidget(btn, 1)
         gl.addLayout(geom_btns)
-        right.addWidget(geom_box)
-        body.addLayout(right, 1)
+        hl.addWidget(geom_box)
+
+        # ── 目录与文件 ──────────────────────────────────────
+        files_box = QGroupBox("目录与文件")
+        fl = QVBoxLayout(files_box)
+
+        def _path_row(label, edit, *buttons):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            row.addWidget(edit, 1)
+            for btn in buttons:
+                row.addWidget(btn)
+            fl.addLayout(row)
+
+        self.lib_edit = QLineEdit()
+        self.lib_edit.setObjectName("preset_lib_edit")
+        self.lib_edit.setPlaceholderText("留空 = 内置参考 CIF 目录")
+        self.lib_edit.setToolTip(
+            "物相/精修工作台用的相库目录；留空 = 软件自带的参考 CIF 目录")
+        self.lib_pick_btn = QPushButton("选目录…")
+        self.lib_pick_btn.clicked.connect(self._pick_library)
+        self.lib_reset_btn = QPushButton("默认")
+        self.lib_reset_btn.setToolTip("清空 = 用内置参考 CIF 目录")
+        self.lib_reset_btn.clicked.connect(self.lib_edit.clear)
+        _path_row("相库目录", self.lib_edit,
+                  self.lib_pick_btn, self.lib_reset_btn)
+
+        self.second_combo = QComboBox()
+        self.second_combo.setObjectName("preset_second_combo")
+        self.second_combo.setEditable(True)
+        self.second_combo.setSizePolicy(QSizePolicy.Ignored,
+                                        QSizePolicy.Preferred)
+        self.second_combo.setToolTip(
+            "作为第二相、不参与主相候选的 CIF 文件名（如集流体 Al）；"
+            "可手输，也可以从相库或 [浏览…] 选")
+        self.second_browse_btn = QPushButton("浏览…")
+        self.second_browse_btn.clicked.connect(self._pick_second_phase)
+        _path_row("第二相 CIF", self.second_combo, self.second_browse_btn)
+        self.lib_edit.editingFinished.connect(self._refresh_second_combo)
+
+        self.insitu_dir_edit = QLineEdit()
+        self.insitu_dir_edit.setPlaceholderText("（未设置）")
+        self.insitu_dir_pick_btn = QPushButton("选目录…")
+        self.insitu_dir_pick_btn.clicked.connect(self._pick_insitu_dir)
+        self.insitu_dir_clear_btn = QPushButton("清空")
+        self.insitu_dir_clear_btn.clicked.connect(self.insitu_dir_edit.clear)
+        _path_row("原位帧目录", self.insitu_dir_edit,
+                  self.insitu_dir_pick_btn, self.insitu_dir_clear_btn)
+
+        self.insitu_mask_edit = QLineEdit()
+        self.insitu_mask_edit.setPlaceholderText("（不遮）")
+        self.insitu_mask_edit.setToolTip(
+            "原位批量用的掩膜文件：掩膜工程 .mask.npz 或通用掩膜 .npy/.edf；"
+            "只写文件名时到 outputs/masks 下找")
+        self.insitu_mask_pick_btn = QPushButton("选文件…")
+        self.insitu_mask_pick_btn.clicked.connect(self._pick_insitu_mask)
+        self.insitu_mask_clear_btn = QPushButton("清空")
+        self.insitu_mask_clear_btn.clicked.connect(self.insitu_mask_edit.clear)
+        _path_row("原位掩膜", self.insitu_mask_edit,
+                  self.insitu_mask_pick_btn, self.insitu_mask_clear_btn)
+
+        self.mask_recipe_edit = QLineEdit()
+        self.mask_recipe_edit.setPlaceholderText("（未设置）")
+        self.mask_recipe_edit.setToolTip(
+            "掩膜工作台在该图没有自己的掩膜工程时用的兜底文件（.mask.npz）")
+        self.mask_recipe_pick_btn = QPushButton("选文件…")
+        self.mask_recipe_pick_btn.clicked.connect(self._pick_mask_recipe)
+        self.mask_recipe_clear_btn = QPushButton("清空")
+        self.mask_recipe_clear_btn.clicked.connect(self.mask_recipe_edit.clear)
+        _path_row("掩膜工程", self.mask_recipe_edit,
+                  self.mask_recipe_pick_btn, self.mask_recipe_clear_btn)
+        hl.addWidget(files_box)
+
+        # ── 样品元素（一定有 / 可能有）──────────────────────
+        elem_box = QGroupBox("样品元素")
+        el = QVBoxLayout(elem_box)
+        elem_row = QHBoxLayout()
+        elem_row.addWidget(QLabel("一定有"))
+        self.elements_required_edit = QLineEdit()
+        self.elements_required_edit.setObjectName("preset_elements_required")
+        self.elements_required_edit.setPlaceholderText("样品里确定的元素")
+        elem_row.addWidget(self.elements_required_edit, 1)
+        elem_row.addWidget(QLabel("可能有"))
+        self.elements_possible_edit = QLineEdit()
+        self.elements_possible_edit.setObjectName("preset_elements_possible")
+        self.elements_possible_edit.setPlaceholderText("杂质/衬底里可能出现的元素")
+        elem_row.addWidget(self.elements_possible_edit, 1)
+        self.elements_periodic_btn = QPushButton("周期表…")
+        self.elements_periodic_btn.clicked.connect(self._edit_elements)
+        self.elements_clear_btn = QPushButton("清空")
+        self.elements_clear_btn.clicked.connect(self._clear_elements)
+        elem_row.addWidget(self.elements_periodic_btn)
+        elem_row.addWidget(self.elements_clear_btn)
+        el.addLayout(elem_row)
+        hint_elem = QLabel("筛相资格取两组并集；「一定有」还用于结果标注。")
+        hint_elem.setStyleSheet("color: gray;")
+        el.addWidget(hint_elem)
+        hl.addWidget(elem_box)
+
+        # ── 处理设置 ────────────────────────────────────────
+        proc_box = QGroupBox("处理设置")
+        pl = QVBoxLayout(proc_box)
+        self.proc_label = QLabel("（未设置）")
+        self.proc_label.setWordWrap(True)
+        self.proc_label.setStyleSheet("color: gray;")
+        pl.addWidget(self.proc_label)
+        proc_row = QHBoxLayout()
+        self.proc_take_btn = QPushButton("用当前处理页设置")
+        self.proc_take_btn.setToolTip(
+            "读当前编辑对象（1D 面板）在「处理」页的背景/平滑/裁剪设置")
+        self.proc_take_btn.clicked.connect(self._take_processing)
+        self.proc_clear_btn = QPushButton("清除")
+        self.proc_clear_btn.clicked.connect(self._clear_processing)
+        proc_row.addWidget(self.proc_take_btn)
+        proc_row.addWidget(self.proc_clear_btn)
+        proc_row.addStretch(1)
+        pl.addLayout(proc_row)
+        hl.addWidget(proc_box)
+        hl.addStretch(1)
+        scroll.setWidget(host)
+        right.addWidget(scroll, 1)
+        body.addLayout(right, 3)
         root.addLayout(body, 1)
 
         buttons = QHBoxLayout()
@@ -476,7 +642,8 @@ class PresetManagerDialog(QDialog):
         self.apply_btn.clicked.connect(self._apply)
         self.save_scheme_btn = QPushButton("保存方案")
         self.save_scheme_btn.setToolTip(
-            "把上面选中的几何写进当前方案；如果它正是活动方案，立即生效")
+            "把这里手动选的八项写进选中的用户方案；"
+            "如果它正是当前方案，立即生效")
         self.save_scheme_btn.clicked.connect(self._save_scheme)
         self.update_btn = QPushButton("用当前设置更新")
         self.update_btn.setToolTip(
@@ -544,10 +711,59 @@ class PresetManagerDialog(QDialog):
             self.refresh_geometry_combo(None)
             return
         preset = get_preset(name)
-        self.summary.setText(_summary_text(preset))
+        builtin = is_builtin(name)
+        self.summary.setText(
+            f"方案「{name}」" + ("（内置，只读）" if builtin else
+                                "（用户方案，可直接改）"))
         self.apply_btn.setEnabled(True)
-        self._set_editable(not is_builtin(name))
-        self.refresh_geometry_combo(preset.get("geometry"))
+        self._load_editors(preset)
+        self._set_editable(not builtin)
+
+    def _load_editors(self, preset) -> None:
+        """把一份方案的八项填进编辑器（内置方案也会填，只是置灰）。"""
+        self._loading = True
+        try:
+            self.refresh_geometry_combo(preset.get("geometry"))
+            self.lib_edit.setText(str(preset.get("phase_library") or ""))
+            second = str(preset.get("second_phase_cif") or "")
+            self._refresh_second_combo(second)
+            self.insitu_dir_edit.setText(str(preset.get("insitu_dir") or ""))
+            self.insitu_mask_edit.setText(
+                str(preset.get("insitu_mask_name") or ""))
+            self.mask_recipe_edit.setText(
+                str(preset.get("mask_recipe") or ""))
+            required = preset.get("sample_elements_required")
+            possible = preset.get("sample_elements_possible")
+            if required is None and possible is None:      # 旧预设单表
+                required = preset.get("sample_elements")
+                possible = ""
+            self.elements_required_edit.setText(str(required or ""))
+            self.elements_possible_edit.setText(str(possible or ""))
+            processing = preset.get("processing")
+            self._processing = dict(processing) if isinstance(
+                processing, dict) else None
+            self._refresh_proc_label()
+        finally:
+            self._loading = False
+
+    def _collect_editors(self) -> dict:
+        """编辑器里的八项 → 可写盘的值。"""
+        second = self.second_combo.currentText().strip()
+        if second == "（无）":
+            second = ""
+        return {
+            "geometry": self._geom_key() or "",
+            "second_phase_cif": second,
+            "phase_library": self.lib_edit.text().strip(),
+            "insitu_dir": self.insitu_dir_edit.text().strip(),
+            "insitu_mask_name": self.insitu_mask_edit.text().strip(),
+            "mask_recipe": self.mask_recipe_edit.text().strip(),
+            "processing": self._processing,
+            "sample_elements_required": " ".join(sort_elements(
+                _split_elements(self.elements_required_edit.text()))),
+            "sample_elements_possible": " ".join(sort_elements(
+                _split_elements(self.elements_possible_edit.text()))),
+        }
 
     def _set_editable(self, on: bool) -> None:
         # on 只表示“当前方案可写”；几何注册表级的操作（加载/编辑/保存
@@ -555,11 +771,124 @@ class PresetManagerDialog(QDialog):
         self.save_scheme_btn.setEnabled(on)
         self.update_btn.setEnabled(on)
         self.delete_btn.setEnabled(on)
-        self.geom_combo.setEnabled(on)
+        for widget in (
+                self.geom_combo, self.lib_edit, self.lib_pick_btn,
+                self.lib_reset_btn, self.second_combo,
+                self.second_browse_btn, self.insitu_dir_edit,
+                self.insitu_dir_pick_btn, self.insitu_dir_clear_btn,
+                self.insitu_mask_edit, self.insitu_mask_pick_btn,
+                self.insitu_mask_clear_btn, self.mask_recipe_edit,
+                self.mask_recipe_pick_btn, self.mask_recipe_clear_btn,
+                self.elements_required_edit, self.elements_possible_edit,
+                self.elements_periodic_btn, self.elements_clear_btn,
+                self.proc_take_btn, self.proc_clear_btn):
+            widget.setEnabled(on)
         for btn in (self.geom_edit_btn, self.geom_load_btn,
                     self.geom_save_btn):
             btn.setEnabled(True)
         self._on_geom_changed()   # 删除按钮按选中条目是否内置决定
+
+    # ── 八项编辑器的按钮 ────────────────────────────────────
+    def _pick_library(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择相库目录",
+            self.lib_edit.text() or str(paths.structures_dir()))
+        if chosen:
+            self.lib_edit.setText(chosen)
+            self._refresh_second_combo(self.second_combo.currentText())
+
+    def _refresh_second_combo(self, current=None) -> None:
+        """第二相下拉：相库里的 CIF + 「（无）」+ 当前值（不丢手输）。"""
+        combo = getattr(self, "second_combo", None)
+        if combo is None:
+            return
+        if current is None:
+            current = combo.currentText().strip()
+        library = (Path(self.lib_edit.text()).expanduser()
+                   if self.lib_edit.text().strip()
+                   else preset_phase_library({"phase_library": ""}))
+        try:
+            cifs = sorted(p.name for p in library.glob("*.cif"))
+        except OSError:
+            cifs = []
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("（无）")
+        for name in cifs:
+            combo.addItem(name)
+        text = (current or "").strip()
+        if text and text != "（无）" and text not in cifs:
+            combo.addItem(text)
+        combo.setCurrentText(text or "（无）")
+        combo.blockSignals(False)
+
+    def _pick_second_phase(self) -> None:
+        start = (self.lib_edit.text().strip()
+                 or str(paths.structures_dir()))
+        name, _ = QFileDialog.getOpenFileName(
+            self, "选择第二相 CIF", start, "CIF (*.cif);;所有文件 (*)")
+        if name:
+            self.second_combo.setCurrentText(Path(name).name)
+
+    def _pick_insitu_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择原位帧目录",
+            self.insitu_dir_edit.text() or str(Path.home()))
+        if chosen:
+            self.insitu_dir_edit.setText(_portable_dir(chosen))
+
+    def _pick_insitu_mask(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择原位掩膜", str(paths.default_outputs_dir() / "masks"),
+            "掩膜 (*.mask.npz *.npy *.edf);;所有文件 (*)")
+        if path:
+            self.insitu_mask_edit.setText(mask_ref(path))
+
+    def _pick_mask_recipe(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择掩膜工程", str(paths.default_outputs_dir() / "masks"),
+            f"掩膜工程 (*{RECIPE_SUFFIX});;所有文件 (*)")
+        if path:
+            self.mask_recipe_edit.setText(_portable_dir(path))
+
+    def _edit_elements(self) -> None:
+        dlg = PeriodicTableDialog(
+            _split_elements(self.elements_required_edit.text()),
+            _split_elements(self.elements_possible_edit.text()), self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.elements_required_edit.setText(
+            " ".join(dlg.required_elements()))
+        self.elements_possible_edit.setText(
+            " ".join(dlg.possible_elements()))
+
+    def _clear_elements(self) -> None:
+        self.elements_required_edit.clear()
+        self.elements_possible_edit.clear()
+
+    def _take_processing(self) -> None:
+        values = current_preset_values(self.window)
+        processing = values.get("processing")
+        if not isinstance(processing, dict):
+            QMessageBox.information(
+                self, "处理设置",
+                "当前没有可读取的处理设置：先把一张 1D 图设为编辑对象，"
+                "在「处理」页调好背景/平滑/裁剪，再回来点这里。")
+            return
+        self._processing = dict(processing)
+        self._refresh_proc_label()
+
+    def _clear_processing(self) -> None:
+        self._processing = None
+        self._refresh_proc_label()
+
+    def _refresh_proc_label(self) -> None:
+        if self._processing:
+            self.proc_label.setText(process.chain_label(self._processing))
+            self.proc_label.setStyleSheet("")
+        else:
+            self.proc_label.setText("（未设置）")
+            self.proc_label.setStyleSheet("color: gray;")
 
     def refresh_geometry_combo(self, select_key=None) -> None:
         """重建几何下拉（注册表变化 / 选中方案变化时用）。
@@ -616,21 +945,20 @@ class PresetManagerDialog(QDialog):
             self.refresh_geometry_combo()
 
     def _save_scheme(self) -> None:
-        """把几何下拉的选中项写进当前方案；活动方案保存即生效（A）。"""
+        """把编辑器里手动选的八项写进选中的用户方案；活动方案保存即生效。"""
         name = self._selected_name()
         if not name or is_builtin(name):
             return
-        key = self._geom_key()
-        if not key:
+        values = self._collect_editors()
+        if not values["geometry"]:
+            QMessageBox.warning(self, "方案", "先选一条几何配置")
             return
-        preset = dict(get_preset(name))
-        preset["geometry"] = key
         try:
-            save_user_preset(name, preset)
+            save_user_preset(name, values)
         except (OSError, ValueError) as err:
             QMessageBox.warning(self, "方案", user_error_text(err))
             return
-        _log(self.window, f"方案已更新：{name}（几何 {key}）")
+        _log(self.window, f"方案已更新：{name}（几何 {values['geometry']}）")
         if getattr(self.window, "preset_name", None) == name:
             apply_preset(self.window, name)
         self._refresh(select=name)

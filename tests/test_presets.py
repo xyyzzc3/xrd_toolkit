@@ -214,6 +214,45 @@ class TestPresetService(unittest.TestCase):
         self.assertIsNone(preset["processing"])
         self.assertEqual(preset["mask_recipe"], "")
 
+    def test_two_state_elements_roundtrip(self):
+        """一定有 / 可能有分开存；旧单表读成"一定有"，并集字段同步。"""
+        path = _tmp_path()
+        presets.save_user_preset("两态", {
+            "geometry": "lmfp1_lab6",
+            "sample_elements_required": "Li Fe P O",
+            "sample_elements_possible": "Al Mn",
+        }, path=path)
+        preset = presets.get_preset("两态", path)
+        self.assertEqual(preset["sample_elements_required"], "Li Fe P O")
+        self.assertEqual(preset["sample_elements_possible"], "Al Mn")
+        self.assertEqual(preset["sample_elements"], "Li Fe P O Al Mn")
+
+        presets.save_user_preset("旧单表", {
+            "geometry": "lmfp1_lab6", "sample_elements": "Li Mn Fe",
+        }, path=path)
+        old = presets.get_preset("旧单表", path)
+        self.assertEqual(old["sample_elements_required"], "Li Mn Fe")
+        self.assertEqual(old["sample_elements_possible"], "")
+        self.assertEqual(old["sample_elements"], "Li Mn Fe")
+
+    def test_builtin_elements_split(self):
+        preset = presets.get_preset(presets.DEFAULT_PRESET_NAME)
+        self.assertEqual(preset["sample_elements_required"], "Li Mn Fe P O")
+        self.assertEqual(preset["sample_elements_possible"], "Al")
+
+    def test_mask_ref_resolution(self):
+        """掩膜引用：名字去 outputs/masks 找，路径原样；反写时同名只存名字。"""
+        from pathlib import Path
+        from xrd_toolkit import paths
+        root = paths.default_outputs_dir() / "masks"
+        named = presets.resolve_mask_ref("m.mask.npz")
+        self.assertEqual(named, root / "m.mask.npz")
+        absolute = root / "m.mask.npz"
+        self.assertEqual(presets.resolve_mask_ref(str(absolute)), absolute)
+        self.assertEqual(presets.mask_ref(absolute), "m.mask.npz")
+        outside = Path("/tmp/other/elsewhere.mask.npz")
+        self.assertEqual(presets.mask_ref(outside), str(outside))
+
 
 if __name__ == "__main__":
     unittest.main()

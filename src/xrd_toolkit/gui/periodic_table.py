@@ -4,6 +4,12 @@
 给同一件事一个点得着的入口：18 列标准布局，点一格 = 勾上/取消，确定
 后把符号按原子序数排好写回输入框（输入框仍保留，手输/脚本不受影响）。
 
+2026-11-17 起每个元素有**两种状态**（用户："周期表选中包含两种，一定有
+和可能有"）：点一下 = 一定有（实心蓝），再点 = 可能有（浅蓝），再点 =
+取消。筛选资格取两组的并集（相的元素必须全落在并集内）；"一定有"用于
+结果标注（一个都不含的相标"可能为衬底/杂质"，用到"可能有"里的元素时
+标出"含 X"）。另加 [确定并筛相]：选完元素直接开始筛相，少跑一趟。
+
 只做界面：不读相库、不判断某元素在不在库里——筛选仍由
 `simulation.phase_search.phase_candidates` 按元素集合完成。
 """
@@ -58,39 +64,61 @@ def sort_elements(symbols) -> list:
     return sorted(cleaned, key=atomic_number)
 
 
+# 元素格的三种状态：点一下一定有、再点可能有、再点取消
+STATE_OFF = 0
+STATE_REQUIRED = 1
+STATE_POSSIBLE = 2
+_STATE_TEXT = {STATE_OFF: "未选", STATE_REQUIRED: "一定有",
+               STATE_POSSIBLE: "可能有"}
+
+
 def _element_button(symbol: str) -> QPushButton:
     button = QPushButton(symbol)
     button.setObjectName(f"element_{symbol}")
-    button.setCheckable(True)
     button.setProperty("element", True)
-    button.setToolTip(f"{symbol}（Z = {atomic_number(symbol)}）")
+    button.setProperty("elementState", "off")
+    button.setToolTip(f"{symbol}（Z = {atomic_number(symbol)}）：点一下 = "
+                      "一定有，再点 = 可能有，再点 = 取消")
     button.setFocusPolicy(Qt.NoFocus)
     return button
 
 
 class PeriodicTableDialog(QDialog):
-    """点选元素；[确定] 后由调用方读 `selected_elements()`。
+    """点选元素（一定有 / 可能有）；[确定] 后由调用方读两组。
 
-    `selected` 是初始勾选（物相工作台输入框里已有的元素）。不在表里的
-    符号被忽略，不做报错——输入框允许手输，这里是它的图形入口。
+    `selected` = 初始的"一定有"，`possible` = 初始的"可能有"（物相工作台
+    两个输入框里已有的元素）。不在表里的符号被忽略，不做报错——输入框
+    允许手输，这里是它的图形入口。
+
+    `allow_screen=True` 时多一颗 [确定并筛相]：点它 = accept + 把
+    `screen_requested` 置 True，调用方据此直接开始筛相。
     """
 
-    def __init__(self, selected=(), parent=None):
+    def __init__(self, selected=(), possible=(), parent=None, *,
+                 allow_screen=False):
         super().__init__(parent)
         self.setWindowTitle("元素周期表")
         self.setMinimumWidth(760)
+        self.screen_requested = False
         self.setStyleSheet(
             'QPushButton[element="true"] {'
             ' min-width: 28px; min-height: 22px; padding: 1px 2px;'
             ' font-size: 11px; }'
-            'QPushButton[element="true"]:checked {'
-            ' background-color: #2f6fd0; color: white; }')
+            'QPushButton[element="true"][elementState="required"] {'
+            ' background-color: #2f6fd0; color: white; }'
+            'QPushButton[element="true"][elementState="possible"] {'
+            ' background-color: #dce9fb; color: #1f4f9a;'
+            ' border: 1px solid #7aa7e8; }')
 
         root = QVBoxLayout(self)
         hint = QLabel(
-            "点元素 = 勾选，再点一下取消。请勾选样品、杂质、衬底里可能"
-            "存在的全部元素——相里的元素必须全在勾选内；漏勾的元素会"
-            "把真正的相挡在候选外。不确定就留空（= 不按元素筛选）。")
+            "点元素：一下 = <b>一定有</b>（深蓝，样品里确定的元素），"
+            "再点 = <b>可能有</b>（浅蓝，杂质/衬底里可能出现的元素），"
+            "再点 = 取消。\n"
+            "筛相时取两组的并集：相里的元素必须全在并集内；漏选的元素"
+            "会把真正的相挡在候选外（被挡的相近相会单独提示）。"
+            "「一定有」还用来标注结果——一个都不含的相标「可能为衬底/"
+            "杂质」。不确定就留空（= 不按元素筛选）。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         root.addWidget(hint)
@@ -100,11 +128,14 @@ class PeriodicTableDialog(QDialog):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(2)
         self._buttons = {}
+        self._states = {}
         for period, groups in _PERIODS.items():
             for group, symbol in groups.items():
                 button = _element_button(symbol)
-                button.toggled.connect(self._refresh_summary)
+                button.clicked.connect(
+                    lambda _checked=False, s=symbol: self._cycle(s))
                 self._buttons[symbol] = button
+                self._states[symbol] = STATE_OFF
                 grid.addWidget(button, period - 1, group - 1)
         # 镧系/锕系在主表里的占位（不放可点的元素，避免重复）
         for row, text, tip in ((5, "57–71", "镧系：La–Lu（见下方一行）"),
@@ -122,12 +153,13 @@ class PeriodicTableDialog(QDialog):
         root.addWidget(grid_host)
 
         self.summary = QLabel("")
+        self.summary.setWordWrap(True)
         self.summary.setStyleSheet("color: gray;")
         root.addWidget(self.summary)
 
         buttons = QHBoxLayout()
         clear_btn = QPushButton("清空")
-        clear_btn.setToolTip("取消全部勾选")
+        clear_btn.setToolTip("取消全部选择（一定有 + 可能有）")
         clear_btn.clicked.connect(self._clear)
         buttons.addWidget(clear_btn)
         buttons.addStretch(1)
@@ -135,34 +167,89 @@ class PeriodicTableDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(cancel_btn)
         ok_btn = QPushButton("确定")
-        ok_btn.setDefault(True)
+        ok_btn.setDefault(not allow_screen)
         ok_btn.clicked.connect(self.accept)
         buttons.addWidget(ok_btn)
+        if allow_screen:
+            screen_btn = QPushButton("确定并筛相")
+            screen_btn.setObjectName("periodic_screen_btn")
+            screen_btn.setDefault(True)
+            screen_btn.setToolTip(
+                "把两组元素写回物相页，并直接开始筛相"
+                "（需要先在物相页选好一条 1D 曲线）")
+            screen_btn.clicked.connect(self._accept_and_screen)
+            buttons.addWidget(screen_btn)
         root.addLayout(buttons)
 
-        self.set_selected(selected)
+        self.set_selected(selected, possible)
 
-    # ── 勾选状态 ─────────────────────────────────────────────
-    def set_selected(self, symbols) -> None:
-        """按符号集合重设勾选（不认识的忽略）。"""
-        wanted = {str(s).strip().capitalize()
-                  for s in symbols if str(s).strip()}
-        for symbol, button in self._buttons.items():
-            button.setChecked(symbol in wanted)
+    # ── 选择状态 ─────────────────────────────────────────────
+    def set_selected(self, symbols, possible=()) -> None:
+        """按两组符号重设状态（不认识的忽略）；`possible` 省略 = 全算一定有。"""
+        required = {str(s).strip().capitalize()
+                    for s in symbols if str(s).strip()}
+        optional = {str(s).strip().capitalize()
+                    for s in possible if str(s).strip()}
+        for symbol in self._buttons:
+            if symbol in required:
+                self._set_state(symbol, STATE_REQUIRED)
+            elif symbol in optional:
+                self._set_state(symbol, STATE_POSSIBLE)
+            else:
+                self._set_state(symbol, STATE_OFF)
         self._refresh_summary()
 
-    def selected_elements(self) -> list:
-        """勾上的元素，按原子序数排序（Z 顺序）。"""
+    def required_elements(self) -> list:
+        """「一定有」的元素，按原子序数排序（Z 顺序）。"""
         return [symbol for symbol in SYMBOLS
-                if self._buttons[symbol].isChecked()]
+                if self._states[symbol] == STATE_REQUIRED]
+
+    def possible_elements(self) -> list:
+        """「可能有」的元素，按原子序数排序（Z 顺序）。"""
+        return [symbol for symbol in SYMBOLS
+                if self._states[symbol] == STATE_POSSIBLE]
+
+    def selected_elements(self) -> list:
+        """两组的并集（兼容旧调用方），按原子序数排序。"""
+        return [symbol for symbol in SYMBOLS
+                if self._states[symbol] != STATE_OFF]
+
+    def _cycle(self, symbol: str) -> None:
+        self._set_state(symbol, (self._states[symbol] + 1) % 3)
+        self._refresh_summary()
+
+    def _set_state(self, symbol: str, state: int) -> None:
+        self._states[symbol] = int(state)
+        button = self._buttons[symbol]
+        button.setProperty(
+            "elementState",
+            {STATE_OFF: "off", STATE_REQUIRED: "required",
+             STATE_POSSIBLE: "possible"}[int(state)])
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+        button.setToolTip(
+            f"{symbol}（Z = {atomic_number(symbol)}）：{_STATE_TEXT[int(state)]}"
+            " · 点一下 = 一定有，再点 = 可能有，再点 = 取消")
 
     def _clear(self) -> None:
-        for button in self._buttons.values():
-            button.setChecked(False)
+        for symbol in self._buttons:
+            self._set_state(symbol, STATE_OFF)
+        self._refresh_summary()
+
+    def _accept_and_screen(self) -> None:
+        self.screen_requested = True
+        self.accept()
 
     def _refresh_summary(self) -> None:
-        chosen = self.selected_elements()
-        if chosen:
-            self.summary.setText(f"已选 {len(chosen)} 个：{' '.join(chosen)}")
-        else:
+        required = self.required_elements()
+        possible = self.possible_elements()
+        if not required and not possible:
             self.summary.setText("未选元素（不按元素筛选）")
+            return
+        parts = []
+        if required:
+            parts.append(f"一定有 {len(required)} 个：{' '.join(required)}")
+        if possible:
+            parts.append(f"可能有 {len(possible)} 个：{' '.join(possible)}")
+        self.summary.setText("　｜　".join(parts))

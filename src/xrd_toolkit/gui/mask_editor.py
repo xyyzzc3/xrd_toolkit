@@ -1014,7 +1014,8 @@ class MaskWorkbench(QWidget):
         self.preset_mask_recipe = None
         if not raw or not geom or current != geom:
             return
-        path = Path(raw).expanduser()
+        from xrd_toolkit.presets import resolve_mask_ref
+        path = resolve_mask_ref(raw)
         if not path.is_file():
             self._say(f"方案的掩膜工程不存在：{path}")
             return
@@ -1218,7 +1219,8 @@ class MaskWorkbench(QWidget):
         self.ax_prev.tick_params(labelsize=7)
         self.ax_prev.grid(alpha=0.25, linestyle=":")
         self.ax_prev.text(
-            0.5, 0.5, "载入图像后这里显示 1D；画掩膜后自动叠加红色对照",
+            0.5, 0.5, "1D preview appears after loading an image; "
+                      "red curve = with mask",
             transform=self.ax_prev.transAxes, ha="center", va="center",
             color="0.45", fontsize=9)
         self.canvas.draw_idle()
@@ -2226,7 +2228,8 @@ class MaskWorkbench(QWidget):
         if t1 is not None:
             ax.plot(t1, y1, lw=0.9, color="tab:red", label="with mask")
         else:
-            ax.text(0.5, 0.5, "掩膜为空：画/自动检测后这里出现红色对照",
+            ax.text(0.5, 0.5,
+                    "empty mask: draw/detect to add the red comparison",
                     transform=ax.transAxes, ha="center", va="center",
                     fontsize=9, color="#888888")
         ax.set_xlabel("2θ (°)", fontsize=8)

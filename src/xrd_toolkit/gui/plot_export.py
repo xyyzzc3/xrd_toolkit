@@ -40,9 +40,11 @@ def _ask_save_options(window: QMainWindow):
     返回 {"dpi": int, "fmt": "png"|"tif"|"pdf"|"svg"} 或 None
     （取消 = 整个保存流程中止，不继续弹文件名框）。fmt 既是
     currentData 也是扩展名，文件名框的过滤器与自动补后缀都从它来。
-    默认 300 dpi：屏幕看 100 dpi 够用，论文/报告印刷要求 300 起步，
-    图大了再往上加。PDF/SVG 是矢量图：曲线和文字不糊、能再编辑，
-    dpi 只影响图里内嵌的位图（如 2D 衍射图）。
+    默认 = **PDF（矢量，论文格式）**，2026-11-17 用户："所有导出的图
+    默认都是论文格式"；位图仍默认 300 dpi（印刷起步值），图大了再往上加。
+    PDF/SVG 是矢量图：曲线和文字不糊、能再编辑，dpi 只影响图里内嵌的
+    位图（如 2D 衍射图）；PDF 字体按 TrueType 嵌入（见 app.py 的
+    pdf.fonttype=42），投稿系统不会因为 Type 3 字体退稿。
     """
     dlg = QDialog(window)
     dlg.setWindowTitle("保存图片选项")
@@ -57,9 +59,10 @@ def _ask_save_options(window: QMainWindow):
     fmt_combo = QComboBox()
     fmt_combo.setObjectName("save_fmt_combo")
     fmt_combo.addItem("PNG（通用，文件小）", "png")
-    fmt_combo.addItem("TIF（无损，论文常用）", "tif")
-    fmt_combo.addItem("PDF（矢量，排版/打印）", "pdf")
+    fmt_combo.addItem("TIF（无损，期刊常收）", "tif")
+    fmt_combo.addItem("PDF（矢量，论文默认）", "pdf")
     fmt_combo.addItem("SVG（矢量，可进 Illustrator/Inkscape 再改）", "svg")
+    fmt_combo.setCurrentIndex(2)          # 论文格式：矢量 PDF（2026-11-17）
     lay.addRow("格式", fmt_combo)
     btn_row = QWidget()
     btn_lay = QHBoxLayout(btn_row)

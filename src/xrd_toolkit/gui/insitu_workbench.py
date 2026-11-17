@@ -42,7 +42,8 @@ from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.plot_export import save_figure_with_options
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
-from xrd_toolkit.presets import DEFAULT_PRESET_NAME, PROJECT_PRESET
+from xrd_toolkit.presets import (
+    DEFAULT_PRESET_NAME, PROJECT_PRESET, resolve_mask_ref)
 
 _COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
             "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
@@ -146,12 +147,17 @@ class InSituWorkbench(QWidget):
     # ── 项目预设 ─────────────────────────────────────────────
     @staticmethod
     def _mask_for_preset(preset, config_name):
-        """预设的 mask 只在预设几何下自动带；文件不存在 → 不遮。"""
-        name = str((preset or {}).get("insitu_mask_name") or "").strip()
-        if not name or config_name != (preset or {}).get("geometry"):
+        """预设的 mask 只在预设几何下自动带；文件不存在 → 不遮。
+
+        引用可以是文件名（去 outputs/masks 找）或完整路径（见
+        `presets.resolve_mask_ref`）；掩膜工程 `.mask.npz` 与通用掩膜
+        `.npy/.edf` 都收（2026-11-17 起，应用内以工程为准）。
+        """
+        ref = str((preset or {}).get("insitu_mask_name") or "").strip()
+        if not ref or config_name != (preset or {}).get("geometry"):
             return None
-        path = paths.default_outputs_dir() / "masks" / name
-        return path if path.is_file() else None
+        path = resolve_mask_ref(ref)
+        return path if path is not None and path.is_file() else None
 
     def apply_preset(self, preset):
         """应用项目预设：换帧目录与 mask（不动 rich/poor/Al 三相定义）。"""
@@ -492,7 +498,7 @@ class InSituWorkbench(QWidget):
     def _choose_mask(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择掩膜文件", str(self.data_dir),
-            "掩膜 (*.npy *.edf);;所有文件 (*)")
+            "掩膜 (*.mask.npz *.npy *.edf);;所有文件 (*)")
         if not path:
             return
         self.mask_path = Path(path)
@@ -762,9 +768,9 @@ class InSituWorkbench(QWidget):
         if self._fit_res is None:
             ax = self.fit_fig.add_subplot(111)
             ax.set_axis_off()
-            ax.text(0.5, 0.55, "单帧拟合", ha="center", va="center",
+            ax.text(0.5, 0.55, "Single-frame fit", ha="center", va="center",
                     fontsize=15, color="#666666", transform=ax.transAxes)
-            ax.text(0.5, 0.44, "双击表格里的一行看这一帧的拟合",
+            ax.text(0.5, 0.44, "Double-click a table row to see that frame",
                     ha="center", va="center", fontsize=10,
                     color="#888888", transform=ax.transAxes)
         else:

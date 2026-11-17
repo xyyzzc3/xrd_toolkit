@@ -41,20 +41,16 @@ from PySide6.QtWidgets import (
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
 from xrd_toolkit.gui.files.open_figures import set_workbench_open
-from xrd_toolkit.gui.panel_state import (
-    _collect_geometry, _data_snapshot, _log, _set_focus)
+from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.plot_export import save_figure_with_options
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 from xrd_toolkit.services.instrument_baseline import save_baseline
 
-# 图配色与 simulation.plots.plot_fit 一致：观测灰、计算蓝、背景红、
-# 布拉格刻度按相轮换。
+# 拟合图本身改由 simulation.plots.draw_fit 画（配色/标注都在那边），
+# 这里只留"拟合前观测曲线"用的灰色。
 _OBS_COLOR = "#333333"
-_CALC_COLOR = "#1f5fa8"
-_BG_COLOR = "#d0544e"
-_PHASE_COLORS = ("#1f5fa8", "#e08a1e", "#2a9d8f", "#8e5aa8")
 
 
 def _section(text):
@@ -383,13 +379,6 @@ class RefineWorkbench(QWidget):
         save_row.addWidget(self.save_btn, 1)
         save_row.addWidget(self.copy_btn, 1)
         left_lay.addLayout(save_row)
-        self.adopt_btn = QPushButton("采纳为图面板")
-        self.adopt_btn.setEnabled(False)
-        self.adopt_btn.setToolTip(
-            "把精修结果开成一张普通 1D 图：观测/计算/背景叠在一起，"
-            "可保存、参与对比")
-        self.adopt_btn.clicked.connect(self._adopt_panel)
-        left_lay.addWidget(self.adopt_btn)
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -724,7 +713,6 @@ class RefineWorkbench(QWidget):
             self.param_table.setRowCount(0)
             self.save_btn.setEnabled(False)
             self.copy_btn.setEnabled(False)
-            self.adopt_btn.setEnabled(False)
         if self.result is None:
             self._draw_observed()
 
@@ -936,7 +924,6 @@ class RefineWorkbench(QWidget):
             f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%")
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
-        self.adopt_btn.setEnabled(True)
         cif = self.cif_combo.currentData() or ""
         self.save_instrument_btn.setEnabled(
             "lab6" in Path(cif).name.lower())
@@ -960,9 +947,9 @@ class RefineWorkbench(QWidget):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR)
-        ax.set_title("观测曲线（点 [开始精修] 拟合）", fontsize=10)
+        ax.set_title("Observed", fontsize=10)
         ax.set_xlabel("2θ (°)", fontsize=8)
-        ax.set_ylabel("counts", fontsize=8)
+        ax.set_ylabel("Intensity (counts)", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.grid(alpha=0.25, linestyle=":")
         self.fig.subplots_adjust(left=0.11, right=0.98, top=0.93, bottom=0.12)
@@ -980,72 +967,26 @@ class RefineWorkbench(QWidget):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.set_axis_off()
-        ax.text(0.5, 0.55, "全谱精修", ha="center", va="center",
-                fontsize=15, color="#666666", transform=ax.transAxes)
-        ax.text(0.5, 0.44, "选一条 1D 曲线和一张 CIF，点 [开始精修]",
+        ax.text(0.5, 0.55, "Whole-pattern refinement", ha="center",
+                va="center", fontsize=15, color="#666666",
+                transform=ax.transAxes)
+        ax.text(0.5, 0.44,
+                "Select a 1D curve and a CIF, then press [Run fit]",
                 ha="center", va="center", fontsize=10, color="#888888",
                 transform=ax.transAxes)
         self.canvas.draw_idle()
 
-    def _bragg_rows(self, result):
-        rows = []
-        peak_tth = getattr(result, "peak_tth", None)
-        if peak_tth is not None and len(peak_tth):
-            rows.append((result.phase_label or "主相",
-                         np.asarray(peak_tth, dtype=float)))
-        for label, pos in (getattr(result, "extra_peak_tth", None) or {}).items():
-            rows.append((str(label), np.asarray(pos, dtype=float)))
-        return rows
-
     def _draw(self, result):
-        rows = self._bragg_rows(result)
-        self.fig.clear()
-        gs = self.fig.add_gridspec(3, 1, height_ratios=[3.2, 0.9, 0.45],
-                                   hspace=0.06)
-        ax = self.fig.add_subplot(gs[0])
-        axr = self.fig.add_subplot(gs[1], sharex=ax)
-        axb = self.fig.add_subplot(gs[2], sharex=ax)
-        ax.tick_params(labelbottom=False)
-        axr.tick_params(labelbottom=False)
+        """论文式拟合图：观测/计算/背景 + obs−calc + 布拉格刻度。
 
-        ax.plot(result.tth, result.y_obs, ".", ms=1.6, color=_OBS_COLOR,
-                label="观测")
-        ax.plot(result.tth, result.y_calc, "-", lw=1.1, color=_CALC_COLOR,
-                label="计算")
-        background = getattr(result, "background", None)
-        if background is not None and np.size(background):
-            ax.plot(result.tth, background, "--", lw=0.9, color=_BG_COLOR,
-                    label="背景")
-        ax.set_ylabel("counts", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.grid(alpha=0.25, linestyle=":")
-        ax.legend(fontsize=8, loc="best")
-        ax.set_title(
-            f"{result.phase_label or ''}   Rwp = {result.rwp:.2f}%",
-            fontsize=10)
-
-        axr.plot(result.tth, result.residual, ".", ms=1.4, color="#555555")
-        axr.axhline(0.0, color="#999999", lw=0.8)
-        axr.set_ylabel("obs − calc", fontsize=8)
-        axr.tick_params(labelsize=7)
-        axr.grid(alpha=0.25, linestyle=":")
-
-        if rows:
-            axb.set_yticks(range(len(rows)))
-            axb.set_yticklabels([row[0] for row in rows], fontsize=7)
-            for i, (_label, pos) in enumerate(rows):
-                color = _PHASE_COLORS[i % len(_PHASE_COLORS)]
-                axb.plot(pos, np.full(len(pos), i), "|", ms=10, mew=1.0,
-                         color=color)
-            axb.set_ylim(-0.6, len(rows) - 0.4)
-        else:
-            axb.set_yticks([])
-        axb.tick_params(axis="x", labelsize=7)
-        axb.set_xlabel("2θ (°)", fontsize=8)
-
-        # 共享 x 轴 + 三行网格与 tight_layout 不兼容（会报警告），
-        # 直接给边距。
-        self.fig.subplots_adjust(left=0.11, right=0.98, top=0.93, bottom=0.10)
+        2026-11-17 用户："三大工作台的图默认全用英文，论文标准"——直接
+        复用 `simulation.plots.draw_fit`（命令行 `plot_fit` 与原位单帧
+        用的同一套布局与英文标注），精修工作台不再维护一份中文重画。
+        """
+        from xrd_toolkit.simulation.plots import draw_fit
+        title = getattr(result, "phase_label", "") or "Whole-pattern fit"
+        draw_fit(self.fig, result, title, bragg="auto")
+        self.fig.subplots_adjust(left=0.11, right=0.98, top=0.90, bottom=0.10)
         self.canvas.draw_idle()
 
     def _fill_params(self, result):
@@ -1126,62 +1067,6 @@ class RefineWorkbench(QWidget):
             return
         QApplication.clipboard().setText(self.result.report())
         self._set_status("报告已复制到剪贴板")
-
-    def _adopt_panel(self):
-        """把精修结果开成一张普通 1D 图面板（参与保存/对比/导出）。
-
-        面板数据 = 拟合用的那条曲线（观测），`dock.fit_overlay` 带
-        计算线/背景/布拉格刻度，`_draw_1d` 每次重画都会把它叠回去。
-        处理链在这个面板上默认全关——否则扣背景/平滑会把观测线改了，
-        和计算线不在一个尺度上。
-        """
-        if self.result is None:
-            self._set_status("先精修再采纳")
-            return
-        from xrd_toolkit.gui.plot.drawing import _draw_1d
-        from xrd_toolkit.gui.plot.panel_build import _open_plot_panel
-        result = self.result
-        cif = self.cif_combo.currentData() or ""
-        phase = Path(cif).stem or "fit"
-        title = f"精修 {phase}  Rwp {result.rwp:.2f}%"
-        key = f"1D|fit:{time.time_ns()}"
-        dock = _open_plot_panel(self.main, "1D", key, title)
-        snap = _data_snapshot(self.main)
-        snap.update({
-            "2θ 下限 (°)": float(np.min(result.tth)),
-            "2θ 上限 (°)": float(np.max(result.tth)),
-            "视图 2θ 下限 (°)": None,
-            "视图 2θ 上限 (°)": None,
-            "背景扣除模式": "off",
-            "平滑曲线": False,
-            "裁剪区间": [],
-            "负值截断为 0": False,
-        })
-        dock.params_snapshot = snap
-        dock.panel_file = None
-        dock.panel_display = f"{phase}_fit"
-        tth = np.asarray(result.tth, dtype=float).copy()
-        y = np.asarray(result.y_obs, dtype=float).copy()
-        dock.last_tth = tth
-        dock.last_intensity = y
-        bragg = [(label, pos, _PHASE_COLORS[i % len(_PHASE_COLORS)])
-                 for i, (label, pos) in enumerate(self._bragg_rows(result))]
-        dock.fit_overlay = {
-            "sig": (int(tth.size), float(np.nansum(np.nan_to_num(y)))),
-            "tth": tth,
-            "y_calc": np.asarray(result.y_calc, dtype=float).copy(),
-            "background": (None if result.background is None else
-                           np.asarray(result.background, dtype=float).copy()),
-            "bragg": bragg,
-            "label": phase,
-            "rwp": result.rwp,
-        }
-        dock.figure_saved = False
-        _draw_1d(self.main, dock, tth, y)
-        _set_focus(self.main, key, title)
-        dock.raise_()
-        self._set_status("已采纳为图面板；回分析模式就能看到")
-        _log(self.main, f"精修结果已采纳为图面板：{title}")
 
     def _set_status(self, text):
         self.status.setText(text)

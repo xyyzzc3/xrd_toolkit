@@ -61,16 +61,25 @@ def save_mask(path, mask) -> Path:
 
 
 def load_mask(path) -> np.ndarray:
-    """读取 `.npy` / `.edf` 掩膜，返回 bool 数组（True = 被遮掉）。
+    """读取掩膜，返回 bool 数组（True = 被遮掉）。
 
-    只接受掩膜后缀：任意 fabio 能读的图片（比如选错了 .tif）会被当成
-    "非零像素 = 遮掉"，几乎整张图变 mask——必须在这里拦住。
+    三种后缀都认（2026-11-17 起）：
+      * `.mask.npz` 掩膜工程 —— 取出里面的 bool 掩膜（来源分层/元数据不用）；
+      * `.npy` / `.edf` 通用掩膜 —— 只有遮/不遮。
+    原位工作台/通用原位对话框与掩膜工作台统一走这一个口：应用内以工程
+    为准，通用掩膜留给外部软件。只接受掩膜后缀：任意 fabio 能读的图片
+    （比如选错了 .tif）会被当成"非零像素 = 遮掉"，几乎整张图变 mask——
+    必须在这里拦住。
     """
     p = Path(path)
+    if is_recipe(p):
+        mask, _source, _meta = load_recipe(p)
+        return mask
     suffix = p.suffix.lower()
     if suffix not in MASK_SUFFIXES:
         raise ValueError(
-            f"掩膜只支持 {MASK_SUFFIXES}，收到 {p.suffix!r}（不是图像文件）")
+            f"掩膜只支持 {MASK_SUFFIXES + (RECIPE_SUFFIX,)}，"
+            f"收到 {p.suffix!r}（不是图像文件）")
     if suffix == ".npy":
         arr = np.load(str(p), allow_pickle=False)
     else:

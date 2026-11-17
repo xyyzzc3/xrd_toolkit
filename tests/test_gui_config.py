@@ -101,6 +101,20 @@ class TestConfigSwitch(unittest.TestCase):
         else:
             CONFIGS[self.FAKE_KEY] = self._saved
 
+    def test_dock_combo_switches_geometry(self):
+        """坞顶下拉（2026-11-17 回到外面）选中 = 立即换当前会话几何。"""
+        from xrd_toolkit.gui.param_dock.pages import _on_dock_geometry
+        w = create_window()
+        try:
+            idx = w.geom_combo.findData(self.FAKE_KEY)
+            self.assertGreaterEqual(idx, 0)
+            w.geom_combo.setCurrentIndex(idx)
+            _on_dock_geometry(w)
+            self.assertEqual(w.config_name, self.FAKE_KEY)
+            self.assertEqual(w.config, CONFIGS[self.FAKE_KEY])
+        finally:
+            w.close()
+
     def test_switch_applies_new_geometry(self):
         w = create_window()
         try:
@@ -113,8 +127,10 @@ class TestConfigSwitch(unittest.TestCase):
             self.assertIn("0.1500", tip)
             self.assertIn("150.0", tip)
             self.assertEqual(w.config["beam_center"], (100.0, 100.0))
-            self.assertTrue(w.geom_label.text().startswith(self.FAKE_KEY),
-                            "灰字应变成新几何；它不在方案里，会带偏离提示")
+            self.assertEqual(w.geom_combo.currentData(), self.FAKE_KEY,
+                             "坞顶下拉应变成新几何")
+            self.assertIn("未写进方案", w.geom_label.text(),
+                          "它不在方案里，要带偏离提示")
             # 方案管理页的几何下拉：文字 = key_备注，完整 label 在悬停提示
             dlg = gui_preset_ops.PresetManagerDialog(w)
             combo = dlg.geom_combo

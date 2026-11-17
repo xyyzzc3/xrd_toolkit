@@ -367,6 +367,37 @@ class TestPresetWindow(unittest.TestCase):
         self.assertEqual(self.w.config_name, "_test_scheme_geom",
                          "活动方案保存后应立即用新几何")
 
+    def test_manager_edits_all_fields(self):
+        """2026-11-17：管理页八项都能手动选，[保存方案] 一次写入。"""
+        presets.save_user_preset("全字段", {
+            "geometry": "lmfp1_lab6", "second_phase_cif": "",
+            "insitu_dir": "", "insitu_mask_name": "", "phase_library": "",
+        })
+        self.addCleanup(presets.remove_user_preset, "全字段")
+        dialog = preset_ops.PresetManagerDialog(self.w)
+        try:
+            for i in range(dialog.list.count()):
+                if dialog.list.item(i).data(Qt.UserRole) == "全字段":
+                    dialog.list.setCurrentRow(i)
+                    break
+            dialog.second_combo.setCurrentText("Al_metal.cif")
+            dialog.insitu_dir_edit.setText("~/frames2")
+            dialog.insitu_mask_edit.setText("m.mask.npz")
+            dialog.mask_recipe_edit.setText("~/masks/m.mask.npz")
+            dialog.elements_required_edit.setText("Li Fe P O")
+            dialog.elements_possible_edit.setText("Al")
+            dialog.save_scheme_btn.click()
+        finally:
+            dialog.close()
+        saved = presets.get_preset("全字段")
+        self.assertEqual(saved["second_phase_cif"], "Al_metal.cif")
+        self.assertEqual(saved["insitu_dir"], "~/frames2")
+        self.assertEqual(saved["insitu_mask_name"], "m.mask.npz")
+        self.assertEqual(saved["mask_recipe"], "~/masks/m.mask.npz")
+        self.assertEqual(saved["sample_elements_required"], "Li O P Fe",
+                         "保存时按原子序数排好")
+        self.assertEqual(saved["sample_elements_possible"], "Al")
+
     def test_manager_update_uses_current_values(self):
         presets.save_user_preset("可更新", {
             "geometry": "lmfp1_lab6", "second_phase_cif": "Al_metal.cif",

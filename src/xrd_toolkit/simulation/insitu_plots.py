@@ -103,7 +103,8 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
             if math.isfinite(_num(r.get("f_rich")))
             and math.isfinite(_num(r.get("rwp")))]
     if not good:
-        return _placeholder(fig, "原位三相批量", "选帧目录，点 [开始]")
+        return _placeholder(fig, "In-situ three-phase batch",
+                            "Choose a frame folder and press [Start]")
 
     fig.clear()
     # CSV rows carry frame as str; GUI rows carry int. Coerce so matplotlib
@@ -235,7 +236,8 @@ def draw_summary(fig, rows, *, title=None):
     """
     rows = _summary_rows(rows)
     if not rows:
-        return _placeholder(fig, "原位三相批量", "选帧目录，点 [开始]")
+        return _placeholder(fig, "In-situ three-phase batch",
+                            "Choose a frame folder and press [Start]")
 
     frames = [r["frame"] for r in rows]
     lo, hi = min(frames) - 0.5, max(frames) + 0.5
@@ -411,7 +413,8 @@ def draw_model_independent(
                       dtype=float)
     fpoor = np.asarray([_num(r.get("f_poor")) for r in rows], dtype=float)
     if not rows or not np.any(np.isfinite(cen)):
-        return _placeholder(fig, "模型无关检查", "先跑几帧，再回来看 (200) 双峰")
+        return _placeholder(fig, "Model-independent check",
+                            "Run a few frames, then look at the (200) doublet")
 
     frames = np.asarray([r["frame"] for r in rows], dtype=int)
     finite_f = [r for r in rows if math.isfinite(_num(r.get("f_poor")))]

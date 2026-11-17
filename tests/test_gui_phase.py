@@ -80,9 +80,10 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.w.phase_btn.click()
         QApplication.processEvents()
         # 默认方案是 LMFP 三相，构造工作台时会带出它的「样品元素」
-        # （Li Mn Fe P O Al）；这些用例测的是通用筛相（合成 LaB6），
-        # 先清空元素表 = 不筛。
+        # （一定有 Li Mn Fe P O，可能有 Al）；这些用例测的是通用筛相
+        # （合成 LaB6），先清空两组元素 = 不筛。
         self.w.phase_editor.elements_edit.clear()
+        self.w.phase_editor.elements_possible_edit.clear()
         self.w.phase_editor.screen_btn.click()
         ok = _wait_until(lambda: len(self.w.phase_editor.rows) > 0,
                          timeout_ms=30000)
@@ -145,6 +146,17 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertTrue(editor.fig.axes[0].collections,
                         "选中候选相后应画出理论峰位")
         self.assertTrue(editor.send_btn.isEnabled())
+        # 2026-11-17：图内文字一律英文（论文标准）
+        import re
+        texts = []
+        for ax in editor.fig.axes:
+            texts += [ax.get_title(), ax.get_xlabel(), ax.get_ylabel()]
+            texts += [t.get_text() for t in ax.texts]
+            legend = ax.get_legend()
+            if legend is not None:
+                texts += [t.get_text() for t in legend.get_texts()]
+        offenders = [t for t in texts if re.search(r"[一-鿿]", t)]
+        self.assertEqual(offenders, [], "物相图里不应出现中文")
 
     def test_curve_list_includes_file_bar_products(self):
         """文件栏里的 1D 产物不打开面板也能选（2026-11-02）。"""
@@ -241,7 +253,7 @@ class TestPhaseWorkbench(unittest.TestCase):
                              "精修后该相应改用精修晶胞的理论峰位")
         legend = editor.fig.axes[0].get_legend()
         labels = [t.get_text() for t in legend.get_texts()]
-        self.assertTrue(any("精修晶胞" in s for s in labels), labels)
+        self.assertTrue(any("refined cell" in s for s in labels), labels)
         from xrd_toolkit.gui import phase_workbench as gui_phase
         save = next(b for b in dlg.findChildren(QPushButton)
                     if b.text() == "保存报告…")
@@ -272,7 +284,7 @@ class TestPhaseWorkbench(unittest.TestCase):
         self.assertIsNotNone(legend)
         texts = [text.get_text() for text in legend.get_texts()]
         self.assertGreaterEqual(
-            sum("理论峰位" in text for text in texts), 2)
+            sum("Bragg" in text for text in texts), 2)
 
     def test_load_text_curve_and_screen(self):
         self.w.phase_btn.click()
@@ -287,6 +299,7 @@ class TestPhaseWorkbench(unittest.TestCase):
             self.assertEqual(editor.curve_combo.currentData(),
                              f"file:{path}")
             editor.elements_edit.clear()   # 合成 LaB6 不属于 LMFP 元素表
+            editor.elements_possible_edit.clear()
             editor.screen_btn.click()
             ok = _wait_until(lambda: len(editor.rows) > 0,
                              timeout_ms=30000)
@@ -391,6 +404,32 @@ class TestScreenNearMissReport(unittest.TestCase):
         _obs, rows, _zero, near = self._worker("Li Mn Fe P O Al")
         self.assertTrue(rows)
         self.assertEqual(near, [])
+
+
+class TestElementNotes(unittest.TestCase):
+    """两态元素只影响标注，不影响资格（2026-11-17）。"""
+
+    def test_note_rules(self):
+        from xrd_toolkit.gui.phase_workbench import _element_note
+        self.assertEqual(_element_note({"Fe", "P", "O"}, {"Fe", "P"}, set()),
+                         "")
+        self.assertEqual(
+            _element_note({"Al"}, {"Li", "Fe"}, {"Al"}),
+            "可能为衬底/杂质")
+        self.assertEqual(
+            _element_note({"Al", "Fe", "P"}, {"Fe", "P"}, {"Al"}),
+            "含 Al")
+
+    def test_worker_tags_lab6_as_possible_substrate(self):
+        tth, y = _synth(PANEL_PATH, {"wavelength_m": 1.223e-11}, 3000)
+        from xrd_toolkit.gui.phase_workbench import _screen_worker
+        _obs, rows, _zero, _near = _screen_worker(
+            tth, y, ROOT / "data" / "structures", "",
+            0.1223, 0.04, 5.0, 0.008,
+            required="Li Fe P O", possible="Al")
+        best = rows[0]
+        self.assertTrue(best.path.name.startswith("LaB6"))
+        self.assertEqual(best.note, "可能为衬底/杂质")
 
 
 if __name__ == "__main__":

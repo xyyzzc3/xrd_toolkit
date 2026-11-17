@@ -90,6 +90,9 @@ class PhaseRow:
     refined_tth: np.ndarray = None
     refined_intensity: np.ndarray = None
     refined_note: str = ""
+    # 2026-11-17：按"一定有 / 可能有"两态元素的标注（"含 Al" /
+    # "可能为衬底/杂质"）；空 = 不标。只影响解读，不影响排序。
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,13 +110,34 @@ class NearMissRow:
     extra: tuple
 
 
+def _element_note(have, required, possible) -> str:
+    """按两态元素给候选相写一句标注（空 = 不标）。
+
+    资格由并集决定（见 `screen_phases_report`）；这里只做解读：
+      * 相里一个"一定有"元素都不含 → 可能是衬底/杂质（如纯 Al）；
+      * 用到了"可能有"里的元素 → 标出"含 X"（如衬底元素出现在相里）。
+    只影响显示，不改分数/排序。
+    """
+    required = set(required)
+    possible = set(possible)
+    if required and not (set(have) & required):
+        return "可能为衬底/杂质"
+    used = set(have) & possible
+    if used:
+        return "含 " + " ".join(sort_elements(used))
+    return ""
+
+
 def _screen_worker(tth, y, lib, elements, wavelength, tol,
-                   prominence, min_distance, skip_names=None):
+                   prominence, min_distance, skip_names=None,
+                   required="", possible=""):
     """后台线程：寻峰 → 对相库打分 → 返回每相的理论峰位。
 
     不碰界面控件。pymatgen 是可选依赖，缺了要保留它自己的安装提示，
     所以 ImportError 转成 RuntimeError（否则会被当成内部 bug 包装掉）。
     skip_names 是"不参与主相候选"的第二相文件名（预设给的）。
+    elements = 一定有 + 可能有的并集（筛选资格）；required/possible
+    只用于给每个候选写 `note`（见 `_element_note`）。
 
     寻峰交给 `phase_search.observed_peaks`：按裁剪区间（NaN）分段、
     显著度按界面给的 kσ、只留最强 20 根。见那里的注释——用全局最大残差
@@ -152,15 +176,19 @@ def _screen_worker(tth, y, lib, elements, wavelength, tol,
         zero = ps.estimate_zero(
             obs_t, matches[0].structure, lam, tmin, tmax,
             scale=matches[0].scale)
+    required_set = ps._element_set(required)
+    possible_set = ps._element_set(possible)
     rows = []
     for match in matches:
         d0, inten = ps.reflection_data(match.structure, lam, tmin, tmax)
         sticks_t, sticks_i = ps.scaled_positions(
             d0, inten, lam, match.scale, zero)
+        have = {el.symbol for el in match.structure.composition.elements}
         rows.append(PhaseRow(
             match.path, match.score, match.scale, match.coverage,
             match.purity, np.asarray(sticks_t, dtype=float),
-            np.asarray(sticks_i, dtype=float)))
+            np.asarray(sticks_i, dtype=float),
+            note=_element_note(have, required_set, possible_set)))
     near_rows = [NearMissRow(m.path.stem, m.score, m.coverage, m.purity,
                              tuple(m.extra)) for m in near]
     return obs_t, rows, zero, near_rows
@@ -199,15 +227,49 @@ class PhaseWorkbench(QWidget):
         return str(self._preset().get("second_phase_cif") or "").strip()
 
     @staticmethod
+    def _preset_elements(preset):
+        """预设里的 (一定有, 可能有)；旧预设只有单表时全算"一定有"。"""
+        preset = preset or PROJECT_PRESET
+        required = preset.get("sample_elements_required")
+        possible = preset.get("sample_elements_possible")
+        if required is None and possible is None:
+            return str(preset.get("sample_elements") or ""), ""
+        return str(required or ""), str(possible or "")
+
+    @staticmethod
     def _library_for_preset(preset):
         return preset_phase_library(preset or PROJECT_PRESET)
+
+    def _element_texts(self) -> tuple:
+        """界面上两组元素的文本（一定有, 可能有）。"""
+        return (self.elements_edit.text().strip(),
+                self.elements_possible_edit.text().strip())
+
+    def _elements_union_text(self) -> str:
+        """两组的并集（给筛相引擎用）。"""
+        required, possible = self._element_texts()
+        seen = []
+        for chunk in (required, possible):
+            for symbol in re.split(r"[,\s]+", chunk):
+                symbol = symbol.strip()
+                if symbol and symbol not in seen:
+                    seen.append(symbol)
+        return " ".join(seen)
+
+    def elements_summary(self) -> str:
+        """报告/日志用的一句话：一定有 …；可能有 …（都空 = 不限）。"""
+        required, possible = self._element_texts()
+        if not required and not possible:
+            return "不限"
+        return (f"一定有 {required or '—'}；可能有 {possible or '—'}")
 
     def apply_preset(self, preset):
         """应用项目预设：换相库 + 样品元素 + 清掉旧候选。"""
         requested = str(preset.get("phase_library") or "").strip()
         self.lib_dir = self._library_for_preset(preset)
-        self.elements_edit.setText(
-            str((preset or {}).get("sample_elements") or "").strip())
+        required, possible = self._preset_elements(preset)
+        self.elements_edit.setText(required)
+        self.elements_possible_edit.setText(possible)
         self.rows = []
         self.near = []
         self.table.setRowCount(0)
@@ -291,21 +353,32 @@ class PhaseWorkbench(QWidget):
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(QLabel("样品元素"))
+        # 两态元素（2026-11-17 用户："周期表选中包含两种，一定有和可能有"）：
+        # 两组都手输/由周期表写回；筛相资格取并集，"一定有"用于结果标注。
         self.elements_edit = QLineEdit()
-        self.elements_edit.setPlaceholderText(
-            "样品、杂质、衬底里可能存在的全部元素；留空 = 不筛")
+        self.elements_edit.setPlaceholderText("一定有（样品元素）")
         self.elements_edit.setToolTip(
-            "白名单：相里的元素必须全部在这张表内。请把样品、杂质、衬底中"
-            "可能存在的元素都写上（如 LMFP 要含 Mn）；不确定就留空。"
-            "漏写的元素会把真正的相挡在候选外——被挡的相近相会单独提示")
-        # 预设自带「样品元素」（LMFP 预设含 Mn 与 Al），新建工作台就按
-        # 当前预设填好；用户预设没写这一项 = 留空不筛。
-        self.elements_edit.setText(
-            str(self._preset().get("sample_elements") or "").strip())
+            "样品里确定的元素。筛相时与右边「可能有」取并集，相里的元素"
+            "必须全在并集内；一个「一定有」元素都不含的相会标"
+            "「可能为衬底/杂质」。留空 = 不筛")
+        row2.addWidget(QLabel("一定有"))
         row2.addWidget(self.elements_edit, 1)
+        self.elements_possible_edit = QLineEdit()
+        self.elements_possible_edit.setPlaceholderText("可能有（杂质/衬底）")
+        self.elements_possible_edit.setToolTip(
+            "可能出现在样品、杂质或衬底里的元素（如 Al 集流体）。"
+            "筛相资格会算上它们；用到它们的相会在备注里标「含 X」")
+        row2.addWidget(QLabel("可能有"))
+        row2.addWidget(self.elements_possible_edit, 1)
+        # 预设自带「样品元素」（LMFP 预设：一定有 Li Mn Fe P O，可能有 Al），
+        # 新建工作台就按当前预设填好；用户预设没写这一项 = 留空不筛。
+        required, possible = self._preset_elements(self._preset())
+        self.elements_edit.setText(required)
+        self.elements_possible_edit.setText(possible)
         self.periodic_btn = QPushButton("周期表…")
         self.periodic_btn.setToolTip(
-            "打开元素周期表：点元素格子勾选，确定后写回左边的元素表")
+            "打开元素周期表：点一下 = 一定有、再点 = 可能有、再点 = 取消；"
+            "确定后写回左右两个元素表")
         self.periodic_btn.clicked.connect(self._open_periodic_table)
         row2.addWidget(self.periodic_btn)
         self.screen_btn = QPushButton("开始筛相")
@@ -400,9 +473,9 @@ class PhaseWorkbench(QWidget):
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right.addWidget(self.canvas)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["相", "score", "coverage", "purity", "scale"])
+            ["相", "score", "coverage", "purity", "scale", "备注"])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -423,8 +496,13 @@ class PhaseWorkbench(QWidget):
         split.setStretchFactor(1, 1)
         split.setSizes([270, 780])
 
+        # 工作台底部状态行（日志坞收起时它是唯一的口信）：常驻、不自动
+        # 消失，下一条状态才覆盖它。可选中/复制 + 允许换行，长句不至于
+        # 被窗口边缘截掉（2026-11-17 用户："存在时间太短，看不清"）。
         self.status = QLabel("选一条 1D 曲线，点 [开始筛相]")
         self.status.setStyleSheet("color: gray;")
+        self.status.setWordWrap(True)
+        self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.status)
 
     # ── 曲线与相库 ──────────────────────────────────────────
@@ -631,17 +709,24 @@ class PhaseWorkbench(QWidget):
         self._set_status("相库已切换，点 [开始筛相]")
 
     def _open_periodic_table(self):
-        """[周期表…]：点选元素，确定后写回输入框（输入框仍是可手输的）。"""
+        """[周期表…]：点选两态元素；[确定并筛相] 顺手开始筛相。
+
+        输入框仍是可手输的（脚本/批量不改）；周期表只是它的图形入口。
+        """
         from xrd_toolkit.simulation import phase_search as ps
-        selected = ps._element_set(self.elements_edit.text())
-        dlg = PeriodicTableDialog(selected, self)
+        required = ps._element_set(self.elements_edit.text())
+        possible = ps._element_set(self.elements_possible_edit.text())
+        dlg = PeriodicTableDialog(required, possible, self, allow_screen=True)
         if dlg.exec() != QDialog.Accepted:
             return
-        self._apply_elements(dlg.selected_elements())
+        self._apply_elements(dlg.required_elements(), dlg.possible_elements())
+        if dlg.screen_requested:
+            self._start_screen()
 
-    def _apply_elements(self, symbols):
-        """把元素集合按原子序数写回输入框（周期表与测试共用）。"""
-        self.elements_edit.setText(" ".join(sort_elements(symbols)))
+    def _apply_elements(self, required, possible=()):
+        """把两组元素按原子序数写回输入框（周期表与测试共用）。"""
+        self.elements_edit.setText(" ".join(sort_elements(required)))
+        self.elements_possible_edit.setText(" ".join(sort_elements(possible)))
 
     # ── 筛相 ────────────────────────────────────────────────
     def _start_screen(self):
@@ -671,7 +756,8 @@ class PhaseWorkbench(QWidget):
         self.export_default_btn.setEnabled(False)
         self._set_status("筛相中，请稍候…")
         _log(self.main, f"物相筛选：{self.lib_dir} → "
-                        f"{self.curve_combo.currentText()}")
+                        f"{self.curve_combo.currentText()}"
+                        f"（{self.elements_summary()}）")
 
         task = None
 
@@ -690,12 +776,14 @@ class PhaseWorkbench(QWidget):
             _log(self.main, f"物相筛选失败：{message}")
 
         second = self._second_phase_cif()
+        required, possible = self._element_texts()
         task = BackgroundTask(
             _screen_worker, tth, y, str(self.lib_dir),
-            self.elements_edit.text(), wavelength,
+            self._elements_union_text(), wavelength,
             float(self.tolerance.value()), float(self.prominence.value()),
             float(self.min_distance.value()),
             (second,) if second else (),
+            required, possible,
             on_done=done, on_error=error)
         self._task = task
         self.main._tasks.append(task)
@@ -715,10 +803,11 @@ class PhaseWorkbench(QWidget):
                 (f"{row.coverage:.2f}", None),
                 (f"{row.purity:.2f}", None),
                 (f"{row.scale:.4f}", None),
+                (getattr(row, "note", ""), None),
             )
             for col, (text, _v) in enumerate(values):
                 item = QTableWidgetItem(text)
-                if col:
+                if 0 < col < 5:     # 数字列右对齐；备注列左对齐
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(i, col, item)
         self.table.blockSignals(False)
@@ -785,13 +874,15 @@ class PhaseWorkbench(QWidget):
                  f"score {r.score:.3f}）" for r in near))
 
     # ── 画图 ────────────────────────────────────────────────
+    # 图内文字一律英文（2026-11-17 用户："三大工作台的图默认全用英文，
+    # 论文标准"）；界面文字仍是中文。
     def _draw_placeholder(self):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.set_axis_off()
-        ax.text(0.5, 0.55, "物相筛选", ha="center", va="center",
+        ax.text(0.5, 0.55, "Phase screening", ha="center", va="center",
                 fontsize=15, color="#666666", transform=ax.transAxes)
-        ax.text(0.5, 0.44, "选一条 1D 曲线，点 [开始筛相]",
+        ax.text(0.5, 0.44, "Select a 1D curve, then press [Start screening]",
                 ha="center", va="center", fontsize=10, color="#888888",
                 transform=ax.transAxes)
         self.canvas.draw_idle()
@@ -823,7 +914,7 @@ class PhaseWorkbench(QWidget):
         tth, y = curve
         self.fig.clear()
         ax = self.fig.add_subplot(111)
-        ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR, label="观测")
+        ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR, label="Observed")
         span = float(np.nanmax(y) - np.nanmin(y))
         amp = 0.55 * span if span > 0 else 1.0
         y0 = float(np.nanmin(y))
@@ -831,11 +922,11 @@ class PhaseWorkbench(QWidget):
             if row.refined_tth is not None:
                 raw_t = np.asarray(row.refined_tth, dtype=float)
                 raw_i = np.asarray(row.refined_intensity, dtype=float)
-                label = f"{row.path.stem} 理论峰位（精修晶胞）"
+                label = f"{row.path.stem} Bragg (refined cell)"
             else:
                 raw_t = np.asarray(row.tth, dtype=float)
                 raw_i = np.asarray(row.intensity, dtype=float)
-                label = f"{row.path.stem} 理论峰位"
+                label = f"{row.path.stem} Bragg positions"
             keep = raw_i >= 0.02
             sticks_t = raw_t[keep]
             sticks_i = raw_i[keep]
@@ -848,14 +939,14 @@ class PhaseWorkbench(QWidget):
             row = rows[0]
             ax.set_title(
                 f"{row.path.stem}   score {row.score:.3f}   "
-                f"（coverage {row.coverage:.2f} / purity {row.purity:.2f}）",
+                f"(coverage {row.coverage:.2f} / purity {row.purity:.2f})",
                 fontsize=10)
         elif rows:
-            ax.set_title(f"{len(rows)} 个候选相叠加", fontsize=10)
+            ax.set_title(f"{len(rows)} candidate phases overlaid", fontsize=10)
         else:
-            ax.set_title("观测曲线", fontsize=10)
+            ax.set_title("Observed pattern", fontsize=10)
         ax.set_xlabel("2θ (°)", fontsize=8)
-        ax.set_ylabel("counts", fontsize=8)
+        ax.set_ylabel("Intensity (counts)", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.grid(alpha=0.25, linestyle=":")
         ax.legend(fontsize=8, loc="best")
@@ -869,7 +960,9 @@ class PhaseWorkbench(QWidget):
         rows = (sorted({i.row() for i in model.selectedRows()})
                 if selected_only and model is not None
                 else list(range(self.table.rowCount())))
-        lines = ["相\tscore\tcoverage\tpurity\tscale"]
+        header = [self.table.horizontalHeaderItem(col).text()
+                  for col in range(self.table.columnCount())]
+        lines = ["\t".join(header)]
         for row in rows:
             values = []
             for col in range(self.table.columnCount()):
@@ -1106,9 +1199,10 @@ class PhaseWorkbench(QWidget):
                 fh.write("# XRD Toolkit phase screen\n")
                 fh.write(f"# curve: {self.curve_combo.currentText()}\n")
                 fh.write(f"# library: {self.lib_dir}\n")
-                fh.write(
-                    "# elements: "
-                    f"{self.elements_edit.text().strip() or '(all)'}\n")
+                required, possible = self._element_texts()
+                fh.write(f"# elements: {self._elements_union_text() or '(all)'}\n")
+                fh.write(f"# elements_required: {required or '-'}\n")
+                fh.write(f"# elements_possible: {possible or '-'}\n")
                 for miss in getattr(self, "near", []):
                     fh.write(
                         f"# excluded_by_elements: {miss.name}"
@@ -1120,12 +1214,13 @@ class PhaseWorkbench(QWidget):
                          f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 writer = csv.writer(fh)
                 writer.writerow(["phase", "score", "coverage", "purity",
-                                 "scale", "path"])
+                                 "scale", "note", "path"])
                 for row in self.rows:
                     writer.writerow([
                         row.path.stem, f"{row.score:.6f}",
                         f"{row.coverage:.6f}", f"{row.purity:.6f}",
-                        f"{row.scale:.6f}", str(row.path)])
+                        f"{row.scale:.6f}", getattr(row, "note", ""),
+                        str(row.path)])
             os.replace(tmp, p)
         finally:
             if tmp.exists():

@@ -257,7 +257,7 @@ class GenericInsituDialog(QDialog):
         start = self.mask_edit.text() or str(paths.OUTPUTS_DIR)
         name, _ = QFileDialog.getOpenFileName(
             self, "选掩膜", start,
-            "掩膜 (*.npy *.edf);;所有文件 (*)")
+            "掩膜 (*.mask.npz *.npy *.edf);;所有文件 (*)")
         if name:
             self.mask_edit.setText(name)
 

@@ -25,8 +25,9 @@ from xrd_toolkit.gui.param_dock.page_draw import (
     build_draw_page, install_draw_reset)
 from xrd_toolkit.gui.param_dock.page_processing import build_processing_page
 from xrd_toolkit.gui.param_dock.pages import (
-    _build_check_summary, _build_plot_type_row, _sync_cut_label,
-    _sync_data_row, _sync_geom_row, _sync_smooth_rows)
+    _build_check_summary, _build_plot_type_row, _on_dock_geometry,
+    _refresh_dock_geom_combo, _sync_cut_label, _sync_data_row,
+    _sync_geom_row, _sync_smooth_rows)
 from xrd_toolkit.gui.param_dock.widgets import make_page
 
 
@@ -100,14 +101,15 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     window.preset_combo = QComboBox()
     window.preset_combo.setObjectName("preset_combo")
     window.preset_combo.setToolTip(
-        "方案：几何 + 第二相 CIF + 原位帧目录/掩膜 + 相库目录"
-        " + 处理设置（点 [套用当前方案] 才生效）+ 掩膜工程（按图兜底）")
+        "方案 = 八项输入的一组快照：几何、第二相 CIF、相库目录、样品元素"
+        "（一定有/可能有）、处理设置（点 [套用当前方案] 才生效）、"
+        "原位帧目录、原位掩膜、掩膜工程（按图兜底）。换方案 = 一起换")
     preset_lay.addWidget(window.preset_combo, 1)
     btn_preset_save = QPushButton("保存…")
     btn_preset_save.setObjectName("preset_save_btn")
     btn_preset_save.setToolTip(
-        "把当前几何 / 相库 / 原位目录 / 掩膜 / 处理设置 / 掩膜工程"
-        "存成一份方案")
+        "把当前几何 / 相库 / 样品元素 / 原位目录 / 掩膜 / 处理设置 / "
+        "掩膜工程存成一份方案")
     btn_preset_save.clicked.connect(lambda: save_preset_dialog(window))
     preset_lay.addWidget(btn_preset_save)
     btn_preset_manage = QPushButton("管理…")
@@ -125,9 +127,9 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 所以它得在做分析的每一页都看得见——2026-09-26 之前它住在校准页
     # 顶部，还被挤进一个 88 px 高的内嵌滚动区（视口 88 / 内容 130），
     # 波长和距离都看不全（用户："位置看不清"）。
-    # 一行两件：灰字当前几何 + [返回分析模式（校准模式才显示）]。
-    # 2026-11-12 方案重构：几何下拉搬进 [管理…] 的方案页；这里只显示
-    # 当前几何条目名，悬停看像素/波长/距离（文案在 _sync_geom_row 里拼）。
+    # 一行：几何下拉 + 偏离小字 + [返回分析模式（校准模式才显示）]。
+    # 2026-11-12 下拉搬进 [管理…] 的方案页；2026-11-17 用户要求"外面也放
+    # 一份"，于是坞顶恢复下拉（立即生效），管理页那份继续管"方案里写哪条"。
     # 控件登记表：坞顶这几行（几何 / 数据参数）里的控件也要登记进来，
     # 所以先建表再建行（下面页面那段不再重复建）
     window.params = {}
@@ -136,12 +138,24 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     geom_lay.setContentsMargins(0, 0, 0, 0)
     geom_lay.setSpacing(4)
     geom_lay.addWidget(QLabel("几何"))
+    # 坞顶几何下拉（2026-11-17 用户："把几何还是在外面也放一份"）：
+    # 选中 = 立即换当前会话几何（set_geometry）；管理页里的下拉仍然存在，
+    # 那一份改的是"选中方案里写哪条"，两处语义不同。
+    window.geom_combo = QComboBox()
+    window.geom_combo.setObjectName("dock_geom_combo")
+    window.geom_combo.setSizePolicy(QSizePolicy.Ignored,
+                                    QSizePolicy.Preferred)
+    window.geom_combo.activated.connect(
+        lambda _i: _on_dock_geometry(window))
+    geom_lay.addWidget(window.geom_combo, 1)
+    # 偏离提示（当前几何不在方案里时显示）；平时藏起来，不跟下拉重复
     window.geom_label = QLabel("—")
     window.geom_label.setObjectName("geom_current_label")
-    window.geom_label.setStyleSheet("color: gray;")
+    window.geom_label.setStyleSheet("color: #c0392b;")
     window.geom_label.setSizePolicy(QSizePolicy.Ignored,
                                     QSizePolicy.Preferred)
-    geom_lay.addWidget(window.geom_label, 1)
+    window.geom_label.setVisible(False)
+    geom_lay.addWidget(window.geom_label)
     # 校准页的显式出口：固定在坞顶、永远可见。以前它在校准表单的最
     # 底部（窗口 1000 高时按钮落在内容 y=1236，要往下滚 434 px），
     # 用户 2026-09-26 报"没有退出校准的按钮了"。按下的效果与工具栏
@@ -244,8 +258,8 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # _sync_geom_row 一处写（翻页、_apply_config 换条目两条路都调它）。
     window.param_stack.currentChanged.connect(
         lambda _i: (_sync_geom_row(window), _sync_data_row(window)))
-    window._geom_row_sync = lambda: _sync_geom_row(window)
-    _sync_geom_row(window)
+    window._geom_row_sync = lambda: _refresh_dock_geom_combo(window)
+    _refresh_dock_geom_combo(window)
     _sync_data_row(window)
 
     build_1d_page(window, form_1d, btns_1d)

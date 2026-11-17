@@ -522,7 +522,7 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
                     selected=id(row) in chosen))
             phase_methods = [
                 ("相库", str(getattr(editor, "lib_dir", "—"))),
-                ("元素过滤", editor.elements_edit.text().strip() or "不限"),
+                ("元素过滤", editor.elements_summary()),
                 ("匹配容差", f"{editor.tolerance.value():g}°"),
                 ("寻峰显著度", f"{editor.prominence.value():g} σ"),
                 ("寻峰最小峰距", f"{editor.min_distance.value():g}°"),

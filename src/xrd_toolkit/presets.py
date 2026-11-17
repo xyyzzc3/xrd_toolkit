@@ -18,6 +18,15 @@ v0.2.1 B1（2026-11-10）起，预设不再只有内置的一份：
   * `mask_recipe`：`.mask.npz` 掩膜工程路径（引用，不内嵌二进制）；
     Mask 工作台在该图没有自己的掩膜工程时用它兜底。
 
+2026-11-17 起：
+  * 「样品元素」分两态：`sample_elements_required`（一定有）与
+    `sample_elements_possible`（可能有）；筛相资格取并集，required
+    只用于结果标注。旧的单表 `sample_elements` 仍读写（= 并集）。
+  * 掩膜引用（`insitu_mask_name`）可以是文件名（去 outputs/masks 找）
+    或完整路径；`resolve_mask_ref` / `mask_ref` 是解析与反写的一对口。
+    应用内以 `.mask.npz` 掩膜工程为准，通用 `.npy/.edf` 也收（给外部
+    软件的那份），原位工作台两种都能读。
+
 2026-11-11 起「配方」不再是独立概念：旧 `recipes.json` 里的命名配方由
 `migrate_legacy_recipes` 一次性迁成用户预设（只迁设置，原文件留作备份）。
 
@@ -27,6 +36,7 @@ v0.2.1 B1（2026-11-10）起，预设不再只有内置的一份：
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -52,15 +62,24 @@ _FIELDS = tuple(DEFAULTS)
 OPTIONAL_DEFAULTS = {
     "processing": None,       # 内嵌处理设置 dict，或 None
     "mask_recipe": "",        # .mask.npz 路径（可写 ~/…），或空
-    # 物相筛选的「样品元素」白名单（空格分隔，空 = 不筛）。LMFP 预设
-    # 带上完整化学（含 Mn 和 Al 集流体），避免用户漏写元素把真相相挡掉。
-    "sample_elements": "",
+    # 物相筛选的「样品元素」，两种状态（空格分隔；空 = 不筛）：
+    #   required = 一定有（样品里确定的元素）
+    #   possible = 可能有（杂质/衬底里可能出现的元素）
+    # 筛选资格取两组的**并集**（相的元素必须全在并集内）；required 只用于
+    # 结果标注（含 none of required = 可能是衬底/杂质；用到 possible 里的
+    # 元素 = 标出"含 X"）。2026-11-17 前的单表 `sample_elements` 仍保留，
+    # 读写时自动同步成并集，旧文件/旧脚本照常可用。
+    "sample_elements": "",            # 兼容字段 = required ∪ possible
+    "sample_elements_required": "",
+    "sample_elements_possible": "",
 }
 
 BUILTIN_PRESETS = {
     DEFAULT_PRESET_NAME: {"name": DEFAULT_PRESET_NAME, **DEFAULTS,
                           **OPTIONAL_DEFAULTS,
-                          "sample_elements": "Li Mn Fe P O Al"},
+                          "sample_elements": "Li Mn Fe P O Al",
+                          "sample_elements_required": "Li Mn Fe P O",
+                          "sample_elements_possible": "Al"},
 }
 # 旧代码直接读 PROJECT_PRESET；保留为内置预设的副本（不随用户选择变化）
 PROJECT_PRESET = dict(BUILTIN_PRESETS[DEFAULT_PRESET_NAME])
@@ -97,8 +116,39 @@ def _clean_processing(raw):
     return norm if recipes.is_meaningful(norm) else None
 
 
+def _clean_elements(text) -> str:
+    """空格分隔的元素串 → 去重、按首次出现顺序排好的规范串。"""
+    if not isinstance(text, str):
+        return ""
+    seen = []
+    for symbol in re.split(r"[,\s]+", text.strip()):
+        symbol = symbol.strip().capitalize()
+        if symbol and symbol not in seen:
+            seen.append(symbol)
+    return " ".join(seen)
+
+
+def _elements_union(required, possible) -> str:
+    """两组元素的并集（顺序 = 一定有在前、可能有在后，去重）。"""
+    out = []
+    for chunk in (_clean_elements(required), _clean_elements(possible)):
+        for symbol in chunk.split():
+            if symbol not in out:
+                out.append(symbol)
+    return " ".join(out)
+
+
+def _preset_elements(preset) -> tuple:
+    """预设里的 (一定有, 可能有)；旧文件只有 single-table 时全算"一定有"。"""
+    required = preset.get("sample_elements_required")
+    possible = preset.get("sample_elements_possible")
+    if required is None and possible is None:
+        return str(preset.get("sample_elements") or ""), ""
+    return str(required or ""), str(possible or "")
+
+
 def _clean_preset(raw, fallback_name="") -> dict:
-    """校验并规范化一份预设：核心五项补默认、三项可选保持"未设置"。
+    """校验并规范化一份预设：核心五项补默认、可选字段保持"未设置"。
 
     非法结构抛 ValueError；字段类型不对时用默认值（不因为一个手写
     JSON 的笔误把整份预设丢掉）。名称从 raw["name"] 或 fallback_name
@@ -116,9 +166,18 @@ def _clean_preset(raw, fallback_name="") -> dict:
     out["processing"] = _clean_processing(raw.get("processing"))
     mask = raw.get("mask_recipe", "")
     out["mask_recipe"] = mask.strip() if isinstance(mask, str) else ""
-    elements = raw.get("sample_elements", "")
-    out["sample_elements"] = (elements.strip()
-                              if isinstance(elements, str) else "")
+    # 样品元素：新文件带 required/possible 两组；旧文件只有 sample_elements，
+    # 按"一定有"读入（并集不变，筛选结果不会因为升级而变化）。
+    raw_required = raw.get("sample_elements_required")
+    raw_possible = raw.get("sample_elements_possible")
+    if raw_required is None and raw_possible is None:
+        raw_required = raw.get("sample_elements", "")
+        raw_possible = ""
+    out["sample_elements_required"] = _clean_elements(raw_required)
+    out["sample_elements_possible"] = _clean_elements(raw_possible)
+    # 兼容字段：永远是两组的并集（显示/旧脚本/旧测试都读它）
+    out["sample_elements"] = _elements_union(
+        out["sample_elements_required"], out["sample_elements_possible"])
     return out
 
 
@@ -190,8 +249,12 @@ def _write_state(state, path=None) -> None:
                 **{key: preset.get(key, DEFAULTS[key]) for key in _FIELDS},
                 "processing": preset.get("processing"),
                 "mask_recipe": str(preset.get("mask_recipe") or ""),
-                "sample_elements": str(
-                    preset.get("sample_elements") or "").strip(),
+                "sample_elements": _elements_union(
+                    *(_preset_elements(preset))),
+                "sample_elements_required": _clean_elements(
+                    _preset_elements(preset)[0]),
+                "sample_elements_possible": _clean_elements(
+                    _preset_elements(preset)[1]),
             }
             for name, preset in (state.get("presets") or {}).items()
         },
@@ -242,6 +305,48 @@ def resolve_preset(raw) -> dict:
         preset["geometry"] = fallback
     preset["warnings"] = warnings
     return preset
+
+
+def mask_refs_dir() -> Path:
+    """方案里"只写文件名"的掩膜默认目录（与掩膜工作台保存默认一致）。"""
+    return paths.default_outputs_dir() / "masks"
+
+
+def resolve_mask_ref(ref):
+    """方案里的掩膜引用 → Path：名字按 outputs/masks 解析，路径原样。
+
+    2026-11-17 起方案同时接受两种写法：只写文件名（内置方案的老写法，
+    放在 outputs/masks 下）或写完整路径（~/… 可搬）。原位工作台与掩膜
+    工作台的兜底都走这一个口，免得两处各解各的。
+    """
+    text = str(ref or "").strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if path.is_absolute() or "/" in text or "\\" in text:
+        return path
+    return mask_refs_dir() / path
+
+
+def mask_ref(path) -> str:
+    """Path → 方案里的掩膜引用：outputs/masks **直属**的只存文件名，其它存 ~/…。
+
+    只把"直接躺在 masks 目录下"的文件写成裸名字；子目录里的文件写完整
+    路径——裸名字会被 `resolve_mask_ref` 当成 masks 下的名字，子目录写
+    成相对路径又会跟当前工作目录纠缠。
+    """
+    p = Path(path).expanduser()
+    try:
+        rel = p.resolve().relative_to(mask_refs_dir().resolve())
+        if rel.parent == Path("."):
+            return rel.name
+    except (OSError, ValueError):
+        pass
+    try:
+        rel = p.resolve().relative_to(Path.home().resolve())
+        return "~" if str(rel) == "." else "~/" + str(rel)
+    except (OSError, ValueError):
+        return str(p)
 
 
 def preset_phase_library(preset) -> Path:
@@ -336,7 +441,9 @@ def migrate_legacy_recipes(path=None) -> int:
         values = {field: base.get(field, DEFAULTS[field]) for field in _FIELDS}
         values["processing"] = recipe
         values["mask_recipe"] = str(base.get("mask_recipe") or "")
-        values["sample_elements"] = str(base.get("sample_elements") or "")
+        required, possible = _preset_elements(base)
+        values["sample_elements_required"] = required
+        values["sample_elements_possible"] = possible
         clean = _clean_preset({**values, "name": key}, fallback_name=key)
         if not clean.get("processing"):
             continue

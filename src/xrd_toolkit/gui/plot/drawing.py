@@ -56,19 +56,19 @@ def _draw_bg_overlay(window: QMainWindow, dock, ax, tth, intensity, base,
 def _draw_fit_overlay(ax, overlay) -> None:
     """把精修结果（计算线 / 背景 / 布拉格刻度）叠在 1D 面板上。
 
-    只给 [采纳为图面板] 建出来的图用：观测曲线在下面已经画好，这里
-    补计算曲线、背景与各相的布拉格刻度。差值图单轴放不下——要看
-    obs−calc 回精修工作台。
+    GUI 的 [采纳为图面板] 按钮已于 2026-11-17 删除（用户"删掉"），这条
+    叠层路径保留给脚本/测试直接构造 `dock.fit_overlay` 用；图内文字按
+    "导出图全英文"的约定走。
     """
     tth = np.asarray(overlay["tth"], dtype=float)
     calc = np.asarray(overlay["y_calc"], dtype=float)
     ax.plot(tth, calc, linestyle="--", lw=1.0, color="#CC79A7",
-            gid=_AUX_GID_PREFIX + "fit_calc", label="计算")
+            gid=_AUX_GID_PREFIX + "fit_calc", label="Calculated")
     background = overlay.get("background")
     if background is not None and np.size(background):
         ax.plot(tth, np.asarray(background, dtype=float), linestyle=":",
                 lw=0.9, color="#d0544e",
-                gid=_AUX_GID_PREFIX + "fit_bg", label="背景")
+                gid=_AUX_GID_PREFIX + "fit_bg", label="Background")
     rows = overlay.get("bragg") or []
     trans = ax.get_xaxis_transform()
     for i, (_label, positions, color) in enumerate(rows):

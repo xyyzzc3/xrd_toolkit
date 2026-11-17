@@ -65,6 +65,10 @@ if sys.platform == "darwin":
 else:                                  # Windows（Linux 桌面同理可加 Noto）
     _cjk_fonts = ["Microsoft YaHei", "SimHei"]
 matplotlib.rcParams["font.family"] = ["DejaVu Sans"] + _cjk_fonts
+# 论文格式（2026-11-17 用户："所有导出的图默认都是论文格式"）：PDF/PS
+# 用 TrueType 嵌入字体（默认 Type 3 会被不少期刊的投稿系统拒收）。
+matplotlib.rcParams["pdf.fonttype"] = 42
+matplotlib.rcParams["ps.fonttype"] = 42
 from PySide6.QtCore import (QEvent, QLibraryInfo, QObject, Qt, QSize,
                             QTranslator, QUrl)
 from PySide6.QtGui import (QAction, QDesktopServices, QIcon, QKeySequence,

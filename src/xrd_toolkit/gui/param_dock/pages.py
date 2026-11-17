@@ -6,18 +6,53 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QPushButton, QWidget
 
-from xrd_toolkit.config import entry_display
+from xrd_toolkit.config import CONFIGS, entry_display
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.plot_views import _plot_view, _refresh_proc
 
 
-def _sync_geom_row(window: QMainWindow) -> None:
-    """坞顶灰字「几何」那一行（换几何 / 翻页 / 方案切换时刷新）。
+def _refresh_dock_geom_combo(window: QMainWindow) -> None:
+    """坞顶几何下拉的选项 = CONFIGS（注册表变化时重建）。
 
-    2026-11-12 方案重构：几何下拉搬进 [管理…] 的方案页；坞顶只剩
-    灰字**显示**当前几何（set_geometry 写 window.config/config_name，
-    这里只负责把它画出来）。工具提示给像素/波长/距离；当前几何和
-    方案里记的不一致时，灰字变橙并标「未写进方案」。
+    和方案管理页那个下拉读同一份 CONFIGS，但语义不同：这里选中 =
+    立即换当前会话几何；管理页那份是"方案里要写哪条"。
+    """
+    combo = getattr(window, "geom_combo", None)
+    if combo is None:
+        return
+    wanted = [(name, entry_display(name, entry))
+              for name, entry in CONFIGS.items()]
+    existing = [(combo.itemData(i), combo.itemText(i))
+                for i in range(combo.count())]
+    if existing != wanted:
+        combo.blockSignals(True)
+        combo.clear()
+        for name, entry in CONFIGS.items():
+            combo.addItem(entry_display(name, entry), name)
+            combo.setItemData(combo.count() - 1, entry.get("label") or name,
+                              Qt.ToolTipRole)
+        combo.blockSignals(False)
+    _sync_geom_row(window)
+
+
+def _on_dock_geometry(window: QMainWindow) -> None:
+    """坞顶几何下拉被用户选中 → 立即切换当前会话几何。"""
+    combo = getattr(window, "geom_combo", None)
+    if combo is None:
+        return
+    key = combo.currentData()
+    if key and key != getattr(window, "config_name", None):
+        from xrd_toolkit.gui.panel_state import set_geometry
+        set_geometry(window, key)
+
+
+def _sync_geom_row(window: QMainWindow) -> None:
+    """坞顶「几何」那一行（换几何 / 翻页 / 方案切换时刷新）。
+
+    2026-11-17：下拉回到坞顶（选中 = 立即换当前几何）；[管理…] 的方案页
+    里仍有一份下拉，那份改的是"选中方案里写哪条"，保存方案前不动会话。
+    工具提示给像素/波长/距离；当前几何和方案里记的不一致时，下拉变橙、
+    旁边小字标「未写进方案」。
     """
     cfg = getattr(window, "config", None)
     if cfg is None:
@@ -35,7 +70,7 @@ def _sync_geom_row(window: QMainWindow) -> None:
                 "分析/积分用的条目）")
     elif window.param_stack.currentIndex() == window.PARAM_PAGES.get("掩膜"):
         tip += "\n（掩膜预览/后续 1D 积分用这条几何）"
-    # 当前几何与方案里记的对不上：灰字变橙并点名，提示去方案管理页
+    # 当前几何与方案里记的对不上：下拉变橙并点名，提示去方案管理页
     # [保存方案]。只做提示，不偷偷写回（2026-11-12 用户选 A）。
     preset = getattr(window, "preset", None) or {}
     want = str(preset.get("geometry") or "")
@@ -43,13 +78,20 @@ def _sync_geom_row(window: QMainWindow) -> None:
     drift = bool(want and key and want != key)
     if drift:
         tip += f"\n（当前几何 {key} 未写进方案，方案里是 {want}）"
-    label = key or "—"
-    if drift:
-        label += "（未写进方案）"
+    combo = getattr(window, "geom_combo", None)
+    if combo is not None:
+        idx = combo.findData(key) if key else -1
+        if idx >= 0 and combo.currentIndex() != idx:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+        combo.setToolTip(tip)
+        combo.setStyleSheet(
+            "color: #c0392b;" if drift else "")
     geom_label = getattr(window, "geom_label", None)
     if geom_label is not None:
-        geom_label.setText(label)
-        geom_label.setStyleSheet("color: %s;" % ("#c0392b" if drift else "gray"))
+        geom_label.setText("未写进方案" if drift else "")
+        geom_label.setVisible(drift)
     window.geom_row.setToolTip(tip)
 
 def _sync_data_row(window: QMainWindow) -> None:

@@ -231,11 +231,11 @@ def _warn_rings_off_image(window: QMainWindow, ax, image, paths,
     fig_head = (f"{len(paths['rings'])} rings fall outside the image under the "
                 f"current geometry (ring radius "
                 f"{paths['r_min_px']:.0f}–{paths['r_max_px']:.0f} px)")
-    fig_how = ("view zoomed out to include them ([看环全貌] on)" if fit
+    fig_how = ("view zoomed out to include them (ring-overview on)" if fit
                else "view is set by zoom: box-zoom or wheel to find them, "
-                    "or turn on [看环全貌]" if zoomed
-               else "no rings are drawn (turn on [看环全貌] or use the "
-                    "[放大镜] box zoom to find them)")
+                    "or turn on ring overview" if zoomed
+               else "no rings are drawn (turn on ring overview or use the "
+                    "magnifier box zoom to find them)")
     fig_tail = f"image {w}×{h} — check pixel size / wavelength / distance"
     # 折行写：默认视野锁在图像那一框（不放大），一行写不下会被右边缘裁掉
     ax.text(0.02, 0.98, "\n".join([f"⚠ {fig_head}", fig_how, fig_tail]),

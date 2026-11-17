@@ -470,7 +470,7 @@ class TestCalibration(unittest.TestCase):
         try:
             w.show()
             w.entrance_buttons["1D"].click()
-            self.assertEqual(w.geom_label.text(), w.config_name)
+            self.assertEqual(w.geom_combo.currentData(), w.config_name)
             self.assertIn("1595.80 mm", w.geom_row.toolTip())
             with mock.patch.object(gui_calib_panel, "load_diffraction_image",
                                    return_value=np.ones((256, 256)) * 10):
@@ -635,7 +635,7 @@ class TestCalibration(unittest.TestCase):
                 gui_calib_panel._redraw_calib(w)
                 locked = w.calib_ax.get_xlim()
                 # 图上红字把出口指出来
-                self.assertTrue(any("看环全貌" in t.get_text()
+                self.assertTrue(any("ring overview" in t.get_text()
                                     for t in w.calib_ax.texts))
                 # 勾上 → 视野放大到包住环
                 chk.setChecked(True)

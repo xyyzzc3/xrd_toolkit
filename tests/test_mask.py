@@ -114,6 +114,14 @@ class TestMaskRecipe(unittest.TestCase):
             self.assertIsNone(src)
             self.assertEqual(meta["version"], 1)
 
+    def test_load_mask_accepts_recipe(self):
+        """2026-11-17：原位/通用入口统一走 load_mask，它也要认 .mask.npz。"""
+        mask = np.zeros((6, 8), dtype=bool)
+        mask[2, 3] = True
+        with tempfile.TemporaryDirectory() as td:
+            p = save_recipe(Path(td) / "m.mask.npz", mask)
+            np.testing.assert_array_equal(load_mask(p), mask)
+
     def test_recipe_rejects_shape_mismatch_and_bad_suffix(self):
         mask = np.zeros((4, 4), dtype=bool)
         with tempfile.TemporaryDirectory() as td:

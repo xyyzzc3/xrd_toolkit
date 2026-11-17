@@ -160,14 +160,14 @@ class TestRefineWorkbench(unittest.TestCase):
         editor = self.w.refine_editor
         self.assertIsNone(editor.result)
         self.assertGreater(len(editor.fig.axes[0].lines), 0)
-        self.assertIn("观测曲线", editor.fig.axes[0].get_title())
+        self.assertIn("Observed", editor.fig.axes[0].get_title())
         # 隐藏再显示（切走再回来）：showEvent 要补画，不能变空白
         self.w.refine_dock.hide()
         QApplication.processEvents()
         self.w.refine_dock.show()
         QApplication.processEvents()
         self.assertGreater(len(editor.fig.axes[0].lines), 0)
-        self.assertIn("观测曲线", editor.fig.axes[0].get_title())
+        self.assertIn("Observed", editor.fig.axes[0].get_title())
 
     def test_mutual_exclusion_with_mask_and_calibration(self):
         self._enter()
@@ -247,6 +247,17 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(editor.save_btn.isEnabled())
         self.assertTrue(editor.copy_btn.isEnabled())
         self.assertGreaterEqual(len(editor.fig.axes), 2)
+        # 2026-11-17：图内文字一律英文（论文标准，复用 draw_fit）
+        import re
+        texts = []
+        for ax in editor.fig.axes:
+            texts += [ax.get_title(), ax.get_xlabel(), ax.get_ylabel()]
+            texts += [t.get_text() for t in ax.texts]
+            legend = ax.get_legend()
+            if legend is not None:
+                texts += [t.get_text() for t in legend.get_texts()]
+        offenders = [t for t in texts if re.search(r"[一-鿿]", t)]
+        self.assertEqual(offenders, [], "精修图里不应出现中文")
 
     def test_copy_parameter_table(self):
         self._open_panel()
@@ -263,29 +274,6 @@ class TestRefineWorkbench(unittest.TestCase):
         text = QApplication.clipboard().text()
         self.assertIn("参数", text)
         self.assertIn("zero", text)
-
-    def test_adopt_creates_normal_panel(self):
-        self._open_panel()
-        self._enter()
-        editor = self.w.refine_editor
-        idx = editor.cif_combo.findData(str(LAB6_CIF))
-        editor.cif_combo.setCurrentIndex(idx)
-        editor.run_btn.click()
-        ok = _wait_until(lambda: editor.result is not None
-                         and editor._task is None, timeout_ms=30000)
-        self.assertTrue(ok, "精修没有完成")
-        editor.adopt_btn.click()
-        QApplication.processEvents()
-        keys = [k for k in self.w.plot_docks
-                if str(k).startswith("1D|fit:")]
-        self.assertEqual(len(keys), 1, "应恰好开出一张精修图面板")
-        dock = self.w.plot_docks[keys[0]]
-        self.assertIn("精修", dock.windowTitle())
-        self.assertIsNotNone(getattr(dock, "fit_overlay", None))
-        ax = _support.gui_panel_state._content(dock).axes_1d
-        labels = [line.get_label() for line in ax.lines]
-        self.assertIn("观测", labels)
-        self.assertIn("计算", labels)
 
     def test_extra_phase_scale_and_bragg_row(self):
         self._open_panel()

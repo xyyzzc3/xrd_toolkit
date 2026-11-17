@@ -77,10 +77,10 @@ def _reload_config_combo(window: QMainWindow,
                          select_key: str | None = None) -> None:
     """几何注册表变化后刷新可见入口（GUI 保存/删除条目后调用）。
 
-    2026-11-12 起主窗口不再有几何下拉：`CONFIGS` 是数据，`set_geometry`
-    是唯一切换入口。这里只负责（可选）切到新条目、刷新坞顶灰字，并
-    通知已打开的方案管理页重建它的几何下拉。select_key 为 None 时
-    保持当前条目不变。
+    `CONFIGS` 是数据，`set_geometry` 是唯一的切换入口。这里负责（可选）
+    切到新条目、重建坞顶几何下拉（2026-11-17 起它回到坞顶），并通知已
+    打开的方案管理页重建它自己的几何下拉。select_key 为 None 时保持
+    当前条目不变。
     """
     if select_key is None:
         select_key = getattr(window, "config_name", None)

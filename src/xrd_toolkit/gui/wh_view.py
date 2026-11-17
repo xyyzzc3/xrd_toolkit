@@ -407,15 +407,15 @@ def show_wh_dialog(window, dock):
     x = np.asarray(result.x, dtype=float)
     y = np.asarray(result.y, dtype=float)
     ax.plot(x, y, "o", ms=5, color="#1f5fa8",
-            label=f"参与 {x.size} 根")
+            label=f"used ({x.size} peaks)")
     ex, ey = _excluded_points(window, dock)
     if ex.size:
         ax.plot(ex, ey, "o", ms=5, mfc="none", color="#999999",
-                label=f"排除 {ex.size} 根")
+                label=f"excluded ({ex.size})")
     if x.size:
         xs = np.linspace(float(x.min()), float(x.max()), 100)
         ax.plot(xs, result.intercept + result.slope * xs, "-",
-                color="#d0544e", lw=1.3, label="线性拟合")
+                color="#d0544e", lw=1.3, label="linear fit")
     ax.set_xlabel(r"$\sin^2\theta$")
     ax.set_ylabel(r"$(\beta\cos\theta)^2$  (rad$^2$)")
     ax.grid(alpha=0.2, linestyle=":")
