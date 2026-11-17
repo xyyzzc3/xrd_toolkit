@@ -540,6 +540,31 @@ class LMFPBatch(GenericBatch):
     结果几何/分数与专用 insitu.py 同口径（同一 fit_pattern + 同一策略）。
     """
 
+    @staticmethod
+    def _fraction_esd(result, a_rich, a_poor):
+        """f_rich 的线性协方差传播（与旧引擎同口径，scale 块）。"""
+        try:
+            names = list(result.linear_names)
+            cov = np.asarray(result.linear_cov, dtype=float)
+            i_r = names.index("scale")
+            i_p = names.index("poor:scale")
+            k_r = (float(np.sum(result.peak_table_intensities))
+                   * float(result.peak_table_norm) / 100.0)
+            k_p = (float(result.extra_phase_table_sum["poor"])
+                   * float(result.extra_phase_norm["poor"]) / 100.0)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return float("nan")
+        total = float(a_rich) + float(a_poor)
+        if not (math.isfinite(total) and total > 0
+                and math.isfinite(k_r) and math.isfinite(k_p)
+                and k_r != 0 and k_p != 0 and cov.ndim == 2):
+            return float("nan")
+        jr = k_r * float(a_poor) / total ** 2
+        jp = -k_p * float(a_rich) / total ** 2
+        sub = cov[np.ix_([i_r, i_p], [i_r, i_p])]
+        var = float(np.array([jr, jp]) @ sub @ np.array([jr, jp]))
+        return math.sqrt(var) if math.isfinite(var) and var >= 0 else float("nan")
+
     def fit_frame(self, path):
         row = super().fit_frame(path)
         if "wt_Al" in row:
@@ -547,5 +572,7 @@ class LMFPBatch(GenericBatch):
         if "Al_a" in row:
             row["al_a"] = row["Al_a"]
         row["al_ref"] = row.get("a_Al", float("nan"))
-        row.setdefault("f_rich_esd", float("nan"))
+        row["f_rich_esd"] = self._fraction_esd(
+            self.fitted[-1][2] if self.fitted else None,
+            row.get("a_rich", float("nan")), row.get("a_poor", float("nan")))
         return row
