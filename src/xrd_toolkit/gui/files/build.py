@@ -195,8 +195,15 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         window._check_syncing = True
         try:
             if is_group(item):
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, item.checkState(0))
+                # 整组勾选：先屏蔽树信号，children 的 itemChanged 不必
+                # 每条都进 Python 槽；最后统一刷新一次标签/组态。
+                tree = window.file_list
+                was_blocked = tree.blockSignals(True)
+                try:
+                    for i in range(item.childCount()):
+                        item.child(i).setCheckState(0, item.checkState(0))
+                finally:
+                    tree.blockSignals(was_blocked)
                 if item.checkState(0) == Qt.Checked:
                     _log(window, f"已勾选整组 {_group_title(item)}"
                                  f"（{item.childCount()} 项；"
@@ -214,8 +221,9 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
         finally:
             window._check_syncing = False
         _sync_current_to_checks(window)
-        _refresh_file_label(window)
-        _sync_select_label(window)
+        checked = gui_sources.checked_sources(window)
+        _refresh_file_label(window, checked)
+        _sync_select_label(window, checked)
         _refresh_group_badges(window)
 
     def on_item_clicked(item, column=0):

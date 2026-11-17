@@ -37,10 +37,15 @@ def _sync_current_to_checks(window: QMainWindow) -> None:
         return      # 没高亮 / 高亮在组节点上 / 就是勾选着的条目：都不动
     window.file_list.setCurrentItem(None)
 
-def _refresh_file_label(window: QMainWindow) -> None:
+def _refresh_file_label(window: QMainWindow, checked=None) -> None:
     """状态行文件标签跟随对号集合：0 个 = 未打开 / 1 个 = 名字 /
-    N 个 = 已选 N 个（其中有产物条目就点明几个，免得"文件数"对不上）。"""
-    checked = gui_sources.checked_sources(window)
+    N 个 = 已选 N 个（其中有产物条目就点明几个，免得"文件数"对不上）。
+
+    `checked` 可由调用方传已算好的列表：整组勾选时一次扫描就够，别为
+    同一批对号重复走三遍全树（2026-11-17 性能）。
+    """
+    if checked is None:
+        checked = gui_sources.checked_sources(window)
     odd = [s for s in checked if s.kind != gui_sources.RAW]
     if not checked:
         window.file_label.setText("未打开任何文件")
@@ -75,7 +80,7 @@ def _sync_group_states(window: QMainWindow) -> None:
             node.child(i).checkState(0) for i in range(node.childCount())))
     _refresh_group_badges(window)   # 批量改完，折叠着的组上的数字也要跟上
 
-def _sync_select_label(window: QMainWindow) -> None:
+def _sync_select_label(window: QMainWindow, checked=None) -> None:
     """出图按钮与全选/全不选切换按钮的**文字**跟着勾选集合走。
 
     全选按钮（2026-09-27 用户："全选全部不选合一"）做哪件事由当前状态决定，
@@ -90,18 +95,19 @@ def _sync_select_label(window: QMainWindow) -> None:
     if btn is not None:
         raw = window.file_list.raw_group
         n = raw.childCount()
-        checked = sum(1 for i in range(n)
-                      if raw.child(i).checkState(0) == Qt.Checked)
+        raw_checked = sum(1 for i in range(n)
+                          if raw.child(i).checkState(0) == Qt.Checked)
         # 标签把**作用范围**写出来（用户 2026-09-28 第 3 条）：这个按钮本来就
         # 是"勾只勾原始数据、清却清全部"（见 select_all 的说明），两个方向
         # 的范围不同——不写出来，用户按下去发生什么全靠猜
-        btn.setText("全不选（全部条目）" if n and checked == n
+        btn.setText("全不选（全部条目）" if n and raw_checked == n
                     else "全选（原始数据）")
-    _refresh_check_labels(window)
+    _refresh_check_labels(window, checked)
 
-def _check_summary(window: QMainWindow) -> str:
+def _check_summary(window: QMainWindow, checked=None) -> str:
     """勾选集合的一句话说明：条数 + 构成（+ "同一条曲线画两遍"提醒）。"""
-    checked = gui_sources.checked_sources(window)
+    if checked is None:
+        checked = gui_sources.checked_sources(window)
     if not checked:
         return ("已勾选 0 项：点条目行：勾这一条，点组那一行：整组一起勾"
                 "（对号方块可以取消）")
@@ -125,9 +131,11 @@ def _duplicate_raw_paths(checked) -> set:
     prod = {str(s.path) for s in checked if s.kind == gui_sources.ONED}
     return raw & prod
 
-def _refresh_check_labels(window: QMainWindow) -> None:
+def _refresh_check_labels(window: QMainWindow, checked=None) -> None:
     """把"勾了多少条"写到 1D 页的出图按钮上，并刷新摘要那句构成说明。"""
-    n = len(gui_sources.checked_sources(window))
+    if checked is None:
+        checked = gui_sources.checked_sources(window)
+    n = len(checked)
     text = f"出图（已勾选 {n} 项）" if n else "出图（尚未勾选）"
     btn = getattr(window, "plot_1d_btn", None)
     if btn is not None:
@@ -139,7 +147,7 @@ def _refresh_check_labels(window: QMainWindow) -> None:
         btn.setText(f"存成产物（已勾选 {n} 项）" if n else "存成产物（当前这张）")
     lbl = getattr(window, "check_summary_lbl", None)
     if lbl is not None:
-        lbl.setText(_check_summary(window))
+        lbl.setText(_check_summary(window, checked))
 
 def _set_checks(window: QMainWindow, wanted: list) -> int:
     """一次性改一批对号，返回改动条数。
