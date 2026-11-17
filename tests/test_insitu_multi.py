@@ -41,6 +41,21 @@ class TestPhaseSet(unittest.TestCase):
         self.assertEqual(pset.views.crossover_pair, ("rich", "poor"))
         self.assertEqual(pset.views.peak_windows[0].tth_min, 1.18)
 
+    def test_phase_set_json_roundtrip(self):
+        import tempfile
+        from xrd_toolkit.simulation.phase_set import (
+            load_phase_set, save_phase_set)
+        pset = lmfp_phase_set()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = save_phase_set(pset, Path(tmp) / "lmfp.json")
+            got = load_phase_set(path)
+        self.assertEqual(got.labels(), pset.labels())
+        self.assertEqual([p.role for p in got.phases],
+                         [p.role for p in pset.phases])
+        self.assertEqual(got.views.shade_phase, "rich")
+        self.assertEqual(got.views.peak_windows[0].name, "(200) doublet")
+        self.assertEqual(got.policy.joint_stage, pset.policy.joint_stage)
+
     def test_generic_batch_uses_phase_set(self):
         pset = lmfp_phase_set()
         batch = GenericBatch([], {}, 1.0, phase_set=pset)

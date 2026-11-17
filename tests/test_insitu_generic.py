@@ -174,3 +174,36 @@ class TestGenericEntry(unittest.TestCase):
         dlg.close()
         QApplication.processEvents()
         self.assertIsNone(self.w._generic_insitu_dialog)
+
+    def test_scheme_save_load_roundtrip(self):
+        from xrd_toolkit.gui import insitu_generic_dialog as gd
+        from xrd_toolkit.simulation.phase_set import (
+            lmfp_phase_set, load_phase_set, save_phase_set)
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        combo = self.w.insitu_editor.preset_combo
+        combo.setCurrentIndex(combo.findData("generic"))
+        combo.activated.emit(combo.currentIndex())
+        QApplication.processEvents()
+        dlg = self.w._generic_insitu_dialog
+        with tempfile.TemporaryDirectory() as tmp:
+            src = save_phase_set(lmfp_phase_set(), Path(tmp) / "lmfp.json")
+            with mock.patch.object(
+                    gd.QFileDialog, "getOpenFileName",
+                    return_value=(str(src), "")):
+                dlg._load_scheme()
+            self.assertEqual(dlg.phase_table.rowCount(), 3)
+            self.assertEqual(dlg._scheme_views.shade_phase, "rich")
+            self.assertEqual(
+                dlg._scheme_views.peak_windows[0].tth_min, 1.18)
+            out = Path(tmp) / "out.json"
+            with mock.patch.object(
+                    gd.QFileDialog, "getSaveFileName",
+                    return_value=(str(out), "")):
+                dlg._save_scheme()
+            self.assertTrue(out.is_file())
+            got = load_phase_set(out)
+            self.assertEqual(got.labels(), ["rich", "poor", "Al"])
+            self.assertEqual(got.views.shade_phase, "rich")
+        dlg.close()
+        QApplication.processEvents()

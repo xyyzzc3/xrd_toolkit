@@ -16,7 +16,8 @@ rich/poor/Al 写死在代码里。
 "一个主结构 + extra_phases" 实现。让所有样品相对等（每相自己的晶胞、
 B、峰宽、坐标）是后续 L2 内核的事，本模块先把接口稳定下来。
 """
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from xrd_toolkit import paths
@@ -130,6 +131,7 @@ class ViewConfig:
     crossover_pair: tuple | None = None   # (label_a, label_b)，50/50 线
     peak_windows: list = field(default_factory=list)
     annotations: list = field(default_factory=list)  # [(start,end,label)]
+    shade_phase: str | None = None    # 用该相分数最低点分充/放电底色
     show_wt: bool = False
     fraction_order: tuple = ()        # 堆叠面积顺序；空 = PhaseSpec 顺序
 
@@ -235,7 +237,7 @@ def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
         color="#2a9d8f")
     al.cell0 = (AL_A, AL_A, AL_A)   # 与 LMFP 引擎一致，固定参考
     views = ViewConfig(
-        crossover_pair=("rich", "poor"),
+        crossover_pair=("rich", "poor"), shade_phase="rich",
         peak_windows=[PeakWindow("(200) doublet", 1.18, 1.55,
                                  vs_phase="poor",
                                  side_lo=(1.18, 1.28),
@@ -243,3 +245,56 @@ def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
         show_wt=True, fraction_order=("rich", "poor"))
     return PhaseSet(name="LMFP 三相", phases=[rich, poor, al],
                     policy=BatchPolicy.lmfp(), views=views)
+
+
+# ── 方案文件（2026-11-17）：PhaseSet/ViewConfig 持久化 ──────────────
+def phase_set_to_dict(phase_set):
+    """序列化为 JSON 友好 dict；结构只存 CIF 路径，不内嵌原子坐标。"""
+    out = {
+        "version": 1,
+        "name": phase_set.name,
+        "policy": asdict(phase_set.policy),
+        "views": asdict(phase_set.views),
+        "phases": [],
+    }
+    for phase in phase_set.phases:
+        item = {f.name: getattr(phase, f.name) for f in fields(phase)
+                if f.name != "structure"}
+        item["path"] = str(phase.path)
+        out["phases"].append(item)
+    return out
+
+
+def phase_set_from_dict(data):
+    """从方案文件重建 PhaseSet；CIF 重新读（路径必须存在）。"""
+    from xrd_toolkit.simulation import load_structure
+    phases = []
+    for item in data.get("phases") or []:
+        path = Path(str(item.get("path", ""))).expanduser()
+        if not path.is_file():
+            raise ValueError(f"方案里的 CIF 不存在：{path}")
+        values = {f.name: item[f.name] for f in fields(PhaseSpec)
+                  if f.name in item and f.name not in ("structure", "path")}
+        values["path"] = path
+        values["structure"] = load_structure(str(path))
+        phases.append(PhaseSpec(**values))
+    policy = BatchPolicy(**(data.get("policy") or {}))
+    views_raw = dict(data.get("views") or {})
+    windows = [PeakWindow(**w) for w in views_raw.pop("peak_windows", [])]
+    views = ViewConfig(peak_windows=windows, **views_raw)
+    return PhaseSet(name=str(data.get("name") or "insitu 方案"),
+                    phases=phases, policy=policy, views=views)
+
+
+def save_phase_set(phase_set, path):
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(phase_set_to_dict(phase_set),
+                               ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    return path
+
+
+def load_phase_set(path):
+    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    return phase_set_from_dict(data)

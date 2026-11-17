@@ -187,6 +187,59 @@ def window_stats(tth, y, window):
     return area, centroid, height
 
 
+def fraction_esds(result, phases, amps):
+    """每相 f_i 的线性协方差 esd（scale/强度块；参考相 NaN）。
+
+    与 insitu._fraction_esd 同一线性传播，只是推广到 N 个样品相。
+    只含线性块，不含晶胞/峰形非线性项，所以是**下限**。
+    """
+    out = {p.label: float("nan") for p in phases}
+    try:
+        names = list(result.linear_names)
+        cov = np.asarray(result.linear_cov, dtype=float)
+        if not names or cov.ndim != 2:
+            return out
+        included = [p for p in phases if p.include_in_fraction
+                    and math.isfinite(float(amps.get(p.label, float("nan"))))
+                    and float(amps.get(p.label, 0.0)) > 0]
+        total = sum(float(amps[p.label]) for p in included)
+        if not (math.isfinite(total) and total > 0):
+            return out
+        idx = {}
+        scales = {}
+        for p in included:
+            key = "scale" if p.label == _main_label(phases) else (
+                f"{p.label}:scale")
+            if key not in names:
+                continue
+            scale = float(result.params.get(key, float("nan")))
+            if not math.isfinite(scale) or scale == 0:
+                continue
+            idx[p.label] = names.index(key)
+            scales[p.label] = scale
+        for p in included:
+            if p.label not in idx:
+                continue
+            g = np.zeros(len(names))
+            a_p = float(amps[p.label])
+            for q in included:
+                if q.label not in idx:
+                    continue
+                a_q = float(amps[q.label])
+                key = idx[q.label]
+                if q.label == p.label:
+                    g[key] += a_p * (total - a_p) / total ** 2 \
+                        / scales[p.label]
+                else:
+                    g[key] += -a_p * a_q / total ** 2 / scales[q.label]
+            var = float(g @ cov @ g)
+            out[p.label] = (math.sqrt(var) if math.isfinite(var)
+                            and var >= 0 else float("nan"))
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return out
+
+
 def _status(result, cells, seed, max_rwp, phases=(), policy=None,
             *, check_cells=True):
     if result is None:
@@ -441,8 +494,11 @@ class GenericBatch:
                        for label, v in weights.items()}
         stderr = dict(getattr(result, "stderr", None) or {}) if result else {}
         main_label = _main_label(self.phases)
+        f_esds = fraction_esds(result, self.phases, amps) if result else {}
         for phase in self.phases:
             row[f"f_{phase.label}"] = fracs.get(phase.label, float("nan"))
+            row[f"f_{phase.label}_esd"] = f_esds.get(
+                phase.label, float("nan"))
             row[f"a_{phase.label}"] = amps.get(phase.label, float("nan"))
             row[f"wt_{phase.label}"] = weights.get(phase.label, float("nan"))
             prefix = "" if phase.label == main_label else f"{phase.label}:"
@@ -499,6 +555,7 @@ class GenericBatch:
         cols = ["frame", "file", "status", "usable", "rwp", "rp"]
         for phase in self.phases:
             cols.append(f"f_{phase.label}")
+            cols.append(f"f_{phase.label}_esd")
             cols.append(f"a_{phase.label}")
             cols.append(f"wt_{phase.label}")
             cols += [f"{phase.label}_{key}" for key in ("a", "b", "c")]

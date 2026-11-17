@@ -40,14 +40,54 @@ def _rows(rows):
     return sorted(out, key=lambda r: int(r["frame"]))
 
 
-def _shade(ax, annotations, lo, hi):
-    for item in annotations or []:
-        try:
-            start, end, label = item
-        except (TypeError, ValueError):
+def _shade(ax, phase_set, rows, lo, hi):
+    """优先用户注释；否则按 ViewConfig.shade_phase 自动分充/放电段。
+
+    自动口径与旧 LMFP 汇总图一致：该相分数最低的帧 = 转折帧，左侧蓝、
+    右侧橙，虚线标转折。通用预设不设 shade_phase 就不画。
+    """
+    ann = getattr(phase_set.views, "annotations", None)
+    if ann:
+        for item in ann:
+            try:
+                start, end, label = item
+            except (TypeError, ValueError):
+                continue
+            ax.axvspan(float(start), float(end), color="0.92", alpha=0.6,
+                       lw=0, zorder=0, label=label)
+        return
+    phase = getattr(phase_set.views, "shade_phase", None)
+    if not phase:
+        return
+    vals = [(int(r["frame"]), _num(r.get(f"f_{phase}")))
+            for r in rows]
+    vals = [(x, y) for x, y in vals if math.isfinite(y)]
+    if not vals:
+        return
+    trans = min(vals, key=lambda item: item[1])[0]
+    ax.axvspan(lo, trans + 0.5, color="tab:blue", alpha=0.06, lw=0)
+    ax.axvspan(trans + 0.5, hi, color="tab:orange", alpha=0.06, lw=0)
+    ax.axvline(trans + 0.5, color="0.55", lw=0.8, ls="--")
+
+
+def _crossing_frame(rows, pair):
+    """crossover 两相分数相等的位置（线性插值）；没有就 None。"""
+    if not pair or len(pair) != 2:
+        return None
+    a, b = pair
+    prev = None
+    for row in rows:
+        fa = _num(row.get(f"f_{a}"))
+        fb = _num(row.get(f"f_{b}"))
+        if not (math.isfinite(fa) and math.isfinite(fb)):
             continue
-        ax.axvspan(float(start), float(end), color="0.92", alpha=0.6,
-                   lw=0, zorder=0, label=label)
+        d = fa - fb
+        if prev is not None and prev[1] * d <= 0 and prev[1] != d:
+            x0, d0 = prev
+            x1 = int(row["frame"])
+            return x0 + (x1 - x0) * (-d0) / (d - d0)
+        prev = (int(row["frame"]), d)
+    return None
 
 
 def draw_multi_trends(fig, rows, phase_set, *, title=None):
@@ -62,7 +102,7 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
     fig.clear()
     axes = fig.subplots(2, 2)
     ax = axes[0, 0]
-    _shade(ax, phase_set.views.annotations, lo, hi)
+    _shade(ax, phase_set, rows, lo, hi)
     base = np.zeros(len(rows))
     for i, phase in enumerate(samples):
         vals = np.array([_num(r.get(f"f_{phase.label}"), 0.0)
@@ -75,6 +115,9 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
     pair = phase_set.views.crossover_pair
     if pair:
         ax.axhline(0.5, color="0.45", lw=0.8, ls="--")
+        cross = _crossing_frame(rows, pair)
+        if cross is not None:
+            ax.axvline(cross, color="0.55", lw=0.8, ls=":")
     ax.set_ylim(0.0, 1.0)
     ax.set_xlim(lo, hi)
     ax.set_ylabel("relative fraction", fontsize=8)
@@ -85,7 +128,7 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
 
     for idx, axis in enumerate(("a", "c")):
         ax = axes[0, 1] if idx == 0 else axes[1, 0]
-        _shade(ax, phase_set.views.annotations, lo, hi)
+        _shade(ax, phase_set, rows, lo, hi)
         for i, phase in enumerate(samples):
             raw = np.array([_num(r.get(f"{phase.label}_{axis}"))
                             for r in rows], dtype=float)
@@ -115,7 +158,7 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
             ax.legend(fontsize=7, loc="best")
 
     ax = axes[1, 1]
-    _shade(ax, phase_set.views.annotations, lo, hi)
+    _shade(ax, phase_set, rows, lo, hi)
     rwp = np.array([_num(r.get("rwp")) for r in rows], dtype=float)
     ax.plot(frames, rwp, "o-", ms=2.5, color="#c0392b")
     _status_markers(ax, rows, "rwp")
@@ -150,15 +193,23 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
     panels = [(axes[0, 0], "f"), (axes[0, 1], "a"),
               (axes[1, 0], "c"), (axes[1, 1], "rwp")]
     for ax, kind in panels:
-        _shade(ax, phase_set.views.annotations, lo, hi)
+        _shade(ax, phase_set, rows, lo, hi)
         ax.set_xlim(lo, hi)
         ax.grid(alpha=0.25, linestyle=":")
         ax.tick_params(labelsize=7)
     ax = axes[0, 0]
     for i, phase in enumerate(samples):
-        vals = [_num(r.get(f"f_{phase.label}")) for r in rows]
+        vals = np.array([_num(r.get(f"f_{phase.label}")) for r in rows],
+                        dtype=float)
+        esd = np.array([_num(r.get(f"f_{phase.label}_esd"))
+                        for r in rows], dtype=float)
         ax.plot(frames, vals, "o-", ms=2.2, lw=0.8,
                 color=_color(phase, i), label=phase.plot_label())
+        good = np.isfinite(vals) & np.isfinite(esd) & (esd > 0)
+        if np.any(good):
+            ax.fill_between(frames[good], (vals - esd)[good],
+                            (vals + esd)[good], color=_color(phase, i),
+                            alpha=0.18, lw=0)
     ax.set_ylim(-0.02, 1.02)
     ax.set_ylabel("relative fraction", fontsize=8)
     ax.set_title("(a) Sample phase fractions", fontsize=9)
@@ -166,9 +217,14 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
         ax.legend(fontsize=7, loc="best")
     for ax, axis in ((axes[0, 1], "a"), (axes[1, 0], "c")):
         for i, phase in enumerate(samples):
-            vals = [_num(r.get(f"{phase.label}_{axis}")) for r in rows]
-            ax.plot(frames, vals, "o-", ms=2.2, lw=0.8,
-                    color=_color(phase, i), label=phase.plot_label())
+            x, y, e = _finite_pairs(
+                rows, f"{phase.label}_{axis}",
+                esd=f"{phase.label}_{axis}_esd")
+            if len(x):
+                ax.errorbar(x, y, yerr=e, fmt="o-", ms=2.2, lw=0.8,
+                            capsize=1.5, elinewidth=0.6,
+                            color=_color(phase, i),
+                            label=phase.plot_label())
         ax.set_ylabel(f"{axis} (Å)", fontsize=8)
         ax.set_title(f"({'b' if axis == 'a' else 'c'}) Cell {axis}",
                      fontsize=9)

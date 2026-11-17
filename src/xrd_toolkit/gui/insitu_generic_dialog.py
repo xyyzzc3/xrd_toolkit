@@ -10,6 +10,7 @@
   * 仪器基线优先用窗口里已保存的 LaB₆ 基线；没有就只精修零位。
 """
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -30,12 +31,13 @@ from xrd_toolkit.gui.tasks import BackgroundTask
 
 
 def _prepare_worker(phase_specs, folder, config_name, mask_path, instrument,
-                    max_rwp, limit, npt, tth_min, tth_max, policy):
+                    max_rwp, limit, npt, tth_min, tth_max, policy,
+                    views=None):
     """后台准备：按每相 PhaseSpec 读结构/mask、列帧。不能碰界面控件。"""
     from xrd_toolkit.simulation.insitu_generic import (
         GenericBatch, frames_for_dir, load_mask_file)
     from xrd_toolkit.simulation.phase_set import (
-        BatchPolicy, PhaseSet, spec_from_path)
+        BatchPolicy, PeakWindow, PhaseSet, ViewConfig, spec_from_path)
     geom = dict(get_config(config_name)["geometry"])
     lam = float(geom["wavelength_m"]) * 1e10
     mask = load_mask_file(mask_path) if mask_path else None
@@ -54,10 +56,13 @@ def _prepare_worker(phase_specs, folder, config_name, mask_path, instrument,
     for key, value in (policy or {}).items():
         if hasattr(pol, key):
             setattr(pol, key, value)
+    vraw = dict(views or {})
+    windows = [PeakWindow(**w) for w in vraw.pop("peak_windows", [])]
+    vcfg = ViewConfig(peak_windows=windows, **vraw)
     batch = GenericBatch(
         [], geom, lam, instrument=instrument, mask=mask,
         max_rwp=max_rwp, phase_set=PhaseSet(name="通用多相", phases=phases,
-                                            policy=pol),
+                                            policy=pol, views=vcfg),
         first_nfev=pol.first_nfev, frame_nfev=pol.frame_nfev,
         npt=npt, tth_min=tth_min, tth_max=tth_max)
     frames = frames_for_dir(folder, limit=limit)
@@ -77,6 +82,8 @@ class GenericInsituDialog(QDialog):
         self._task = None
         self._stop = False
         self._instrument = self._baseline_params()
+        self._scheme_policy = None
+        self._scheme_views = None
         self.setWindowTitle("通用多相原位精修")
         self.resize(1040, 680)
         self._build_ui()
@@ -144,7 +151,9 @@ class GenericInsituDialog(QDialog):
         for text, slot in (("加 CIF…", self._add_phases),
                            ("移除", self._remove_phase),
                            ("切换角色", self._toggle_role),
-                           ("改名…", self._rename_phase)):
+                           ("改名…", self._rename_phase),
+                           ("存方案…", self._save_scheme),
+                           ("载方案…", self._load_scheme)):
             btn = QPushButton(text)
             btn.clicked.connect(slot)
             side.addWidget(btn)
@@ -271,15 +280,15 @@ class GenericInsituDialog(QDialog):
             if path and Path(path).is_file():
                 is_al = key == "al"
                 self._append_phase(
-                    Path(path),
+                    Path(path), label=key,
                     role="reference" if is_al else "sample",
                     cell_free=not is_al,
                     intensity="lebail" if is_al else "structure",
                     include_in_fraction=not is_al)
 
-    def _append_phase(self, path, *, role="sample", cell_free=True,
-                      intensity="structure", include_in_fraction=True,
-                      free_extra=False):
+    def _append_phase(self, path, *, label=None, role="sample",
+                      cell_free=True, intensity="structure",
+                      include_in_fraction=True, free_extra=False):
         table = self.phase_table
         row = table.rowCount()
         table.insertRow(row)
@@ -290,6 +299,8 @@ class GenericInsituDialog(QDialog):
         table.setCellWidget(row, 0, role_box)
         item = QTableWidgetItem(Path(path).stem)
         item.setData(Qt.UserRole, str(path))
+        if label:
+            item.setData(Qt.UserRole + 1, str(label))
         item.setToolTip(str(path))
         table.setItem(row, 1, item)
         cell = QCheckBox()
@@ -331,6 +342,72 @@ class GenericInsituDialog(QDialog):
             self, "相的名字", "界面/图里显示的名字：", text=item.text())
         if ok and text.strip():
             item.setText(text.strip())
+
+    def _save_scheme(self):
+        specs = self._phase_specs()
+        if not specs:
+            self._set_status("相表为空，没有可保存的方案")
+            return
+        start = str(Path.home() / "Data" / "XRD" / "insitu_scheme.json")
+        name, _ = QFileDialog.getSaveFileName(
+            self, "保存原位方案", start, "方案 (*.json);;所有文件 (*)")
+        if not name:
+            return
+        path = Path(name)
+        if path.suffix.lower() != ".json":
+            path = path.with_suffix(".json")
+        try:
+            from xrd_toolkit.simulation.phase_set import (
+                BatchPolicy, PhaseSet, ViewConfig, save_phase_set,
+                spec_from_path)
+            phases = [spec_from_path(
+                item["path"], label=item.get("label"),
+                display_name=item.get("display_name", ""),
+                role=item.get("role", "sample"),
+                cell_free=item.get("cell_free", True),
+                intensity=item.get("intensity", "structure"),
+                include_in_fraction=item.get("include_in_fraction", True),
+                free_extra=item.get("free_extra", ()))
+                for item in specs]
+            pset = PhaseSet(
+                name=path.stem, phases=phases,
+                policy=(self._scheme_policy or BatchPolicy.generic()),
+                views=(self._scheme_views or ViewConfig()))
+            save_phase_set(pset, path)
+        except Exception as err:                    # noqa: BLE001
+            QMessageBox.warning(self, "保存方案失败", str(err))
+            return
+        self._set_status(f"方案已保存：{path}")
+        _log(self.main, f"原位方案已保存：{path}")
+
+    def _load_scheme(self):
+        start = str(Path.home() / "Data" / "XRD")
+        name, _ = QFileDialog.getOpenFileName(
+            self, "载入原位方案", start, "方案 (*.json);;所有文件 (*)")
+        if not name:
+            return
+        try:
+            from xrd_toolkit.simulation.phase_set import load_phase_set
+            pset = load_phase_set(name)
+        except Exception as err:                    # noqa: BLE001
+            QMessageBox.warning(self, "载入方案失败", str(err))
+            return
+        self.phase_table.setRowCount(0)
+        for phase in pset.phases:
+            self._append_phase(
+                phase.path, label=phase.label, role=phase.role,
+                cell_free=phase.cell_free, intensity=phase.intensity,
+                include_in_fraction=phase.include_in_fraction,
+                free_extra=bool(phase.free_extra))
+            item = self.phase_table.item(self.phase_table.rowCount() - 1, 1)
+            if item is not None and phase.display_name:
+                item.setText(phase.display_name)
+        self._scheme_policy = pset.policy
+        self._scheme_views = pset.views
+        self.setWindowTitle(f"通用多相原位精修：{pset.name}")
+        self._set_status(
+            f"已载入方案：{Path(name).name}（{len(pset.phases)} 相）")
+        _log(self.main, f"原位方案已载入：{name}")
 
     def _add_phases(self):
         start = (str(paths.phase_library_dir())
@@ -383,6 +460,7 @@ class GenericInsituDialog(QDialog):
             bfree = self.phase_table.cellWidget(row, 5)
             specs.append({
                 "path": item.data(Qt.UserRole),
+                "label": item.data(Qt.UserRole + 1),
                 "display_name": item.text(),
                 "role": role_box.currentData() if role_box is not None
                 else "sample",
@@ -462,8 +540,11 @@ class GenericInsituDialog(QDialog):
             int(self.workbench.npt.value()),
             float(self.workbench.tth_min.value()),
             float(self.workbench.tth_max.value()),
-            {"first_nfev": 120, "frame_nfev": 60,
-             "dual_start": "off", "pending_frames": 0},
+            (asdict(self._scheme_policy) if self._scheme_policy is not None
+             else {"first_nfev": 120, "frame_nfev": 60,
+                   "dual_start": "off", "pending_frames": 0}),
+            (asdict(self._scheme_views) if self._scheme_views is not None
+             else None),
             on_done=self._prepared, on_error=self._failed)
         self._task.start()
 
