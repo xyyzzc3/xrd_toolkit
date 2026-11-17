@@ -679,8 +679,15 @@ class RefineWorkbench(QWidget):
 
     def _current_source(self):
         key = self.curve_combo.currentData()
-        if key and str(key).startswith("product:"):
+        if not key:
+            return None
+        if str(key).startswith("product:"):
             return self._product_sources.get(key)
+        if str(key).startswith("1D|"):
+            # 打开的面板也记着自己的来源（plot/view_flow.py 的
+            # panel_source）；处理产物做成 1D 面板后仍是 BG，不能只看 key。
+            dock = getattr(self.main, "plot_docks", {}).get(key)
+            return getattr(dock, "panel_source", None)
         return None
 
     def _update_curve_mode(self):

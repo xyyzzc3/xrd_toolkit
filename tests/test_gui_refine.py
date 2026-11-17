@@ -248,6 +248,27 @@ class TestRefineWorkbench(unittest.TestCase):
         bg.assert_not_called()
         self.assertIn("处理产物", note)
 
+    def test_processed_source_is_detected_on_an_open_panel(self):
+        """处理产物做成 1D 面板后，panel_source 仍是 BG（2026-11-18）。"""
+        import types
+        from xrd_toolkit.gui import refine_workbench as gui_refine
+        self._enter()
+        editor = self.w.refine_editor
+        key = "1D|product-demo"
+        self.w.plot_docks[key] = types.SimpleNamespace(
+            panel_source=types.SimpleNamespace(
+                kind=gui_refine.gui_sources.BG))
+        try:
+            editor.curve_combo.addItem("demo · 处理产物", key)
+            editor.curve_combo.setCurrentIndex(
+                editor.curve_combo.count() - 1)
+            editor._update_curve_mode()
+            self.assertTrue(editor._processed_curve)
+            self.assertEqual(editor.bg_combo.currentData(), "none")
+            self.assertIn("处理产物", editor.source_mode_label.text())
+        finally:
+            self.w.plot_docks.pop(key, None)
+
     def test_cif_list_has_reference_structures(self):
         self._enter()
         combo = self.w.refine_editor.cif_combo
