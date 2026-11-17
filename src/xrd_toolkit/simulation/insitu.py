@@ -15,6 +15,11 @@
 不收敛/高 Rwp/晶胞跳变的帧标异常，不中断；晶胞跳变后连续 2 帧
 落在同一个新晶胞时重锁种子，避免两相区一跳就永远用旧种子。
 
+2026-11-17 提速：峰表跨帧缓存、峰形计算内联（数学等价），收敛容差
+1e-6 + 后续帧迭代上限 80。实测 10 帧与"200 次迭代的严格参考解"一致
+（Rwp/晶胞/f_rich 到 1e-4），6 帧总耗时约从 60 s 降到 23 s；大多数帧
+2–3 次迭代就停，困难帧（两相区）才用满迭代。
+
 相分数口径（2026-10-27 与用户定的第一版）：
   A_p = scale_p × Σ(table.inten_p) × table.norm_p / 100
   f_rich = A_rich / (A_rich + A_poor)，Al 只作参考、不参与 LMFP 分数。
@@ -50,8 +55,18 @@ LAB6_CIF = _STRUCT / "LaB6_NIST660c.cif"
 # 与 fit_lmfp.py 一致的 Al 参考晶胞（实测峰位）
 AL_A = 4.061
 # 第一帧/后续帧的最大函数评估次数（时间-稳定性折中）
+# 2026-11-17 原位提速：配合 1e-6 收敛容差，后续帧 80 次足以在两相区
+# 收敛（实测第 4 帧 40 次会停在不同的 f_rich，80 次与不限迭代的严格解
+# 一致）；大多数帧 2–3 次迭代就停，只有困难帧才用满。
 FIRST_NFEV = 120
-FRAME_NFEV = 40
+FRAME_NFEV = 80
+# 拟合收敛容差（2026-11-17 原位提速）：原来固定 1e-12，优化器要把最后
+# 一点点噪声也啃干净；帧间 Rwp/晶胞变化比这个量大几个数量级，1e-6
+# 足够。实测 10 帧：与 200 次迭代的严格参考解一致（Rwp/晶胞/f_rich
+# 到 1e-4），大多数帧 2–3 次迭代就停。
+FIT_XTOL = 1e-6
+FIT_FTOL = 1e-6
+FIT_GTOL = 1e-6
 # 异常判据：晶胞相对上一好种子跳超过这么多 Å 就标记（不中止）
 CELL_JUMP_RICH = 0.12
 CELL_JUMP_POOR = 0.25
@@ -319,7 +334,8 @@ def _fit_once(t, y, bg, rich, poor, al, lam, inst, rich_cell, poor_cell,
         initial=_fit_initial(inst, rich_cell, poor_cell),
         stages=[("zero", "a", "b", "c",
                  "LMFP_poor:a", "LMFP_poor:b", "LMFP_poor:c")],
-        bounds=CELL_BOUNDS, max_nfev=max_nfev)
+        bounds=CELL_BOUNDS, max_nfev=max_nfev,
+        xtol=FIT_XTOL, ftol=FIT_FTOL, gtol=FIT_GTOL)
 
 
 def load_frame(path, geom, mask, *, npt=NPT, tth_min=TTH_MIN,
@@ -384,7 +400,7 @@ def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
         weights="poisson", cell_refine=True, intensity_poly=ipoly,
         extra_phases=extra, phase_label="LMFP_rich", free=free,
         initial=init, stages=[stage_names], bounds=CELL_BOUNDS,
-        max_nfev=max_nfev)
+        max_nfev=max_nfev, xtol=FIT_XTOL, ftol=FIT_FTOL, gtol=FIT_GTOL)
 
 
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,

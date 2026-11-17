@@ -289,13 +289,14 @@ class InSituWorkbench(QWidget):
         self.max_rwp.setValue(20.0)
         self.max_rwp.setSuffix(" %")
         left_lay.addLayout(_labeled_row("最大 Rwp", self.max_rwp))
+        from xrd_toolkit.simulation.insitu import FIRST_NFEV, FRAME_NFEV
         self.first_nfev = QSpinBox()
         self.first_nfev.setRange(20, 2000)
-        self.first_nfev.setValue(120)
+        self.first_nfev.setValue(FIRST_NFEV)
         left_lay.addLayout(_labeled_row("首帧迭代", self.first_nfev))
         self.frame_nfev = QSpinBox()
         self.frame_nfev.setRange(10, 1000)
-        self.frame_nfev.setValue(40)
+        self.frame_nfev.setValue(FRAME_NFEV)
         left_lay.addLayout(_labeled_row("后续帧迭代", self.frame_nfev))
         self.tth_min = QDoubleSpinBox()
         self.tth_min.setRange(0.0, 20.0)
@@ -357,8 +358,9 @@ class InSituWorkbench(QWidget):
         left_lay.addWidget(self.copy_report_btn)
         hint = QLabel("双击表格行看单帧拟合；f_rich 是相对散射强度分数，"
                       "看趋势用；wt rich% / wt poor% 是晶态相的 Rietveld "
-                      "重量分数（Al 单列、不进两相分母）。每帧双起点，"
-                      "约 15–20 s/帧；晶胞只在相占多数时可信。")
+                      "重量分数（Al 单列、不进两相分母）。多数帧只跑一次"
+                      "（种子收敛就采用），通常几秒/帧，两相区更慢；"
+                      "晶胞只在相占多数时可信。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         hint.setMinimumWidth(0)

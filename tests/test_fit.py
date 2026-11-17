@@ -600,6 +600,56 @@ class TestExtraPhaseLebailAndBackgroundSmooth(unittest.TestCase):
         self.assertLess(smooth.rwp, raw.rwp + 0.6)
 
 
+class TestPeakTableCache(unittest.TestCase):
+    """2026-11-17 原位提速：峰表缓存只对"简单情形"复用，参数不同不能串。"""
+
+    def test_same_args_share_table_and_others_do_not(self):
+        from xrd_toolkit.simulation import fit as fit_mod
+        st = core.load_structure(str(STRUCT_DIR / "LaB6_NIST660c.cif"))
+        with fit_mod._TABLE_CACHE_LOCK:
+            fit_mod._TABLE_CACHE.clear()
+        a = fit_mod._cached_peak_table(
+            st, CU_KA, (10.0, 80.0), 10, 0.0, 0.5, keep_unmerged=True)
+        b = fit_mod._cached_peak_table(
+            st, CU_KA, (10.0, 80.0), 10, 0.0, 0.5, keep_unmerged=True)
+        self.assertIs(a, b, "同参数应命中同一张峰表")
+        c = fit_mod._cached_peak_table(
+            st, 1.0, (10.0, 80.0), 10, 0.0, 0.5, keep_unmerged=True)
+        self.assertIsNot(a, c, "波长不同不能共用峰表")
+
+    def test_looser_tolerance_reaches_same_minimum(self):
+        """1e-6 容差与 1e-12 在同一合成谱上落到同一个解（原位提速依据）。"""
+        st = core.load_structure(str(STRUCT_DIR / "LaB6_NIST660c.cif"))
+        tth, y = _synth(st)
+        kw = dict(wavelength=CU_KA, background=2,
+                  free=("zero", "u", "v", "w"))
+        strict = fit_pattern(st, tth, y, **kw)
+        fast = fit_pattern(
+            st, tth, y, **kw, xtol=1e-6, ftol=1e-6, gtol=1e-6)
+        self.assertAlmostEqual(strict.rwp, fast.rwp, places=5)
+        # zero/u/v/w 有相关性：1e-6 容差下最后一个有效位可能不同，
+        # 但对 Rwp/谱形的差别远小于实验误差。
+        for name in ("zero", "u", "v", "w"):
+            self.assertAlmostEqual(strict.params[name], fast.params[name],
+                                   delta=0.01)
+
+    def test_dict_b_iso_is_not_cached(self):
+        """字典 B / 动态强度会改表属性：必须每次新建。"""
+        from xrd_toolkit.simulation import fit as fit_mod
+        st = core.load_structure(str(STRUCT_DIR / "LaB6_NIST660c.cif"))
+        with fit_mod._TABLE_CACHE_LOCK:
+            fit_mod._TABLE_CACHE.clear()
+        a = fit_mod._cached_peak_table(
+            st, CU_KA, (10.0, 80.0), 10, {"La": 0.2}, 0.5,
+            keep_unmerged=True)
+        b = fit_mod._cached_peak_table(
+            st, CU_KA, (10.0, 80.0), 10, {"La": 0.2}, 0.5,
+            keep_unmerged=True)
+        self.assertIsNot(a, b)
+        with fit_mod._TABLE_CACHE_LOCK:
+            self.assertEqual(len(fit_mod._TABLE_CACHE), 0)
+
+
 class TestFitHelpers(unittest.TestCase):
     def test_rwp_matches_manual(self):
         obs = np.array([10.0, 20.0, 30.0, 40.0])

@@ -31,7 +31,10 @@
 拟合结果里的 `params` 是 GSAS 口径（U/V/W centideg²、X/Y/Z centideg、
 Size µm、Mustrain = 4ε·10⁶），报告直接可与 GSAS-II 的参数表对照。
 """
+import bisect
 import math
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -266,6 +269,51 @@ class FitResult:
         if self.stages:
             lines.append("stages: " + " -> ".join("+".join(s) for s in self.stages))
         return "\n".join(lines)
+
+
+# 峰表缓存（2026-11-17 原位提速）：同一结构 + 同一波长/范围/温度因子，
+# 每帧重建峰表要 ~0.7 s（pymatgen 反射表 + 对称操作），原位批量里结构
+# 不变，缓存后只付一次。只缓存"简单情形"（标量 b_iso、无 md、无动态
+# 强度/逐位点模型）——那些路径会改表属性，不能共享。键带结构对象并
+# 存一份引用，id 不会被复用；上限 16 张（约几十 MB）。
+# 面积归一伪 Voigt 的常数（内联到 peak_curve/peak_columns 用；
+# 2026-11-17 原位提速：几十万次小数组调用，函数/数组转换的开销比
+# 数学本身还大）
+_PV_K = 4.0 * math.log(2.0)
+_PV_AREA_G = math.sqrt(math.pi / (4.0 * math.log(2.0)))
+_PV_HALF_PI = math.pi / 2.0
+# 峰形计算窗口（FWHM 倍数，GSAS-II 口径 50/75）。
+_PEAK_WINDOW_LO = 50.0
+_PEAK_WINDOW_HI = 75.0
+
+_TABLE_CACHE = OrderedDict()
+_TABLE_CACHE_LOCK = threading.Lock()
+_TABLE_CACHE_MAX = 16
+
+
+def _cached_peak_table(structure, wavelength, two_theta_range, nmax,
+                       b_iso, polariz, *, keep_unmerged=False, md=None):
+    """`_PeakTable(...)` 的缓存包装；不安全的情形直接新建。"""
+    if md is not None or b_iso is None or isinstance(b_iso, dict):
+        return _PeakTable(
+            structure, wavelength, two_theta_range, nmax, b_iso, polariz,
+            keep_unmerged=keep_unmerged, md=md)
+    key = (id(structure), float(wavelength),
+           tuple(float(x) for x in two_theta_range), int(nmax),
+           float(b_iso), float(polariz), bool(keep_unmerged))
+    with _TABLE_CACHE_LOCK:
+        hit = _TABLE_CACHE.get(key)
+        if hit is not None and hit[0] is structure:
+            _TABLE_CACHE.move_to_end(key)
+            return hit[1]
+    table = _PeakTable(
+        structure, wavelength, two_theta_range, nmax, b_iso, polariz,
+        keep_unmerged=keep_unmerged, md=md)
+    with _TABLE_CACHE_LOCK:
+        _TABLE_CACHE[key] = (structure, table)
+        while len(_TABLE_CACHE) > _TABLE_CACHE_MAX:
+            _TABLE_CACHE.popitem(last=False)
+    return table
 
 
 class _PeakTable:
@@ -519,6 +567,7 @@ class _Model:
                  background_smooth=0.0):
         self.table = table
         self.tth = np.asarray(tth, dtype=float)
+        self._tth_list = self.tth.tolist()   # _window 用 bisect（标量查询快）
         self.y = np.asarray(y_target, dtype=float)
         self.sqrt_w = np.sqrt(np.asarray(weights, dtype=float))
         self.wavelength = float(wavelength)
@@ -741,34 +790,52 @@ class _Model:
 
     def _window(self, tt, fw):
         # GSAS-II 的峰范围：低角侧 50 FWHM、高角侧 75 FWHM（2θ>90° 对调）
-        half_lo = (75.0 if tt > 90.0 else 50.0) * fw
-        half_hi = (50.0 if tt > 90.0 else 75.0) * fw
-        return (int(np.searchsorted(self.tth, tt - half_lo)),
-                int(np.searchsorted(self.tth, tt + half_hi)))
+        if tt > 90.0:
+            half_lo, half_hi = _PEAK_WINDOW_HI, _PEAK_WINDOW_LO
+        else:
+            half_lo, half_hi = _PEAK_WINDOW_LO, _PEAK_WINDOW_HI
+        half_lo *= fw
+        half_hi *= fw
+        tth = self._tth_list
+        return (bisect.bisect_left(tth, tt - half_lo),
+                bisect.bisect_left(tth, tt + half_hi))
 
     def peak_curve(self, p):
         """面积守恒的峰形曲线（不含 scale 与背景）。"""
         y = np.zeros_like(self.tth)
-        for tt, ii, fw, et in zip(*self._parts(p)):
+        centers, inten, fwhm, eta = self._parts(p)
+        # 转成 Python 标量再循环：numpy 标量的每次运算都要走 dispatcher，
+        # 这里是每帧几十万次的循环（2026-11-17 原地提速）。
+        for tt, ii, fw, et in zip(centers.tolist(), inten.tolist(),
+                                  fwhm.tolist(), eta.tolist()):
             if fw <= 0 or ii == 0:
                 continue
             lo, hi = self._window(tt, fw)
             if hi <= lo:
                 continue
-            y[lo:hi] += ii * pv_area_normalized(self.tth[lo:hi], tt, fw, et)
+            z = (self.tth[lo:hi] - tt) / fw
+            shape = et / (1.0 + 4.0 * z * z) \
+                + (1.0 - et) * np.exp(-_PV_K * z * z)
+            area = fw * (et * _PV_HALF_PI + (1.0 - et) * _PV_AREA_G)
+            y[lo:hi] += (ii / area) * shape
         return y
 
     def peak_columns(self, p):
         """每条峰单独一列（面积归一），供 Le Bail 式逐峰强度拟合。"""
         centers, inten, fwhm, eta = self._parts(p)
         cols = []
-        for tt, ii, fw, et in zip(centers, inten, fwhm, eta):
+        for tt, ii, fw, et in zip(centers.tolist(), inten.tolist(),
+                                  fwhm.tolist(), eta.tolist()):
             col = np.zeros_like(self.tth)
             if fw > 0 and ii != 0:
                 lo, hi = self._window(tt, fw)
                 if hi > lo:
-                    col[lo:hi] = ii * pv_area_normalized(
-                        self.tth[lo:hi], tt, fw, et)
+                    z = (self.tth[lo:hi] - tt) / fw
+                    shape = et / (1.0 + 4.0 * z * z) \
+                        + (1.0 - et) * np.exp(-_PV_K * z * z)
+                    area = fw * (et * _PV_HALF_PI
+                                 + (1.0 - et) * _PV_AREA_G)
+                    col[lo:hi] = (ii / area) * shape
             cols.append(col)
         return np.column_stack(cols) if cols else np.empty((len(self.tth), 0))
 
@@ -1042,7 +1109,8 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                 free=("zero", "u", "v", "w"),
                 stages=None, initial=None, bounds=None,
                 size_mix=1.0, strain_mix=1.0,
-                phase_label=None, max_nfev=2000, site_symprec=1e-3):
+                phase_label=None, max_nfev=2000, site_symprec=1e-3,
+                xtol=1e-12, ftol=1e-12, gtol=1e-12):
     """用 GSAS-II 口径的全谱模型拟合一条 1D 谱。
 
     参数：
@@ -1107,6 +1175,9 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         bounds             边界覆盖（同名参数）
         size_mix/strain_mix 尺寸/应变的 LG 混合，GSAS 默认 1（Lorentzian）
         site_symprec      空间群判定的容差（Å，默认 1e-3）；只影响 coord_*
+        xtol/ftol/gtol    `least_squares` 收敛容差；默认 1e-12（开发期
+                          精度）。原位批量传 1e-6：帧间变化远大于这个
+                          量级，能少跑多次 Jacobian，结果与严格解一致。
 
     返回 `FitResult`。拟合在**观测点**上逐点比较，不做插值。
     """
@@ -1237,11 +1308,17 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
         raise ValueError("精修 md_r 时必须给 md=(轴, R)")
 
     # ── 峰表（固定结构；精修晶胞/动态强度时保留 hkl/d） ──────────
-    table = _PeakTable(structure, wavelength, two_theta_range, nmax,
-                       b_iso, polariz,
-                       keep_unmerged=cell_refine or dynamic, md=md,
-                       dynamic=dynamic, md_refine=md_refine,
-                       site_model=site_model)
+    if not dynamic and md is None and site_model is None:
+        table = _cached_peak_table(
+            structure, wavelength, two_theta_range, nmax,
+            b_iso, polariz, keep_unmerged=bool(cell_refine))
+    else:
+        table = _PeakTable(
+            structure, wavelength, two_theta_range, nmax,
+            b_iso, polariz,
+            keep_unmerged=cell_refine or dynamic, md=md,
+            dynamic=dynamic, md_refine=md_refine,
+            site_model=site_model)
     if table.cubic:
         bad_cell = [n for n in free if n in ("b", "c")]
         if bad_cell:
@@ -1432,7 +1509,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
             raise ValueError("extra_phases 每项必须给 structure")
         label = str(spec.get("label", "extra"))
         b_extra = spec.get("b_iso")
-        extra_table = _PeakTable(
+        extra_table = _cached_peak_table(
             st, wavelength, two_theta_range, nmax, b_extra, polariz,
             keep_unmerged=True, md=spec.get("md"))
         extra_fixed = {
@@ -1497,7 +1574,7 @@ def fit_pattern(structure, tth, intensity, *, wavelength=1.5406,
                          lo, hi)
             cand = least_squares(
                 model.residual, x0, bounds=(lo, hi), x_scale="jac",
-                max_nfev=max_nfev, xtol=1e-12, ftol=1e-12, gtol=1e-12)
+                max_nfev=max_nfev, xtol=xtol, ftol=ftol, gtol=gtol)
             if best is None or cand.cost < best.cost:
                 best = cand
         result = best
