@@ -288,7 +288,8 @@ class GenericInsituDialog(QDialog):
 
     def _append_phase(self, path, *, label=None, role="sample",
                       cell_free=True, intensity="structure",
-                      include_in_fraction=True, free_extra=False):
+                      include_in_fraction=True, free_extra=False,
+                      plot_name=None):
         table = self.phase_table
         row = table.rowCount()
         table.insertRow(row)
@@ -301,6 +302,8 @@ class GenericInsituDialog(QDialog):
         item.setData(Qt.UserRole, str(path))
         if label:
             item.setData(Qt.UserRole + 1, str(label))
+        if plot_name:
+            item.setData(Qt.UserRole + 2, str(plot_name))
         item.setToolTip(str(path))
         table.setItem(row, 1, item)
         cell = QCheckBox()
@@ -363,6 +366,7 @@ class GenericInsituDialog(QDialog):
             phases = [spec_from_path(
                 item["path"], label=item.get("label"),
                 display_name=item.get("display_name", ""),
+                plot_name=item.get("plot_name") or "",
                 role=item.get("role", "sample"),
                 cell_free=item.get("cell_free", True),
                 intensity=item.get("intensity", "structure"),
@@ -398,7 +402,8 @@ class GenericInsituDialog(QDialog):
                 phase.path, label=phase.label, role=phase.role,
                 cell_free=phase.cell_free, intensity=phase.intensity,
                 include_in_fraction=phase.include_in_fraction,
-                free_extra=bool(phase.free_extra))
+                free_extra=bool(phase.free_extra),
+                plot_name=phase.plot_name)
             item = self.phase_table.item(self.phase_table.rowCount() - 1, 1)
             if item is not None and phase.display_name:
                 item.setText(phase.display_name)
@@ -461,6 +466,7 @@ class GenericInsituDialog(QDialog):
             specs.append({
                 "path": item.data(Qt.UserRole),
                 "label": item.data(Qt.UserRole + 1),
+                "plot_name": item.data(Qt.UserRole + 2),
                 "display_name": item.text(),
                 "role": role_box.currentData() if role_box is not None
                 else "sample",
