@@ -362,7 +362,7 @@ class InSituWorkbench(QWidget):
         left_lay.addWidget(self.stop_btn)
         self.save_btn = QPushButton("保存当前图…")
         self.save_btn.setToolTip(
-            "保存当前标签页的图（趋势 / 汇总 / 单帧拟合 / 模型无关）")
+            "保存当前标签页的图（趋势 / 汇总 / 单帧拟合 / 峰窗跟踪）")
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._save_view)
         left_lay.addWidget(self.save_btn)
@@ -406,7 +406,7 @@ class InSituWorkbench(QWidget):
         self.view_tabs.addTab(self.canvas, "趋势")
         self.view_tabs.addTab(self.summary_canvas, "汇总")
         self.view_tabs.addTab(self.fit_canvas, "单帧拟合")
-        self.view_tabs.addTab(self.mi_canvas, "模型无关")
+        self.view_tabs.addTab(self.mi_canvas, "峰窗跟踪")
         self.view_tabs.setCurrentIndex(0)
         self.view_tabs.currentChanged.connect(self._on_view_changed)
         right.addWidget(self.view_tabs)
@@ -798,16 +798,23 @@ class InSituWorkbench(QWidget):
         else:
             self._draw_model_independent()
 
+    def _phase_set(self):
+        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        return (getattr(self.batch, "phase_set", None)
+                or lmfp_phase_set())
+
     def _draw_trends(self):
-        from xrd_toolkit.simulation.insitu_plots import draw_trends
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_multi_trends)
         rows = (self.batch.rows if self.batch is not None else [])
-        draw_trends(self.fig, rows)
+        draw_multi_trends(self.fig, rows, self._phase_set())
         self.canvas.draw_idle()
 
     def _draw_summary(self):
-        from xrd_toolkit.simulation.insitu_plots import draw_summary
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_multi_summary)
         rows = (self.batch.rows if self.batch is not None else [])
-        draw_summary(self.summary_fig, rows)
+        draw_multi_summary(self.summary_fig, rows, self._phase_set())
         self.summary_canvas.draw_idle()
 
     def _fit_title(self):
@@ -833,13 +840,11 @@ class InSituWorkbench(QWidget):
         self.fit_canvas.draw_idle()
 
     def _draw_model_independent(self):
-        from xrd_toolkit.simulation.insitu_plots import (
-            draw_model_independent, model_independent_rows)
-        fitted = (self.batch.fitted if self.batch is not None else [])
-        if self._mi_rows is None or self._mi_len != len(fitted):
-            self._mi_rows = model_independent_rows(fitted)
-            self._mi_len = len(fitted)
-        draw_model_independent(self.mi_fig, self._mi_rows)
+        """峰窗跟踪（原模型无关 (200) 检查的通用版）。"""
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_window_tracker)
+        rows = (self.batch.rows if self.batch is not None else [])
+        draw_window_tracker(self.mi_fig, rows, self._phase_set())
         self.mi_canvas.draw_idle()
 
     def _clear_fit_view(self):
@@ -913,9 +918,8 @@ class InSituWorkbench(QWidget):
     def _save_view(self):
         """按脚本同尺寸/同布局重画一张再存——画布会被 Qt 拉成窗口大小，
         直接存画布会得到低分辨率、挤在一起的图（2026-11-02 实测）。"""
-        from xrd_toolkit.simulation.insitu_plots import (
-            draw_model_independent, draw_summary, draw_trends,
-            model_independent_rows)
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_multi_summary, draw_multi_trends, draw_window_tracker)
         from xrd_toolkit.simulation.plots import draw_fit
 
         index = self.view_tabs.currentIndex()
@@ -924,14 +928,14 @@ class InSituWorkbench(QWidget):
                 self._set_status("还没有趋势图")
                 return
             fig = Figure(figsize=(11.0, 7.0))
-            draw_trends(fig, self.batch.rows)
+            draw_multi_trends(fig, self.batch.rows, self._phase_set())
             name = "insitu_trends"
         elif index == 1:
             if self.batch is None or not self.batch.rows:
                 self._set_status("还没有汇总图")
                 return
             fig = Figure(figsize=(12.5, 8.0))
-            draw_summary(fig, self.batch.rows)
+            draw_multi_summary(fig, self.batch.rows, self._phase_set())
             name = "insitu_summary"
         elif index == 2:
             if self._fit_res is None:
@@ -941,15 +945,12 @@ class InSituWorkbench(QWidget):
             draw_fit(fig, self._fit_res, self._fit_title(), bragg="auto")
             name = f"insitu_fit_frame_{self._fit_frame:03d}"
         else:
-            if self.batch is None or not self.batch.fitted:
-                self._set_status("还没有模型无关数据")
+            if self.batch is None or not self.batch.rows:
+                self._set_status("还没有峰窗数据")
                 return
-            if self._mi_rows is None:
-                self._mi_rows = model_independent_rows(self.batch.fitted)
-                self._mi_len = len(self.batch.fitted)
-            fig = Figure(figsize=(15.0, 4.6))
-            draw_model_independent(fig, self._mi_rows)
-            name = "insitu_model_independent"
+            fig = Figure(figsize=(12.0, 8.0))
+            draw_window_tracker(fig, self.batch.rows, self._phase_set())
+            name = "insitu_peak_windows"
         stamp = time.strftime("%Y%m%d-%H%M%S")
         saved = save_figure_with_options(
             self.main, fig, f"{name}_{stamp}", title="保存当前图",
