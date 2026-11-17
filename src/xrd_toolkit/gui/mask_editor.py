@@ -168,6 +168,7 @@ class MaskWorkbench(QWidget):
         self._mask_cache = OrderedDict()
         # 已经生成过产物的 (原图路径, mask 哈希)：用来把按钮标成"已生成"
         self._generated = set()
+        self._generating = False       # 批量生成中：防止 processEvents 重入
         self._image_combo_sig = None
         # 放大镜点亮时的框选放大
         self._zooming = False
@@ -2097,13 +2098,28 @@ class MaskWorkbench(QWidget):
         label = self.mask_path.name if self.mask_path else "未保存掩膜工程"
         made = 0
         made_paths = []
-        for path in paths:
-            try:
-                self._create_masked2d([path], label=label)
-                made += 1
-                made_paths.append(path)
-            except Exception as err:                   # noqa: BLE001
-                self._say(f"掩膜 2D 生成失败：{path.name}——{err}")
+        # 批量生成：状态栏给 k/n（2026-11-17 用户："81 张只写日志，
+        # 不知道到哪了"）。逐张 processEvents，窗口不闷死；重入由
+        # _generate_current 的 _generating 护栏挡住。
+        from xrd_toolkit.gui.plot.spawn import _progress_hide, _progress_show
+        show_bar = len(paths) > 1
+        if show_bar:
+            _progress_show(self.main, len(paths), 0, label="掩膜 2D")
+        try:
+            for i, path in enumerate(paths, start=1):
+                try:
+                    self._create_masked2d([path], label=label)
+                    made += 1
+                    made_paths.append(path)
+                except Exception as err:               # noqa: BLE001
+                    self._say(f"掩膜 2D 生成失败：{path.name}——{err}")
+                if show_bar:
+                    _progress_show(self.main, len(paths), i,
+                                   label="掩膜 2D")
+                    QApplication.processEvents()
+        finally:
+            if show_bar:
+                _progress_hide(self.main)
         if made_paths:
             self._uncheck_raw(made_paths)
             idx = self.scope_combo.findData("current")
@@ -2153,11 +2169,18 @@ class MaskWorkbench(QWidget):
             if hasattr(self.main, "status_text"):
                 self.main.status_text.setText("掩膜为空：未生成产物")
             return
-        if self.scope_combo.currentData() == "current":
-            self._apply_to_main()
-        else:
-            self._apply_to_paths(self._target_paths())
-        self._update_generate_state()
+        if getattr(self, "_generating", False):
+            self._say("正在生成掩膜 2D，等这一批跑完再点")
+            return
+        self._generating = True
+        try:
+            if self.scope_combo.currentData() == "current":
+                self._apply_to_main()
+            else:
+                self._apply_to_paths(self._target_paths())
+        finally:
+            self._generating = False
+            self._update_generate_state()
 
     def _preview_effect(self):
         """[预览效果]：立即重算掩膜前/后的 1D（不建产物）。"""

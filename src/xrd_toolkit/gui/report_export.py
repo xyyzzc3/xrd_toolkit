@@ -363,11 +363,13 @@ def _insitu_snapshot(window):
 
 # ══ 收集快照 ═════════════════════════════════════════════
 def collect_report_snapshot(window, *, title, sample, curve_key,
-                            sections) -> report.ReportSnapshot:
+                            sections, on_step=None) -> report.ReportSnapshot:
     """把窗口里的当前结果读成 ReportSnapshot（只读，不改任何状态）。
 
     `sections` 是用户勾的节（键见 `analysis_report.SECTIONS`）。没勾的节
     不收集；勾了但没有结果的节由生成器在报告里写"本次未做"。
+    `on_step(done, total, label)` 可选：每收集完一节报一次，给进度框用
+    （2026-11-17：报告生成从"不确定忙碌框"改成按节推进；写盘算最后一步）。
     """
     sections = tuple(key for key in sections if key in report._ALL_KEYS)
     if not sections:
@@ -376,6 +378,29 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
     dock = docks.get(curve_key)
     if dock is None or getattr(dock, "last_tth", None) is None:
         raise ValueError("选中的 1D 曲线已经不在了（重新点 [1D] 出图再试）")
+
+    need_fits = "fits" in sections or "wh" in sections
+    steps = ["曲线"]
+    if "peaks" in sections:
+        steps.append("峰表")
+    if need_fits:
+        steps.append("单峰拟合")
+    if "wh" in sections:
+        steps.append("W-H")
+    if "phases" in sections:
+        steps.append("物相")
+    if "refine" in sections:
+        steps.append("精修")
+    if "insitu" in sections:
+        steps.append("原位")
+    total_steps = len(steps) + 1        # + 写报告
+    done_steps = 0
+
+    def step(label):
+        nonlocal done_steps
+        done_steps += 1
+        if callable(on_step):
+            on_step(done_steps, total_steps, label)
 
     tth = np.asarray(dock.last_tth, dtype=float)
     intensity = np.asarray(dock.last_intensity, dtype=float)
@@ -403,15 +428,16 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
         name=name, tth=proc_tth, intensity=proc_y, path=source_path,
         raw_tth=raw_tth, raw_intensity=raw_y, chain=chain,
         config=config_name, wavelength=_wavelength(window, config_name))
+    step("曲线")
 
     # 峰表：勾了才收集（图上的峰标记也跟着这个开关）
     if "peaks" in sections:
         curve.peaks = _detect_peaks(window, dock, proc_tth, proc_y)
+        step("峰表")
 
     # 单峰拟合：直接读面板结果；曲线变了（重新积分/改处理参数）就作废，
     # 与 gui/fit_view.draw_fit_overlays 的判定同一个指纹。
     entries = list(getattr(dock, "fit_results", None) or [])
-    need_fits = "fits" in sections or "wh" in sections
     stale = (bool(entries) and need_fits
              and getattr(dock, "fit_sig", None) != _curve_sig(
                  proc_tth, proc_y))
@@ -447,6 +473,9 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
                 window_intensity=proc_y[mask]))
 
     # W-H：读面板上已经算好的结果（refresh_wh 在拟合/勾选变化时自动重算）
+    if need_fits:
+        step("单峰拟合")
+
     result = getattr(dock, "wh_result", None)
     if "wh" in sections and result is not None and not stale:
         curve.wh = report.ReportWH(
@@ -458,6 +487,9 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
             instrument_note=str(getattr(dock, "wh_inst_note", "") or ""),
             warning=str(getattr(result, "warning", "") or ""),
             n_used=int(np.size(result.x)))
+
+    if "wh" in sections:
+        step("W-H")
 
     # 方法表：把"这次到底用了什么参数"写清楚。峰/拟合参数从面板快照读，
     # 拟合背景按每根 FitEntry 实际用的值——不是当前设置（拟合完改过设置
@@ -528,8 +560,15 @@ def collect_report_snapshot(window, *, title, sample, curve_key,
                 ("寻峰最小峰距", f"{editor.min_distance.value():g}°"),
             ]
 
+    if "phases" in sections:
+        step("物相")
+
     refine = _refine_snapshot(window) if "refine" in sections else None
+    if "refine" in sections:
+        step("精修")
     insitu = _insitu_snapshot(window) if "insitu" in sections else None
+    if "insitu" in sections:
+        step("原位")
 
     return report.ReportSnapshot(
         title=str(title).strip() or "XRD 分析报告",
@@ -683,26 +722,40 @@ class ReportDialog(QDialog):
             return
         if path.suffix.lower() != ".html":
             path = path.with_suffix(".html")
+
+        # 进度框从"收集"就开始——2026-11-17：原先它只罩住写盘，收集阶段
+        # 界面是静止的；现在按收集的节推进，写盘算最后一步。纯 CPU +
+        # Matplotlib Agg，通常 1–3 秒，用模态框也避免和 Qt 画布重绘并发。
+        progress = QProgressDialog("正在收集数据…", "", 0, 1, self)
+        progress.setWindowTitle("一键分析报告")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)    # 收集到 100% 后还要写报告，别提前关
+
+        def on_step(done, total, label):
+            progress.setRange(0, max(1, int(total)))
+            progress.setValue(int(done))
+            progress.setLabelText(f"正在收集：{label}…")
+            QApplication.processEvents()
+
+        progress.show()
+        QApplication.processEvents()
         try:
             snapshot = collect_report_snapshot(
                 self._window,
                 title=self.title_edit.text(),
                 sample=self.sample_edit.text(),
                 curve_key=self.curve_combo.currentData(),
-                sections=sections)
+                sections=sections,
+                on_step=on_step)
         except Exception as err:                       # noqa: BLE001
+            progress.close()
             self.status.setText(user_error_text(err))
             return
 
-        # 生成是纯 CPU + Matplotlib Agg，通常 1–3 秒；用模态进度框让用户
-        # 看到"在做事"，同时避免和主窗口的 Qt 画布重绘并发（Matplotlib
-        # 的全局状态不适合跨线程同时用）。
-        progress = QProgressDialog("正在生成报告…", "", 0, 0, self)
-        progress.setWindowTitle("一键分析报告")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setCancelButton(None)
-        progress.setMinimumDuration(0)
-        progress.show()
+        progress.setValue(progress.maximum())
+        progress.setLabelText("正在生成报告…")
         QApplication.processEvents()
         try:
             target = data_export.unique_path(path)

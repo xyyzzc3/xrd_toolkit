@@ -135,13 +135,19 @@ def _on_integration_done(window: QMainWindow, key: str, task, result) -> None:
         _log(window, f"积分完成：{dock.panel_display}（0 点，无有效数据）"
                      f"{suffix}")
 
-def _progress_show(window: QMainWindow, total: int, value: int = 0) -> None:
-    """批量进度条：显示出来并把范围设成 total（开面板阶段也用它）。"""
+def _progress_show(window: QMainWindow, total: int, value: int = 0,
+                   label: str = "") -> None:
+    """批量进度条：显示出来并把范围设成 total（开面板阶段也用它）。
+
+    label 可选：给这条进度一个名字（如"掩膜 2D"），格式变成
+    `掩膜 2D 3/81`；不给就仍是 `3/81`（批量出图的老样子）。
+    """
     bar = getattr(window, "batch_progress", None)
     if bar is None:
         return
     bar.setRange(0, max(1, int(total)))
     bar.setValue(int(value))
+    bar.setFormat(f"{label} %v/%m" if label else "%v/%m")
     bar.setVisible(True)
 
 def _progress_hide(window: QMainWindow) -> None:

@@ -203,10 +203,15 @@ class TestInSituWorkbench(unittest.TestCase):
             with mock.patch.object(insitu_gui, "_prepare_worker",
                                    lambda *a, **k: _FakeBatch()):
                 editor.start_btn.click()
+                # 2026-11-17：帧进度条 = 总帧数已知的 k/n
+                self.assertTrue(editor.frame_progress.isVisible())
+                self.assertEqual(editor.frame_progress.maximum(), 3)
                 ok = _wait_until(
                     lambda: editor.start_btn.isEnabled()
                     and editor.table.rowCount() == 3, timeout_ms=10000)
             self.assertTrue(ok, "批量没有在 10 秒内完成")
+            self.assertFalse(editor.frame_progress.isVisible(),
+                             "批完进度条应收起来")
             self.assertIn("完成", editor.status.text())
             self.assertEqual(len(editor.batch.rows), 3)
             self.assertEqual(editor._batch_meta["data_dir"], str(data))

@@ -276,7 +276,20 @@ class TestMaskEditor(unittest.TestCase):
         self._open()
         self.ed.load_image(self.img_path)
         self.ed._fill_rect((10, 10), (20, 20), True)
-        self.ed._apply_to_paths([self.img_path, other])
+        # 2026-11-17：批量生成时状态栏应有 k/n 进度条（逐张可见）
+        seen = []
+        original = self.ed._create_masked2d
+
+        def _wrapped(*args, **kwargs):
+            seen.append(self.w.batch_progress.isVisible())
+            return original(*args, **kwargs)
+
+        with mock.patch.object(self.ed, "_create_masked2d",
+                               side_effect=_wrapped):
+            self.ed._apply_to_paths([self.img_path, other])
+        self.assertEqual(seen, [True, True])
+        self.assertFalse(self.w.batch_progress.isVisible(),
+                         "生成完进度条应收起来")
         self.assertEqual(len(self._products()), 2)
 
     def test_preview_button_draws_before_after_without_product(self):

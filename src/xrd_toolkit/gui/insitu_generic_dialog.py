@@ -16,8 +16,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget)
+    QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSpinBox,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import get_config
@@ -181,9 +181,22 @@ class GenericInsituDialog(QDialog):
         info.addWidget(close_btn)
         root.addLayout(info)
 
+        # 进度：文字 + 帧进度条（2026-11-17；总帧数列完就知道，给 k/n）
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(6)
         self.progress = QLabel("选好帧目录与相，点 [开始]")
         self.progress.setStyleSheet("color: gray;")
-        root.addWidget(self.progress)
+        self.progress.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        progress_row.addWidget(self.progress, 1)
+        self.frame_progress = QProgressBar()
+        self.frame_progress.setObjectName("insitu_generic_progress")
+        self.frame_progress.setFixedWidth(170)
+        self.frame_progress.setMaximumHeight(14)
+        self.frame_progress.setFormat("%v/%m")
+        self.frame_progress.setVisible(False)
+        progress_row.addWidget(self.frame_progress)
+        root.addLayout(progress_row)
 
         self.table = QTableWidget(0, 0)
         self.table.verticalHeader().setVisible(False)
@@ -293,6 +306,7 @@ class GenericInsituDialog(QDialog):
         self.table.setColumnCount(0)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self._hide_progress()
         self._set_status("准备中（读结构 + 掩膜 + 列帧）…")
         _log(self.main, "通用原位多相：准备开始")
         self._task = BackgroundTask(
@@ -314,6 +328,7 @@ class GenericInsituDialog(QDialog):
             self._reset_buttons()
             return
         self._build_table()
+        self._show_progress(len(self._frames), 0)
         self._set_status(f"开始：{len(self._frames)} 帧，"
                          f"主相 {self.batch.phases[0].label}")
         self._start_next()
@@ -329,6 +344,7 @@ class GenericInsituDialog(QDialog):
             self._finish()
             return
         path = self._frames[self._index]
+        self._set_progress(self._index)
         self._set_status(
             f"第 {self._index + 1}/{len(self._frames)} 帧：{Path(path).name}")
         self._task = BackgroundTask(
@@ -341,12 +357,14 @@ class GenericInsituDialog(QDialog):
         self._append_row(row)
         self._rows.append(row)
         self._index += 1
+        self._set_progress(self._index)
         self._start_next()
 
     def _frame_failed(self, message):
         self._task = None
         self._set_status(f"这一帧失败：{message}")
         self._index += 1
+        self._set_progress(self._index)
         self._start_next()
 
     def _append_row(self, row):
@@ -370,6 +388,7 @@ class GenericInsituDialog(QDialog):
 
     def _finish(self):
         self._reset_buttons()
+        self._hide_progress()
         if not self._rows:
             self._set_status("没有完成任何帧")
             return
@@ -392,10 +411,30 @@ class GenericInsituDialog(QDialog):
     def _failed(self, message):
         self._task = None
         self._reset_buttons()
+        self._hide_progress()
         self._set_status(f"准备失败：{message}")
 
     def _set_status(self, text):
         self.progress.setText(text)
+
+    # ── 帧进度条（2026-11-17）───────────────────────────────
+    def _show_progress(self, total: int, value: int = 0) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is None:
+            return
+        bar.setRange(0, max(1, int(total)))
+        bar.setValue(int(value))
+        bar.setVisible(True)
+
+    def _set_progress(self, value: int) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is not None and bar.isVisible():
+            bar.setValue(int(value))
+
+    def _hide_progress(self) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is not None:
+            bar.setVisible(False)
 
     def closeEvent(self, event):
         if self._task is not None:

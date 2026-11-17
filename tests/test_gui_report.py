@@ -143,9 +143,19 @@ class TestReportWindow(unittest.TestCase):
         self._open_panel()
         self._fit_all()
         self.assertIsNotNone(self.dock.wh_result)
+        steps = []
         snapshot = report_export.collect_report_snapshot(
             self.w, title="测试报告", sample="fake",
-            curve_key=self.key, sections=ar._ALL_KEYS)
+            curve_key=self.key, sections=ar._ALL_KEYS,
+            on_step=lambda done, total, label: steps.append(
+                (done, total, label)))
+        # 2026-11-17：报告进度按收集的节推进（写盘算最后一步）
+        self.assertTrue(steps, "应该至少报一次收集进度")
+        self.assertEqual([s[0] for s in steps],
+                         list(range(1, len(steps) + 1)))
+        self.assertTrue(all(s[1] == steps[0][1] for s in steps))
+        self.assertGreater(steps[0][1], len(steps),
+                           "最后一步留给写报告")
         curve = snapshot.curve
         self.assertIsNotNone(curve)
         self.assertEqual(curve.chain, "none")

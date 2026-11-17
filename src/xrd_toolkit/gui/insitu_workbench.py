@@ -33,8 +33,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow, QMenu, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget,
+    QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow, QMenu, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
@@ -417,9 +417,25 @@ class InSituWorkbench(QWidget):
         split.setStretchFactor(1, 1)
         split.setSizes([290, 760])
 
+        # 底栏：状态文字 + 帧进度条（2026-11-17 用户："原位十几分钟只有
+        # 一行字"）。总帧数一开始就知道，直接给 k/n 确定进度。
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
         self.status = QLabel("选帧目录，点 [开始]")
         self.status.setStyleSheet("color: gray;")
-        root.addWidget(self.status)
+        self.status.setSizePolicy(QSizePolicy.Ignored,
+                                  QSizePolicy.Preferred)
+        status_row.addWidget(self.status, 1)
+        self.frame_progress = QProgressBar()
+        self.frame_progress.setObjectName("insitu_progress")
+        self.frame_progress.setFixedWidth(170)
+        self.frame_progress.setMaximumHeight(14)
+        self.frame_progress.setTextVisible(True)
+        self.frame_progress.setFormat("%v/%m")
+        self.frame_progress.setVisible(False)
+        status_row.addWidget(self.frame_progress)
+        root.addLayout(status_row)
 
     # ── 目录与文件 ──────────────────────────────────────────
     def _refresh_data_label(self):
@@ -593,6 +609,7 @@ class InSituWorkbench(QWidget):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
+        self._show_progress(len(self.frames), 0)
         self._set_status("准备中（读结构 + LaB₆ 定仪器）…")
         where = ("文件栏勾选" if self._use_checked else str(self.data_dir))
         _log(self.main, f"原位批量：{where}（{len(self.frames)} 帧）")
@@ -610,6 +627,7 @@ class InSituWorkbench(QWidget):
             self._task = None
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
+            self._hide_progress()
             self._set_status(f"准备失败：{message}")
             _log(self.main, f"原位批量准备失败：{message}")
 
@@ -640,6 +658,7 @@ class InSituWorkbench(QWidget):
             self._finish("完成")
             return
         path = self.frames[self._index]
+        self._set_progress(self._index)   # 已完成帧数（本帧正在算）
         self._set_status(
             f"第 {self._index + 1}/{len(self.frames)} 帧：{path.name}")
         task = None
@@ -664,6 +683,7 @@ class InSituWorkbench(QWidget):
 
     def _on_frame(self, row):
         self._index += 1
+        self._set_progress(self._index)
         self._append_row(row)
         # 任意新帧都会让模型无关缓存失效；趋势图始终跟着更新
         self._mi_rows = None
@@ -687,6 +707,7 @@ class InSituWorkbench(QWidget):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._task = None
+        self._hide_progress()
         if self.batch is not None and self.batch.rows:
             self._write_csv()
             try:
@@ -963,6 +984,25 @@ class InSituWorkbench(QWidget):
 
     def _set_status(self, text):
         self.status.setText(text)
+
+    # ── 帧进度条（2026-11-17）───────────────────────────────
+    def _show_progress(self, total: int, value: int = 0) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is None:
+            return
+        bar.setRange(0, max(1, int(total)))
+        bar.setValue(int(value))
+        bar.setVisible(True)
+
+    def _set_progress(self, value: int) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is not None and bar.isVisible():
+            bar.setValue(int(value))
+
+    def _hide_progress(self) -> None:
+        bar = getattr(self, "frame_progress", None)
+        if bar is not None:
+            bar.setVisible(False)
 
 
 def _section(text):
