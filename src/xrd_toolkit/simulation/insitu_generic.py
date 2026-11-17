@@ -152,12 +152,50 @@ def fractions(result, phases):
             for label, value in amps.items()}
 
 
-def _status(result, cells, seed, max_rwp, phases=(), policy=None):
+def window_stats(tth, y, window):
+    """模型无关峰窗指标：局部线性背景后的面积/质心/峰高。
+
+    `window` 是 PhaseSpec 的 PeakWindow；两侧平带优先用 side_lo/side_hi，
+    没给就取窗口两端各 15% 的点做背景。返回 (area, centroid, height)。
+    """
+    t = np.asarray(tth, dtype=float)
+    y = np.asarray(y, dtype=float)
+    lo, hi = float(window.tth_min), float(window.tth_max)
+    m = (t >= lo) & (t <= hi) & np.isfinite(y)
+    if np.count_nonzero(m) < 8:
+        return float("nan"), float("nan"), float("nan")
+    side = np.zeros_like(m)
+    if window.side_lo:
+        side |= (t >= window.side_lo[0]) & (t <= window.side_lo[1])
+    if window.side_hi:
+        side |= (t >= window.side_hi[0]) & (t <= window.side_hi[1])
+    if np.count_nonzero(side) < 4:
+        span = max(hi - lo, 1e-9)
+        side = ((t >= lo) & (t <= lo + 0.15 * span)) | \
+               ((t >= hi - 0.15 * span) & (t <= hi))
+        side &= m
+    if np.count_nonzero(side) >= 4:
+        coef = np.polyfit(t[side], y[side], 1)
+        yy = y[m] - np.polyval(coef, t[m])
+    else:
+        yy = y[m] - float(np.median(y[m]))
+    area = float(np.trapezoid(yy, t[m]))
+    height = float(np.max(yy)) if yy.size else float("nan")
+    if not math.isfinite(area) or area <= 0:
+        return area, float("nan"), height
+    centroid = float(np.trapezoid(t[m] * yy, t[m]) / area)
+    return area, centroid, height
+
+
+def _status(result, cells, seed, max_rwp, phases=(), policy=None,
+            *, check_cells=True):
     if result is None:
         return "error"
     if not math.isfinite(float(result.rwp)) or result.rwp > max_rwp:
         return f"high_rwp({float(result.rwp):.1f}%)"
     default = (policy.cell_jump_default if policy is not None else CELL_JUMP)
+    if not check_cells:
+        phases = ()
     for phase in phases or ():
         label = phase.label
         got = cells.get(label)
@@ -197,6 +235,8 @@ class GenericBatch:
                 phase.lebail = bool(extra_lebail and i > 0)
             base_policy = policy or BatchPolicy.generic()
         self.policy = base_policy
+        self.windows = list(getattr(getattr(phase_set, "views", None),
+                                    "peak_windows", []) or [])
         self.geom = dict(geom)
         self.lam = float(wavelength)
         self.instrument = dict(instrument or {})
@@ -210,6 +250,8 @@ class GenericBatch:
         self.outdir = Path(outdir) if outdir else None
         self.rows = []
         self.fitted = []          # [(i, path, result, fracs, status)]
+        self.pending_seed = None
+        self.pending_count = 0
         self.frame_no = 0
         self.seed = {phase.label: (tuple(float(x) for x in phase.cell0)
                                    if getattr(phase, "cell0", None)
@@ -225,25 +267,33 @@ class GenericBatch:
         raise ValueError("至少要有一张样品相（role=sample）")
 
     # ── 拟合一帧 ────────────────────────────────────────────
-    def _fit_once(self, t, y, bg, max_nfev):
+    def _fit_once(self, t, y, bg, max_nfev, seed=None):
+        seed = self.seed if seed is None else seed
         main = self._main_phase()
         main_free = cell_free_params(main.structure) if main.cell_free else ()
         # 样品展宽必须放开：固定成"无限大晶粒"会把真实峰的宽度算错，
         # 实测 Rwp 会从几个百分点冲到 60% 以上。
-        free = ("zero",) + tuple(main_free) + ("size_um", "mustrain")
+        free = ("zero",) + tuple(main_free) + (
+            ("size_um", "mustrain") if main.width_free else ())
         init = {"zero": float(self.instrument.get("zero", 0.0)),
                 "u": float(self.instrument.get("u", 0.0)),
                 "v": float(self.instrument.get("v", 0.0)),
                 "w": float(self.instrument.get("w", 0.0)),
                 "x": float(self.instrument.get("x", 0.0)),
                 "y": float(self.instrument.get("y", 0.0)),
-                "size_um": 0.1, "mustrain": 0.0}
+                "size_um": float(main.size_um),
+                "mustrain": float(main.mustrain)}
         for j, key in enumerate(("a", "b", "c")):
-            init[key] = float(self.seed[main.label][j])
+            init[key] = float(seed[main.label][j])
+        extra_bounds = {}
+        for key, (lo, hi) in (getattr(main, "cell_bounds", {}) or {}).items():
+            extra_bounds[key] = (float(lo), float(hi))
         extras = []
         for phase in self.phases:
             if phase is main:
                 continue
+            for key, (lo, hi) in (getattr(phase, "cell_bounds", {}) or {}).items():
+                extra_bounds[f"{phase.label}:{key}"] = (float(lo), float(hi))
             spec = {
                 "structure": phase.structure,
                 "label": phase.label,
@@ -255,8 +305,17 @@ class GenericBatch:
                                     and cell_free_params(phase.structure)),
             }
             for j, key in enumerate(("a", "b", "c")):
-                spec[key] = float(self.seed[phase.label][j])
+                spec[key] = float(seed[phase.label][j])
             extras.append(spec)
+        stages = None
+        if self.policy.joint_stage:
+            names = list(free)
+            for phase in self.phases:
+                if phase is main or not phase.cell_free:
+                    continue
+                for key in cell_free_params(phase.structure):
+                    names.append(f"{phase.label}:{key}")
+            stages = [tuple(names)]
         return fit_pattern(
             main.structure, t, y, wavelength=self.lam,
             b_iso=float(main.b_iso),
@@ -264,8 +323,44 @@ class GenericBatch:
             weights="poisson", cell_refine=bool(main_free),
             extra_phases=extras, phase_label=main.label,
             free=free, initial=init, max_nfev=int(max_nfev),
+            stages=stages, bounds=extra_bounds or None,
             xtol=self.policy.xtol, ftol=self.policy.ftol,
             gtol=self.policy.gtol)
+
+    def _cif_seed(self):
+        return {phase.label: (tuple(float(x) for x in phase.cell0)
+                              if getattr(phase, "cell0", None)
+                              else tuple(float(x) for x in
+                                         phase.structure.lattice.abc))
+                for phase in self.phases}
+
+    def _is_cif_seed(self, seed):
+        cif = self._cif_seed()
+        for phase in self.phases:
+            if not phase.cell_free:
+                continue
+            if any(abs(float(a) - float(b)) > 1e-4
+                   for a, b in zip(seed[phase.label], cif[phase.label])):
+                return False
+        return True
+
+    def _choose_fit(self, seed_res, cif_res):
+        """Rwp 优先；差 ≤ policy.tie_rwp 时取晶胞变化小的解。"""
+        cands = [r for r in (seed_res, cif_res)
+                 if r is not None and math.isfinite(float(r.rwp))]
+        if not cands:
+            return seed_res if seed_res is not None else cif_res
+        best = min(cands, key=lambda r: float(r.rwp))
+        if (len(cands) == 2
+                and abs(float(seed_res.rwp) - float(cif_res.rwp))
+                <= self.policy.tie_rwp):
+            def _change(result):
+                cells = _cells(result, self.phases, self.seed)
+                return sum(abs(float(a) - float(b))
+                           for label, got in cells.items()
+                           for a, b in zip(got, self.seed[label]))
+            best = min(cands, key=lambda r: _change(r))
+        return best
 
     def fit_frame(self, path):
         """跑一帧，返回 row dict；异常也返回 error 行，不抛出。"""
@@ -279,16 +374,36 @@ class GenericBatch:
             t, y, bg, timers = load_frame(
                 path, self.geom, self.mask, npt=self.npt,
                 tth_min=self.tth_min, tth_max=self.tth_max)
+            win_vals = []
+            for window in self.windows:
+                win_vals.append(window_stats(t, y, window))
             t0 = time.perf_counter()
-            result = self._fit_once(
-                t, y, bg,
-                self.first_nfev if i == 1 else self.frame_nfev)
+            nfev = self.first_nfev if i == 1 else self.frame_nfev
+            res_seed = self._fit_once(t, y, bg, nfev)
+            res_cif = None
+            cif_is_seed = self._is_cif_seed(self.seed)
+            mode = str(self.policy.dual_start or "off")
+            if mode == "always":
+                need_second = not cif_is_seed
+            elif mode == "auto":
+                need_second = (not cif_is_seed
+                               and not bool(getattr(res_seed, "success",
+                                                    True)))
+            else:
+                need_second = False
+            if need_second:
+                res_cif = self._fit_once(t, y, bg, nfev,
+                                         seed=self._cif_seed())
+            result = self._choose_fit(res_seed, res_cif)
             timers["fit"] = time.perf_counter() - t0
+            timers["dual_start"] = int(res_cif is not None)
             cells = _cells(result, self.phases, self.seed)
             status = _status(result, cells, self.seed, self.max_rwp,
-                             self.phases, self.policy)
+                             self.phases, self.policy,
+                             check_cells=(i > 1))
         except Exception as err:                       # noqa: BLE001
             status = f"error: {type(err).__name__}: {err}"
+            win_vals = [(float("nan"),) * 3 for _ in self.windows]
             cells = {phase.label: self.seed[phase.label]
                      for phase in self.phases}
         cells = _cells(result, self.phases, self.seed) if result is not None \
@@ -305,18 +420,74 @@ class GenericBatch:
                        else float("nan")),
                "rp": (float(result.rp) if result is not None
                       else float("nan"))}
+        weights = {}
+        for weight in (getattr(result, "phase_weights", None) or []):
+            try:
+                weights[str(weight.label)] = float(weight.weight_percent)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        # 样品相的 wt 在样品相之间归一（参考相不进分母）；参考相保留
+        # 对全部晶态相的原始 wt，单独报告。
+        sample_labels = {p.label for p in self.phases if p.is_sample()}
+        wt_total = sum(v for label, v in weights.items()
+                       if label in sample_labels and math.isfinite(v) and v > 0)
+        if math.isfinite(wt_total) and wt_total > 0:
+            weights = {label: (100.0 * v / wt_total
+                               if label in sample_labels else v)
+                       for label, v in weights.items()}
+        stderr = dict(getattr(result, "stderr", None) or {}) if result else {}
+        main_label = _main_label(self.phases)
         for phase in self.phases:
             row[f"f_{phase.label}"] = fracs.get(phase.label, float("nan"))
             row[f"a_{phase.label}"] = amps.get(phase.label, float("nan"))
+            row[f"wt_{phase.label}"] = weights.get(phase.label, float("nan"))
+            prefix = "" if phase.label == main_label else f"{phase.label}:"
             for key, value in zip(("a", "b", "c"), cells[phase.label]):
                 row[f"{phase.label}_{key}"] = float(value)
+                try:
+                    row[f"{phase.label}_{key}_esd"] = float(
+                        stderr.get(prefix + key, float("nan")))
+                except (TypeError, ValueError):
+                    row[f"{phase.label}_{key}_esd"] = float("nan")
+        for k, vals in enumerate(win_vals):
+            for name, value in zip(("area", "centroid", "height"), vals):
+                row[f"win_{k}_{name}"] = float(value)
         for key in ("load", "integrate", "bg", "fit", "total"):
             row[f"t_{key}_s"] = float(timers.get(key, float("nan")))
         self.rows.append(row)
-        self.fitted.append((i, path, result, fracs, status))
-        if row["usable"] and status != "cell_jump":
-            self.seed = {label: tuple(cells[label])
-                         for label in cells}
+        main_label = _main_label(self.phases)
+        f_main = fracs.get(main_label, float("nan"))
+        self.fitted.append((i, path, result, f_main, status))
+        # 种子更新：晶胞正常立刻接；跳变后连续 pending_frames 帧落在
+        # 同一个新晶胞也接受（与 LMFP 专用引擎同口径）。
+        if row["usable"]:
+            new_seed = {label: tuple(cells[label]) for label in cells}
+            cell_ok = (i == 1) or all(
+                all(abs(float(a) - float(b))
+                    <= (phase.jump_tol if phase.jump_tol is not None
+                        else self.policy.cell_jump_default)
+                    for a, b in zip(cells[phase.label], self.seed[phase.label]))
+                for phase in self.phases)
+            if cell_ok:
+                self.seed = new_seed
+                self.pending_seed = None
+                self.pending_count = 0
+            elif self.policy.pending_frames > 0:
+                tol = float(self.policy.pending_tol)
+                pending = self.pending_seed
+                same = (pending is not None and all(
+                    all(abs(float(a) - float(b)) <= tol
+                        for a, b in zip(cells[label], pending[label]))
+                    for label in cells))
+                if same:
+                    self.pending_count += 1
+                else:
+                    self.pending_seed = new_seed
+                    self.pending_count = 1
+                if self.pending_count >= int(self.policy.pending_frames):
+                    self.seed = new_seed
+                    self.pending_seed = None
+                    self.pending_count = 0
         return row
 
     # ── 输出 ────────────────────────────────────────────────
@@ -325,7 +496,12 @@ class GenericBatch:
         for phase in self.phases:
             cols.append(f"f_{phase.label}")
             cols.append(f"a_{phase.label}")
+            cols.append(f"wt_{phase.label}")
             cols += [f"{phase.label}_{key}" for key in ("a", "b", "c")]
+            cols += [f"{phase.label}_{key}_esd" for key in ("a", "b", "c")]
+        for k in range(len(self.windows)):
+            cols += [f"win_{k}_{name}"
+                     for name in ("area", "centroid", "height")]
         cols += [f"t_{key}_s" for key in ("load", "integrate", "bg", "fit",
                                           "total")]
         return cols
@@ -350,3 +526,22 @@ def load_mask_file(path):
     if not path:
         return None
     return load_mask(Path(path).expanduser())
+
+
+class LMFPBatch(GenericBatch):
+    """LMFP 三相等价实现的适配器（2026-11-17）。
+
+    统一引擎下 LMFP 只是 lmfp_phase_set() 预设；旧工作台/报告仍读
+    `wt_al` / `al_a` / `al_ref` / `f_rich_esd` 这些字段，这里补齐别名。
+    结果几何/分数与专用 insitu.py 同口径（同一 fit_pattern + 同一策略）。
+    """
+
+    def fit_frame(self, path):
+        row = super().fit_frame(path)
+        if "wt_Al" in row:
+            row["wt_al"] = row["wt_Al"]
+        if "Al_a" in row:
+            row["al_a"] = row["Al_a"]
+        row["al_ref"] = row.get("a_Al", float("nan"))
+        row.setdefault("f_rich_esd", float("nan"))
+        return row

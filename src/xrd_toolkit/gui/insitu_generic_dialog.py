@@ -13,12 +13,14 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
-    QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget)
+    QSizePolicy, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.config import get_config
@@ -217,6 +219,20 @@ class GenericInsituDialog(QDialog):
         progress_row.addWidget(self.frame_progress)
         root.addLayout(progress_row)
 
+        # 四视图 + 数据表：通用趋势/汇总/单帧/峰窗跟踪。
+        self.view_tabs = QTabWidget()
+        self.trend_fig = Figure(figsize=(6.0, 4.2))
+        self.trend_canvas = FigureCanvasQTAgg(self.trend_fig)
+        self.summary_fig = Figure(figsize=(6.0, 4.2))
+        self.summary_canvas = FigureCanvasQTAgg(self.summary_fig)
+        self.fit_fig = Figure(figsize=(6.0, 4.2))
+        self.fit_canvas = FigureCanvasQTAgg(self.fit_fig)
+        self.win_fig = Figure(figsize=(6.0, 4.2))
+        self.win_canvas = FigureCanvasQTAgg(self.win_fig)
+        self.view_tabs.addTab(self.trend_canvas, "趋势")
+        self.view_tabs.addTab(self.summary_canvas, "汇总")
+        self.view_tabs.addTab(self.fit_canvas, "单帧拟合")
+        self.view_tabs.addTab(self.win_canvas, "峰窗跟踪")
         self.table = QTableWidget(0, 0)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -224,7 +240,18 @@ class GenericInsituDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setFrameShape(QFrame.NoFrame)
-        root.addWidget(self.table, 1)
+        self.table.itemDoubleClicked.connect(self._on_table_double_clicked)
+        self.view_tabs.addTab(self.table, "数据")
+        root.addWidget(self.view_tabs, 1)
+        # 空状态
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_multi_summary, draw_multi_trends, draw_window_tracker)
+        draw_multi_trends(self.trend_fig, [], None)
+        draw_multi_summary(self.summary_fig, [], None)
+        draw_window_tracker(self.win_fig, [], None)
+        self.trend_canvas.draw_idle()
+        self.summary_canvas.draw_idle()
+        self.win_canvas.draw_idle()
 
         if self._instrument is None:
             self.instrument_label.setText(
@@ -423,6 +450,8 @@ class GenericInsituDialog(QDialog):
             self._reset_buttons()
             return
         self._build_table()
+        self._phase_set = self.batch.phase_set
+        self._refresh_views()
         self._show_progress(len(self._frames), 0)
         samples = [p.display() for p in self.batch.phases if p.is_sample()]
         self._set_status(f"开始：{len(self._frames)} 帧，"
@@ -454,6 +483,7 @@ class GenericInsituDialog(QDialog):
         self._rows.append(row)
         self._index += 1
         self._set_progress(self._index)
+        self._refresh_views()
         self._start_next()
 
     def _frame_failed(self, message):
@@ -478,6 +508,42 @@ class GenericInsituDialog(QDialog):
             self.table.setItem(i, j, item)
         self.table.scrollToBottom()
 
+    def _refresh_views(self):
+        """把当前 rows 重画到通用四视图（LMFP 预设只是配置不同）。"""
+        from xrd_toolkit.simulation.insitu_multi_plots import (
+            draw_multi_summary, draw_multi_trends, draw_window_tracker)
+        pset = getattr(self, "_phase_set", None)
+        if pset is None:
+            return
+        draw_multi_trends(self.trend_fig, self._rows, pset)
+        draw_multi_summary(self.summary_fig, self._rows, pset)
+        draw_window_tracker(self.win_fig, self._rows, pset)
+        self.trend_canvas.draw_idle()
+        self.summary_canvas.draw_idle()
+        self.win_canvas.draw_idle()
+
+    def _on_table_double_clicked(self, item):
+        row = item.row() if item is not None else -1
+        if row < 0 or row >= len(self._rows):
+            return
+        self._show_frame_fit(int(self._rows[row]["frame"]))
+
+    def _show_frame_fit(self, frame):
+        from xrd_toolkit.simulation.plots import draw_fit
+        entry = next((x for x in self.batch.fitted if x[0] == frame), None)
+        self.fit_fig.clear()
+        if entry is None or entry[2] is None:
+            from xrd_toolkit.simulation.insitu_plots import _placeholder
+            _placeholder(self.fit_fig, "Single-frame fit",
+                         "Double-click a row in the 数据 tab")
+        else:
+            _i, path, result, _fracs, _status = entry
+            title = (f"{Path(path).name} — frame {frame}/"
+                     f"{len(self._frames)}, Rwp={result.rwp:.2f}%")
+            draw_fit(self.fit_fig, result, title, bragg="auto")
+        self.fit_canvas.draw_idle()
+        self.view_tabs.setCurrentWidget(self.fit_canvas)
+
     def _request_stop(self):
         self._stop = True
         self._set_status("已请求停止：当前帧算完就停")
@@ -485,6 +551,7 @@ class GenericInsituDialog(QDialog):
     def _finish(self):
         self._reset_buttons()
         self._hide_progress()
+        self._refresh_views()
         if not self._rows:
             self._set_status("没有完成任何帧")
             return
@@ -539,4 +606,7 @@ class GenericInsituDialog(QDialog):
             return
         if getattr(self.main, "_generic_insitu_dialog", None) is self:
             self.main._generic_insitu_dialog = None
+        sync = getattr(self.workbench, "_sync_preset_combo", None)
+        if callable(sync):
+            sync(False)
         super().closeEvent(event)

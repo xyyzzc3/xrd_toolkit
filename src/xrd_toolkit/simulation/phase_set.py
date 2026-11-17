@@ -35,9 +35,11 @@ class PhaseSpec:
     structure: object
     label: str                       # 机器键：参数名/CSV 列
     path: Path | None = None
-    display_name: str = ""           # 界面/图/CSV 显示名
+    display_name: str = ""           # 界面/CSV 显示名
+    plot_name: str = ""              # 图内英文名（论文图默认英文）
     role: str = SAMPLE
     cell_free: bool = True
+    width_free: bool = True          # main 相 size/mustrain 是否精修
     intensity: str = "structure"     # structure | lebail
     include_in_fraction: bool = True
     b_iso: float = 0.0
@@ -61,6 +63,9 @@ class PhaseSpec:
 
     def display(self) -> str:
         return self.display_name or self.label
+
+    def plot_label(self) -> str:
+        return self.plot_name or self.display_name or self.label
 
     def is_sample(self) -> bool:
         return self.role == SAMPLE
@@ -87,6 +92,7 @@ class BatchPolicy:
     background_model: str = "estimated"
     background_order: int = 10
     intensity_poly: int = 0
+    joint_stage: bool = False      # True = 所有非线性参数一个联合阶段
 
     @classmethod
     def lmfp(cls):
@@ -94,7 +100,8 @@ class BatchPolicy:
                    tie_rwp=0.05, max_rwp=20.0, cell_jump_default=0.30,
                    first_nfev=120, frame_nfev=120,
                    xtol=1e-6, ftol=1e-6, gtol=1e-6,
-                   background_model="estimated", intensity_poly=0)
+                   background_model="estimated", intensity_poly=0,
+                   joint_stage=True)
 
     @classmethod
     def generic(cls):
@@ -112,6 +119,8 @@ class PeakWindow:
     tth_min: float
     tth_max: float
     vs_phase: str | None = None       # 可与哪个 sample 相的分数画相关
+    side_lo: tuple | None = None      # 两侧取背景的平带（默认窗口边缘）
+    side_hi: tuple | None = None
 
 
 @dataclass
@@ -156,8 +165,9 @@ def _safe_label(path, used):
     return label
 
 
-def spec_from_path(path, *, label=None, display_name="", role=SAMPLE,
-                   cell_free=True, intensity="structure",
+def spec_from_path(path, *, label=None, display_name="", plot_name="",
+                   role=SAMPLE,
+                   cell_free=True, width_free=True, intensity="structure",
                    include_in_fraction=True, b_iso=None,
                    size_um=1e4, mustrain=0.0, cell_bounds=None,
                    jump_tol=None, color=None):
@@ -170,8 +180,10 @@ def spec_from_path(path, *, label=None, display_name="", role=SAMPLE,
     used = set()
     spec = PhaseSpec(
         structure=structure, label=label or _safe_label(path, used),
-        path=path, display_name=display_name or "", role=role,
-        cell_free=bool(cell_free), intensity=str(intensity),
+        path=path, display_name=display_name or "",
+        plot_name=plot_name or "", role=role,
+        cell_free=bool(cell_free), width_free=bool(width_free),
+        intensity=str(intensity),
         include_in_fraction=bool(include_in_fraction), b_iso=float(b_iso),
         size_um=float(size_um), mustrain=float(mustrain),
         cell_bounds=dict(cell_bounds or {}),
@@ -193,25 +205,30 @@ def generic_phase_set(paths_list, *, name="通用多相"):
                     views=ViewConfig())
 
 
-def lmfp_phase_set():
+def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
     """内置「LMFP 三相」预设：rich/poor 样品相 + Al 参考相。"""
     from xrd_toolkit.simulation.insitu import (
         AL_A, CELL_BOUNDS, DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH)
     rich = spec_from_path(
-        DEFAULT_RICH, label="rich", display_name="富锂相", role=SAMPLE,
-        cell_free=True, intensity="structure", include_in_fraction=True,
-        b_iso=0.0, size_um=1e4, mustrain=0.0,
+        rich_path or DEFAULT_RICH, label="rich", display_name="富锂相",
+        plot_name="Li-rich phase", role=SAMPLE,
+        cell_free=True, width_free=False, intensity="structure",
+        include_in_fraction=True,
+        b_iso=0.0, size_um=0.093, mustrain=0.0,
         cell_bounds={k: CELL_BOUNDS[k] for k in ("a", "b", "c")},
         jump_tol=0.12, color="#1f5fa8")
     poor = spec_from_path(
-        DEFAULT_POOR, label="poor", display_name="贫锂相", role=SAMPLE,
-        cell_free=True, intensity="structure", include_in_fraction=True,
+        poor_path or DEFAULT_POOR, label="poor", display_name="贫锂相",
+        plot_name="Li-poor phase", role=SAMPLE,
+        cell_free=True, width_free=False, intensity="structure",
+        include_in_fraction=True,
         b_iso=0.5, size_um=0.1, mustrain=0.0,
         cell_bounds={k: CELL_BOUNDS[f"LMFP_poor:{k}"]
                      for k in ("a", "b", "c")},
         jump_tol=0.25, color="#e08a1e")
     al = spec_from_path(
-        DEFAULT_AL, label="Al", display_name="Al 参考相", role=REFERENCE,
+        al_path or DEFAULT_AL, label="Al", display_name="Al 参考相",
+        plot_name="Al reference", role=REFERENCE,
         cell_free=False, intensity="lebail", include_in_fraction=False,
         b_iso=0.5, size_um=0.1, mustrain=0.0, jump_tol=0.30,
         color="#2a9d8f")
@@ -219,7 +236,9 @@ def lmfp_phase_set():
     views = ViewConfig(
         crossover_pair=("rich", "poor"),
         peak_windows=[PeakWindow("(200) doublet", 1.18, 1.55,
-                                 vs_phase="poor")],
+                                 vs_phase="poor",
+                                 side_lo=(1.18, 1.28),
+                                 side_hi=(1.50, 1.56))],
         show_wt=True, fraction_order=("rich", "poor"))
     return PhaseSet(name="LMFP 三相", phases=[rich, poor, al],
                     policy=BatchPolicy.lmfp(), views=views)

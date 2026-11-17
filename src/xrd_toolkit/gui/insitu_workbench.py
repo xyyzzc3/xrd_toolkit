@@ -32,8 +32,8 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow, QMenu, QProgressBar,
+    QAbstractItemView, QApplication, QComboBox, QDoubleSpinBox, QFileDialog,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QMdiSubWindow, QMenu, QProgressBar,
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -64,12 +64,24 @@ def _prepare_worker(config_name, rich_path, poor_path, al_path, mask_path,
     """后台准备：读结构 + LaB₆ 定仪器 + 读 mask，返回 InSituBatch。"""
     try:
         from xrd_toolkit.simulation.insitu import prepare_setup
+        from xrd_toolkit.simulation.insitu_generic import LMFPBatch
+        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
     except ImportError as err:
         raise RuntimeError(str(err)) from err
-    return prepare_setup(
+    # 先用专用准备步骤定仪器/读标样（保留 LaB₆ 基线口径），批处理本身
+    # 已切到通用 N 相引擎 + LMFP 预设：结果/CSV/视图与旧路径同口径。
+    prepared = prepare_setup(
         config_name, rich_path=rich_path, poor_path=poor_path,
         al_path=al_path, mask_path=mask_path, lab6_tif=lab6_path,
         max_rwp=max_rwp, first_nfev=first_nfev, frame_nfev=frame_nfev,
+        npt=npt, tth_min=tth_min, tth_max=tth_max)
+    inst = dict(getattr(prepared.instrument, "params", {}) or {})
+    pset = lmfp_phase_set(rich_path=rich_path, poor_path=poor_path,
+                          al_path=al_path)
+    return LMFPBatch(
+        [], prepared.geom, prepared.lam, instrument=inst,
+        mask=prepared.mask, phase_set=pset, max_rwp=max_rwp,
+        first_nfev=first_nfev, frame_nfev=frame_nfev,
         npt=npt, tth_min=tth_min, tth_max=tth_max)
 
 
@@ -207,12 +219,16 @@ class InSituWorkbench(QWidget):
             "（不用先进文件夹；只认原始图，同几何/同形状）")
         self.checked_btn.clicked.connect(self._use_checked_frames)
         top.addWidget(self.checked_btn)
-        self.generic_btn = QPushButton("通用多相…")
-        self.generic_btn.setToolTip(
-            "任意相列表的原位顺序精修（第一张 CIF = 主相，其余为额外相）；"
-            "专用 LMFP 三相快速模式仍是本页的 [开始]")
-        self.generic_btn.clicked.connect(self._open_generic_dialog)
-        top.addWidget(self.generic_btn)
+        # 一个入口内的"方案"：LMFP 三相（本页专用快速模式）/ 通用多相。
+        top.addWidget(QLabel("方案"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.setObjectName("insitu_preset_combo")
+        self.preset_combo.addItem("LMFP 三相", "lmfp")
+        self.preset_combo.addItem("通用多相", "generic")
+        self.preset_combo.setToolTip(
+            "LMFP 三相 = 本页专用快速模式；通用多相 = 任意相角色的顺序精修")
+        self.preset_combo.activated.connect(self._on_preset_changed)
+        top.addWidget(self.preset_combo)
         top.addStretch(1)
         self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
@@ -465,6 +481,19 @@ class InSituWorkbench(QWidget):
             f"{self.data_dir}（{len(self.frames)} 帧）")
         self.data_label.setToolTip(str(self.data_dir))
 
+    def _on_preset_changed(self, _index):
+        if self.preset_combo.currentData() == "generic":
+            self._open_generic_dialog()
+        else:
+            dlg = getattr(self.main, "_generic_insitu_dialog", None)
+            if dlg is not None:
+                dlg.close()
+
+    def _sync_preset_combo(self, generic_open: bool):
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(1 if generic_open else 0)
+        self.preset_combo.blockSignals(False)
+
     def _open_generic_dialog(self):
         """打开通用多相入口（2026-11-11 用户第 14 条）。"""
         from xrd_toolkit.gui.insitu_generic_dialog import GenericInsituDialog
@@ -472,9 +501,11 @@ class InSituWorkbench(QWidget):
         if dlg is not None:
             dlg.raise_()
             dlg.activateWindow()
+            self._sync_preset_combo(True)
             return
         dlg = GenericInsituDialog(self.main, self)
         self.main._generic_insitu_dialog = dlg
+        self._sync_preset_combo(True)
         dlg.show()
 
     def _choose_data(self):

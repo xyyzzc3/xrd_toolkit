@@ -113,6 +113,7 @@ class TestGenericEngine(unittest.TestCase):
 
     def test_cell_jump_keeps_seed(self):
         batch = gen.GenericBatch([RICH, POOR], {}, 1.0)
+        batch.frame_no = 1        # 第一帧不判晶胞跳变（与 LMFP 引擎同口径）
         before = dict(batch.seed)
         labels = [p.label for p in batch.phases]
         poor_cell = tuple(float(x) for x in
@@ -147,7 +148,9 @@ class TestGenericEntry(unittest.TestCase):
     def test_button_opens_dialog_with_seeded_phases(self):
         self.w.insitu_btn.click()
         QApplication.processEvents()
-        self.w.insitu_editor.generic_btn.click()
+        combo = self.w.insitu_editor.preset_combo
+        combo.setCurrentIndex(combo.findData("generic"))
+        combo.activated.emit(combo.currentIndex())
         QApplication.processEvents()
         dlg = self.w._generic_insitu_dialog
         self.assertIsNotNone(dlg)
