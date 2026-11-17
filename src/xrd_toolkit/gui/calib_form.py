@@ -38,7 +38,7 @@ from xrd_toolkit.gui.calib_calibrant import (
     _pixel_ok, _set_pixel_ok, _sync_calibrant_widgets, _update_ring_count,
     _warn_pixel_unchecked)
 from xrd_toolkit.gui.config_ops import (
-    _save_calib_config, _suggest_config_key)
+    _delete_config, _save_calib_config, _suggest_config_key)
 
 from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
@@ -66,6 +66,22 @@ CALIB_FIELD_STEPS = {
     "rot2_deg": 0.01,
 }
 CALIB_BEAM_STEP = 0.5         # 束心行/列（px）
+
+
+def _delete_calib_config(window: QMainWindow) -> None:
+    """[删除配置]：删除当前分析/校准借用的用户配置条目。
+
+    删除的是注册表里的**用户条目**（`window.config_name`，即坞顶灰字
+    那条）；内置条目人工登记、不可删，按钮会置灰。删除前有确认框，
+    删除后分析几何切回默认条目；校准页的「当前配置」几何保留（它可能
+    是从这条借来的起点，删条目不该把正在看的校准结果一起丢掉）。
+    """
+    key = str(getattr(window, "config_name", "") or "")
+    if not key:
+        _log(window, "当前没有可删除的配置条目")
+        return
+    _delete_config(window, key=key)
+    _calib_sync(window)
 
 
 def _edit_current(window: QMainWindow) -> None:
@@ -206,7 +222,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     """参数坞第 0 页：校准功能。
 
     布局（自上而下）：
-      操作区  [编辑当前配置…] / [保存为配置] + 条目名称
+      操作区  [编辑当前配置…] / [保存为配置] / [删除配置] + 条目名称
               + **像素尺寸确认**（单独一行：校准的前置门禁，得在按钮之前
               看得见；2026-10-01 从数据表里搬回来）
       手动    选点计数 + 撤销/清空 + 用选点精修（右键点 = 选中它改环号）
@@ -222,9 +238,10 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     手动区在自动区**上面**（用户 2026-10-13："校准顺序调为手动在上，自动在下"）：
     手动选点是常用路径，打开校准页第一眼就看到它。
 
-    操作区只留"对校准当前几何动手"的两项（编辑当前配置 / 保存为配置）；
-    导入/导出 .poni、删除条目等"对注册表动手"的动作 2026-11-12 搬进
-    方案管理页的几何区，和几何选择器挨着。
+    操作区是"对校准当前几何动手"的三项（编辑当前配置 / 保存为配置 /
+    删除配置）；导入/导出 .poni 等"对注册表动手"的动作 2026-11-12 搬进
+    方案管理页的几何区，和几何选择器挨着。删除条目两处都有：管理页删
+    下拉选中的那条，校准页删当前几何条目（同一个用户条目才可删）。
 
     出口 [返回分析模式] 与灰字几何行不在这里：两者都固定在参数坞顶部
     （app._build_param_dock 建，window.calib_exit_btn）——出口原先钉在本页
@@ -331,12 +348,19 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
                             "不进 git），保存后方案管理页的几何下拉自动选中")
     btn_save_cfg.clicked.connect(lambda: _save_calib_config(window))
     window.calib_save_btn = btn_save_cfg
-    for btn in (btn_edit, btn_save_cfg):
+    btn_del_cfg = QPushButton("删除配置")
+    btn_del_cfg.setObjectName("del_calib_config")
+    btn_del_cfg.setToolTip("删除当前选中的用户配置条目"
+                           "（内置条目不可删）")
+    btn_del_cfg.clicked.connect(lambda: _delete_calib_config(window))
+    window.calib_del_btn = btn_del_cfg
+    for btn in (btn_edit, btn_save_cfg, btn_del_cfg):
         btn.setStyleSheet("padding: 2px 5px;")
     btn_row = QHBoxLayout()
     btn_row.setSpacing(2)
     btn_row.addWidget(btn_edit, 1)
     btn_row.addWidget(btn_save_cfg, 1)
+    btn_row.addWidget(btn_del_cfg, 1)
     ops.addLayout(btn_row)
     lay.addWidget(ops_box)
 
@@ -542,6 +566,9 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     _ensure_current(window)
     _sync_calibrant_widgets(window)
     _calib_sync(window)
+    # 几何条目变化（方案/坞顶下拉/保存/删除/导入）时刷新本页按钮：
+    # 「删除配置」只对用户条目开放，config_name 变了要立刻跟上。
+    window._geometry_changed = lambda _key=None: _calib_sync(window)
     return scroll
 
 def _reset_calib_form(window: QMainWindow) -> None:
@@ -620,6 +647,18 @@ def _calib_sync(window: QMainWindow) -> None:
     window.calib_save_hint.setText(
         f"将保存：「{_slot_label(state, 'current')}」的几何"
         if has_cur else "还没有可保存的几何")
+    # 删除配置：只对注册表里的**用户条目**开放（坞顶灰字那条）。
+    # 内置条目人工登记，按钮置灰；当前配置是未保存的校准结果时也删不了
+    # 条目（没有条目可删），但几何仍留在校准页上。
+    key = str(getattr(window, "config_name", "") or "")
+    deletable = bool(key) and key in config.USER_CONFIGS
+    del_btn = getattr(window, "calib_del_btn", None)
+    if del_btn is not None:
+        del_btn.setEnabled(deletable)
+        del_btn.setToolTip(
+            f"删除用户配置条目「{config.entry_display(key, config.USER_CONFIGS[key])}」"
+            if deletable else
+            (f"「{key}」是内置条目，不可删除" if key else "当前没有配置条目"))
     _sync_slot_combos(window)
     _refresh_table(window)
 

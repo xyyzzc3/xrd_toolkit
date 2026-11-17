@@ -1719,6 +1719,57 @@ class TestSaveCalibConfig(unittest.TestCase):
                                    return_value="discard"):
                 w.close()
 
+    def test_delete_config_button_only_for_user_entries(self):
+        """2026-11-17：校准页 [删除配置] 只对用户条目开放，内置条目置灰。"""
+        w = create_window()
+        try:
+            w.show()
+            with mock.patch.object(gui_calib_panel, "load_diffraction_image",
+                                   return_value=np.ones((256, 256)) * 10):
+                add_checked(w, ["data/fake_a.tif"])
+                w.calib_btn.click()
+            QApplication.processEvents()
+            self.assertFalse(w.calib_del_btn.isEnabled(),
+                             "内置条目（预填自 lmfp1_lab6）不可删")
+            self.assertIn("内置条目", w.calib_del_btn.toolTip())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
+    def test_delete_config_removes_entry_and_restores_default(self):
+        """[删除配置]：确认后删条目、切回默认、按钮置灰；取消则保留。"""
+        w = create_window()
+        try:
+            w.show()
+            self._auto_calib(w)
+            w.calib_name_edit.setText("to_delete")
+            w.calib_save_btn.click()
+            QApplication.processEvents()
+            self.assertEqual(w.config_name, "to_delete")
+            self.assertTrue(w.calib_del_btn.isEnabled(),
+                            "保存后应可删除这条用户配置")
+            self.assertIn("to_delete", w.calib_del_btn.toolTip())
+            # 取消：条目与当前几何都不动
+            with mock.patch.object(gui_config_ops.QMessageBox, "question",
+                                   return_value=QMessageBox.No):
+                w.calib_del_btn.click()
+            self.assertIn("to_delete", config_mod.USER_CONFIGS)
+            self.assertEqual(w.config_name, "to_delete")
+            # 确认：删条目、切回默认、删除按钮置灰
+            with mock.patch.object(gui_config_ops.QMessageBox, "question",
+                                   return_value=QMessageBox.Yes):
+                w.calib_del_btn.click()
+            QApplication.processEvents()
+            self.assertNotIn("to_delete", config_mod.USER_CONFIGS)
+            self.assertEqual(w.config_name, config_mod.DEFAULT_CONFIG)
+            self.assertFalse(w.calib_del_btn.isEnabled())
+            self.assertIn("已删除配置条目", w.log_text.toPlainText())
+        finally:
+            with mock.patch.object(gui_app, "_confirm_close",
+                                   return_value="discard"):
+                w.close()
+
     def test_suggest_config_key(self):
         """key 建议名：第一个数字段 +1，后缀数字（_lab6 的 6）不动。"""
         self.assertEqual(gui_config_ops._suggest_config_key("lmfp1_lab6"),
