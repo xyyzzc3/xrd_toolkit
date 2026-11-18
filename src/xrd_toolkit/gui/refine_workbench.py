@@ -54,6 +54,11 @@ from xrd_toolkit.services.instrument_baseline import save_baseline
 # 这里只留"拟合前观测曲线"用的灰色。
 _OBS_COLOR = "#333333"
 
+# 拟合质量提示阈值（Rwp %）：超过就把数字标红并给下一步建议（2026-11-18）。
+# 15% 是"真实数据里明显不对劲"的量级——GUI 的 LMFP 快精修约 10%，
+# 校准标样约 4%，处理产物则普遍在几十个百分点。
+_RWP_WARN_PERCENT = 15.0
+
 
 def _section(text):
     """左栏的小节标题（灰字加粗，与 1D 页的「峰表」「峰形拟合」同款）。"""
@@ -426,6 +431,14 @@ class RefineWorkbench(QWidget):
             "GoF：约化 χ² = (Rwp/Rexp)²，越接近 1 说明残差只剩计数噪声；"
             "处理产物用等权权重，χ² 不是统计量，不报 GoF。")
         left_lay.addWidget(self.rwp_label)
+        self.quality_hint = QLabel("")
+        self.quality_hint.setWordWrap(True)
+        self.quality_hint.setStyleSheet("color: #c0392b;")
+        self.quality_hint.setMinimumWidth(0)
+        self.quality_hint.setSizePolicy(QSizePolicy.Ignored,
+                                        QSizePolicy.Preferred)
+        self.quality_hint.setVisible(False)
+        left_lay.addWidget(self.quality_hint)
         hint = QLabel("精修用这条 1D 曲线的积分数据，背景由工作台自己估计；"
                       "波长取顶部选中的几何配置。")
         hint.setWordWrap(True)
@@ -727,9 +740,9 @@ class RefineWorkbench(QWidget):
                 self.bg_combo.setCurrentIndex(idx)
             self.bg_combo.setEnabled(False)
             self.bg_window.setEnabled(False)
-            # 只有处理产物才是"要提醒"的状态，用警示色；1D 产物走灰字
-            # 普通提示（2026-11-18 用户："1D 产物现在精修也会出红字"）。
-            self.source_mode_label.setStyleSheet("color: #b7791f;")
+            # 处理产物是"红利警告"（不可定量），1D 产物走灰字普通提示
+            # （2026-11-18 用户："处理产物拟合太差，而且不弹红字"）。
+            self.source_mode_label.setStyleSheet("color: #c0392b;")
             self.source_mode_label.setText(
                 "处理产物：已扣过背景/可能平滑过。本次不再次扣背景、"
                 "用等权；Rwp/esd/wt% 只作相对参考，定量请选 1D 产物。")
@@ -808,6 +821,7 @@ class RefineWorkbench(QWidget):
             self._fit_meta = None
             self._fit_result_note = ""
             self.rwp_label.setText("Rwp = —")
+            self._reset_quality_hint()
             self.report_view.clear()
             self.param_table.setRowCount(0)
             self.save_btn.setEnabled(False)
@@ -1033,6 +1047,7 @@ class RefineWorkbench(QWidget):
         self.report_view.setPlainText(report)
         processed = bool((meta or {}).get("processed"))
         self.rwp_label.setText(_quality_line(result, processed))
+        self._update_quality_hint(result, processed)
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
         cif = self.cif_combo.currentData() or ""
@@ -1045,6 +1060,33 @@ class RefineWorkbench(QWidget):
             f"（{result.message}）{suffix}")
         _log(self.main, f"精修完成：Rwp {result.rwp:.3f}%"
                         f"（{self.cif_combo.currentText()}）{suffix}")
+
+    def _reset_quality_hint(self):
+        self.rwp_label.setStyleSheet(
+            "font-size: 15px; font-weight: 600;")
+        self.quality_hint.clear()
+        self.quality_hint.setVisible(False)
+
+    def _update_quality_hint(self, result, processed):
+        """Rwp 偏高时标红并给下一步建议（2026-11-18 用户：处理产物不弹红字）。"""
+        try:
+            rwp = float(result.rwp)
+        except (AttributeError, TypeError, ValueError):
+            rwp = float("nan")
+        if not (rwp == rwp) or rwp <= _RWP_WARN_PERCENT:
+            self._reset_quality_hint()
+            return
+        self.rwp_label.setStyleSheet(
+            "font-size: 15px; font-weight: 600; color: #c0392b;")
+        if processed:
+            text = ("Rwp 偏高，且这是处理产物：Rwp 只作相对参考。定量或需要"
+                    "低 Rwp 时，请改用同一条数据的 1D 产物（原始计数）重新"
+                    "精修；必要时补第二相、检查背景。")
+        else:
+            text = ("Rwp 偏高：检查背景、第二相（如集流体/基片）和晶胞初值"
+                    "是否合适。")
+        self.quality_hint.setText(text)
+        self.quality_hint.setVisible(True)
 
     # ── 画图与结果表 ────────────────────────────────────────
     def _draw_observed(self):

@@ -279,8 +279,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertEqual(editor.bg_combo.currentData(), "none")
         self.assertFalse(editor.bg_combo.isEnabled())
         self.assertIn("处理产物", editor.source_mode_label.text())
-        # 警示色只属于处理产物（2026-11-18）
-        self.assertIn("#b7791f", editor.source_mode_label.styleSheet())
+        # 处理产物用红色警告（2026-11-18）
+        self.assertIn("#c0392b", editor.source_mode_label.styleSheet())
 
         tth = np.linspace(1.0, 8.0, 200)
         y = np.ones(200)
@@ -316,6 +316,23 @@ class TestRefineWorkbench(unittest.TestCase):
             self.assertIn("处理产物", editor.source_mode_label.text())
         finally:
             self.w.plot_docks.pop(key, None)
+
+    def test_high_rwp_marks_result_red_and_advises(self):
+        """Rwp 偏高：数字标红并给下一步建议（2026-11-18）。"""
+        import types
+        self._enter()
+        editor = self.w.refine_editor
+        bad = types.SimpleNamespace(rwp=67.0, rp=71.9, reduced_chi2=5.0)
+        editor._update_quality_hint(bad, True)
+        self.assertFalse(editor.quality_hint.isHidden())
+        self.assertIn("1D 产物", editor.quality_hint.text())
+        self.assertIn("#c0392b", editor.rwp_label.styleSheet())
+        editor._update_quality_hint(bad, False)
+        self.assertIn("第二相", editor.quality_hint.text())
+        good = types.SimpleNamespace(rwp=9.7, rp=3.6, reduced_chi2=5.8)
+        editor._update_quality_hint(good, False)
+        self.assertTrue(editor.quality_hint.isHidden())
+        self.assertNotIn("color", editor.rwp_label.styleSheet())
 
     def test_quality_line_uses_standard_metrics(self):
         """市场标准口径（2026-11-18）：原始计数报 Rwp/Rp/GoF；处理产物
