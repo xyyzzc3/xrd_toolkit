@@ -164,6 +164,24 @@ class TestDiscard(unittest.TestCase):
         self.assertTrue(_wait_until(task.is_done), "discard 后任务应已收尾")
         self.assertEqual(called, [], "discard 后的回调必须被丢弃")
 
+    def test_abandon_silences_callbacks_without_waiting(self):
+        """暂停/换方案：丢弃回调但不阻塞界面（2026-11-18）。"""
+        called = []
+
+        def slow():
+            time.sleep(0.3)
+            return "late result"
+
+        task = BackgroundTask(slow, on_done=called.append)
+        task.start()
+        time.sleep(0.05)          # 让后台函数真的开跑（否则不算"在途"）
+        started = time.time()
+        task.abandon()
+        self.assertLess(time.time() - started, 0.2,
+                        "abandon 不该等后台函数算完")
+        self.assertTrue(_wait_until(task.is_done), "任务仍应正常收尾")
+        self.assertEqual(called, [], "abandon 后的回调必须被丢弃")
+
 
 if __name__ == "__main__":
     unittest.main()

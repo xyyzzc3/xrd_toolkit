@@ -248,6 +248,60 @@ class TestInSituWorkbench(unittest.TestCase):
                 and editor.table.rowCount() == 3, timeout_ms=10000)
         self.assertTrue(ok, "批量没有在 10 秒内完成")
 
+    def test_switching_scheme_pauses_a_running_batch(self):
+        """跑批中切方案 = 暂停（2026-11-18 用户："切就暂停"）。
+
+        旧行为：方案切换把 self.batch 清成 None，在途帧的回调回来找
+        batch.fit_frame 抛 AttributeError，界面卡在"停止亮着、开始灰着、
+        进度条不动"。现在切换前先暂停：按钮恢复、进度收起，在途帧结果
+        丢弃，不往新相表里塞旧方案的行。
+        """
+        import time as _time
+
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            data = folder / "data"
+            data.mkdir()
+            for i in (1, 2, 3):
+                (data / f"frame_{i:03d}.tif").write_bytes(b"")
+            self._apply_lmfp(editor)
+            editor.data_dir = data
+            editor.outdir = folder / "out"
+            editor.limit.setValue(3)
+            editor._refresh_data_label()
+
+            class _SlowBatch(_FakeBatch):
+                def fit_frame(self, path):
+                    _time.sleep(0.3)
+                    return super().fit_frame(path)
+
+            with mock.patch.object(insitu_gui, "_prepare_worker",
+                                   lambda *a, **k: _SlowBatch()):
+                editor.start_btn.click()
+                self.assertTrue(_wait_until(
+                    lambda: editor.batch is not None
+                    and editor._task is not None
+                    and not editor.start_btn.isEnabled(),
+                    timeout_ms=5000), "批次没开始跑")
+                combo = editor.preset_combo
+                combo.setCurrentIndex(combo.findData("generic"))
+                combo.activated.emit(combo.currentIndex())
+                QApplication.processEvents()
+            self.assertTrue(editor.start_btn.isEnabled(), "暂停后应能再开始")
+            self.assertFalse(editor.stop_btn.isEnabled())
+            self.assertFalse(editor.frame_progress.isVisible())
+            self.assertEqual(editor.phase_table.rowCount(), 0)
+            self.assertIn("方案：通用", editor.status.text())
+            # 等在途那一帧算完：回调已丢弃，不能把行塞进新相表
+            for _ in range(20):
+                QApplication.processEvents()
+                _time.sleep(0.05)
+            self.assertEqual(editor.table.rowCount(), 0,
+                             "暂停前的在途帧不应写入新方案的结果表")
+
     def test_four_views_and_single_frame_fit(self):
         self.w.insitu_btn.click()
         QApplication.processEvents()

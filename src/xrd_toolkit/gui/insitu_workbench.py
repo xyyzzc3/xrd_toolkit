@@ -552,6 +552,9 @@ class InSituWorkbench(QWidget):
             if answer != QMessageBox.Yes:
                 self._sync_preset_combo()
                 return
+        # 正在跑批就先暂停（2026-11-18 用户："切就暂停"）：换方案会让
+        # 在途帧回调落到新相表上，旧代码会在这里把界面卡死。
+        self._pause_run("已暂停")
         data = self.preset_combo.currentData()
         if data == "generic":
             self._apply_generic_scheme()
@@ -741,6 +744,7 @@ class InSituWorkbench(QWidget):
         self._load_scheme_path(Path(name))
 
     def _load_scheme_path(self, path):
+        self._pause_run("已暂停")
         try:
             from xrd_toolkit.simulation.phase_set import load_phase_set
             pset = load_phase_set(path)
@@ -999,6 +1003,35 @@ class InSituWorkbench(QWidget):
         self._stop = True
         self.stop_btn.setEnabled(False)
         self._set_status("正在停止（当前帧算完后停）…")
+
+    def _pause_run(self, reason="已暂停"):
+        """暂停跑批（2026-11-18）：丢弃在途回调，界面立刻恢复可操作。
+
+        换方案/载入方案时调用。已完成的帧先写一次 CSV——换方案会清表，
+        但产物目录里留着这一轮的进度。正在跑的那一帧照常算完，结果丢弃
+        （回调已清空），不会再往新相表里塞旧方案的行，也不会把界面卡在
+        "停止按钮亮着但点不动"的状态。
+        """
+        task = self._task
+        if task is None:
+            return False
+        self._task = None
+        self._stop = False
+        task.abandon()
+        try:
+            self.main._tasks.remove(task)   # 收尾回调已被丢弃，这里自己摘账
+        except ValueError:
+            pass
+        wrote = bool(self.batch is not None and self.batch.rows)
+        if wrote:
+            self._write_csv()
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self._hide_progress()
+        detail = "已完成的帧先写入 CSV" if wrote else "在途计算的结果丢弃"
+        self._set_status(f"{reason}：{detail}")
+        _log(self.main, f"原位批量{reason}（换方案）：{detail}")
+        return True
 
     def _finish(self, reason):
         self.start_btn.setEnabled(True)

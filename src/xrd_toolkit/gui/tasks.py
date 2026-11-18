@@ -341,3 +341,17 @@ class BackgroundTask(QObject):
         worker.cancelled = True
         if self._started and worker.running:
             worker.finished.wait()
+
+    def abandon(self):
+        """暂停/换方案：丢弃回调，但**不等**正在跑的算完。
+
+        与 discard() 的区别：discard 是关窗路径，要等后台函数返回才能
+        安全销毁；这里是"人还在、只是不要这一轮结果了"——界面必须立刻
+        恢复可操作，所以不 wait。worker 跑完会正常发信号，此时回调已
+        清空，不会再碰界面；对象本身由 _live_tasks 保活到收尾。
+        """
+        self._on_done_cb = None
+        self._on_error_cb = None
+        worker = self._worker
+        if worker is not None:
+            worker.cancelled = True    # 排队中还没开跑的会直接放弃
