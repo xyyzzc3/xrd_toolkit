@@ -648,6 +648,39 @@ def _on_mask_mode(window: QMainWindow, on: bool) -> None:
         _exit_mask_mode(window)
 
 
+def _remember_plot_layout(window: QMainWindow) -> None:
+    """进入工作台前记下工作区里每个图子窗口（2026-11-18）。"""
+    window._workbench_plot_layout = _snapshot_plot_layout(window)
+
+
+def _restore_workspace_after_workbench(window: QMainWindow) -> None:
+    """退出工作台后：按进入前快照还原图子窗口，再刷新每个可见图内容。"""
+    _settle(window)
+    _restore_plot_layout(window,
+                         getattr(window, "_workbench_plot_layout", None))
+    window._workbench_plot_layout = None
+    for plot_dock in list(getattr(window, "plot_docks", {}).values()):
+        if plot_dock is not None:
+            # 包括此刻隐藏的面板：它们被工作台遮过，画布状态也可能停在
+            # 隐藏前；重画一次不贵，下次显示就不会带着旧尺寸。
+            _refresh_plot_after_workbench(plot_dock)
+
+
+def prepare_refine_source(window: QMainWindow, curve_key, cif_path):
+    """[送去精修] 进入精修模式前先把曲线/CIF 选好（2026-11-18）。
+
+    先选好再显示，工作台第一帧就是观测曲线，不会先闪一张空白/占位。
+    这里只造编辑器，不建子窗口；随后正常走 [精修] 入口。
+    """
+    from xrd_toolkit.gui.refine_workbench import RefineWorkbench
+    editor = getattr(window, "refine_editor", None)
+    if editor is None:
+        editor = RefineWorkbench(window)
+        window.refine_editor = editor
+    editor.set_source(curve_key, str(cif_path) if cif_path else None)
+    return editor
+
+
 def _select_checked_curve(window: QMainWindow, editor) -> bool:
     """进入物相/精修：文件栏勾选的第一条 1D/处理产物优先（2026-11-12）。
 
@@ -717,8 +750,7 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     _highlight_entrance(window, None)
     window.mode_label.setText("精修模式")
     _set_bottom_strip_visible(window, False)
-    # 记下工作区里已有的图（几何 + 最大化状态），退出时按快照还原。
-    window._refine_plot_layout = _snapshot_plot_layout(window)
+    _remember_plot_layout(window)
     _open_refine_workbench(window)
     window.refine_btn.setText("退出精修")
     window.refine_btn.setToolTip("退出精修工作台，回到分析模式")
@@ -739,14 +771,7 @@ def _exit_refine_mode(window: QMainWindow) -> None:
         window._dock_intent[name] = want
     window._refine_dock_saved = None
     _resync_docks(window)
-    _settle(window)
-    # 先按进入前的快照还原子窗口几何/最大化状态，再让面板按当前尺寸
-    # 重排重画（2026-11-18 用户："1D 图整体放大、子窗口没变"）。
-    _restore_plot_layout(window, getattr(window, "_refine_plot_layout", None))
-    window._refine_plot_layout = None
-    for plot_dock in list(getattr(window, "plot_docks", {}).values()):
-        if plot_dock is not None and plot_dock.isVisible():
-            _refresh_plot_after_workbench(plot_dock)
+    _restore_workspace_after_workbench(window)
     prev = getattr(window, "_refine_prev_entrance", None)
     if prev is not None:
         _highlight_entrance(window, prev)
@@ -787,9 +812,7 @@ def _open_phase_workbench(window: QMainWindow) -> None:
         dock.move(12, 12)
     window.phase_editor.refresh_curves()
     _select_checked_curve(window, window.phase_editor)
-    dock.show()
-    dock.raise_()
-    _maximize_subwindow(dock)
+    _show_workbench_window(dock)
 
 
 def _enter_phase_mode(window: QMainWindow) -> None:
@@ -810,6 +833,7 @@ def _enter_phase_mode(window: QMainWindow) -> None:
     _highlight_entrance(window, None)
     window.mode_label.setText("物相模式")
     _set_bottom_strip_visible(window, False)
+    _remember_plot_layout(window)
     _open_phase_workbench(window)
     window.phase_btn.setText("退出物相")
     window.phase_btn.setToolTip("退出物相工作台，回到分析模式")
@@ -830,6 +854,7 @@ def _exit_phase_mode(window: QMainWindow) -> None:
         window._dock_intent[name] = want
     window._phase_dock_saved = None
     _resync_docks(window)
+    _restore_workspace_after_workbench(window)
     prev = getattr(window, "_phase_prev_entrance", None)
     if prev is not None:
         _highlight_entrance(window, prev)
@@ -869,9 +894,7 @@ def _open_insitu_workbench(window: QMainWindow) -> None:
         dock.resize(max(720, area.width() - 40),
                     max(520, area.height() - 40))
         dock.move(12, 12)
-    dock.show()
-    dock.raise_()
-    _maximize_subwindow(dock)
+    _show_workbench_window(dock)
 
 
 def _enter_insitu_mode(window: QMainWindow) -> None:
@@ -892,6 +915,7 @@ def _enter_insitu_mode(window: QMainWindow) -> None:
     _highlight_entrance(window, None)
     window.mode_label.setText("原位模式")
     _set_bottom_strip_visible(window, False)
+    _remember_plot_layout(window)
     _open_insitu_workbench(window)
     editor = window.insitu_editor
     checked_raw = [s for s in gui_sources.checked_sources(window)
@@ -923,6 +947,7 @@ def _exit_insitu_mode(window: QMainWindow) -> None:
         window._dock_intent[name] = want
     window._insitu_dock_saved = None
     _resync_docks(window)
+    _restore_workspace_after_workbench(window)
     prev = getattr(window, "_insitu_prev_entrance", None)
     if prev is not None:
         _highlight_entrance(window, prev)

@@ -1206,6 +1206,14 @@ class PhaseWorkbench(QWidget):
         if str(curve_key or "").startswith("file:") or self._selected_dock() is None:
             self._set_status("文件曲线没有对应的 1D 面板，不能直接送去精修")
             return
+        # 2026-11-18 用户："点送去精修会闪一瞬全屏空白"——先在工作台
+        # 显示之前把曲线/CIF 选好，第一帧就是观测曲线。
+        try:
+            from xrd_toolkit.gui.app import prepare_refine_source
+            prepare_refine_source(self.main, curve_key, str(row.path))
+        except Exception as err:                   # noqa: BLE001
+            self._set_status(f"送去精修失败：{user_error_text(err)}")
+            return
         self.main.phase_btn.setChecked(False)      # 退出物相模式
         self.main.refine_btn.setChecked(True)      # 进入精修模式
         editor = getattr(self.main, "refine_editor", None)

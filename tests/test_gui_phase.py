@@ -75,6 +75,21 @@ class TestPhaseWorkbench(unittest.TestCase):
                 timeout_ms=20000)
         self.assertTrue(ok, "1D 图没算完")
 
+    def test_exit_restores_plot_layout(self):
+        """退出物相后 1D 面板几何按进入前还原（2026-11-18）。"""
+        self._open_panel()
+        dock = self.w.plot_docks[f"1D|{PANEL_PATH}"]
+        dock.showNormal()
+        dock.setGeometry(20, 30, 480, 320)
+        QApplication.processEvents()
+        rect = dock.geometry().getRect()
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        self.w.phase_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(dock.geometry().getRect(), rect,
+                         "退出物相后 1D 面板几何没还原")
+
     def _screen(self):
         self._open_panel()
         self.w.phase_btn.click()

@@ -100,7 +100,7 @@ class TestRefineWorkbench(unittest.TestCase):
         idx = editor.cif_combo.findData(str(cif))
         self.assertGreaterEqual(idx, 0, "相库里应有 LiFePO4 的 CIF")
         editor.cif_combo.setCurrentIndex(idx)
-        editor.site_toggle.setChecked(True)
+        editor._show_site_page()          # 结构参数搬到右侧标签页（2026-11-18）
         QApplication.processEvents()
         self.assertEqual(editor.site_table.rowCount(), 6,
                          "Pnma LiFePO4 应列出 6 条等效位点")
@@ -188,6 +188,18 @@ class TestRefineWorkbench(unittest.TestCase):
             _refresh_plot_after_workbench(dock)
         self.assertTrue(draw.called, "刷新必须同步重画画布")
         self.assertEqual(content.canvas.size(), size, "刷新不该改变画布尺寸")
+
+    def test_prepare_refine_source_before_entry(self):
+        """[送去精修] 先进编辑器选好曲线、再显示（2026-11-18：闪空白）。"""
+        self._open_panel()
+        from xrd_toolkit.gui import app as app_mod
+        key = next(k for k in self.w.plot_docks if k.startswith("1D|"))
+        self.assertIsNone(getattr(self.w, "refine_dock", None))
+        editor = app_mod.prepare_refine_source(self.w, key, None)
+        self.assertIs(self.w.refine_editor, editor)
+        self.assertIsNone(getattr(self.w, "refine_dock", None),
+                          "预选阶段不该创建/显示子窗口")
+        self.assertEqual(editor.curve_combo.currentData(), key)
 
     def test_set_source_renders_immediately(self):
         """物相 [送去精修] 交接后应立即同步画一次（2026-11-18：空图一闪）。"""

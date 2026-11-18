@@ -272,6 +272,9 @@ class RefineWorkbench(QWidget):
         self.range_label = QLabel("还没有选曲线")
         self.range_label.setWordWrap(True)
         self.range_label.setStyleSheet("color: gray;")
+        self.range_label.setToolTip(
+            "精修用这条 1D 曲线的积分数据，背景由工作台自己估计；"
+            "波长取顶部选中的几何配置。")
         left_lay.addWidget(self.range_label)
         self.source_mode_label = QLabel("")
         self.source_mode_label.setWordWrap(True)
@@ -318,7 +321,7 @@ class RefineWorkbench(QWidget):
             left_lay.addWidget(widget)
 
         left_lay.addWidget(_section("仪器"))
-        self.chk_fix_instrument = QCheckBox("固定仪器（用上次 LaB₆ 基线）")
+        self.chk_fix_instrument = QCheckBox("固定仪器（LaB₆ 基线）")
         self.chk_fix_instrument.setEnabled(False)
         self.chk_fix_instrument.setToolTip(
             "先精修一张 LaB₆ 并点 [存为仪器基线]；之后精修样品时固定 "
@@ -328,78 +331,55 @@ class RefineWorkbench(QWidget):
         self.instrument_label.setWordWrap(True)
         self.instrument_label.setStyleSheet("color: gray;")
         left_lay.addWidget(self.instrument_label)
+        self.chk_fix_instrument.toggled.connect(
+            lambda on: self.chk_instr.setEnabled(not on))
+        self.chk_lebail.toggled.connect(lambda _on: self._apply_site_enabled())
+
+        # 左侧只放高频控件（2026-11-18 用户 1+2+4）：结构参数表和额外相
+        # 列表搬到右侧标签页，这里只留入口按钮；基线保存/图外观收进
+        # "更多"折叠区，默认收起。
+        left_lay.addWidget(_section("进阶"))
+        self.site_btn = QPushButton("结构参数（坐标/占位）…")
+        self.site_btn.setToolTip(
+            "精修主相 CIF 的原子坐标/占位；坐标按空间群只放开允许的方向")
+        self.site_btn.clicked.connect(self._show_site_page)
+        left_lay.addWidget(self.site_btn)
+        self.extra_btn = QPushButton("额外相…")
+        self.extra_btn.setToolTip(
+            "额外相（如基片/集流体）：峰位与峰形跟随主相，强度默认逐反射自由")
+        self.extra_btn.clicked.connect(self._show_extra_page)
+        left_lay.addWidget(self.extra_btn)
+
+        self.more_toggle = QToolButton()
+        self.more_toggle.setText("更多")
+        self.more_toggle.setCheckable(True)
+        self.more_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.more_toggle.setArrowType(Qt.RightArrow)
+        self.more_toggle.setStyleSheet(
+            "QToolButton { border: none; color: gray; font-weight: 600;"
+            " padding: 2px 0; }")
+        self.more_toggle.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.more_toggle.toggled.connect(self._on_more_toggle)
+        left_lay.addWidget(self.more_toggle)
+        self.more_box = QWidget()
+        more_lay = QVBoxLayout(self.more_box)
+        more_lay.setContentsMargins(0, 0, 0, 0)
+        more_lay.setSpacing(4)
         self.save_instrument_btn = QPushButton("存为仪器基线")
         self.save_instrument_btn.setEnabled(False)
         self.save_instrument_btn.setToolTip(
             "把这次 LaB₆ 精修得到的仪器峰形参数存起来，供样品精修复用")
         self.save_instrument_btn.clicked.connect(self._save_instrument_baseline)
-        left_lay.addWidget(self.save_instrument_btn)
-        self.chk_fix_instrument.toggled.connect(
-            lambda on: self.chk_instr.setEnabled(not on))
-
-        left_lay.addWidget(_section("额外相"))
-        self.extra_list = QListWidget()
-        self.extra_list.setMaximumHeight(72)
-        self.extra_list.setToolTip("额外相（如基片/集流体）：峰位与峰形跟随"
-                                   "主相，强度默认逐反射自由")
-        left_lay.addWidget(self.extra_list)
-        extra_row = QHBoxLayout()
-        extra_row.setSpacing(4)
-        self.add_extra_btn = QPushButton("加 CIF…")
-        self.add_extra_btn.clicked.connect(self._choose_extra_cif)
-        self.remove_extra_btn = QPushButton("移除")
-        self.remove_extra_btn.clicked.connect(self._remove_extra_cif)
-        extra_row.addWidget(self.add_extra_btn, 1)
-        extra_row.addWidget(self.remove_extra_btn, 1)
-        left_lay.addLayout(extra_row)
-        self.chk_extra_lebail = QCheckBox("额外相强度自由（Le Bail）")
-        self.chk_extra_lebail.setChecked(True)
-        self.chk_extra_lebail.setToolTip(
-            "第二相（如箔材/基片）织构强时，峰强交给数据逐反射解出")
-        left_lay.addWidget(self.chk_extra_lebail)
-        extra_hint = QLabel("额外相只精修比例与峰强，不精修原子位置/占位")
-        extra_hint.setWordWrap(True)
-        extra_hint.setStyleSheet("color: gray;")
-        left_lay.addWidget(extra_hint)
-
-        # 结构参数（2026-11-11 用户第 13 条："有没有精修 CIF 原子位置？"）：
-        # 默认收起；展开时才做空间群分析，避免换 CIF 就卡界面。
-        self.site_toggle = QToolButton()
-        self.site_toggle.setText("结构参数（原子坐标 / 占位）")
-        self.site_toggle.setCheckable(True)
-        self.site_toggle.setChecked(False)
-        self.site_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.site_toggle.setArrowType(Qt.RightArrow)
-        self.site_toggle.setStyleSheet(
-            "QToolButton { border: none; color: gray; font-weight: 600;"
-            " padding: 2px 0; }")
-        self.site_toggle.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.site_toggle.setToolTip(
-            "精修主相 CIF 的原子坐标/占位；坐标按空间群只放开允许的方向")
-        self.site_toggle.toggled.connect(self._on_site_toggle)
-        left_lay.addWidget(self.site_toggle)
-        self.site_hint = QLabel("展开后列出这张 CIF 可精修的位点")
-        self.site_hint.setWordWrap(True)
-        self.site_hint.setStyleSheet("color: gray;")
-        self.site_hint.setVisible(False)
-        left_lay.addWidget(self.site_hint)
-        self.site_table = QTableWidget(0, 4)
-        self.site_table.setHorizontalHeaderLabels(
-            ["位点", "Wyckoff", "坐标", "占位"])
-        self.site_table.verticalHeader().setVisible(False)
-        self.site_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.site_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.site_table.setShowGrid(False)
-        self.site_table.setFrameShape(QFrame.NoFrame)
-        self.site_table.setMaximumHeight(150)
-        header = self.site_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col in (1, 2, 3):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        self.site_table.setVisible(False)
-        left_lay.addWidget(self.site_table)
-        self.chk_lebail.toggled.connect(lambda _on: self._apply_site_enabled())
+        more_lay.addWidget(self.save_instrument_btn)
+        self.appearance_btn = QPushButton("图外观…")
+        self.appearance_btn.setToolTip(
+            "改标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
+        self.appearance_btn.setEnabled(False)
+        self.appearance_btn.clicked.connect(self._edit_appearance)
+        more_lay.addWidget(self.appearance_btn)
+        self.more_box.setVisible(False)
+        left_lay.addWidget(self.more_box)
 
         self.run_btn = QPushButton("开始精修")
         self.run_btn.setToolTip("用选中的 1D 曲线和 CIF 做全谱最小二乘拟合")
@@ -417,12 +397,6 @@ class RefineWorkbench(QWidget):
         save_row.addWidget(self.save_btn, 1)
         save_row.addWidget(self.copy_btn, 1)
         left_lay.addLayout(save_row)
-        self.appearance_btn = QPushButton("图外观…")
-        self.appearance_btn.setToolTip(
-            "改标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
-        self.appearance_btn.setEnabled(False)
-        self.appearance_btn.clicked.connect(self._edit_appearance)
-        left_lay.addWidget(self.appearance_btn)
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -439,11 +413,6 @@ class RefineWorkbench(QWidget):
                                         QSizePolicy.Preferred)
         self.quality_hint.setVisible(False)
         left_lay.addWidget(self.quality_hint)
-        hint = QLabel("精修用这条 1D 曲线的积分数据，背景由工作台自己估计；"
-                      "波长取顶部选中的几何配置。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-        left_lay.addWidget(hint)
         left_lay.addStretch(1)
         left_scroll.setWidget(left)
         split.addWidget(left_scroll)
@@ -471,8 +440,63 @@ class RefineWorkbench(QWidget):
         self.report_view = QPlainTextEdit()
         self.report_view.setReadOnly(True)
         self.report_view.setPlaceholderText("精修完成后这里显示完整报告")
+
+        # 结构参数页：位点表放到右侧，宽度足够（2026-11-18 用户 1+2+4）。
+        self.site_page = QWidget()
+        site_lay = QVBoxLayout(self.site_page)
+        site_lay.setContentsMargins(6, 6, 6, 6)
+        site_lay.setSpacing(4)
+        self.site_hint = QLabel("切到本页时列出当前 CIF 可精修的位点")
+        self.site_hint.setWordWrap(True)
+        self.site_hint.setStyleSheet("color: gray;")
+        site_lay.addWidget(self.site_hint)
+        self.site_table = QTableWidget(0, 4)
+        self.site_table.setHorizontalHeaderLabels(
+            ["位点", "Wyckoff", "坐标", "占位"])
+        self.site_table.verticalHeader().setVisible(False)
+        self.site_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.site_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.site_table.setShowGrid(False)
+        self.site_table.setFrameShape(QFrame.NoFrame)
+        header = self.site_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        site_lay.addWidget(self.site_table, 1)
+
+        # 额外相页
+        self.extra_page = QWidget()
+        extra_lay = QVBoxLayout(self.extra_page)
+        extra_lay.setContentsMargins(6, 6, 6, 6)
+        extra_lay.setSpacing(4)
+        self.extra_list = QListWidget()
+        self.extra_list.setToolTip("额外相（如基片/集流体）：峰位与峰形跟随"
+                                   "主相，强度默认逐反射自由")
+        extra_lay.addWidget(self.extra_list, 1)
+        extra_row = QHBoxLayout()
+        extra_row.setSpacing(4)
+        self.add_extra_btn = QPushButton("加 CIF…")
+        self.add_extra_btn.clicked.connect(self._choose_extra_cif)
+        self.remove_extra_btn = QPushButton("移除")
+        self.remove_extra_btn.clicked.connect(self._remove_extra_cif)
+        extra_row.addWidget(self.add_extra_btn, 1)
+        extra_row.addWidget(self.remove_extra_btn, 1)
+        extra_lay.addLayout(extra_row)
+        self.chk_extra_lebail = QCheckBox("额外相强度自由（Le Bail）")
+        self.chk_extra_lebail.setChecked(True)
+        self.chk_extra_lebail.setToolTip(
+            "第二相（如箔材/基片）织构强时，峰强交给数据逐反射解出")
+        extra_lay.addWidget(self.chk_extra_lebail)
+        extra_hint = QLabel("额外相只精修比例与峰强，不精修原子位置/占位")
+        extra_hint.setWordWrap(True)
+        extra_hint.setStyleSheet("color: gray;")
+        extra_lay.addWidget(extra_hint)
+
         self.tabs.addTab(self.param_table, "参数表")
         self.tabs.addTab(self.report_view, "报告")
+        self.tabs.addTab(self.site_page, "结构参数")
+        self.tabs.addTab(self.extra_page, "额外相")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         right.addWidget(self.tabs)
         right.setStretchFactor(0, 3)
         right.setStretchFactor(1, 1)
@@ -624,8 +648,14 @@ class RefineWorkbench(QWidget):
         self.extra_list.addItem(path.stem)
         item = self.extra_list.item(self.extra_list.count() - 1)
         item.setToolTip(str(path))
+        self._update_extra_button()
         self._set_status(f"已加入额外相 {path.stem}")
         return True
+
+    def _update_extra_button(self):
+        count = self.extra_list.count()
+        self.extra_btn.setText(
+            f"额外相（{count}）…" if count else "额外相…")
 
     def _choose_extra_cif(self):
         start = paths.structures_dir()
@@ -641,6 +671,7 @@ class RefineWorkbench(QWidget):
             return
         self.extra_list.takeItem(row)
         del self._extra_phase_paths[row]
+        self._update_extra_button()
 
     def _update_instrument_label(self):
         if self._instrument is None:
@@ -835,22 +866,31 @@ class RefineWorkbench(QWidget):
             self._draw_observed()
 
     # ── 结构参数（原子坐标 / 占位）──────────────────────────
-    def _on_site_toggle(self, checked):
-        """展开/收起「结构参数」小节；展开时才做空间群分析。"""
-        self.site_toggle.setArrowType(
+    def _on_more_toggle(self, checked):
+        """「更多」折叠区：基线保存与图外观（2026-11-18 用户 1+2+4）。"""
+        self.more_toggle.setArrowType(
             Qt.DownArrow if checked else Qt.RightArrow)
-        self.site_hint.setVisible(checked)
-        self.site_table.setVisible(checked)
-        if checked:
+        self.more_box.setVisible(checked)
+
+    def _show_site_page(self):
+        """左侧入口：切到右侧「结构参数」页并分析位点。"""
+        self.tabs.setCurrentWidget(self.site_page)
+        self._ensure_sites()
+
+    def _show_extra_page(self):
+        self.tabs.setCurrentWidget(self.extra_page)
+
+    def _on_tab_changed(self, _index):
+        if self.tabs.currentWidget() is self.site_page:
             self._ensure_sites()
 
     def _refresh_sites(self):
-        """换 CIF：丢掉旧位点表；小节展开着就立刻重列。"""
+        """换 CIF：丢掉旧位点表；结构参数页开着就立刻重列。"""
         self._site_model = None
         self._site_cif = None
         self._site_rows = {}
         self.site_table.setRowCount(0)
-        if self.site_toggle.isChecked():
+        if self.tabs.currentWidget() is self.site_page:
             self._ensure_sites()
         self._apply_site_enabled()
 
@@ -862,7 +902,7 @@ class RefineWorkbench(QWidget):
         """
         path = self.cif_combo.currentData()
         if not path:
-            self.site_hint.setText("先在左上选一张 CIF")
+            self.site_hint.setText("先在顶部选一张 CIF")
             return
         if self._site_model is not None and self._site_cif == str(path):
             return
@@ -926,7 +966,7 @@ class RefineWorkbench(QWidget):
                 f"{self._site_model.space_group}：勾上要精修的位点；"
                 "坐标按空间群只放开允许的方向，占位精修该位点的总占位。")
         else:
-            self.site_hint.setText("展开后列出这张 CIF 可精修的位点")
+            self.site_hint.setText("切到本页时列出这张 CIF 可精修的位点")
 
     # ── 精修 ────────────────────────────────────────────────
     def _free_params(self):
