@@ -13,8 +13,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QHeaderView, QInputDialog,
-    QTableWidget, QTableWidgetItem)
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QFormLayout, QHeaderView, QLabel, QLineEdit, QTableWidget,
+    QTableWidgetItem)
 
 COLUMNS = ("角色", "相", "晶胞", "强度", "计入分数", "B/峰宽")
 ROLE_SAMPLE = "sample"
@@ -35,6 +36,39 @@ def _safe_label(path, used):
         i += 1
     used.add(label)
     return label
+
+
+class _NamesDialog(QDialog):
+    """改一个相的两个名字：界面显示名、图内名称（2026-11-18）。
+
+    为什么分开：界面/表格用中文名，图例和布拉格刻度行按论文习惯用英文
+    （如 "Li-rich phase"）。机器标签（rich/poor）不动——CSV 列名与
+    引擎参数都靠它。
+    """
+
+    def __init__(self, parent, display, plot):
+        super().__init__(parent)
+        self.setWindowTitle("相的名字")
+        form = QFormLayout(self)
+        self.display_edit = QLineEdit(str(display or ""))
+        self.display_edit.setPlaceholderText("界面/表格/报告里显示的名字")
+        form.addRow("界面显示名", self.display_edit)
+        self.plot_edit = QLineEdit(str(plot or ""))
+        self.plot_edit.setPlaceholderText("图例/布拉格刻度行用，建议英文")
+        form.addRow("图内名称", self.plot_edit)
+        hint = QLabel("图内名称留空 = 用界面显示名。")
+        hint.setStyleSheet("color: gray;")
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def values(self):
+        return (self.display_edit.text().strip(),
+                self.plot_edit.text().strip())
 
 
 def default_phase(path, used):
@@ -223,11 +257,16 @@ class InsituPhaseTable(QTableWidget):
         item = self.item(row, 1) if row >= 0 else None
         if item is None:
             return False
-        text, ok = QInputDialog.getText(
-            parent, "相的名字", "界面/图里显示的名字：", text=item.text())
-        if not ok or not str(text).strip():
+        spec = dict(item.data(_SPEC_ROLE) or {})
+        dlg = _NamesDialog(parent, item.text(), spec.get("plot_name", ""))
+        if dlg.exec() != QDialog.Accepted:
             return False
-        item.setText(str(text).strip())
+        display, plot = dlg.values()
+        if not display:
+            display = str(spec.get("label") or item.text())
+        item.setText(display)
+        spec["plot_name"] = plot
+        item.setData(_SPEC_ROLE, spec)
         self.dirty = True
         return True
 

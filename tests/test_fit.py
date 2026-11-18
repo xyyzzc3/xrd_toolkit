@@ -461,6 +461,15 @@ class TestPlotFitLayout(unittest.TestCase):
         plot_fit(self._result(), "test", str(out2), bragg=None)
         self.assertTrue(out2.exists() and out2.stat().st_size > 0)
 
+    def test_bragg_rows_accept_display_names(self):
+        """布拉格刻度行可换显示名（2026-11-18：图内名称可改）。"""
+        from xrd_toolkit.simulation.plots import _fit_bragg_rows
+        rows = _fit_bragg_rows(
+            self._result(), "auto",
+            {"LaB6": "LaB₆ standard", "Al": "Al foil"})
+        self.assertEqual([row[0] for row in rows],
+                         ["LaB₆ standard", "Al foil"])
+
 
 class TestFitReport(unittest.TestCase):
     """报告要能独立当结果看：参数 + 逐峰强度 + 峰位（2026-10-26）。"""

@@ -175,16 +175,23 @@ def _thin_bragg(pos, tol=_BRAGG_MERGE_DEG):
     return np.asarray(keep)
 
 
-def _fit_bragg_rows(result, bragg):
-    """`plot_fit` / `draw_fit` 共用的布拉格刻度行。"""
+def _fit_bragg_rows(result, bragg, labels=None):
+    """`plot_fit` / `draw_fit` 共用的布拉格刻度行。
+
+    labels 可选：机器标签 → 图内显示名（如 "rich" → "Li-rich phase"）。
+    引擎参数名仍用机器标签，只在出图时换名字（2026-11-18）。
+    """
+    labels = labels or {}
     rows = []
     if bragg == "auto":
         if result.peak_tth is not None and len(result.peak_tth):
-            rows.append((result.phase_label or "main phase",
+            main = str(result.phase_label or "main phase")
+            rows.append((labels.get(main, main),
                          np.asarray(result.peak_tth, dtype=float),
                          _MAIN_COLOR))
         for i, (label, pos) in enumerate((result.extra_peak_tth or {}).items()):
-            rows.append((str(label), np.asarray(pos, dtype=float),
+            rows.append((labels.get(str(label), str(label)),
+                         np.asarray(pos, dtype=float),
                          _EXTRA_COLORS[i % len(_EXTRA_COLORS)]))
     elif bragg:
         rows = [(str(label), np.asarray(pos, dtype=float), color)
@@ -193,13 +200,14 @@ def _fit_bragg_rows(result, bragg):
 
 
 def draw_fit(fig, result, title, zoom=None, exclude_ranges=None,
-             bragg="auto"):
+             bragg="auto", bragg_labels=None):
     """在已有 `Figure` 上画论文式拟合图（GUI 与 `plot_fit` 共用）。
 
     与 `plot_fit` 的布局和标注完全一致；区别只是不新建 figure、不保存、
     不关闭——调用方（Qt 画布）自己决定何时重画/存盘。
+    bragg_labels：机器标签 → 图内显示名（布拉格刻度行）。
     """
-    rows = _fit_bragg_rows(result, bragg)
+    rows = _fit_bragg_rows(result, bragg, bragg_labels)
     fig.clear()
     if rows:
         gs = fig.add_gridspec(3, 1, height_ratios=[3.2, 1.0, 0.65],
@@ -294,7 +302,7 @@ def draw_fit(fig, result, title, zoom=None, exclude_ranges=None,
 
 
 def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
-             bragg="auto"):
+             bragg="auto", bragg_labels=None):
     """拟合结果图（论文式布局，2026-10-23 起为默认画法）。
 
     三栏：观测点 / 计算线 / 背景虚线 → obs−calc 差值 → 布拉格峰位刻度
@@ -309,10 +317,11 @@ def plot_fit(result, title, out_path, zoom=None, exclude_ranges=None,
         [(label, positions, color), …] = 手工指定刻度行。
     """
     import matplotlib.pyplot as plt
-    rows = _fit_bragg_rows(result, bragg)
+    rows = _fit_bragg_rows(result, bragg, bragg_labels)
     fig = plt.figure(figsize=(11.5, 7.6 if rows else 6.5))
     draw_fit(fig, result, title, zoom=zoom,
-             exclude_ranges=exclude_ranges, bragg=bragg)
+             exclude_ranges=exclude_ranges, bragg=bragg,
+             bragg_labels=bragg_labels)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
     return out_path

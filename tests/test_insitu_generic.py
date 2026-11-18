@@ -218,6 +218,35 @@ class TestGenericEntry(unittest.TestCase):
         self.assertEqual(self.editor.phase_table.rowCount(), 0)
         self.assertEqual(self.editor._scheme_adapter, "")
 
+    def test_rename_updates_plot_name_and_bragg_labels(self):
+        """改名同时改图内名称（2026-11-18 用户："Li rich 这些怎么改"）。"""
+        from xrd_toolkit.gui import insitu_phase_table as pt
+        self._pick("lmfp")
+        table = self.editor.phase_table
+        table.setCurrentCell(0, 1)
+
+        class _Dlg:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def exec(self):
+                return pt.QDialog.Accepted
+
+            def values(self):
+                return ("富锂相（新）", "Li-rich custom")
+
+        with mock.patch.object(pt, "_NamesDialog", _Dlg):
+            self.editor._rename_phase()
+        self.assertEqual(table.item(0, 1).text(), "富锂相（新）")
+        spec = table.phases()[0]
+        self.assertEqual(spec["display_name"], "富锂相（新）")
+        self.assertEqual(spec["plot_name"], "Li-rich custom")
+        self.assertEqual(
+            self.editor._preview_phase_set.phases[0].plot_name,
+            "Li-rich custom")
+        self.assertEqual(
+            self.editor._bragg_labels()["rich"], "Li-rich custom")
+
     def test_scheme_save_load_roundtrip(self):
         from xrd_toolkit.gui import insitu_workbench as wb
         self._pick("lmfp")

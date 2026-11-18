@@ -248,6 +248,38 @@ class TestInSituWorkbench(unittest.TestCase):
                 and editor.table.rowCount() == 3, timeout_ms=10000)
         self.assertTrue(ok, "批量没有在 10 秒内完成")
 
+    def test_rename_changes_figure_legend(self):
+        """改名要真的改到图上（2026-11-18 用户："Li rich 这些怎么改"）。"""
+        from xrd_toolkit.gui import insitu_phase_table as pt
+
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        with tempfile.TemporaryDirectory() as folder:
+            self._run_fake_batch(editor, Path(folder))
+            editor.phase_table.setCurrentCell(0, 1)
+
+            class _Dlg:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def exec(self):
+                    return pt.QDialog.Accepted
+
+                def values(self):
+                    return ("富锂相", "Li-rich custom")
+
+            with mock.patch.object(pt, "_NamesDialog", _Dlg):
+                editor._rename_phase()
+            QApplication.processEvents()
+            texts = []
+            for ax in editor.summary_fig.axes:
+                legend = ax.get_legend()
+                if legend is not None:
+                    texts += [t.get_text() for t in legend.get_texts()]
+            self.assertTrue(any("Li-rich custom" in text for text in texts),
+                            f"图例没跟着改名：{texts}")
+
     def test_switching_scheme_pauses_a_running_batch(self):
         """跑批中切方案 = 暂停（2026-11-18 用户："切就暂停"）。
 

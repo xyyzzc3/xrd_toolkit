@@ -309,14 +309,19 @@ class InSituWorkbench(QWidget):
         phase_row.addWidget(self.phase_table, 1)
         phase_side = QVBoxLayout()
         phase_side.setSpacing(4)
-        for text, slot in (
-                ("加 CIF…", self._add_phases),
-                ("移除", self._remove_phase),
-                ("切换角色", self._toggle_phase_role),
-                ("改名…", self._rename_phase),
-                ("上移", lambda: self.phase_table.move_selected(-1)),
-                ("下移", lambda: self.phase_table.move_selected(1))):
+        for text, slot, tip in (
+                ("加 CIF…", self._add_phases, "加相（默认样品相）"),
+                ("移除", self._remove_phase, "移除选中的相"),
+                ("切换角色", self._toggle_phase_role,
+                 "样品相 ↔ 参考相（参考相默认固定晶胞 + Le Bail + 不计入分数）"),
+                ("改名…", self._rename_phase,
+                 "改界面显示名与图内名称（图例、布拉格刻度行）"),
+                ("上移", lambda: self.phase_table.move_selected(-1),
+                 "上移一位（第一条样品相走完整结构精修）"),
+                ("下移", lambda: self.phase_table.move_selected(1),
+                 "下移一位")):
             btn = QPushButton(text)
+            btn.setToolTip(tip)
             btn.clicked.connect(slot)
             phase_side.addWidget(btn)
         phase_side.addStretch(1)
@@ -698,7 +703,31 @@ class InSituWorkbench(QWidget):
             self._set_status("已切换角色（参考相默认固定晶胞 + Le Bail + 不进分母）")
 
     def _rename_phase(self):
-        self.phase_table.rename_selected(self)
+        if not self.phase_table.rename_selected(self):
+            return
+        self._sync_phase_names()
+        self._set_status("已改名：图例与布拉格刻度行跟着换")
+
+    def _sync_phase_names(self):
+        """相表里的显示名/图内名 → 批次/预览方案，然后重画视图。"""
+        names = {}
+        for phase in self.phase_table.phases():
+            label = str(phase.get("label") or "")
+            if label:
+                names[label] = (str(phase.get("display_name") or ""),
+                                str(phase.get("plot_name") or ""))
+        for pset in (getattr(self.batch, "phase_set", None),
+                     self._preview_phase_set):
+            if pset is None:
+                continue
+            for phase in pset.phases:
+                pair = names.get(phase.label)
+                if pair is not None:
+                    phase.display_name, phase.plot_name = pair
+        self._draw_trends()
+        self._draw_summary()
+        self._draw_model_independent()
+        self._draw_fit()
 
     def _save_scheme(self):
         phases = self.phase_table.phases()
@@ -1107,6 +1136,23 @@ class InSituWorkbench(QWidget):
         return (getattr(self.batch, "phase_set", None)
                 or getattr(self, "_preview_phase_set", None))
 
+    def _bragg_labels(self):
+        """机器标签 → 图内显示名（布拉格刻度行用，2026-11-18）。"""
+        labels = {}
+        pset = self._phase_set()
+        if pset is not None:
+            for phase in pset.phases:
+                labels[str(phase.label)] = phase.plot_label()
+            return labels
+        for phase in self.phase_table.phases():
+            label = str(phase.get("label") or "")
+            if not label:
+                continue
+            labels[label] = str(
+                phase.get("plot_name") or phase.get("display_name")
+                or label)
+        return labels
+
     def _main_label(self):
         """结构精修相（第一条样品相）的标签：状态行/单帧标题用它。"""
         pset = self._phase_set()
@@ -1153,7 +1199,7 @@ class InSituWorkbench(QWidget):
                     color="#888888", transform=ax.transAxes)
         else:
             draw_fit(self.fit_fig, self._fit_res, self._fit_title(),
-                     bragg="auto")
+                     bragg="auto", bragg_labels=self._bragg_labels())
         apply_figure_appearance(self.fit_fig, self._appearances[2])
         self.fit_canvas.draw_idle()
 
@@ -1264,7 +1310,8 @@ class InSituWorkbench(QWidget):
                 self._set_status("先在表格里双击一帧")
                 return
             fig = Figure(figsize=(11.5, 7.6))
-            draw_fit(fig, self._fit_res, self._fit_title(), bragg="auto")
+            draw_fit(fig, self._fit_res, self._fit_title(), bragg="auto",
+                     bragg_labels=self._bragg_labels())
             apply_figure_appearance(fig, self._appearances[2])
             name = f"insitu_fit_frame_{self._fit_frame:03d}"
         else:
