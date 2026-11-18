@@ -134,16 +134,36 @@ class ViewConfig:
     shade_phase: str | None = None    # 用该相分数最低点分充/放电底色
     show_wt: bool = False
     fraction_order: tuple = ()        # 堆叠面积顺序；空 = PhaseSpec 顺序
+    # 结果表要显示的列（引擎列名，如 "f_rich"）；空 = 全部列。
+    # LMFP 预设给原来的紧凑 12 列，通用方案默认全给（2026-11-18）。
+    table_columns: tuple = ()
+
+
+@dataclass
+class InstrumentSpec:
+    """仪器峰形从哪来：已保存的 LaB₆ 基线 / 标样帧现算 / 不固定。
+
+    方案文件里带着它，切预设时"仪器"那一行跟着换（2026-11-18）：
+
+      * baseline —— 用窗口里保存的仪器基线（通用默认；λ 不符就退回 none）
+      * lab6     —— 每次跑批用标样帧现拟合（LMFP 预设用，保持金标准口径）
+      * none     —— 只精修零位、峰宽按默认估计
+    """
+
+    mode: str = "baseline"            # baseline | lab6 | none
+    lab6_tif: str | None = None       # 标样帧路径（lab6 模式）
+    lab6_cif: str | None = None       # 标样结构；None = 内置 LaB₆
 
 
 @dataclass
 class PhaseSet:
-    """一份原位预设：相 + 策略 + 视图配置。"""
+    """一份原位方案：相 + 策略 + 视图配置 + 仪器来源。"""
 
     name: str
     phases: list
     policy: BatchPolicy = field(default_factory=BatchPolicy.generic)
     views: ViewConfig = field(default_factory=ViewConfig)
+    instrument: InstrumentSpec = field(default_factory=InstrumentSpec)
 
     def sample_phases(self) -> list:
         return [p for p in self.phases if p.is_sample()]
@@ -172,7 +192,7 @@ def spec_from_path(path, *, label=None, display_name="", plot_name="",
                    cell_free=True, width_free=True, intensity="structure",
                    include_in_fraction=True, b_iso=None,
                    size_um=1e4, mustrain=0.0, cell_bounds=None,
-                   jump_tol=None, color=None, free_extra=()):
+                   jump_tol=None, color=None, cell0=None, free_extra=()):
     """读一张 CIF → PhaseSpec（label 不给就用文件名洗出来）。"""
     path = Path(path)
     structure = load_structure(str(path))
@@ -190,6 +210,7 @@ def spec_from_path(path, *, label=None, display_name="", plot_name="",
         size_um=float(size_um), mustrain=float(mustrain),
         cell_bounds=dict(cell_bounds or {}),
         jump_tol=jump_tol, color=color,
+        cell0=tuple(cell0) if cell0 is not None else None,
         free_extra=tuple(free_extra or ()))
     return spec
 
@@ -211,7 +232,7 @@ def generic_phase_set(paths_list, *, name="通用多相"):
 def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
     """内置「LMFP 三相」预设：rich/poor 样品相 + Al 参考相。"""
     from xrd_toolkit.simulation.insitu import (
-        AL_A, CELL_BOUNDS, DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH)
+        AL_A, CELL_BOUNDS, DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, LAB6_TIF)
     rich = spec_from_path(
         rich_path or DEFAULT_RICH, label="rich", display_name="富锂相",
         plot_name="Li-rich phase", role=SAMPLE,
@@ -242,19 +263,35 @@ def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
                                  vs_phase="poor",
                                  side_lo=(1.18, 1.28),
                                  side_hi=(1.50, 1.56))],
-        show_wt=True, fraction_order=("rich", "poor"))
+        show_wt=True, fraction_order=("rich", "poor"),
+        # 工作台原来那 12 列（引擎列名，显示名在 GUI 里映射）
+        table_columns=("frame", "file", "status", "rwp", "f_rich",
+                       "wt_rich", "wt_poor", "rich_a", "rich_c",
+                       "poor_a", "poor_c", "t_fit_s"))
+    # 仪器口径：LMFP 金标准要求每次跑批用标样帧现拟合；文件不存在时
+    # 留空（打包版没有仓库样例），界面会让用户 [换…] 指自己的标样帧。
+    lab6 = Path(LAB6_TIF)
+    instrument = InstrumentSpec(
+        mode="lab6", lab6_tif=str(lab6) if lab6.is_file() else "")
     return PhaseSet(name="LMFP 三相", phases=[rich, poor, al],
-                    policy=BatchPolicy.lmfp(), views=views)
+                    policy=BatchPolicy.lmfp(), views=views,
+                    instrument=instrument)
 
 
 # ── 方案文件（2026-11-17）：PhaseSet/ViewConfig 持久化 ──────────────
 def phase_set_to_dict(phase_set):
-    """序列化为 JSON 友好 dict；结构只存 CIF 路径，不内嵌原子坐标。"""
+    """序列化为 JSON 友好 dict；结构只存 CIF 路径，不内嵌原子坐标。
+
+    2026-11-18 起 version 2：多记 `instrument`（仪器峰形来源）和
+    `views.table_columns`（结果表列）。v1 旧文件缺这两个键，读取时按
+    默认值补齐（baseline 仪器 / 全部列）。
+    """
     out = {
-        "version": 1,
+        "version": 2,
         "name": phase_set.name,
         "policy": asdict(phase_set.policy),
         "views": asdict(phase_set.views),
+        "instrument": asdict(phase_set.instrument),
         "phases": [],
     }
     for phase in phase_set.phases:
@@ -276,14 +313,33 @@ def phase_set_from_dict(data):
         values = {f.name: item[f.name] for f in fields(PhaseSpec)
                   if f.name in item and f.name not in ("structure", "path")}
         values["path"] = path
+        if values.get("cell0") is not None:
+            values["cell0"] = tuple(values["cell0"])
+        if values.get("cell_bounds"):
+            values["cell_bounds"] = {
+                key: tuple(bound)
+                for key, bound in values["cell_bounds"].items()}
         values["structure"] = load_structure(str(path))
         phases.append(PhaseSpec(**values))
     policy = BatchPolicy(**(data.get("policy") or {}))
     views_raw = dict(data.get("views") or {})
     windows = [PeakWindow(**w) for w in views_raw.pop("peak_windows", [])]
+    # JSON 把元组写成列表；读回来还原成元组，保持与内存里一致。
+    if views_raw.get("crossover_pair") is not None:
+        views_raw["crossover_pair"] = tuple(views_raw["crossover_pair"])
+    if "fraction_order" in views_raw:
+        views_raw["fraction_order"] = tuple(
+            views_raw["fraction_order"] or ())
+    if "annotations" in views_raw:
+        views_raw["annotations"] = [
+            tuple(item) for item in (views_raw["annotations"] or [])]
+    if "table_columns" in views_raw:
+        views_raw["table_columns"] = tuple(views_raw["table_columns"] or ())
     views = ViewConfig(peak_windows=windows, **views_raw)
+    instrument = InstrumentSpec(**(data.get("instrument") or {}))
     return PhaseSet(name=str(data.get("name") or "insitu 方案"),
-                    phases=phases, policy=policy, views=views)
+                    phases=phases, policy=policy, views=views,
+                    instrument=instrument)
 
 
 def save_phase_set(phase_set, path):

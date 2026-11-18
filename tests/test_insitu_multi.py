@@ -55,6 +55,57 @@ class TestPhaseSet(unittest.TestCase):
         self.assertEqual(got.views.shade_phase, "rich")
         self.assertEqual(got.views.peak_windows[0].name, "(200) doublet")
         self.assertEqual(got.policy.joint_stage, pset.policy.joint_stage)
+        # 2026-11-18：仪器来源与表格列随方案走；装到别的机器上
+        # 标样帧路径可能不存在，但模式必须还是 lab6。
+        self.assertEqual(got.instrument.mode, "lab6")
+        self.assertEqual(got.instrument.lab6_tif,
+                         pset.instrument.lab6_tif)
+        self.assertEqual(got.views.table_columns,
+                         pset.views.table_columns)
+        self.assertIn("f_rich", got.views.table_columns)
+
+    def test_scheme_roundtrip_keeps_every_phase_field(self):
+        """对话框时代的损失回归：width_free / cell0 / 尺寸 / 边界不能丢。"""
+        import tempfile
+        from xrd_toolkit.simulation.phase_set import (
+            load_phase_set, save_phase_set)
+        pset = lmfp_phase_set()
+        with tempfile.TemporaryDirectory() as tmp:
+            got = load_phase_set(save_phase_set(pset, Path(tmp) / "s.json"))
+        rich, poor, al = got.phases
+        self.assertFalse(rich.width_free, "rich 的 width_free=False 是金标准口径")
+        self.assertAlmostEqual(rich.size_um, 0.093, places=6)
+        self.assertAlmostEqual(poor.b_iso, 0.5, places=6)
+        self.assertEqual(al.cell0, (4.061, 4.061, 4.061))
+        self.assertEqual(al.intensity, "lebail")
+        self.assertFalse(al.include_in_fraction)
+        self.assertEqual(rich.cell_bounds["a"],
+                         pset.phases[0].cell_bounds["a"])
+        self.assertEqual([p.color for p in got.phases],
+                         [p.color for p in pset.phases])
+        self.assertEqual(rich.plot_name, "Li-rich phase")
+
+    def test_v1_scheme_file_gets_defaults(self):
+        """v1 旧方案没有 instrument/table_columns，读取补默认值。"""
+        import json
+        import tempfile
+        from xrd_toolkit.simulation.phase_set import (
+            load_phase_set, phase_set_to_dict, save_phase_set)
+        data = phase_set_to_dict(lmfp_phase_set())
+        data["version"] = 1
+        data.pop("instrument", None)
+        data["views"].pop("table_columns", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "v1.json"
+            old.write_text(json.dumps(data, ensure_ascii=False),
+                           encoding="utf-8")
+            got = load_phase_set(old)
+            new = save_phase_set(lmfp_phase_set(), Path(tmp) / "v2.json")
+            written = json.loads(new.read_text(encoding="utf-8"))
+        self.assertEqual(got.instrument.mode, "baseline")
+        self.assertEqual(got.views.table_columns, ())
+        self.assertEqual(written["version"], 2)
+        self.assertIn("instrument", written)
 
     def test_generic_batch_uses_phase_set(self):
         pset = lmfp_phase_set()
