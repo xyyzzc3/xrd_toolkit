@@ -248,6 +248,35 @@ class TestInSituWorkbench(unittest.TestCase):
                 and editor.table.rowCount() == 3, timeout_ms=10000)
         self.assertTrue(ok, "批量没有在 10 秒内完成")
 
+    def test_instrument_parameters_are_shown(self):
+        """仪器参数（zero/U/V/W/X/Y）看得见（2026-11-18）。"""
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        editor.batch = SimpleNamespace(
+            instrument={"zero": 0.0017, "u": 81.34, "v": -2.28,
+                        "w": 0.494, "x": 0.168, "y": 0.24},
+            phase_set=None, rows=[])
+        editor._refresh_instrument_label()
+        text = editor.instrument_params_label.text()
+        for name in ("zero", "u", "v", "w", "x", "y"):
+            self.assertIn(name, text)
+        self.assertIn("81.34", text)
+
+    def test_phase_table_columns_have_room(self):
+        """相表列放得下控件文字：'结构因子'四个字不再被裁（2026-11-18）。"""
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        editor = self.w.insitu_editor
+        self._apply_lmfp(editor)
+        table = editor.phase_table
+        self.assertGreaterEqual(table.columnWidth(3), 110,
+                                "强度列放不下「结构因子」")
+        combo = table.cellWidget(0, 3)
+        self.assertGreaterEqual(table.columnWidth(3),
+                                combo.sizeHint().width(),
+                                "强度下拉被列宽裁掉")
+
     def test_rename_changes_figure_legend(self):
         """改名要真的改到图上（2026-11-18 用户："Li rich 这些怎么改"）。"""
         from xrd_toolkit.gui import insitu_phase_table as pt

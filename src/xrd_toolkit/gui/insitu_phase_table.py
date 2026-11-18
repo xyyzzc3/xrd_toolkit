@@ -12,10 +12,12 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QHeaderView, QLabel, QLineEdit, QTableWidget,
-    QTableWidgetItem)
+    QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog,
+    QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QPushButton, QTableWidget,
+    QTableWidgetItem, QWidget)
 
 COLUMNS = ("角色", "相", "晶胞", "强度", "计入分数", "B/峰宽")
 ROLE_SAMPLE = "sample"
@@ -71,6 +73,154 @@ class _NamesDialog(QDialog):
                 self.plot_edit.text().strip())
 
 
+class _DetailsDialog(QDialog):
+    """每相细节（2026-11-18）：B / 尺寸 / 应变 / 晶胞范围 / jump / 颜色。
+
+    这些字段原本只能改方案 JSON；原位页补上入口后，和精修页的"每相自由"
+    对齐（精修页也只有开关，没有数值框）。
+    """
+
+    def __init__(self, parent, spec):
+        super().__init__(parent)
+        self.spec = dict(spec or {})
+        self.setWindowTitle("相细节")
+        form = QFormLayout(self)
+
+        self.use_cif_b = QCheckBox("从 CIF 取 Uiso")
+        self.b_iso = QDoubleSpinBox()
+        self.b_iso.setRange(-50.0, 100.0)
+        self.b_iso.setDecimals(3)
+        self.b_iso.setSingleStep(0.1)
+        b_row = QHBoxLayout()
+        b_row.addWidget(self.use_cif_b)
+        b_row.addWidget(self.b_iso, 1)
+        form.addRow("温度因子 B (Å²)", b_row)
+
+        self.size_um = QDoubleSpinBox()
+        self.size_um.setRange(1e-4, 1e6)
+        self.size_um.setDecimals(4)
+        self.size_um.setSingleStep(0.01)
+        self.size_um.setSuffix(" µm")
+        form.addRow("尺寸", self.size_um)
+
+        self.mustrain = QDoubleSpinBox()
+        self.mustrain.setRange(0.0, 1e6)
+        self.mustrain.setDecimals(1)
+        form.addRow("应变 mustrain", self.mustrain)
+
+        self.width_free = QCheckBox("峰宽随数据精修（结构精修相）")
+        form.addRow("", self.width_free)
+
+        bounds = QWidget()
+        grid = QGridLayout(bounds)
+        grid.setContentsMargins(0, 0, 0, 0)
+        self.use_bounds = QCheckBox("限晶胞范围 (Å)")
+        grid.addWidget(self.use_bounds, 0, 0, 1, 3)
+        grid.addWidget(QLabel("下限"), 1, 1)
+        grid.addWidget(QLabel("上限"), 1, 2)
+        self.bound_spins = {}
+        for row, axis in enumerate(("a", "b", "c"), start=2):
+            grid.addWidget(QLabel(axis), row, 0)
+            lo = QDoubleSpinBox()
+            lo.setRange(0.0, 50.0)
+            lo.setDecimals(3)
+            hi = QDoubleSpinBox()
+            hi.setRange(0.0, 50.0)
+            hi.setDecimals(3)
+            self.bound_spins[axis] = (lo, hi)
+            grid.addWidget(lo, row, 1)
+            grid.addWidget(hi, row, 2)
+        form.addRow("晶胞范围", bounds)
+
+        self.use_default_jump = QCheckBox("用方案默认")
+        self.jump_tol = QDoubleSpinBox()
+        self.jump_tol.setRange(0.001, 2.0)
+        self.jump_tol.setDecimals(3)
+        self.jump_tol.setSingleStep(0.01)
+        jump_row = QHBoxLayout()
+        jump_row.addWidget(self.use_default_jump)
+        jump_row.addWidget(self.jump_tol, 1)
+        form.addRow("晶胞跳变容差 (Å)", jump_row)
+
+        self.color_edit = QLineEdit()
+        self.color_edit.setPlaceholderText("#1f5fa8（留空 = 自动配色）")
+        color_btn = QPushButton("选…")
+        color_btn.clicked.connect(self._pick_color)
+        color_row = QHBoxLayout()
+        color_row.addWidget(self.color_edit, 1)
+        color_row.addWidget(color_btn)
+        form.addRow("图里的颜色", color_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+        self._prefill()
+        self.use_cif_b.toggled.connect(
+            lambda on: self.b_iso.setEnabled(not on))
+        self.use_bounds.toggled.connect(self._toggle_bounds)
+        self.use_default_jump.toggled.connect(
+            lambda on: self.jump_tol.setEnabled(not on))
+
+    def _prefill(self):
+        b_iso = self.spec.get("b_iso")
+        self.use_cif_b.setChecked(b_iso is None)
+        self.b_iso.setEnabled(b_iso is not None)
+        self.b_iso.setValue(0.0 if b_iso is None else float(b_iso))
+        self.size_um.setValue(float(self.spec.get("size_um", 1e4)))
+        self.mustrain.setValue(float(self.spec.get("mustrain", 0.0)))
+        self.width_free.setChecked(bool(self.spec.get("width_free", True)))
+        bounds = dict(self.spec.get("cell_bounds") or {})
+        self.use_bounds.setChecked(bool(bounds))
+        for axis, (lo, hi) in self.bound_spins.items():
+            pair = bounds.get(axis)
+            if pair:
+                lo.setValue(float(pair[0]))
+                hi.setValue(float(pair[1]))
+            else:
+                lo.setValue(0.0)
+                hi.setValue(30.0)
+        self._toggle_bounds(bool(bounds))
+        jump = self.spec.get("jump_tol")
+        self.use_default_jump.setChecked(jump is None)
+        self.jump_tol.setEnabled(jump is not None)
+        self.jump_tol.setValue(0.3 if jump is None else float(jump))
+        self.color_edit.setText(str(self.spec.get("color") or ""))
+
+    def _toggle_bounds(self, on):
+        for lo, hi in self.bound_spins.values():
+            lo.setEnabled(bool(on))
+            hi.setEnabled(bool(on))
+
+    def _pick_color(self):
+        start = QColor(self.color_edit.text().strip() or "#1f5fa8")
+        color = QColorDialog.getColor(start, self, "相的颜色")
+        if color.isValid():
+            self.color_edit.setText(color.name())
+
+    def values(self):
+        spec = dict(self.spec)
+        spec["b_iso"] = (
+            None if self.use_cif_b.isChecked() else float(self.b_iso.value()))
+        spec["size_um"] = float(self.size_um.value())
+        spec["mustrain"] = float(self.mustrain.value())
+        spec["width_free"] = bool(self.width_free.isChecked())
+        if self.use_bounds.isChecked():
+            spec["cell_bounds"] = {
+                axis: (float(lo.value()), float(hi.value()))
+                for axis, (lo, hi) in self.bound_spins.items()}
+        else:
+            spec["cell_bounds"] = {}
+        spec["jump_tol"] = (
+            None if self.use_default_jump.isChecked()
+            else float(self.jump_tol.value()))
+        text = self.color_edit.text().strip()
+        spec["color"] = text or None
+        return spec
+
+
 def default_phase(path, used):
     """新加一相的默认字段（与对话框一致：样品相、晶胞自由、结构因子）。"""
     path = Path(path)
@@ -109,15 +259,22 @@ class InsituPhaseTable(QTableWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         hh = self.horizontalHeader()
-        for col in (0, 2, 3, 4, 5):
-            hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # 这些列里放的是控件（下拉/复选），ResizeToContents 只量"表头
+        # 文字"，会把下拉里的"结构因子"裁掉（2026-11-18 用户反馈）。
+        # 给按控件内容定的固定宽度，用户仍可拖动列宽；相名占剩余宽度。
+        hh.setMinimumSectionSize(72)
+        for col, width in ((0, 96), (2, 76), (3, 118), (4, 100), (5, 96)):
+            hh.setSectionResizeMode(col, QHeaderView.Interactive)
+            hh.resizeSection(col, width)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setToolTip(
             "每相一行：角色（样品相/参考相）、晶胞是否自由、强度用结构因子"
             "还是 Le Bail、是否计入样品分数分母；B/峰宽 = 该相自己的"
             "温度因子/尺寸/应变也参与精修（默认固定，更快更稳）。"
             "顺序只决定哪条样品相走完整结构精修（原子坐标/占位）；"
-            "其余样品相照样计入分数、各有晶胞/强度。用 [上移/下移] 调整。")
+            "其余样品相照样计入分数、各有晶胞/强度。用 [上移/下移] 调整；"
+            "双击相名可改 B / 尺寸 / 应变 / 晶胞范围 / 颜色。")
 
     # ── 行内字段 ─────────────────────────────────────────────
     def _add_row(self, spec):
@@ -267,6 +424,19 @@ class InsituPhaseTable(QTableWidget):
         item.setText(display)
         spec["plot_name"] = plot
         item.setData(_SPEC_ROLE, spec)
+        self.dirty = True
+        return True
+
+    def edit_selected_details(self, parent):
+        row = self.currentRow()
+        item = self.item(row, 1) if row >= 0 else None
+        if item is None:
+            return False
+        spec = dict(item.data(_SPEC_ROLE) or {})
+        dlg = _DetailsDialog(parent, spec)
+        if dlg.exec() != QDialog.Accepted:
+            return False
+        item.setData(_SPEC_ROLE, dlg.values())
         self.dirty = True
         return True
 

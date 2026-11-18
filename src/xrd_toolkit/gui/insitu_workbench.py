@@ -305,7 +305,9 @@ class InSituWorkbench(QWidget):
         phase_row = QHBoxLayout()
         phase_row.setSpacing(6)
         self.phase_table = InsituPhaseTable()
-        self.phase_table.setMaximumHeight(150)
+        self.phase_table.setMaximumHeight(180)
+        self.phase_table.cellDoubleClicked.connect(
+            self._on_phase_double_clicked)
         phase_row.addWidget(self.phase_table, 1)
         phase_side = QVBoxLayout()
         phase_side.setSpacing(4)
@@ -316,6 +318,8 @@ class InSituWorkbench(QWidget):
                  "样品相 ↔ 参考相（参考相默认固定晶胞 + Le Bail + 不计入分数）"),
                 ("改名…", self._rename_phase,
                  "改界面显示名与图内名称（图例、布拉格刻度行）"),
+                ("细节…", self._edit_phase_details,
+                 "每相细节：B、尺寸、应变、晶胞范围、跳变容差、颜色"),
                 ("上移", lambda: self.phase_table.move_selected(-1),
                  "上移一位（第一条样品相走完整结构精修）"),
                 ("下移", lambda: self.phase_table.move_selected(1),
@@ -354,6 +358,13 @@ class InSituWorkbench(QWidget):
         self.lab6_btn.setToolTip("LMFP 方案用标样帧现拟合仪器峰形（zero/U/V/W/X/Y）")
         self.lab6_btn.clicked.connect(self._choose_lab6)
         left_lay.addWidget(self.lab6_btn)
+        self.instrument_params_label = QLabel("")
+        self.instrument_params_label.setStyleSheet("color: gray;")
+        self.instrument_params_label.setWordWrap(True)
+        self.instrument_params_label.setMinimumWidth(0)
+        self.instrument_params_label.setSizePolicy(QSizePolicy.Ignored,
+                                                   QSizePolicy.Preferred)
+        left_lay.addWidget(self.instrument_params_label)
 
         left_lay.addWidget(_section("参数"))
         self.max_rwp = QDoubleSpinBox()
@@ -630,8 +641,30 @@ class InSituWorkbench(QWidget):
                 lab6_tif=str(self.lab6_path) if self.lab6_path else "")
         return self._scheme_instrument
 
+    @staticmethod
+    def _instrument_params_text(params):
+        """zero/U/V/W/X/Y → 一行灰字（2026-11-18：和精修页一样能看见）。"""
+        bits = []
+        for name in ("zero", "u", "v", "w", "x", "y"):
+            try:
+                value = float((params or {}).get(name))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                bits.append(f"{name} {value:.4g}")
+        return ("参数：" + "，".join(bits)) if bits else ""
+
     def _refresh_instrument_label(self):
         mode = self._scheme_instrument.mode
+        # 跑过的批次带着实际用上的参数；没跑时看方案来源。
+        batch_instrument = getattr(self.batch, "instrument", None)
+        if isinstance(batch_instrument, dict) and batch_instrument:
+            self.instrument_params_label.setText(
+                self._instrument_params_text(batch_instrument))
+        elif mode == "lab6":
+            self.instrument_params_label.setText("参数：运行准备后显示")
+        else:
+            self.instrument_params_label.setText("")
         if mode == "lab6":
             name = self.lab6_path.name if self.lab6_path else "未选"
             self.instrument_label.setText(f"标样帧现拟合：{name}")
@@ -659,6 +692,8 @@ class InSituWorkbench(QWidget):
         if wavelength == wavelength and abs(wavelength - current) <= 0.01:
             self.instrument_label.setText(
                 f"已保存基线（λ {wavelength:.4f} Å）")
+            self.instrument_params_label.setText(
+                self._instrument_params_text(record.get("params") or {}))
         else:
             self.instrument_label.setText("无可用基线（只精修零位）")
 
@@ -707,6 +742,31 @@ class InSituWorkbench(QWidget):
             return
         self._sync_phase_names()
         self._set_status("已改名：图例与布拉格刻度行跟着换")
+
+    def _on_phase_double_clicked(self, row, col):
+        if col == 1 and row >= 0:
+            self._edit_phase_details()
+
+    def _edit_phase_details(self):
+        if not self.phase_table.edit_selected_details(self):
+            return
+        self._sync_phase_details()
+        self._set_status("相细节已更新（数值下一次开始生效；颜色立即生效）")
+
+    def _sync_phase_details(self):
+        """颜色立即生效（重画视图）；其余数值等下一次 [开始] 才进批次。"""
+        specs = {p["label"]: p for p in self.phase_table.phases()}
+        for pset in (getattr(self.batch, "phase_set", None),
+                     self._preview_phase_set):
+            if pset is None:
+                continue
+            for phase in pset.phases:
+                spec = specs.get(phase.label)
+                if spec is not None:
+                    phase.color = spec.get("color") or None
+        self._draw_trends()
+        self._draw_summary()
+        self._draw_model_independent()
 
     def _sync_phase_names(self):
         """相表里的显示名/图内名 → 批次/预览方案，然后重画视图。"""
@@ -973,6 +1033,7 @@ class InSituWorkbench(QWidget):
             "table_columns", ()) or ())
         keys = [k for k in wanted if k in all_keys] if all_keys else wanted
         self._set_table_columns(keys or all_keys)
+        self._refresh_instrument_label()
         self._set_status("已就绪，开始逐帧精修…")
         self._start_next()
 

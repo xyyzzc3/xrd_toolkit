@@ -247,6 +247,35 @@ class TestGenericEntry(unittest.TestCase):
         self.assertEqual(
             self.editor._bragg_labels()["rich"], "Li-rich custom")
 
+    def test_phase_details_update_spec_and_color(self):
+        """每相细节（2026-11-18）：B/尺寸/晶胞范围等写回相表，颜色立即生效。"""
+        from xrd_toolkit.gui import insitu_phase_table as pt
+        self._pick("lmfp")
+        table = self.editor.phase_table
+        table.setCurrentCell(0, 1)
+
+        class _Dlg:
+            def __init__(self, parent, spec):
+                self.spec = dict(spec)
+
+            def exec(self):
+                return pt.QDialog.Accepted
+
+            def values(self):
+                self.spec["size_um"] = 0.5
+                self.spec["cell_bounds"] = {"a": (10.3, 10.4)}
+                self.spec["color"] = "#ff0000"
+                return self.spec
+
+        with mock.patch.object(pt, "_DetailsDialog", _Dlg):
+            self.editor._edit_phase_details()
+        spec = table.phases()[0]
+        self.assertAlmostEqual(spec["size_um"], 0.5)
+        self.assertEqual(spec["cell_bounds"], {"a": (10.3, 10.4)})
+        self.assertEqual(spec["color"], "#ff0000")
+        self.assertEqual(
+            self.editor._preview_phase_set.phases[0].color, "#ff0000")
+
     def test_scheme_save_load_roundtrip(self):
         from xrd_toolkit.gui import insitu_workbench as wb
         self._pick("lmfp")
