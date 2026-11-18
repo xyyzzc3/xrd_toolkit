@@ -32,11 +32,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-    QMdiSubWindow, QMenu, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QTabWidget, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QListWidget, QMdiSubWindow, QMenu, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget,
+    QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
@@ -441,10 +441,13 @@ class RefineWorkbench(QWidget):
         self.report_view.setReadOnly(True)
         self.report_view.setPlaceholderText("精修完成后这里显示完整报告")
 
-        # 结构参数页：位点表放到右侧，宽度足够（2026-11-18 用户 1+2+4）。
-        self.site_page = QWidget()
-        site_lay = QVBoxLayout(self.site_page)
-        site_lay.setContentsMargins(6, 6, 6, 6)
+        # 结构参数/额外相 = 配置，不与结果混在一起：改成非模态弹窗
+        # （2026-11-18 用户问题 2，按建议 A）。右侧标签只留参数表/报告。
+        self.site_dialog = QDialog(self)
+        self.site_dialog.setWindowTitle("结构参数（原子坐标 / 占位）")
+        self.site_dialog.resize(560, 380)
+        site_lay = QVBoxLayout(self.site_dialog)
+        site_lay.setContentsMargins(8, 8, 8, 8)
         site_lay.setSpacing(4)
         self.site_hint = QLabel("切到本页时列出当前 CIF 可精修的位点")
         self.site_hint.setWordWrap(True)
@@ -463,11 +466,13 @@ class RefineWorkbench(QWidget):
         for col in (1, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         site_lay.addWidget(self.site_table, 1)
+        self.site_dialog.hide()
 
-        # 额外相页
-        self.extra_page = QWidget()
-        extra_lay = QVBoxLayout(self.extra_page)
-        extra_lay.setContentsMargins(6, 6, 6, 6)
+        self.extra_dialog = QDialog(self)
+        self.extra_dialog.setWindowTitle("额外相")
+        self.extra_dialog.resize(460, 320)
+        extra_lay = QVBoxLayout(self.extra_dialog)
+        extra_lay.setContentsMargins(8, 8, 8, 8)
         extra_lay.setSpacing(4)
         self.extra_list = QListWidget()
         self.extra_list.setToolTip("额外相（如基片/集流体）：峰位与峰形跟随"
@@ -491,12 +496,10 @@ class RefineWorkbench(QWidget):
         extra_hint.setWordWrap(True)
         extra_hint.setStyleSheet("color: gray;")
         extra_lay.addWidget(extra_hint)
+        self.extra_dialog.hide()
 
         self.tabs.addTab(self.param_table, "参数表")
         self.tabs.addTab(self.report_view, "报告")
-        self.tabs.addTab(self.site_page, "结构参数")
-        self.tabs.addTab(self.extra_page, "额外相")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
         right.addWidget(self.tabs)
         right.setStretchFactor(0, 3)
         right.setStretchFactor(1, 1)
@@ -873,24 +876,24 @@ class RefineWorkbench(QWidget):
         self.more_box.setVisible(checked)
 
     def _show_site_page(self):
-        """左侧入口：切到右侧「结构参数」页并分析位点。"""
-        self.tabs.setCurrentWidget(self.site_page)
+        """左侧入口：打开非模态「结构参数」窗口并分析位点。"""
         self._ensure_sites()
+        self.site_dialog.show()
+        self.site_dialog.raise_()
+        self.site_dialog.activateWindow()
 
     def _show_extra_page(self):
-        self.tabs.setCurrentWidget(self.extra_page)
-
-    def _on_tab_changed(self, _index):
-        if self.tabs.currentWidget() is self.site_page:
-            self._ensure_sites()
+        self.extra_dialog.show()
+        self.extra_dialog.raise_()
+        self.extra_dialog.activateWindow()
 
     def _refresh_sites(self):
-        """换 CIF：丢掉旧位点表；结构参数页开着就立刻重列。"""
+        """换 CIF：丢掉旧位点表；结构参数窗口开着就立刻重列。"""
         self._site_model = None
         self._site_cif = None
         self._site_rows = {}
         self.site_table.setRowCount(0)
-        if self.tabs.currentWidget() is self.site_page:
+        if self.site_dialog.isVisible():
             self._ensure_sites()
         self._apply_site_enabled()
 
@@ -1176,6 +1179,14 @@ class RefineWorkbench(QWidget):
             self._draw(self.result)
         else:
             self._draw_observed()
+
+    def hideEvent(self, event):
+        """退出/隐藏工作台时收起配置弹窗（2026-11-18 问题 2）。"""
+        for dialog in (getattr(self, "site_dialog", None),
+                       getattr(self, "extra_dialog", None)):
+            if dialog is not None:
+                dialog.hide()
+        super().hideEvent(event)
 
     def _draw_placeholder(self, detail=None):
         """空状态说明（没有曲线/曲线没有可用数据时）。

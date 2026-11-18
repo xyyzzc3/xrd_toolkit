@@ -100,7 +100,7 @@ class TestRefineWorkbench(unittest.TestCase):
         idx = editor.cif_combo.findData(str(cif))
         self.assertGreaterEqual(idx, 0, "相库里应有 LiFePO4 的 CIF")
         editor.cif_combo.setCurrentIndex(idx)
-        editor._show_site_page()          # 结构参数搬到右侧标签页（2026-11-18）
+        editor._show_site_page()          # 结构参数是非模态弹窗（2026-11-18）
         QApplication.processEvents()
         self.assertEqual(editor.site_table.rowCount(), 6,
                          "Pnma LiFePO4 应列出 6 条等效位点")
@@ -126,6 +126,25 @@ class TestRefineWorkbench(unittest.TestCase):
         editor.cif_combo.setCurrentIndex(0)
         QApplication.processEvents()
         self.assertNotIn("Fe4", editor._site_rows)
+
+    def test_config_panels_are_nonmodal_dialogs(self):
+        """结构参数/额外相是配置弹窗，右标签只留结果（2026-11-18 问题 2）。"""
+        self._enter()
+        editor = self.w.refine_editor
+        self.assertEqual(editor.tabs.count(), 2,
+                         "右侧只留参数表/报告")
+        self.assertEqual(
+            [editor.tabs.tabText(i) for i in range(editor.tabs.count())],
+            ["参数表", "报告"])
+        self.assertFalse(editor.site_dialog.isModal())
+        self.assertFalse(editor.extra_dialog.isModal())
+        editor._show_extra_page()
+        QApplication.processEvents()
+        self.assertTrue(editor.extra_dialog.isVisible())
+        self.w.refine_dock.hide()
+        QApplication.processEvents()
+        self.assertFalse(editor.extra_dialog.isVisible(),
+                         "退出/隐藏工作台应收起配置弹窗")
 
     def test_enter_exit_restores_docks(self):
         self.assertFalse(self.w.param_dock.isVisible())
