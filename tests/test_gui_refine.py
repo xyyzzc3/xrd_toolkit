@@ -189,6 +189,48 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(draw.called, "刷新必须同步重画画布")
         self.assertEqual(content.canvas.size(), size, "刷新不该改变画布尺寸")
 
+    def test_set_source_renders_immediately(self):
+        """物相 [送去精修] 交接后应立即同步画一次（2026-11-18：空图一闪）。"""
+        self._open_panel()
+        self._enter()
+        editor = self.w.refine_editor
+        key = editor.curve_combo.currentData()
+        with mock.patch.object(editor, "render_now") as render:
+            editor.set_source(key, None)
+        self.assertTrue(render.called, "送去精修后没有立即画图")
+
+    def test_empty_curve_shows_placeholder_not_blank_axes(self):
+        """空曲线不画成"有坐标轴、没有线"的空图（2026-11-18 用户反馈）。"""
+        self._enter()
+        editor = self.w.refine_editor
+        with mock.patch.object(editor, "_curve_data",
+                               return_value=(np.array([]), np.array([]))):
+            editor._draw_observed()
+        texts = [t.get_text() for ax in editor.fig.axes for t in ax.texts]
+        self.assertIn("Selected curve has no usable data", texts)
+        self.assertEqual(len(editor.fig.axes[0].lines), 0)
+
+    def test_exit_restores_plot_layout(self):
+        """退出精修后 1D 面板的几何/最大化状态按进入前还原（2026-11-18）。"""
+        dock = self._open_panel()
+        dock.showNormal()
+        dock.setGeometry(20, 30, 480, 320)
+        QApplication.processEvents()
+        rect = dock.geometry().getRect()
+        self.w.refine_btn.click()
+        QApplication.processEvents()
+        self.w.refine_btn.click()
+        QApplication.processEvents()
+        self.assertEqual(dock.geometry().getRect(), rect,
+                         "普通面板的几何没还原")
+        dock.showMaximized()
+        QApplication.processEvents()
+        self.w.refine_btn.click()
+        QApplication.processEvents()
+        self.w.refine_btn.click()
+        QApplication.processEvents()
+        self.assertTrue(dock.isMaximized(), "原本最大化的面板没还原")
+
     def test_render_now_draws_canvas_synchronously(self):
         self._enter()
         editor = self.w.refine_editor

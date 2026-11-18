@@ -121,8 +121,8 @@ from xrd_toolkit.gui.panel_state import (
     _reload_config_combo, _set_focus, set_geometry)
 from xrd_toolkit.gui.panel_layout import (
     _maximize_subwindow, _refresh_plot_after_workbench,
-    _restore_param_dock_width, _settle, _show_workbench_window,
-    _widen_param_dock_for_task)
+    _restore_param_dock_width, _restore_plot_layout, _settle,
+    _show_workbench_window, _snapshot_plot_layout, _widen_param_dock_for_task)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
@@ -717,6 +717,8 @@ def _enter_refine_mode(window: QMainWindow) -> None:
     _highlight_entrance(window, None)
     window.mode_label.setText("精修模式")
     _set_bottom_strip_visible(window, False)
+    # 记下工作区里已有的图（几何 + 最大化状态），退出时按快照还原。
+    window._refine_plot_layout = _snapshot_plot_layout(window)
     _open_refine_workbench(window)
     window.refine_btn.setText("退出精修")
     window.refine_btn.setToolTip("退出精修工作台，回到分析模式")
@@ -737,9 +739,11 @@ def _exit_refine_mode(window: QMainWindow) -> None:
         window._dock_intent[name] = want
     window._refine_dock_saved = None
     _resync_docks(window)
-    # 工作台遮住期间面板的画布可能记着隐藏前的尺寸/像素比：回到工作区
-    # 后按当前尺寸重排并同步重画一次（2026-11-18 用户："1D 图整体放大"）。
     _settle(window)
+    # 先按进入前的快照还原子窗口几何/最大化状态，再让面板按当前尺寸
+    # 重排重画（2026-11-18 用户："1D 图整体放大、子窗口没变"）。
+    _restore_plot_layout(window, getattr(window, "_refine_plot_layout", None))
+    window._refine_plot_layout = None
     for plot_dock in list(getattr(window, "plot_docks", {}).values()):
         if plot_dock is not None and plot_dock.isVisible():
             _refresh_plot_after_workbench(plot_dock)

@@ -585,6 +585,9 @@ class RefineWorkbench(QWidget):
                 idx = self.cif_combo.findData(str(path))
             if idx >= 0:
                 self.cif_combo.setCurrentIndex(idx)
+        # 外部入口（物相 [送去精修]）进来时窗口已经显示：选完曲线立刻
+        # 同步画一次，别让第一帧停在空图/占位（2026-11-18 用户反馈）。
+        self.render_now()
         self._set_status("已选好曲线与结构，点 [开始精修]")
 
     def _use_bundled_library(self):
@@ -1095,8 +1098,17 @@ class RefineWorkbench(QWidget):
         if curve is None:
             self._draw_placeholder()
             return
-        tth = np.asarray(curve[0], dtype=float)
-        y = np.asarray(curve[1], dtype=float)
+        try:
+            tth = np.asarray(curve[0], dtype=float)
+            y = np.asarray(curve[1], dtype=float)
+        except (TypeError, ValueError):
+            self._draw_placeholder("Selected curve has no usable data")
+            return
+        # 空曲线/全 NaN 会画出一张"有坐标轴、没有线"的空图（2026-11-18
+        # 用户："还是会弹一个空的坐标图"）：直接换成说明文字。
+        if tth.size < 2 or y.size != tth.size or not np.isfinite(y).any():
+            self._draw_placeholder("Selected curve has no usable data")
+            return
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.plot(tth, y, "-", lw=0.9, color=_OBS_COLOR)
@@ -1125,16 +1137,25 @@ class RefineWorkbench(QWidget):
         else:
             self._draw_observed()
 
-    def _draw_placeholder(self):
+    def _draw_placeholder(self, detail=None):
+        """空状态说明（没有曲线/曲线没有可用数据时）。
+
+        2026-11-18 用户："第一次点精修会弹一个空的坐标图"——把空状态
+        写清楚：标题 + 缺什么 + 下一步，不再给一张让人以为出错的空图。
+        """
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         ax.set_axis_off()
-        ax.text(0.5, 0.55, "Whole-pattern refinement", ha="center",
+        ax.text(0.5, 0.58, "Whole-pattern refinement", ha="center",
                 va="center", fontsize=15, color="#666666",
                 transform=ax.transAxes)
-        ax.text(0.5, 0.44,
-                "Select a 1D curve and a CIF, then press [Run fit]",
-                ha="center", va="center", fontsize=10, color="#888888",
+        ax.text(0.5, 0.47, detail or "No 1D curve selected", ha="center",
+                va="center", fontsize=11, color="#555555",
+                transform=ax.transAxes)
+        ax.text(0.5, 0.38,
+                "Open a [1D] panel or pick a 1D / processed product in the "
+                "curve list, then press [Run fit]",
+                ha="center", va="center", fontsize=9, color="#888888",
                 transform=ax.transAxes)
         self.canvas.draw_idle()
 

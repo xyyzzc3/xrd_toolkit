@@ -416,6 +416,36 @@ def _show_workbench_window(dock) -> None:
     dock.repaint()
 
 
+def _snapshot_plot_layout(window) -> dict:
+    """进入工作台前记下每个 1D/2D 子窗口的几何与最大化状态（2026-11-18）。
+
+    最大化工作台会抢 Qt 的"最大化槽位"，把原本最大化的图还原、把其它
+    子窗口的几何交给 Qt 自己记；退出后不一定回得去。这里自己记一份，
+    退出时按它还原（窗口层面），内容层面再由 `_refresh_plot_after_workbench`
+    收口。
+    """
+    layout = {}
+    for key, dock in list(getattr(window, "plot_docks", {}).items()):
+        if isinstance(dock, QMdiSubWindow):
+            layout[key] = (dock.geometry().getRect(), dock.isMaximized())
+    return layout
+
+
+def _restore_plot_layout(window, layout) -> None:
+    """按进入工作台前的快照还原子窗口几何与最大化状态。"""
+    if not layout:
+        return
+    for key, (rect, maximized) in layout.items():
+        dock = getattr(window, "plot_docks", {}).get(key)
+        if not isinstance(dock, QMdiSubWindow):
+            continue
+        if maximized:
+            dock.showMaximized()
+        else:
+            dock.showNormal()
+            dock.setGeometry(*rect)
+
+
 def _refresh_plot_after_workbench(dock) -> None:
     """工作台退出后，让面板按当前尺寸重排、重算 DPI 并同步重画一次。
 
