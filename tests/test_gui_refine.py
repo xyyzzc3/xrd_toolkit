@@ -161,6 +161,9 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertIsNone(editor.result)
         self.assertGreater(len(editor.fig.axes[0].lines), 0)
         self.assertIn("Observed", editor.fig.axes[0].get_title())
+        # 1D 产物/普通面板只是普通提示，不该用警示色（2026-11-18）
+        self.assertIn("1D 产物", editor.source_mode_label.text())
+        self.assertIn("gray", editor.source_mode_label.styleSheet())
         # 隐藏再显示（切走再回来）：showEvent 要补画，不能变空白
         self.w.refine_dock.hide()
         QApplication.processEvents()
@@ -233,6 +236,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertEqual(editor.bg_combo.currentData(), "none")
         self.assertFalse(editor.bg_combo.isEnabled())
         self.assertIn("处理产物", editor.source_mode_label.text())
+        # 警示色只属于处理产物（2026-11-18）
+        self.assertIn("#b7791f", editor.source_mode_label.styleSheet())
 
         tth = np.linspace(1.0, 8.0, 200)
         y = np.ones(200)

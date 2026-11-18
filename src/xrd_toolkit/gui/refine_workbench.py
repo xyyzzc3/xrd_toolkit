@@ -270,7 +270,7 @@ class RefineWorkbench(QWidget):
         left_lay.addWidget(self.range_label)
         self.source_mode_label = QLabel("")
         self.source_mode_label.setWordWrap(True)
-        self.source_mode_label.setStyleSheet("color: #b7791f;")
+        self.source_mode_label.setStyleSheet("color: gray;")
         left_lay.addWidget(self.source_mode_label)
 
         left_lay.addWidget(_section("背景"))
@@ -724,6 +724,9 @@ class RefineWorkbench(QWidget):
                 self.bg_combo.setCurrentIndex(idx)
             self.bg_combo.setEnabled(False)
             self.bg_window.setEnabled(False)
+            # 只有处理产物才是"要提醒"的状态，用警示色；1D 产物走灰字
+            # 普通提示（2026-11-18 用户："1D 产物现在精修也会出红字"）。
+            self.source_mode_label.setStyleSheet("color: #b7791f;")
             self.source_mode_label.setText(
                 "处理产物：已扣过背景/可能平滑过。本次不再次扣背景、"
                 "用等权；Rwp/esd/wt% 只作相对参考，定量请选 1D 产物。")
@@ -734,6 +737,7 @@ class RefineWorkbench(QWidget):
                 idx = self.bg_combo.findData("auto")
                 if idx >= 0:
                     self.bg_combo.setCurrentIndex(idx)
+            self.source_mode_label.setStyleSheet("color: gray;")
             self.source_mode_label.setText(
                 "1D 产物/面板积分曲线：原始计数数据，可用 Poisson 权重"
                 "和自动背景做全谱定量。")
