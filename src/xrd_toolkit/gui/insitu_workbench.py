@@ -1108,7 +1108,7 @@ class InSituWorkbench(QWidget):
                 or getattr(self, "_preview_phase_set", None))
 
     def _main_label(self):
-        """主相标签（第一条样品相）：状态行/单帧标题用它。"""
+        """结构精修相（第一条样品相）的标签：状态行/单帧标题用它。"""
         pset = self._phase_set()
         if pset is not None and pset.sample_phases():
             return pset.sample_phases()[0].label
