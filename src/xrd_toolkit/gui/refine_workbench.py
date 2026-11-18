@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QListWidget, QMdiSubWindow, QMenu, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget,
-    QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
 from xrd_toolkit.gui import sources as gui_sources
@@ -331,13 +331,19 @@ class RefineWorkbench(QWidget):
         self.instrument_label.setWordWrap(True)
         self.instrument_label.setStyleSheet("color: gray;")
         left_lay.addWidget(self.instrument_label)
+        self.save_instrument_btn = QPushButton("存为仪器基线")
+        self.save_instrument_btn.setEnabled(False)
+        self.save_instrument_btn.setToolTip(
+            "把这次 LaB₆ 精修得到的仪器峰形参数存起来，供样品精修复用")
+        self.save_instrument_btn.clicked.connect(self._save_instrument_baseline)
+        left_lay.addWidget(self.save_instrument_btn)
         self.chk_fix_instrument.toggled.connect(
             lambda on: self.chk_instr.setEnabled(not on))
         self.chk_lebail.toggled.connect(lambda _on: self._apply_site_enabled())
 
-        # 左侧只放高频控件（2026-11-18 用户 1+2+4）：结构参数表和额外相
-        # 列表搬到右侧标签页，这里只留入口按钮；基线保存/图外观收进
-        # "更多"折叠区，默认收起。
+        # 左侧只放高频控件（2026-11-18 用户 1+2+4；2026-11-19 用户：
+        # "宽度是问题、长度可以"——"更多"折叠取消，按钮直接排出来）：
+        # 结构参数/额外相用非模态窗口，其余按钮直接放在左栏。
         left_lay.addWidget(_section("进阶"))
         self.site_btn = QPushButton("结构参数（坐标/占位）…")
         self.site_btn.setToolTip(
@@ -349,37 +355,6 @@ class RefineWorkbench(QWidget):
             "额外相（如基片/集流体）：峰位与峰形跟随主相，强度默认逐反射自由")
         self.extra_btn.clicked.connect(self._show_extra_page)
         left_lay.addWidget(self.extra_btn)
-
-        self.more_toggle = QToolButton()
-        self.more_toggle.setText("更多")
-        self.more_toggle.setCheckable(True)
-        self.more_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.more_toggle.setArrowType(Qt.RightArrow)
-        self.more_toggle.setStyleSheet(
-            "QToolButton { border: none; color: gray; font-weight: 600;"
-            " padding: 2px 0; }")
-        self.more_toggle.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.more_toggle.toggled.connect(self._on_more_toggle)
-        left_lay.addWidget(self.more_toggle)
-        self.more_box = QWidget()
-        more_lay = QVBoxLayout(self.more_box)
-        more_lay.setContentsMargins(0, 0, 0, 0)
-        more_lay.setSpacing(4)
-        self.save_instrument_btn = QPushButton("存为仪器基线")
-        self.save_instrument_btn.setEnabled(False)
-        self.save_instrument_btn.setToolTip(
-            "把这次 LaB₆ 精修得到的仪器峰形参数存起来，供样品精修复用")
-        self.save_instrument_btn.clicked.connect(self._save_instrument_baseline)
-        more_lay.addWidget(self.save_instrument_btn)
-        self.appearance_btn = QPushButton("图外观…")
-        self.appearance_btn.setToolTip(
-            "改标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
-        self.appearance_btn.setEnabled(False)
-        self.appearance_btn.clicked.connect(self._edit_appearance)
-        more_lay.addWidget(self.appearance_btn)
-        self.more_box.setVisible(False)
-        left_lay.addWidget(self.more_box)
 
         self.run_btn = QPushButton("开始精修")
         self.run_btn.setToolTip("用选中的 1D 曲线和 CIF 做全谱最小二乘拟合")
@@ -397,6 +372,12 @@ class RefineWorkbench(QWidget):
         save_row.addWidget(self.save_btn, 1)
         save_row.addWidget(self.copy_btn, 1)
         left_lay.addLayout(save_row)
+        self.appearance_btn = QPushButton("图外观…")
+        self.appearance_btn.setToolTip(
+            "改标题/轴标签/Y 轴对数/网格/范围；重画和保存都保留")
+        self.appearance_btn.setEnabled(False)
+        self.appearance_btn.clicked.connect(self._edit_appearance)
+        left_lay.addWidget(self.appearance_btn)
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -869,12 +850,6 @@ class RefineWorkbench(QWidget):
             self._draw_observed()
 
     # ── 结构参数（原子坐标 / 占位）──────────────────────────
-    def _on_more_toggle(self, checked):
-        """「更多」折叠区：基线保存与图外观（2026-11-18 用户 1+2+4）。"""
-        self.more_toggle.setArrowType(
-            Qt.DownArrow if checked else Qt.RightArrow)
-        self.more_box.setVisible(checked)
-
     def _show_site_page(self):
         """左侧入口：打开非模态「结构参数」窗口并分析位点。"""
         self._ensure_sites()
