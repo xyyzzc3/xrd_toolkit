@@ -120,8 +120,9 @@ from xrd_toolkit.gui.panel_state import (
     _note_user_edit, _param_box_set, _pending_names, _proc_settings,
     _reload_config_combo, _set_focus, set_geometry)
 from xrd_toolkit.gui.panel_layout import (
-    _maximize_subwindow, _restore_param_dock_width, _settle,
-    _show_workbench_window, _widen_param_dock_for_task)
+    _maximize_subwindow, _refresh_plot_after_workbench,
+    _restore_param_dock_width, _settle, _show_workbench_window,
+    _widen_param_dock_for_task)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
@@ -736,6 +737,12 @@ def _exit_refine_mode(window: QMainWindow) -> None:
         window._dock_intent[name] = want
     window._refine_dock_saved = None
     _resync_docks(window)
+    # 工作台遮住期间面板的画布可能记着隐藏前的尺寸/像素比：回到工作区
+    # 后按当前尺寸重排并同步重画一次（2026-11-18 用户："1D 图整体放大"）。
+    _settle(window)
+    for plot_dock in list(getattr(window, "plot_docks", {}).values()):
+        if plot_dock is not None and plot_dock.isVisible():
+            _refresh_plot_after_workbench(plot_dock)
     prev = getattr(window, "_refine_prev_entrance", None)
     if prev is not None:
         _highlight_entrance(window, prev)

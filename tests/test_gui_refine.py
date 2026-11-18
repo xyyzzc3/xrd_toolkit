@@ -164,6 +164,31 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertTrue(self.w.refine_dock.isVisible())
         self.assertTrue(self.w.refine_dock.updatesEnabled())
 
+    def test_exit_refreshes_open_plots(self):
+        """退出精修后，原本打开的 1D 面板要按当前尺寸重排重画（2026-11-18）。"""
+        dock = self._open_panel()
+        from xrd_toolkit.gui import app as app_mod
+        with mock.patch.object(
+                app_mod, "_refresh_plot_after_workbench") as refresh:
+            self._enter()
+            self.w.refine_btn.click()
+            QApplication.processEvents()
+        self.assertTrue(refresh.called, "退出工作台没刷新已打开的面板")
+        self.assertTrue(
+            any(call.args and call.args[0] is dock
+                for call in refresh.call_args_list),
+            "刷新调用没带上这条 1D 面板")
+
+    def test_refresh_plot_helper_draws_synchronously(self):
+        dock = self._open_panel()
+        from xrd_toolkit.gui.panel_layout import _refresh_plot_after_workbench
+        content = dock.widget()
+        size = content.canvas.size()
+        with mock.patch.object(content.canvas, "draw") as draw:
+            _refresh_plot_after_workbench(dock)
+        self.assertTrue(draw.called, "刷新必须同步重画画布")
+        self.assertEqual(content.canvas.size(), size, "刷新不该改变画布尺寸")
+
     def test_render_now_draws_canvas_synchronously(self):
         self._enter()
         editor = self.w.refine_editor

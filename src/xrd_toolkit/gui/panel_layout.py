@@ -4,6 +4,7 @@
 panels 再导出，plot_panels 与 app 照旧经 gui_panels 取用。
 """
 from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMdiArea,
     QMdiSubWindow, QPushButton, QVBoxLayout, QWidget)
@@ -413,6 +414,44 @@ def _show_workbench_window(dock) -> None:
     finally:
         dock.setUpdatesEnabled(True)
     dock.repaint()
+
+
+def _refresh_plot_after_workbench(dock) -> None:
+    """工作台退出后，让面板按当前尺寸重排、重算 DPI 并同步重画一次。
+
+    2026-11-18（用户："关掉精修工作台后 1D 图整体放大，子窗口大小没变"）：
+    面板被最大化工作台遮住期间，matplotlib 画布缓存的像素比或图形尺寸
+    可能停在隐藏前的值——Retina 上会按旧缓冲放大绘制。这里依次：
+    布局定型 → 刷新缓存 DPR（变化时它自己会触发 resize）→ 合成一次
+    resize（重算 figure 的英寸尺寸）→ 同步 draw。不依赖具体哪一步落后，
+    隐藏/显示的各种路径都能收口。
+    """
+    content = _content(dock)
+    if content is None:
+        return
+    layout = content.layout()
+    if layout is not None:
+        layout.activate()
+    canvas = getattr(content, "canvas", None)
+    if canvas is None:
+        return
+    update = getattr(canvas, "_update_pixel_ratio", None)
+    if callable(update):
+        try:
+            update()
+        except RuntimeError:
+            return
+    try:
+        canvas.resizeEvent(QResizeEvent(canvas.size(), canvas.size()))
+    except Exception:                              # noqa: BLE001
+        pass
+    try:
+        canvas.draw()
+    except Exception:                              # noqa: BLE001
+        try:
+            canvas.draw_idle()
+        except Exception:                          # noqa: BLE001
+            pass
 
 
 # ══ 校准 / 掩膜：参数坞按"不缩小中央 2D 图"拉宽（2026-11-14 用户口径）══
