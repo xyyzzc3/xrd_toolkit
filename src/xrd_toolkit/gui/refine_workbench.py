@@ -94,6 +94,20 @@ def _cell_free(structure, free):
     return list(free), None
 
 
+def _quality_line(result, processed):
+    """结果行的拟合优度（2026-11-18：按市场标准口径）。
+
+    Rietveld 软件的通行做法（GSAS-II / FullProf / HighScore）是同时给
+    Rwp、Rp 和 GoF（约化 χ² = (Rwp/Rexp)²，越接近 1 越贴合计数噪声）。
+    处理产物用等权权重、没有背景模型，χ² 不再是统计量，所以只报
+    Rwp/Rp 并注明相对——不给一个看着像 GoF 其实没意义的数字。
+    """
+    line = f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%"
+    if processed:
+        return line + "   （处理产物，相对）"
+    return line + f"   GoF = {result.reduced_chi2:.3g}"
+
+
 def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
                 max_nfev, extra_paths=(), extra_lebail=True,
                 instrument=None, processed=False):
@@ -155,7 +169,7 @@ def _fit_worker(cif_path, tth, y, wavelength, free, lebail, bg_window,
         kwargs["cell_refine"] = True
     if processed:
         note = (note + "；" if note else "") + (
-            "处理产物：不再扣背景、等权权重；Rwp/esd/wt% 仅供相对比较")
+            "处理产物：不再扣背景、等权权重；Rwp/esd/wt%/χ² 仅供相对比较")
     return fit_pattern(structure, tth, y, **kwargs), note
 
 
@@ -404,6 +418,10 @@ class RefineWorkbench(QWidget):
 
         self.rwp_label = QLabel("Rwp = —")
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self.rwp_label.setToolTip(
+            "Rwp/Rp：标准 Rietveld 拟合优度（加权/未加权剖面 R）。\n"
+            "GoF：约化 χ² = (Rwp/Rexp)²，越接近 1 说明残差只剩计数噪声；"
+            "处理产物用等权权重，χ² 不是统计量，不报 GoF。")
         left_lay.addWidget(self.rwp_label)
         hint = QLabel("精修用这条 1D 曲线的积分数据，背景由工作台自己估计；"
                       "波长取顶部选中的几何配置。")
@@ -1007,9 +1025,7 @@ class RefineWorkbench(QWidget):
             report += "\n\n【数据来源提示】" + str(note)
         self.report_view.setPlainText(report)
         processed = bool((meta or {}).get("processed"))
-        self.rwp_label.setText(
-            f"Rwp = {result.rwp:.3f}%   Rp = {result.rp:.3f}%"
-            + ("   （处理产物，相对）" if processed else ""))
+        self.rwp_label.setText(_quality_line(result, processed))
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
         cif = self.cif_combo.currentData() or ""

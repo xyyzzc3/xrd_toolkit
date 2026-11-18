@@ -269,6 +269,22 @@ class TestRefineWorkbench(unittest.TestCase):
         finally:
             self.w.plot_docks.pop(key, None)
 
+    def test_quality_line_uses_standard_metrics(self):
+        """市场标准口径（2026-11-18）：原始计数报 Rwp/Rp/GoF；处理产物
+        只有 Rwp/Rp + 相对（等权权重下 χ² 不是统计量，标准软件不报）。"""
+        import types
+        from xrd_toolkit.gui import refine_workbench as gui_refine
+        result = types.SimpleNamespace(
+            rwp=9.746, rp=3.57, reduced_chi2=5.763)
+        raw = gui_refine._quality_line(result, False)
+        self.assertIn("Rwp = 9.746%", raw)
+        self.assertIn("Rp = 3.570%", raw)
+        self.assertIn("GoF = 5.76", raw)
+        proc = gui_refine._quality_line(result, True)
+        self.assertIn("Rwp = 9.746%", proc)
+        self.assertNotIn("GoF", proc)
+        self.assertIn("相对", proc)
+
     def test_cif_list_has_reference_structures(self):
         self._enter()
         combo = self.w.refine_editor.cif_combo
@@ -296,6 +312,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertGreater(editor.param_table.rowCount(), 0)
         self.assertIn("Rwp", editor.report_view.toPlainText())
         self.assertIn("Rwp", editor.rwp_label.text())
+        # 2026-11-18：原始计数按标准 Rietveld 口径同时给 GoF（约化 χ²）
+        self.assertIn("GoF", editor.rwp_label.text())
         self.assertTrue(editor.save_btn.isEnabled())
         self.assertTrue(editor.copy_btn.isEnabled())
         self.assertGreaterEqual(len(editor.fig.axes), 2)
