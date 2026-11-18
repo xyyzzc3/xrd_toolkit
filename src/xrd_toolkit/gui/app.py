@@ -121,7 +121,7 @@ from xrd_toolkit.gui.panel_state import (
     _reload_config_combo, _set_focus, set_geometry)
 from xrd_toolkit.gui.panel_layout import (
     _maximize_subwindow, _restore_param_dock_width, _settle,
-    _widen_param_dock_for_task)
+    _show_workbench_window, _widen_param_dock_for_task)
 from xrd_toolkit.gui.panel_state import _proc_curve
 from xrd_toolkit.gui.plot_compare import (
     _plot_compare, _plot_heatmap, _refresh_compare, _refresh_compare_family,
@@ -693,9 +693,9 @@ def _open_refine_workbench(window: QMainWindow) -> None:
     window.refine_editor.refresh_curves()
     window.refine_editor.refresh_cifs()
     _select_checked_curve(window, window.refine_editor)
-    dock.show()
-    dock.raise_()
-    _maximize_subwindow(dock)
+    # 关更新 → 显示/最大化 → 同步画一帧 → 开更新：首帧不再闪白
+    # （2026-11-18 用户："点精修会先出一瞬间的空白，占满整个工作台"）。
+    _show_workbench_window(dock)
 
 
 def _enter_refine_mode(window: QMainWindow) -> None:

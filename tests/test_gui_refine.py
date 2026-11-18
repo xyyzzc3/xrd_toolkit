@@ -153,6 +153,24 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertFalse(self.w._bottom_strip.isHidden(),
                          "退出工作台应恢复底部横带")
 
+    def test_first_entry_renders_before_showing(self):
+        """进入精修先同步渲染一帧（2026-11-18：整块白闪现）。"""
+        from xrd_toolkit.gui import refine_workbench as rw
+        with mock.patch.object(rw.RefineWorkbench, "render_now",
+                               autospec=True) as render:
+            self.w.refine_btn.click()
+            QApplication.processEvents()
+        self.assertTrue(render.called, "进入工作台应先同步渲染")
+        self.assertTrue(self.w.refine_dock.isVisible())
+        self.assertTrue(self.w.refine_dock.updatesEnabled())
+
+    def test_render_now_draws_canvas_synchronously(self):
+        self._enter()
+        editor = self.w.refine_editor
+        with mock.patch.object(editor.canvas, "draw") as draw:
+            editor.render_now()
+        self.assertTrue(draw.called, "render_now 必须同步 draw 画布")
+
     def test_curve_shows_before_fitting(self):
         """进入精修工作台就该看到观测曲线，而不是空白（2026-11-02）。"""
         self._open_panel()

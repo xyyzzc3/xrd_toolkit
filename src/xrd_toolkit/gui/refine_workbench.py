@@ -301,7 +301,10 @@ class RefineWorkbench(QWidget):
         self.chk_micro = QCheckBox("样品微结构 Size/Mustrain")
         self.chk_micro.setChecked(True)
         self.chk_b = QCheckBox("温度因子 B")
-        self.chk_b.setToolTip("从 CIF 的 Uiso 起步；Le Bail 模式下不可用")
+        self.chk_b.setToolTip(
+            "从 CIF 的 Uiso 起步；默认固定——窄 2θ 范围下 B 与强度标度、"
+            "背景强相关，容易被它们吸收；数据含高角峰、想看热振动或精修"
+            "占位时再勾。B 与占位是简并对；Le Bail 模式下不可用。")
         self.chk_lebail = QCheckBox("Le Bail（强度自由）")
         self.chk_lebail.setToolTip(
             "每条峰的强度单独解出，不看结构因子；适合只看峰形与晶胞")
@@ -1063,6 +1066,14 @@ class RefineWorkbench(QWidget):
         apply_figure_appearance(self.fig, self._appearance)
         self.fig.subplots_adjust(left=0.11, right=0.98, top=0.93, bottom=0.12)
         self.canvas.draw_idle()
+
+    def render_now(self):
+        """同步画一次（进入工作台前用，2026-11-18：避免首帧空白）。"""
+        if getattr(self, "result", None) is not None:
+            self._draw(self.result)
+        else:
+            self._draw_observed()
+        self.canvas.draw()
 
     def showEvent(self, event):
         """重新显示时补一次绘制（MDI 隐藏期间 draw_idle 可能被吞）。"""

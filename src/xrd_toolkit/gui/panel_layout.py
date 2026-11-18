@@ -379,6 +379,42 @@ def _maximize_subwindow(dock) -> None:
         dock.showMaximized()
 
 
+def _show_workbench_window(dock) -> None:
+    """工作台子上屏：关更新 → 显示/最大化 → 同步画一帧 → 开更新。
+
+    2026-11-18（用户："点精修会先出一瞬间的空白，占满整个工作台"）：
+    新建的大画布工作台先 show 再 maximize 时，系统会先合成一帧白底，
+    matplotlib 的首次绘制（实测 ~120 ms）排在它后面，于是整块空白一闪。
+    这里在隐藏状态先关更新，布局定型后让工作台自己同步画（工作台可选
+    提供 `render_now()`），最后一次性重绘——白帧不提交给系统。交互时
+    的 `draw_idle` 不受影响。
+    """
+    if dock is None:
+        return
+    if dock.isVisible():
+        dock.show()
+        dock.raise_()
+        _maximize_subwindow(dock)
+        return
+    dock.setUpdatesEnabled(False)
+    try:
+        dock.show()
+        dock.raise_()
+        _maximize_subwindow(dock)
+        widget = dock.widget()
+        if widget is not None:
+            widget.ensurePolished()
+            layout = widget.layout()
+            if layout is not None:
+                layout.activate()
+            render = getattr(widget, "render_now", None)
+            if callable(render):
+                render()
+    finally:
+        dock.setUpdatesEnabled(True)
+    dock.repaint()
+
+
 # ══ 校准 / 掩膜：参数坞按"不缩小中央 2D 图"拉宽（2026-11-14 用户口径）══
 # 用户要的是：校准页和掩膜页在 281 px 下太挤，但拉宽不能把中间的 2D 图
 # 挤小。2D 图按等比例画、居中，两侧本来就有空白——参数坞只吃这块空白，
