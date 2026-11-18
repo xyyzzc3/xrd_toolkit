@@ -60,6 +60,7 @@ class TestPhaseSet(unittest.TestCase):
         self.assertEqual(got.instrument.mode, "lab6")
         self.assertEqual(got.instrument.lab6_tif,
                          pset.instrument.lab6_tif)
+        self.assertEqual(got.adapter, "lmfp")
         self.assertEqual(got.views.table_columns,
                          pset.views.table_columns)
         self.assertIn("f_rich", got.views.table_columns)

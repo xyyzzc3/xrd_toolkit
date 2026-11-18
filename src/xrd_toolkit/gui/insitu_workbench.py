@@ -1,26 +1,24 @@
-"""原位三相批量中央工作台（2026-10-30）。
+"""原位多相批量中央工作台（2026-10-30；2026-11-18 统一为通用页面）。
 
 打开方式：工具栏 [原位]。与 [掩膜]、[精修]、[物相] 同一套中央 MDI
 子窗口：进入时收起参数坞和日志坞，退出只隐藏，选中的目录/参数/结果
 都留着。
 
-流程（引擎在 `simulation.insitu`，命令行 `scripts/fit_insitu.py` 共用）：
+一个页面、一份通用流程（引擎：`simulation.insitu_generic`）：
 
-    选帧目录与 mask → [开始]
-    → 后台准备（读三相 CIF + LaB₆ 定仪器，数秒）
-    → 逐帧后台精修：读图 → 积分 → 三相拟合 → 结果进表
-    → 右侧四个视图：趋势 / 汇总 / 单帧拟合 / 模型无关
+    选帧目录与掩膜 → 相表（默认空；[加 CIF…] 或顶部「方案」下拉）
+    → [开始]：后台准备（读相表 + 定仪器，数秒）
+    → 逐帧精修：读图 → 积分 → 全谱拟合 → 结果进表
+    → 右侧四个视图：趋势 / 汇总 / 单帧拟合 / 峰窗跟踪
     → 结束写 CSV 与 fit_summary.txt
 
-    单帧拟合（2026-11-02）：双击表格行看这一帧的观测/计算/背景 +
-    残差 + 布拉格刻度；[复制这一帧报告] 调 FitResult.report()。
-    [保存当前图…] 会按脚本同尺寸重画一张再存（Qt 画布会被拉成窗口
-    大小，直接存画布会低分辨率、挤在一起）。
+「方案」下拉只替换相表/策略/视图/仪器来源（通用（默认）/ LMFP 三相 /
+载入的方案 .json），不再另开界面。方案文件格式见
+`simulation.phase_set`（v2 多记 instrument 与 table_columns）。
 
-相分数口径：f_rich = A_rich / (A_rich + A_poor)，A_p = scale_p ×
-Σ(table.inten_p) × norm_p / 100，是**相对散射强度分数**；表里另有
-`wt rich%` / `wt poor%`（Rietveld 重量分数，只对晶态相；Al 单列，
-不进 LMFP 分母）。趋势图仍画 f_rich，两种口径别混着引用。
+分数口径：f_<相> = A_相 / ΣA_样品相，是**相对散射强度分数**；表里
+另有 `wt <相>%`（Rietveld 重量分数，只对晶态相；参考相单列、不进
+样品分母）。单帧拟合双击表格行；[保存当前图…] 按脚本同尺寸重画。
 """
 import csv
 import time
@@ -38,8 +36,11 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from xrd_toolkit import paths
+from xrd_toolkit.config import get_config
 from xrd_toolkit.gui.figure_appearance import (
     apply_figure_appearance, edit_figure_appearance)
+from xrd_toolkit.gui.insitu_phase_table import (
+    InsituPhaseTable, ROLE_SAMPLE)
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.plot_export import save_figure_with_options
@@ -47,9 +48,52 @@ from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, PROJECT_PRESET, resolve_mask_ref)
 
-_COLUMNS = ("帧", "文件", "状态", "Rwp %", "f_rich",
-            "wt rich%", "wt poor%", "rich a", "rich c", "poor a",
-            "poor c", "拟合 s")
+# 结果表列（2026-11-18 起跟随方案）：引擎列名 → 表头；方案里只记列名，
+# 没登记的按规则展开（wt_x → "wt x%"，rich_a → "rich a" …）。
+_COLUMN_LABELS = {
+    "frame": "帧", "file": "文件", "status": "状态", "rwp": "Rwp %",
+    "rp": "Rp %", "usable": "usable",
+    "f_rich": "f_rich", "wt_rich": "wt rich%", "wt_poor": "wt poor%",
+    "rich_a": "rich a", "rich_c": "rich c",
+    "poor_a": "poor a", "poor_c": "poor c",
+    "t_fit_s": "拟合 s", "t_total_s": "总 s",
+}
+
+
+def _column_label(key):
+    key = str(key)
+    if key in _COLUMN_LABELS:
+        return _COLUMN_LABELS[key]
+    if key.startswith("f_") and key.endswith("_esd"):
+        return f"{key[:-4]} esd"
+    if key.startswith("wt_"):
+        return f"wt {key[3:]}%"
+    if "_" in key:
+        return key.replace("_", " ")
+    return key
+
+
+def _cell_text(key, value):
+    """结果表单元格格式（沿用原来按列的小数位）。"""
+    if isinstance(value, str):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number != number:
+        return "—"
+    if key == "frame":
+        return str(int(number))
+    if key in ("rwp", "rp"):
+        return f"{number:.2f}"
+    if key.startswith("f_") or key.endswith("_esd"):
+        return f"{number:.3f}"
+    if key.startswith("wt_"):
+        return f"{number:.2f}"
+    if key.startswith("t_"):
+        return f"{number:.1f}"
+    return f"{number:.4f}"
 
 
 def _fmt(value, digits=3):
@@ -60,31 +104,23 @@ def _fmt(value, digits=3):
     return f"{value:.{digits}f}" if np.isfinite(value) else "—"
 
 
-def _prepare_worker(config_name, rich_path, poor_path, al_path, mask_path,
-                    lab6_path, max_rwp, first_nfev, frame_nfev, npt,
+def _prepare_worker(config_name, scheme, mask_path, saved_baseline,
+                    max_rwp, first_nfev, frame_nfev, npt,
                     tth_min, tth_max):
-    """后台准备：读结构 + LaB₆ 定仪器 + 读 mask，返回 InSituBatch。"""
+    """后台准备：按方案字典读结构/定仪器/读 mask，返回 batch。
+
+    scheme 是 `phase_set_to_dict()` 的形状；CIF 解析与 LaB₆ 定仪器都
+    留在后台线程（2026-11-18 起界面只拼字典）。
+    """
     try:
-        from xrd_toolkit.simulation.insitu import prepare_setup
-        from xrd_toolkit.simulation.insitu_generic import LMFPBatch
-        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        from xrd_toolkit.simulation.insitu_generic import prepare_batch
     except ImportError as err:
         raise RuntimeError(str(err)) from err
-    # 先用专用准备步骤定仪器/读标样（保留 LaB₆ 基线口径），批处理本身
-    # 已切到通用 N 相引擎 + LMFP 预设：结果/CSV/视图与旧路径同口径。
-    prepared = prepare_setup(
-        config_name, rich_path=rich_path, poor_path=poor_path,
-        al_path=al_path, mask_path=mask_path, lab6_tif=lab6_path,
-        max_rwp=max_rwp, first_nfev=first_nfev, frame_nfev=frame_nfev,
-        npt=npt, tth_min=tth_min, tth_max=tth_max)
-    inst = dict(getattr(prepared.instrument, "params", {}) or {})
-    pset = lmfp_phase_set(rich_path=rich_path, poor_path=poor_path,
-                          al_path=al_path)
-    return LMFPBatch(
-        [], prepared.geom, prepared.lam, instrument=inst,
-        mask=prepared.mask, phase_set=pset, max_rwp=max_rwp,
-        first_nfev=first_nfev, frame_nfev=frame_nfev,
-        npt=npt, tth_min=tth_min, tth_max=tth_max)
+    return prepare_batch(
+        config_name, scheme, mask_path=mask_path,
+        saved_baseline=saved_baseline, max_rwp=max_rwp,
+        first_nfev=first_nfev, frame_nfev=frame_nfev, npt=npt,
+        tth_min=tth_min, tth_max=tth_max)
 
 
 class InSituWorkbench(QWidget):
@@ -96,12 +132,9 @@ class InSituWorkbench(QWidget):
         self.setObjectName("insitu_workbench")
 
         try:
-            from xrd_toolkit.simulation.insitu import (
-                DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, LAB6_TIF,
-                frames_in_dir)
+            from xrd_toolkit.simulation.insitu import LAB6_TIF, frames_in_dir
             self._frames_in_dir = frames_in_dir
         except ImportError:
-            DEFAULT_RICH = DEFAULT_POOR = DEFAULT_AL = None
             LAB6_TIF = None
             self._frames_in_dir = lambda *a, **k: []
 
@@ -126,11 +159,17 @@ class InSituWorkbench(QWidget):
         # 预设的 mask 只在预设自己的几何下自动带；其它配置按不遮
         self.mask_path = self._mask_for_preset(
             preset, self.main.config_name)
-        self.phase_paths = {
-            "rich": Path(DEFAULT_RICH) if DEFAULT_RICH else None,
-            "poor": Path(DEFAULT_POOR) if DEFAULT_POOR else None,
-            "al": Path(DEFAULT_AL) if DEFAULT_AL else None,
-        }
+        # 当前方案（2026-11-18）：相表在界面上，策略/视图/仪器跟方案走。
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, InstrumentSpec, ViewConfig)
+        self._scheme_name = "通用多相"
+        self._scheme_policy = BatchPolicy.generic()
+        self._scheme_views = ViewConfig()
+        self._scheme_instrument = InstrumentSpec(mode="baseline")
+        self._scheme_adapter = ""
+        self._preview_phase_set = None   # 视图在没有批次时用（含相位颜色/窗口）
+        self._preset_index = 0        # 下拉当前应用过的项（取消替换时还原）
+        self._table_keys = ["frame", "file", "status", "rwp", "rp"]
         self.outdir = paths.default_outputs_dir() / "insitu"
         self.frames = []
         self._use_checked = False       # 帧来源 = 文件栏勾选
@@ -147,6 +186,7 @@ class InSituWorkbench(QWidget):
         self._fit_status = ""
         self._fit_file = ""
         self._fit_frich = float("nan")
+        self._fit_main_label = "phase"
         # 模型无关视图的按帧缓存：每次新帧/新批次清空
         self._mi_rows = None
         self._mi_len = -1
@@ -155,8 +195,7 @@ class InSituWorkbench(QWidget):
         self._build_ui()
         self._refresh_mask_label()
         self._refresh_data_label()
-        self._refresh_phase_labels()
-        self._refresh_lab6_label()
+        self._refresh_instrument_label()
         self._draw_trends()
 
     # ── 项目预设 ─────────────────────────────────────────────
@@ -222,16 +261,28 @@ class InSituWorkbench(QWidget):
             "（不用先进文件夹；只认原始图，同几何/同形状）")
         self.checked_btn.clicked.connect(self._use_checked_frames)
         top.addWidget(self.checked_btn)
-        # 一个入口内的"方案"：LMFP 三相（本页专用快速模式）/ 通用多相。
+        # 一个入口、一份通用页面：方案只替换相表/策略/视图，不另开界面。
         top.addWidget(QLabel("方案"))
         self.preset_combo = QComboBox()
         self.preset_combo.setObjectName("insitu_preset_combo")
+        self.preset_combo.addItem("通用（默认）", "generic")
         self.preset_combo.addItem("LMFP 三相", "lmfp")
-        self.preset_combo.addItem("通用多相", "generic")
         self.preset_combo.setToolTip(
-            "LMFP 三相 = 本页专用快速模式；通用多相 = 任意相角色的顺序精修")
+            "通用 = 自己加相；LMFP 三相 = 用内置三相当场替换相表、策略和"
+            "视图（页面不变）。方案只管相与拟合策略，数据目录与掩膜仍按"
+            "项目方案/本页选择。")
         self.preset_combo.activated.connect(self._on_preset_changed)
         top.addWidget(self.preset_combo)
+        self.save_scheme_btn = QPushButton("存方案…")
+        self.save_scheme_btn.setToolTip(
+            "把当前相表 + 策略 + 视图 + 仪器来源存成 .json 方案文件")
+        self.save_scheme_btn.clicked.connect(self._save_scheme)
+        top.addWidget(self.save_scheme_btn)
+        self.load_scheme_btn = QPushButton("载方案…")
+        self.load_scheme_btn.setToolTip(
+            "载入方案文件并当场替换相表；载入过的方案会留在下拉里")
+        self.load_scheme_btn.clicked.connect(self._load_scheme)
+        top.addWidget(self.load_scheme_btn)
         top.addStretch(1)
         self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
         self.mask_label.setStyleSheet("color: gray;")
@@ -250,6 +301,28 @@ class InSituWorkbench(QWidget):
         top.addWidget(self.mask_clear_btn)
         root.addLayout(top)
 
+        # 相表（全宽）：通用页面默认空表，LMFP 预设一键填三行。
+        phase_row = QHBoxLayout()
+        phase_row.setSpacing(6)
+        self.phase_table = InsituPhaseTable()
+        self.phase_table.setMaximumHeight(150)
+        phase_row.addWidget(self.phase_table, 1)
+        phase_side = QVBoxLayout()
+        phase_side.setSpacing(4)
+        for text, slot in (
+                ("加 CIF…", self._add_phases),
+                ("移除", self._remove_phase),
+                ("切换角色", self._toggle_phase_role),
+                ("改名…", self._rename_phase),
+                ("上移", lambda: self.phase_table.move_selected(-1)),
+                ("下移", lambda: self.phase_table.move_selected(1))):
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            phase_side.addWidget(btn)
+        phase_side.addStretch(1)
+        phase_row.addLayout(phase_side)
+        root.addLayout(phase_row)
+
         split = QSplitter(Qt.Horizontal)
         root.addWidget(split, 1)
 
@@ -264,41 +337,18 @@ class InSituWorkbench(QWidget):
         left_lay.setContentsMargins(2, 2, 8, 2)
         left_lay.setSpacing(6)
 
-        left_lay.addWidget(_section("三相结构"))
-        self.phase_labels = {}
-        for key, text in (("rich", "富锂相"), ("poor", "贫锂相"),
-                          ("al", "Al 参考相")):
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            row.addWidget(QLabel(text))
-            label = QLabel("—")
-            label.setStyleSheet("color: gray;")
-            label.setWordWrap(True)
-            label.setMinimumWidth(0)
-            label.setSizePolicy(QSizePolicy.Ignored,
-                                QSizePolicy.Preferred)
-            self.phase_labels[key] = label
-            row.addWidget(label, 1)
-            btn = QPushButton("换…")
-            btn.clicked.connect(
-                lambda _=False, k=key: self._choose_phase(k))
-            row.addWidget(btn)
-            left_lay.addLayout(row)
-
-        lab6_row = QHBoxLayout()
-        lab6_row.setSpacing(4)
-        lab6_row.addWidget(QLabel("LaB₆ 标样图"))
-        self.lab6_label = QLabel("未选")
-        self.lab6_label.setStyleSheet("color: gray;")
-        self.lab6_label.setWordWrap(True)
-        self.lab6_label.setMinimumWidth(0)
-        self.lab6_label.setSizePolicy(QSizePolicy.Ignored,
-                                      QSizePolicy.Preferred)
-        lab6_row.addWidget(self.lab6_label, 1)
-        lab6_btn = QPushButton("换…")
-        lab6_btn.clicked.connect(self._choose_lab6)
-        lab6_row.addWidget(lab6_btn)
-        left_lay.addLayout(lab6_row)
+        left_lay.addWidget(_section("仪器"))
+        self.instrument_label = QLabel("—")
+        self.instrument_label.setStyleSheet("color: gray;")
+        self.instrument_label.setWordWrap(True)
+        self.instrument_label.setMinimumWidth(0)
+        self.instrument_label.setSizePolicy(QSizePolicy.Ignored,
+                                            QSizePolicy.Preferred)
+        left_lay.addWidget(self.instrument_label)
+        self.lab6_btn = QPushButton("换标样帧…")
+        self.lab6_btn.setToolTip("LMFP 方案用标样帧现拟合仪器峰形（zero/U/V/W/X/Y）")
+        self.lab6_btn.clicked.connect(self._choose_lab6)
+        left_lay.addWidget(self.lab6_btn)
 
         left_lay.addWidget(_section("参数"))
         self.max_rwp = QDoubleSpinBox()
@@ -380,11 +430,11 @@ class InSituWorkbench(QWidget):
         self.copy_report_btn.setEnabled(False)
         self.copy_report_btn.clicked.connect(self._copy_fit_report)
         left_lay.addWidget(self.copy_report_btn)
-        hint = QLabel("双击表格行看单帧拟合；f_rich 是相对散射强度分数，"
-                      "看趋势用；wt rich% / wt poor% 是晶态相的 Rietveld "
-                      "重量分数（Al 单列、不进两相分母）。多数帧只跑一次"
-                      "（种子收敛就采用），通常几秒/帧，两相区更慢；"
-                      "晶胞只在相占多数时可信。")
+        hint = QLabel("双击表格行看单帧拟合；f_相 是相对散射强度分数，"
+                      "看趋势用；wt 相% 是晶态相的 Rietveld 重量分数"
+                      "（不计入分数的相单列）。多数帧只跑一次（种子收敛"
+                      "就采用），通常几秒/帧，两相区更慢；晶胞只在相占"
+                      "多数时可信。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         hint.setMinimumWidth(0)
@@ -419,8 +469,9 @@ class InSituWorkbench(QWidget):
         self.view_tabs.currentChanged.connect(self._on_view_changed)
         right.addWidget(self.view_tabs)
 
-        self.table = QTableWidget(0, len(_COLUMNS))
-        self.table.setHorizontalHeaderLabels(list(_COLUMNS))
+        self.table = QTableWidget(0, len(self._table_keys))
+        self.table.setHorizontalHeaderLabels(
+            [_column_label(k) for k in self._table_keys])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -489,32 +540,232 @@ class InSituWorkbench(QWidget):
             f"{self.data_dir}（{len(self.frames)} 帧）")
         self.data_label.setToolTip(str(self.data_dir))
 
+    # ── 方案（相表 + 策略 + 视图 + 仪器） ─────────────────────
     def _on_preset_changed(self, _index):
-        if self.preset_combo.currentData() == "generic":
-            self._open_generic_dialog()
-        else:
-            dlg = getattr(self.main, "_generic_insitu_dialog", None)
-            if dlg is not None:
-                dlg.close()
+        """下拉选中 = 当场替换页面内容（不再另开界面）。"""
+        if self.phase_table.dirty and not self.phase_table.is_empty():
+            from PySide6.QtWidgets import QMessageBox
+            answer = QMessageBox.question(
+                self, "替换方案",
+                "当前相表有未保存的修改，替换会丢掉这些改动。继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self._sync_preset_combo()
+                return
+        data = self.preset_combo.currentData()
+        if data == "generic":
+            self._apply_generic_scheme()
+        elif data == "lmfp":
+            from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+            self._apply_phase_set(lmfp_phase_set())
+        elif isinstance(data, tuple) and data[0] == "scheme":
+            self._load_scheme_path(Path(data[1]))
+        self._preset_index = self.preset_combo.currentIndex()
 
-    def _sync_preset_combo(self, generic_open: bool):
+    def _sync_preset_combo(self):
         self.preset_combo.blockSignals(True)
-        self.preset_combo.setCurrentIndex(1 if generic_open else 0)
+        self.preset_combo.setCurrentIndex(self._preset_index)
         self.preset_combo.blockSignals(False)
 
-    def _open_generic_dialog(self):
-        """打开通用多相入口（2026-11-11 用户第 14 条）。"""
-        from xrd_toolkit.gui.insitu_generic_dialog import GenericInsituDialog
-        dlg = getattr(self.main, "_generic_insitu_dialog", None)
-        if dlg is not None:
-            dlg.raise_()
-            dlg.activateWindow()
-            self._sync_preset_combo(True)
+    def _apply_generic_scheme(self):
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, InstrumentSpec, ViewConfig)
+        self._scheme_name = "通用多相"
+        self._scheme_policy = BatchPolicy.generic()
+        self._scheme_views = ViewConfig()
+        self._scheme_instrument = InstrumentSpec(mode="baseline")
+        self._scheme_adapter = ""
+        self._preview_phase_set = None
+        self.phase_table.load([])
+        self._reset_run()
+        self._set_table_columns([])
+        self._apply_policy_to_controls()
+        self._refresh_instrument_label()
+        self._set_status("方案：通用（相表为空，先 [加 CIF…]）")
+
+    def _apply_phase_set(self, pset):
+        from xrd_toolkit.simulation.phase_set import spec_to_dict
+        self._scheme_name = pset.name
+        self._scheme_policy = pset.policy
+        self._scheme_views = pset.views
+        self._scheme_instrument = pset.instrument
+        self._scheme_adapter = pset.adapter
+        self._preview_phase_set = pset
+        self.phase_table.load([spec_to_dict(p) for p in pset.phases])
+        lab6 = str(pset.instrument.lab6_tif or "")
+        self.lab6_path = (
+            Path(lab6) if lab6 and Path(lab6).is_file() else None)
+        self._reset_run()
+        self._set_table_columns(list(pset.views.table_columns))
+        self._apply_policy_to_controls()
+        self._refresh_instrument_label()
+        self._set_status(f"方案：{pset.name}（{len(pset.phases)} 相）")
+
+    def _apply_policy_to_controls(self):
+        self.max_rwp.setValue(float(self._scheme_policy.max_rwp))
+        self.first_nfev.setValue(int(self._scheme_policy.first_nfev))
+        self.frame_nfev.setValue(int(self._scheme_policy.frame_nfev))
+
+    def _current_policy(self):
+        from dataclasses import replace
+        return replace(
+            self._scheme_policy,
+            max_rwp=float(self.max_rwp.value()),
+            first_nfev=int(self.first_nfev.value()),
+            frame_nfev=int(self.frame_nfev.value()))
+
+    def _instrument_for_run(self):
+        from dataclasses import replace
+        if self._scheme_instrument.mode == "lab6":
+            return replace(
+                self._scheme_instrument,
+                lab6_tif=str(self.lab6_path) if self.lab6_path else "")
+        return self._scheme_instrument
+
+    def _refresh_instrument_label(self):
+        mode = self._scheme_instrument.mode
+        if mode == "lab6":
+            name = self.lab6_path.name if self.lab6_path else "未选"
+            self.instrument_label.setText(f"标样帧现拟合：{name}")
+            self.instrument_label.setToolTip(
+                str(self.lab6_path) if self.lab6_path else
+                "LMFP 方案需要一张 LaB₆ 标样帧来定仪器峰形")
+            self.lab6_btn.setVisible(True)
             return
-        dlg = GenericInsituDialog(self.main, self)
-        self.main._generic_insitu_dialog = dlg
-        self._sync_preset_combo(True)
-        dlg.show()
+        self.lab6_btn.setVisible(False)
+        self.instrument_label.setToolTip("")
+        if mode == "none":
+            self.instrument_label.setText("不固定（只精修零位）")
+            return
+        record = getattr(self.main, "instrument_baseline", None) or {}
+        try:
+            wavelength = float(record.get("wavelength"))
+        except (TypeError, ValueError):
+            wavelength = float("nan")
+        try:
+            current = float(
+                get_config(self.main.config_name)["geometry"]["wavelength_m"]
+            ) * 1e10
+        except (KeyError, TypeError, ValueError):
+            current = float("nan")
+        if wavelength == wavelength and abs(wavelength - current) <= 0.01:
+            self.instrument_label.setText(
+                f"已保存基线（λ {wavelength:.4f} Å）")
+        else:
+            self.instrument_label.setText("无可用基线（只精修零位）")
+
+    def _set_table_columns(self, keys):
+        """结果表列：方案给了就按方案（LMFP 紧凑 12 列），空 = 基础列。"""
+        keys = [str(k) for k in (keys or ())]
+        self._table_keys = keys or ["frame", "file", "status", "rwp", "rp"]
+        self.table.setColumnCount(len(self._table_keys))
+        self.table.setHorizontalHeaderLabels(
+            [_column_label(k) for k in self._table_keys])
+
+    def _reset_run(self):
+        self.batch = None
+        self._batch_meta = None
+        self.table.setRowCount(0)
+        self._clear_fit_view()
+        self._mi_rows = None
+        self._mi_len = -1
+        self._appearances = [{}, {}, {}, {}]
+        self._draw_trends()
+        self._draw_summary()
+        self._draw_model_independent()
+
+    # ── 相表按钮 / 方案文件 ───────────────────────────────────
+    def _add_phases(self):
+        start = (paths.phase_library_dir()
+                 if paths.phase_library_dir().is_dir()
+                 else paths.structures_dir())
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "加 CIF（默认样品相，可再切换角色）", str(start),
+            "CIF (*.cif);;所有文件 (*)")
+        added = self.phase_table.add_paths(files)
+        if added:
+            self._set_status(f"加了 {added} 相")
+
+    def _remove_phase(self):
+        if self.phase_table.remove_selected():
+            self._set_status("移除了一相")
+
+    def _toggle_phase_role(self):
+        if self.phase_table.toggle_role():
+            self._set_status("已切换角色（参考相默认固定晶胞 + Le Bail + 不进分母）")
+
+    def _rename_phase(self):
+        self.phase_table.rename_selected(self)
+
+    def _save_scheme(self):
+        phases = self.phase_table.phases()
+        if not phases:
+            self._set_status("相表为空，没有可保存的方案")
+            return
+        start = str(Path.home() / "Data" / "XRD" / "insitu_scheme.json")
+        name, _ = QFileDialog.getSaveFileName(
+            self, "保存原位方案", start, "方案 (*.json);;所有文件 (*)")
+        if not name:
+            return
+        path = Path(name)
+        if path.suffix.lower() != ".json":
+            path = path.with_suffix(".json")
+        try:
+            from xrd_toolkit.simulation.phase_set import (
+                PhaseSet, save_phase_set, spec_from_path)
+            specs = []
+            for phase in phases:
+                fields = {k: v for k, v in phase.items() if k != "path"}
+                specs.append(spec_from_path(phase["path"], **fields))
+            pset = PhaseSet(
+                name=path.stem, phases=specs,
+                policy=self._current_policy(), views=self._scheme_views,
+                instrument=self._instrument_for_run(),
+                adapter=self._scheme_adapter)
+            save_phase_set(pset, path)
+        except Exception as err:                    # noqa: BLE001
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "保存方案失败", str(err))
+            return
+        self.phase_table.dirty = False
+        self._add_scheme_item(path, name=path.stem, select=True)
+        self._set_status(f"方案已保存：{path}")
+        _log(self.main, f"原位方案已保存：{path}")
+
+    def _load_scheme(self):
+        start = str(Path.home() / "Data" / "XRD")
+        name, _ = QFileDialog.getOpenFileName(
+            self, "载入原位方案", start, "方案 (*.json);;所有文件 (*)")
+        if not name:
+            return
+        self._load_scheme_path(Path(name))
+
+    def _load_scheme_path(self, path):
+        try:
+            from xrd_toolkit.simulation.phase_set import load_phase_set
+            pset = load_phase_set(path)
+        except Exception as err:                    # noqa: BLE001
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "载入方案失败", str(err))
+            return
+        self._apply_phase_set(pset)
+        self._add_scheme_item(Path(path), name=Path(path).stem, select=True)
+        self.phase_table.dirty = False
+        self._set_status(
+            f"已载入方案：{Path(path).name}（{len(pset.phases)} 相）")
+        _log(self.main, f"原位方案已载入：{path}")
+
+    def _add_scheme_item(self, path, name=None, select=False):
+        key = ("scheme", str(path))
+        idx = self.preset_combo.findData(key)
+        if idx < 0:
+            self.preset_combo.addItem(str(name or Path(path).stem), key)
+            idx = self.preset_combo.count() - 1
+        if select:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentIndex(idx)
+            self.preset_combo.blockSignals(False)
+            self._preset_index = idx
 
     def _choose_data(self):
         chosen = QFileDialog.getExistingDirectory(
@@ -565,24 +816,6 @@ class InSituWorkbench(QWidget):
         self.mask_path = None
         self._refresh_mask_label()
 
-    def _choose_phase(self, key):
-        start = paths.structures_dir()
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 CIF 结构", str(start), "CIF (*.cif);;所有文件 (*)")
-        if not path:
-            return
-        self.phase_paths[key] = Path(path)
-        self._refresh_phase_labels()
-
-    def _refresh_phase_labels(self):
-        for key, label in self.phase_labels.items():
-            path = self.phase_paths.get(key)
-            name = path.stem if path else "未选"
-            if len(name) > 18:
-                name = name[:17] + "…"
-            label.setText(name)
-            label.setToolTip(str(path) if path else "")
-
     def _choose_lab6(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 LaB₆ 标样帧", str(self.data_dir),
@@ -590,17 +823,7 @@ class InSituWorkbench(QWidget):
         if not path:
             return
         self.lab6_path = Path(path)
-        self._refresh_lab6_label()
-
-    def _refresh_lab6_label(self):
-        path = self.lab6_path
-        name = path.name if path else "未选"
-        if len(name) > 18:
-            name = name[:17] + "…"
-        self.lab6_label.setText(name)
-        self.lab6_label.setToolTip(
-            str(path) if path else
-            "原位工作台需要一张 LaB₆ 标样帧来定仪器峰形")
+        self._refresh_instrument_label()
 
     def _choose_outdir(self):
         chosen = QFileDialog.getExistingDirectory(
@@ -619,12 +842,15 @@ class InSituWorkbench(QWidget):
         if not self.frames:
             self._set_status("先选一个包含 .tif 的文件夹，或点 [用勾选的原始数据]")
             return
-        for key, text in (("rich", "富锂相"), ("poor", "贫锂相"),
-                          ("al", "Al 参考相")):
-            if not self.phase_paths.get(key):
-                self._set_status(f"先给{text}选一张 CIF")
-                return
-        if self.lab6_path is None:
+        phases = self.phase_table.phases()
+        if not phases:
+            self._set_status("相表是空的：先 [加 CIF…] 至少加一张相")
+            return
+        if not any(p.get("role") == ROLE_SAMPLE for p in phases):
+            self._set_status("至少要有一相是「样品相」（不能全是参考相）")
+            return
+        if (self._scheme_instrument.mode == "lab6"
+                and self.lab6_path is None):
             self._set_status("先选一张 LaB₆ 标样帧（用来定仪器峰形）")
             return
         self._stop = False
@@ -636,11 +862,13 @@ class InSituWorkbench(QWidget):
                          else ""),
             "source": "checked" if self._use_checked else "folder",
             "mask": str(self.mask_path) if self.mask_path else "",
-            "phases": {key: str(path)
-                       for key, path in self.phase_paths.items() if path},
+            "scheme": self._scheme_name,
+            "phases": [str(p.get("path") or "") for p in phases],
             "lab6": str(self.lab6_path) if self.lab6_path else "",
         }
         self.table.setRowCount(0)
+        self._set_table_columns(
+            list(getattr(self._scheme_views, "table_columns", ()) or ()))
         self._clear_fit_view()
         self._mi_rows = None
         self._mi_len = -1
@@ -652,9 +880,13 @@ class InSituWorkbench(QWidget):
         self.stop_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
         self._show_progress(len(self.frames), 0)
-        self._set_status("准备中（读结构 + LaB₆ 定仪器）…")
+        if self._scheme_instrument.mode == "lab6":
+            self._set_status("准备中（读结构 + LaB₆ 定仪器）…")
+        else:
+            self._set_status("准备中（读结构 + 仪器基线）…")
         where = ("文件栏勾选" if self._use_checked else str(self.data_dir))
-        _log(self.main, f"原位批量：{where}（{len(self.frames)} 帧）")
+        _log(self.main, f"原位批量：{where}（{len(self.frames)} 帧，"
+                        f"方案「{self._scheme_name}」）")
 
         task = None
 
@@ -673,14 +905,23 @@ class InSituWorkbench(QWidget):
             self._set_status(f"准备失败：{message}")
             _log(self.main, f"原位批量准备失败：{message}")
 
+        from dataclasses import asdict
+        policy = self._current_policy()
+        scheme = {
+            "version": 2,
+            "name": self._scheme_name,
+            "adapter": self._scheme_adapter,
+            "policy": asdict(policy),
+            "views": asdict(self._scheme_views),
+            "instrument": asdict(self._instrument_for_run()),
+            "phases": phases,
+        }
         task = BackgroundTask(
-            _prepare_worker, self.main.config_name,
-            str(self.phase_paths["rich"]), str(self.phase_paths["poor"]),
-            str(self.phase_paths["al"]),
+            _prepare_worker, self.main.config_name, scheme,
             (str(self.mask_path) if self.mask_path else None),
-            str(self.lab6_path),
-            float(self.max_rwp.value()), int(self.first_nfev.value()),
-            int(self.frame_nfev.value()), int(self.npt.value()),
+            getattr(self.main, "instrument_baseline", None),
+            float(policy.max_rwp), int(policy.first_nfev),
+            int(policy.frame_nfev), int(self.npt.value()),
             float(self.tth_min.value()), float(self.tth_max.value()),
             on_done=done, on_error=error)
         self._task = task
@@ -689,6 +930,16 @@ class InSituWorkbench(QWidget):
 
     def _on_prepared(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
+        # 列：方案指定了就用方案的顺序；没指定用引擎给的全部列。
+        try:
+            all_keys = list(self.batch.columns())
+        except AttributeError:                 # 测试里的假 batch
+            all_keys = []
+        wanted = list(getattr(
+            getattr(getattr(self.batch, "phase_set", None), "views", None),
+            "table_columns", ()) or ())
+        keys = [k for k in wanted if k in all_keys] if all_keys else wanted
+        self._set_table_columns(keys or all_keys)
         self._set_status("已就绪，开始逐帧精修…")
         self._start_next()
 
@@ -735,10 +986,13 @@ class InSituWorkbench(QWidget):
         if self.view_tabs.currentIndex() != 0:
             self._refresh_active_view()
         self._write_csv()
+        label = self._main_label()
+        fraction = row.get(f"f_{label}", row.get("f_rich", float("nan")))
+        weight = row.get(f"wt_{label}", row.get("wt_rich", float("nan")))
         self._set_status(
             f"第 {row['frame']}/{len(self.frames)} 帧：{row['status']}  "
-            f"Rwp {_fmt(row['rwp'])}%  f_rich {_fmt(row['f_rich'])}  "
-            f"wt {_fmt(row.get('wt_rich', float('nan')), 1)}%")
+            f"Rwp {_fmt(row['rwp'])}%  f_{label} {_fmt(fraction)}  "
+            f"wt {_fmt(weight, 1)}%")
         self._start_next()
 
     def _stop_run(self):
@@ -756,7 +1010,8 @@ class InSituWorkbench(QWidget):
             try:
                 from xrd_toolkit.simulation.insitu import write_summary
                 write_summary(self.outdir, self.batch.rows,
-                              self.batch.mask is not None)
+                              self.batch.mask is not None,
+                              phase_set=self._phase_set())
             except OSError as err:                 # noqa: BLE001
                 _log(self.main, f"摘要写入失败：{user_error_text(err)}")
         usable = (sum(1 for r in (self.batch.rows if self.batch else [])
@@ -771,24 +1026,15 @@ class InSituWorkbench(QWidget):
         table = self.table
         i = table.rowCount()
         table.insertRow(i)
-        values = (
-            str(row["frame"]), row["file"], row["status"],
-            _fmt(row["rwp"], 2), _fmt(row["f_rich"], 3),
-            _fmt(row.get("wt_rich", float("nan")), 2),
-            _fmt(row.get("wt_poor", float("nan")), 2),
-            _fmt(row["rich_a"], 4), _fmt(row["rich_c"], 4),
-            _fmt(row["poor_a"], 4), _fmt(row["poor_c"], 4),
-            _fmt(row["t_fit_s"], 1),
-        )
-        status = str(row["status"])
-        for col, text in enumerate(values):
-            item = QTableWidgetItem(text)
-            if col not in (1, 2):
+        status = str(row.get("status", ""))
+        for col, key in enumerate(self._table_keys):
+            item = QTableWidgetItem(_cell_text(key, row.get(key, "")))
+            if key not in ("file", "status"):
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if col == 2 and (status.startswith("error")
-                             or status.startswith("high_rwp")):
+            if key == "status" and (status.startswith("error")
+                                    or status.startswith("high_rwp")):
                 item.setForeground(QBrush(QColor("#c0392b")))
-            elif col == 2 and status != "ok":
+            elif key == "status" and status != "ok":
                 item.setForeground(QBrush(QColor("#b7791f")))
             table.setItem(i, col, item)
         table.scrollToBottom()
@@ -824,9 +1070,19 @@ class InSituWorkbench(QWidget):
             self._draw_model_independent()
 
     def _phase_set(self):
-        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        """视图用的方案：真实批次自带；没有就用手上这份预览。"""
         return (getattr(self.batch, "phase_set", None)
-                or lmfp_phase_set())
+                or getattr(self, "_preview_phase_set", None))
+
+    def _main_label(self):
+        """主相标签（第一条样品相）：状态行/单帧标题用它。"""
+        pset = self._phase_set()
+        if pset is not None and pset.sample_phases():
+            return pset.sample_phases()[0].label
+        for phase in self.phase_table.phases():
+            if phase.get("role") == ROLE_SAMPLE:
+                return phase.get("label") or "phase"
+        return "phase"
 
     def _draw_trends(self):
         from xrd_toolkit.simulation.insitu_multi_plots import (
@@ -846,8 +1102,9 @@ class InSituWorkbench(QWidget):
 
     def _fit_title(self):
         total = len(self.frames) or self._fit_frame
+        label = getattr(self, "_fit_main_label", "phase")
         return (f"{self._fit_file} — frame {self._fit_frame}/{total}, "
-                f"f_rich={_fmt(self._fit_frich)}, "
+                f"f_{label}={_fmt(self._fit_frich)}, "
                 f"Rwp={self._fit_res.rwp:.2f}% ({self._fit_status})")
 
     def _draw_fit(self):
@@ -899,18 +1156,19 @@ class InSituWorkbench(QWidget):
         if entry is None:
             self._set_status(f"第 {frame} 帧没有拟合结果（看状态列）")
             return
-        i, path, res, f_rich, status = entry
+        i, path, res, fraction, status = entry
         self._fit_frame = i
         self._fit_res = res
         self._fit_status = status
         self._fit_file = Path(path).name
-        self._fit_frich = float(f_rich)
+        self._fit_frich = float(fraction)
+        self._fit_main_label = self._main_label()
         self.copy_report_btn.setEnabled(True)
         self.view_tabs.setCurrentWidget(self.fit_canvas)
         self._draw_fit()
         self._set_status(
             f"第 {i} 帧：{status}  Rwp {res.rwp:.2f}%  "
-            f"f_rich {_fmt(f_rich)}")
+            f"f_{self._fit_main_label} {_fmt(fraction)}")
 
     def _on_cell_double_clicked(self, row, _col):
         if self.batch is None or row < 0 or row >= len(self.batch.rows):
@@ -996,7 +1254,11 @@ class InSituWorkbench(QWidget):
         rows = (sorted({i.row() for i in model.selectedRows()})
                 if selected_only and model is not None
                 else list(range(self.table.rowCount())))
-        lines = ["\t".join(_COLUMNS)]
+        lines = ["\t".join(
+            (self.table.horizontalHeaderItem(col).text()
+             if self.table.horizontalHeaderItem(col) is not None
+             else str(col))
+            for col in range(self.table.columnCount()))]
         for row in rows:
             values = []
             for col in range(self.table.columnCount()):

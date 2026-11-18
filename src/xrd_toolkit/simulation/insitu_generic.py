@@ -25,7 +25,8 @@ import numpy as np
 
 from xrd_toolkit.simulation import b_iso_from_cif, fit_pattern, load_structure
 from xrd_toolkit.simulation.phase_set import (
-    BatchPolicy, PhaseSet, PhaseSpec, REFERENCE, SAMPLE, _safe_label)
+    BatchPolicy, PhaseSet, PhaseSpec, REFERENCE, SAMPLE, _safe_label,
+    phase_set_from_dict)
 from xrd_toolkit.simulation.insitu import frames_in_dir, load_frame
 from xrd_toolkit.services.mask import load_mask
 
@@ -587,6 +588,62 @@ def load_mask_file(path):
     if not path:
         return None
     return load_mask(Path(path).expanduser())
+
+
+def resolve_instrument(spec, geom, lam, saved_baseline=None):
+    """按方案的仪器来源解析峰形参数；None = 只精修零位。
+
+    spec 是 `phase_set.InstrumentSpec`：
+      * lab6     —— 用标样帧现拟合（LMFP 金标准口径）；
+      * baseline —— 用窗口里保存的仪器基线，λ 不符就退回 None；
+      * none     —— 不固定。
+    返回 zero/U/V/W/X/Y 的 dict（与 `prepare_setup` 同口径）。
+    """
+    mode = str(getattr(spec, "mode", "baseline") or "baseline")
+    if mode == "lab6":
+        # `_instrument` 是旧准备步骤里定仪器的那一段，LMFP 金标准用的
+        # 就是它；这里直接复用，保证数值逐位一致。
+        from xrd_toolkit.simulation.insitu import _instrument
+        fitted = _instrument(
+            geom, lam,
+            lab6_tif=(getattr(spec, "lab6_tif", None) or None),
+            lab6_cif=(getattr(spec, "lab6_cif", None) or None))
+        if fitted is None:
+            raise RuntimeError("没有 LaB₆ 标样图，无法固定仪器峰形")
+        return dict(getattr(fitted, "params", {}) or {})
+    if mode == "none":
+        return None
+    try:
+        wl = float((saved_baseline or {}).get("wavelength"))
+    except (TypeError, ValueError):
+        return None
+    if abs(wl - float(lam)) > 0.01:
+        return None
+    params = (saved_baseline or {}).get("params")
+    return dict(params) if isinstance(params, dict) else None
+
+
+def prepare_batch(config_name, scheme, *, mask_path=None, saved_baseline=None,
+                  max_rwp=20.0, first_nfev=120, frame_nfev=120, npt=3000,
+                  tth_min=1.0, tth_max=8.0):
+    """按方案字典准备一批：读 CIF、定仪器、读掩膜 → GenericBatch。
+
+    scheme 是 `phase_set_to_dict()` 的形状（JSON 友好），所以调用方
+    可以在界面线程只拼字典，CIF 解析留给后台线程。LMFP 预设带
+    adapter="lmfp" 时用 LMFPBatch（补旧 CSV 字段）。
+    """
+    from xrd_toolkit.config import get_config
+    geom = dict(get_config(config_name)["geometry"])
+    lam = float(geom["wavelength_m"]) * 1e10
+    pset = phase_set_from_dict(scheme)
+    instrument = resolve_instrument(pset.instrument, geom, lam,
+                                    saved_baseline)
+    mask = load_mask_file(mask_path) if mask_path else None
+    batch_cls = LMFPBatch if pset.adapter == "lmfp" else GenericBatch
+    return batch_cls(
+        [], geom, lam, instrument=instrument, mask=mask,
+        max_rwp=max_rwp, phase_set=pset, first_nfev=first_nfev,
+        frame_nfev=frame_nfev, npt=npt, tth_min=tth_min, tth_max=tth_max)
 
 
 class LMFPBatch(GenericBatch):

@@ -559,8 +559,12 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
     }
 
 
-def write_summary(outdir, rows, mask_on):
-    """把批处理摘要写到 outdir/fit_summary.txt。"""
+def write_summary(outdir, rows, mask_on, phase_set=None):
+    """把批处理摘要写到 outdir/fit_summary.txt。
+
+    phase_set 给定时按方案的相名写标题与分数说明（通用页面）；
+    不给时保持原来的 LMFP 三相措辞（命令行/旧脚本照旧）。
+    """
     strict = [r for r in rows if r["status"] == "ok"]
     soft = [r for r in rows if r["status"] == "ok_soft"]
     usable = [r for r in rows if r.get("usable")]
@@ -572,8 +576,26 @@ def write_summary(outdir, rows, mask_on):
     for r in rows:
         key = r["status"].split("(", 1)[0]
         status[key] = status.get(key, 0) + 1
+    if phase_set is not None:
+        title = (f"=== {getattr(phase_set, 'name', 'in-situ')} "
+                 "in-situ batch ===")
+        labels = [p.label for p in phase_set.sample_phases()]
+        frac_note = (
+            "phase fractions: "
+            + ", ".join(f"f_{label}" for label in labels)
+            + " = relative scattering intensity; "
+            + "/".join(f"wt_{label}" for label in labels)
+            + " = Rietveld wt% (crystalline phases only; reference "
+            "phases are reported separately).")
+    else:
+        title = "=== LMFP in-situ three-phase batch ==="
+        labels = ["rich", "poor"]
+        frac_note = (
+            "phase fractions: f_rich = relative scattering intensity; "
+            "wt_rich/wt_poor = Rietveld wt% (crystalline phases only; "
+            "Al is reported separately and excluded from the LMFP denominator).")
     lines = [
-        "=== LMFP in-situ three-phase batch ===",
+        title,
         f"frames: {n}",
         f"strict ok: {len(strict)}  ok_soft: {len(soft)}  "
         f"others: {n - len(strict) - len(soft)}",
@@ -588,11 +610,10 @@ def write_summary(outdir, rows, mask_on):
         "  (ok_soft = optimizer exit flag, Rwp/phase fractions still good)",
         f"2x frames estimate: {2 * total / 60.0:.1f} min"
         " (linear; integration and fit both scale with N)",
-        "phase fractions: f_rich = relative scattering intensity; "
-        "wt_rich/wt_poor = Rietveld wt% (crystalline phases only; "
-        "Al is reported separately and excluded from the LMFP denominator).",
+        frac_note,
     ]
-    for key, label in (("wt_rich", "rich"), ("wt_poor", "poor")):
+    for label in labels:
+        key = f"wt_{label}"
         vals = [float(r.get(key, float("nan"))) for r in rows]
         vals = [v for v in vals if math.isfinite(v)]
         if vals:

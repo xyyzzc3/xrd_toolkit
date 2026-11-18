@@ -164,6 +164,9 @@ class PhaseSet:
     policy: BatchPolicy = field(default_factory=BatchPolicy.generic)
     views: ViewConfig = field(default_factory=ViewConfig)
     instrument: InstrumentSpec = field(default_factory=InstrumentSpec)
+    # 报告口径适配器："" = 通用引擎的字段；"lmfp" = 额外补
+    # wt_al / al_a / al_ref 与旧公式的 f_rich_esd（CSV/脚本沿用）。
+    adapter: str = ""
 
     def sample_phases(self) -> list:
         return [p for p in self.phases if p.is_sample()]
@@ -275,10 +278,18 @@ def lmfp_phase_set(rich_path=None, poor_path=None, al_path=None):
         mode="lab6", lab6_tif=str(lab6) if lab6.is_file() else "")
     return PhaseSet(name="LMFP 三相", phases=[rich, poor, al],
                     policy=BatchPolicy.lmfp(), views=views,
-                    instrument=instrument)
+                    instrument=instrument, adapter="lmfp")
 
 
 # ── 方案文件（2026-11-17）：PhaseSet/ViewConfig 持久化 ──────────────
+def spec_to_dict(phase):
+    """一相 → JSON 友好的字段字典（结构只留路径）。"""
+    item = {f.name: getattr(phase, f.name) for f in fields(phase)
+            if f.name != "structure"}
+    item["path"] = str(phase.path) if phase.path else ""
+    return item
+
+
 def phase_set_to_dict(phase_set):
     """序列化为 JSON 友好 dict；结构只存 CIF 路径，不内嵌原子坐标。
 
@@ -289,16 +300,12 @@ def phase_set_to_dict(phase_set):
     out = {
         "version": 2,
         "name": phase_set.name,
+        "adapter": phase_set.adapter,
         "policy": asdict(phase_set.policy),
         "views": asdict(phase_set.views),
         "instrument": asdict(phase_set.instrument),
-        "phases": [],
+        "phases": [spec_to_dict(phase) for phase in phase_set.phases],
     }
-    for phase in phase_set.phases:
-        item = {f.name: getattr(phase, f.name) for f in fields(phase)
-                if f.name != "structure"}
-        item["path"] = str(phase.path)
-        out["phases"].append(item)
     return out
 
 
@@ -313,6 +320,11 @@ def phase_set_from_dict(data):
         values = {f.name: item[f.name] for f in fields(PhaseSpec)
                   if f.name in item and f.name not in ("structure", "path")}
         values["path"] = path
+        if values.get("b_iso") is None:
+            # 相表里新加的相留 b_iso=None（意思是"读 CIF 的 Uiso"）；
+            # PhaseSpec 要的是数字，这里解析一次（与 spec_from_path 同口径）。
+            from xrd_toolkit.simulation import b_iso_from_cif
+            values["b_iso"] = b_iso_from_cif(str(path)) or 0.0
         if values.get("cell0") is not None:
             values["cell0"] = tuple(values["cell0"])
         if values.get("cell_bounds"):
@@ -339,7 +351,8 @@ def phase_set_from_dict(data):
     instrument = InstrumentSpec(**(data.get("instrument") or {}))
     return PhaseSet(name=str(data.get("name") or "insitu 方案"),
                     phases=phases, policy=policy, views=views,
-                    instrument=instrument)
+                    instrument=instrument,
+                    adapter=str(data.get("adapter") or ""))
 
 
 def save_phase_set(phase_set, path):

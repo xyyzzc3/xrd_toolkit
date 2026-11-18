@@ -194,6 +194,7 @@ class TestInSituWorkbench(unittest.TestCase):
             data.mkdir()
             for i in (1, 2, 3):
                 (data / f"frame_{i:03d}.tif").write_bytes(b"")
+            self._apply_lmfp(editor)
             editor.data_dir = data
             editor.outdir = folder / "out"
             editor.limit.setValue(3)
@@ -222,11 +223,19 @@ class TestInSituWorkbench(unittest.TestCase):
                 (folder / "out" / "fit_summary.txt").is_file())
             self.assertGreaterEqual(len(editor.fig.axes), 2)
 
+    def _apply_lmfp(self, editor):
+        """默认是通用空相表（2026-11-18）：跑批前先选 LMFP 预设。"""
+        combo = editor.preset_combo
+        combo.setCurrentIndex(combo.findData("lmfp"))
+        combo.activated.emit(combo.currentIndex())
+        QApplication.processEvents()
+
     def _run_fake_batch(self, editor, folder):
         data = folder / "data"
         data.mkdir()
         for i in (1, 2, 3):
             (data / f"frame_{i:03d}.tif").write_bytes(b"")
+        self._apply_lmfp(editor)
         editor.data_dir = data
         editor.outdir = folder / "out"
         editor.limit.setValue(3)

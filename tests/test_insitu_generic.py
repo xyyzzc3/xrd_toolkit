@@ -111,6 +111,42 @@ class TestGenericEngine(unittest.TestCase):
         self.assertAlmostEqual(fracs["poor"], 50.0 / 150.0, places=6)
         self.assertFalse(math.isfinite(fracs["Al"]), "参考相不进分母")
 
+    def test_prepare_batch_from_scheme(self):
+        scheme = {
+            "name": "demo", "adapter": "", "policy": {}, "views": {},
+            "instrument": {"mode": "none"},
+            "phases": [{"path": str(RICH), "label": "demo",
+                        "role": "sample", "width_free": False,
+                        "size_um": 0.2}],
+        }
+        batch = gen.prepare_batch("lmfp1_lab6", scheme)
+        self.assertIsInstance(batch, gen.GenericBatch)
+        self.assertNotIsInstance(batch, gen.LMFPBatch)
+        self.assertEqual(batch.instrument, {}, "mode=none 不固定仪器")
+        self.assertAlmostEqual(batch.phases[0].size_um, 0.2)
+        self.assertFalse(batch.phases[0].width_free,
+                         "方案里的 PhaseSpec 字段要原样进批处理")
+
+    def test_prepare_batch_uses_lmfp_adapter(self):
+        scheme = {"name": "LMFP", "adapter": "lmfp", "policy": {},
+                  "views": {}, "instrument": {"mode": "none"},
+                  "phases": [{"path": str(RICH), "label": "rich"}]}
+        batch = gen.prepare_batch("lmfp1_lab6", scheme)
+        self.assertIsInstance(batch, gen.LMFPBatch)
+
+    def test_resolve_instrument_modes(self):
+        from xrd_toolkit.simulation.phase_set import InstrumentSpec
+        record = {"wavelength": 1.0, "params": {"zero": 0.1}}
+        self.assertEqual(
+            gen.resolve_instrument(
+                InstrumentSpec(mode="baseline"), {}, 1.0, record),
+            {"zero": 0.1})
+        self.assertIsNone(gen.resolve_instrument(
+            InstrumentSpec(mode="baseline"), {}, 2.0, record),
+            "λ 不符不能用旧基线")
+        self.assertIsNone(gen.resolve_instrument(
+            InstrumentSpec(mode="none"), {}, 1.0, record))
+
     def test_cell_jump_keeps_seed(self):
         batch = gen.GenericBatch([RICH, POOR], {}, 1.0)
         batch.frame_no = 1        # 第一帧不判晶胞跳变（与 LMFP 引擎同口径）
@@ -136,74 +172,74 @@ class TestGenericEntry(unittest.TestCase):
         self.w = create_window()
         self.w.show()
         QApplication.processEvents()
+        self.w.insitu_btn.click()
+        QApplication.processEvents()
+        self.editor = self.w.insitu_editor
 
     def tearDown(self):
-        dlg = getattr(self.w, "_generic_insitu_dialog", None)
-        if dlg is not None:
-            dlg.close()
         self.w.hide()
         self.w.close()
         QApplication.processEvents()
 
-    def test_button_opens_dialog_with_seeded_phases(self):
-        self.w.insitu_btn.click()
-        QApplication.processEvents()
-        combo = self.w.insitu_editor.preset_combo
-        combo.setCurrentIndex(combo.findData("generic"))
+    def _pick(self, data):
+        combo = self.editor.preset_combo
+        combo.setCurrentIndex(combo.findData(data))
         combo.activated.emit(combo.currentIndex())
         QApplication.processEvents()
-        dlg = self.w._generic_insitu_dialog
-        self.assertIsNotNone(dlg)
-        self.assertEqual(dlg.phase_table.rowCount(), 3,
-                         "默认应带入 LMFP 三相")
-        roles = [dlg.phase_table.cellWidget(r, 0).currentData()
-                 for r in range(3)]
-        self.assertEqual(roles, ["sample", "sample", "reference"],
-                         "rich/poor 是样品相，Al 是参考相")
+
+    def test_default_page_is_generic_and_empty(self):
+        """默认是通用空相表（2026-11-18）。"""
+        self.assertEqual(self.editor.preset_combo.currentData(), "generic")
+        self.assertEqual(self.editor.phase_table.rowCount(), 0)
+        self.assertEqual(self.editor._table_keys[:5],
+                         ["frame", "file", "status", "rwp", "rp"])
+
+    def test_lmfp_preset_fills_the_phase_table_in_place(self):
+        self._pick("lmfp")
+        table = self.editor.phase_table
+        self.assertEqual(table.rowCount(), 3)
+        roles = [table.cellWidget(r, 0).currentData() for r in range(3)]
+        self.assertEqual(roles, ["sample", "sample", "reference"])
+        self.assertEqual(table.cellWidget(2, 3).currentData(), "lebail")
+        self.assertFalse(table.cellWidget(2, 4).isChecked())
+        self.assertFalse(table.cellWidget(1, 5).isChecked())
+        table.cellWidget(1, 5).setChecked(True)
         self.assertEqual(
-            dlg.phase_table.cellWidget(2, 3).currentData(), "lebail")
-        self.assertFalse(dlg.phase_table.cellWidget(2, 4).isChecked(),
-                         "参考相默认不进样品分数")
-        self.assertEqual(dlg.phase_table.columnCount(), 6)
-        self.assertFalse(dlg.phase_table.cellWidget(1, 5).isChecked(),
-                         "额外相 B/峰宽默认固定")
-        dlg.phase_table.cellWidget(1, 5).setChecked(True)
-        specs = dlg._phase_specs()
-        self.assertEqual(specs[1]["free_extra"],
-                         ("b_iso", "size_um", "mustrain"))
-        dlg.close()
-        QApplication.processEvents()
-        self.assertIsNone(self.w._generic_insitu_dialog)
+            self.editor.phase_table.phases()[1]["free_extra"],
+            ("b_iso", "size_um", "mustrain"))
+        # 结果表列按方案（LMFP 紧凑 12 列）
+        self.assertEqual(len(self.editor._table_keys), 12)
+        self.assertIn("f_rich", self.editor._table_keys)
+        self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
+
+    def test_switching_to_generic_clears_the_table(self):
+        self._pick("lmfp")
+        self._pick("generic")
+        self.assertEqual(self.editor.phase_table.rowCount(), 0)
+        self.assertEqual(self.editor._scheme_adapter, "")
 
     def test_scheme_save_load_roundtrip(self):
-        from xrd_toolkit.gui import insitu_generic_dialog as gd
-        from xrd_toolkit.simulation.phase_set import (
-            lmfp_phase_set, load_phase_set, save_phase_set)
-        self.w.insitu_btn.click()
-        QApplication.processEvents()
-        combo = self.w.insitu_editor.preset_combo
-        combo.setCurrentIndex(combo.findData("generic"))
-        combo.activated.emit(combo.currentIndex())
-        QApplication.processEvents()
-        dlg = self.w._generic_insitu_dialog
+        from xrd_toolkit.gui import insitu_workbench as wb
+        self._pick("lmfp")
         with tempfile.TemporaryDirectory() as tmp:
-            src = save_phase_set(lmfp_phase_set(), Path(tmp) / "lmfp.json")
+            out = Path(tmp) / "demo.json"
             with mock.patch.object(
-                    gd.QFileDialog, "getOpenFileName",
-                    return_value=(str(src), "")):
-                dlg._load_scheme()
-            self.assertEqual(dlg.phase_table.rowCount(), 3)
-            self.assertEqual(dlg._scheme_views.shade_phase, "rich")
-            self.assertEqual(
-                dlg._scheme_views.peak_windows[0].tth_min, 1.18)
-            out = Path(tmp) / "out.json"
-            with mock.patch.object(
-                    gd.QFileDialog, "getSaveFileName",
+                    wb.QFileDialog, "getSaveFileName",
                     return_value=(str(out), "")):
-                dlg._save_scheme()
+                self.editor._save_scheme()
             self.assertTrue(out.is_file())
-            got = load_phase_set(out)
-            self.assertEqual(got.labels(), ["rich", "poor", "Al"])
-            self.assertEqual(got.views.shade_phase, "rich")
-        dlg.close()
-        QApplication.processEvents()
+            self._pick("generic")
+            self.assertEqual(self.editor.phase_table.rowCount(), 0)
+            with mock.patch.object(
+                    wb.QFileDialog, "getOpenFileName",
+                    return_value=(str(out), "")):
+                self.editor._load_scheme()
+            self.assertEqual(self.editor.phase_table.rowCount(), 3)
+            self.assertEqual(
+                [p["label"] for p in self.editor.phase_table.phases()],
+                ["rich", "poor", "Al"])
+            self.assertEqual(self.editor._scheme_views.shade_phase, "rich")
+            self.assertEqual(
+                self.editor._scheme_views.peak_windows[0].tth_min, 1.18)
+            self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
+            self.assertEqual(self.editor._scheme_adapter, "lmfp")
