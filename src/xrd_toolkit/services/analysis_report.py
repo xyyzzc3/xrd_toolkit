@@ -51,7 +51,7 @@ SECTIONS = (
     ("wh", "W-H / Scherrer"),
     ("phases", "物相筛选"),
     ("refine", "全谱精修"),
-    ("insitu", "原位三相批量"),
+    ("insitu", "原位多相批量"),
 )
 _ALL_KEYS = tuple(key for key, _title in SECTIONS)
 
@@ -189,10 +189,15 @@ class ReportRefine:
 
 @dataclass
 class ReportInSitu:
-    """原位三相批量的报告快照（`insitu_editor.batch` 的只读副本）。"""
+    """原位多相批量的报告快照（`insitu_editor.batch` 的只读副本）。"""
 
     rows: list[dict] = field(default_factory=list)
     methods: list[tuple[str, str]] = field(default_factory=list)
+    # 相名（2026-11-18）：[(机器标签, 显示名)]；sample_labels 是计入
+    # 样品分数分母的相；f_key 是正文里代表"主相分数"的列名。
+    phase_labels: list[tuple[str, str]] = field(default_factory=list)
+    sample_labels: list[str] = field(default_factory=list)
+    f_key: str = "f_rich"
     # 代表性单帧拟合（当前查看的帧，或 Rwp 最低的可用帧）
     frame_fit: Optional[ReportProfileFit] = None
     # 模型无关检查（(200) 双峰质心）；由 GUI 从已算好的拟合曲线导出
@@ -274,8 +279,12 @@ def _truthy(value) -> bool:
     return bool(value)
 
 
-def _insitu_stats(rows) -> dict:
-    """原位批量行的摘要数字（范围表 / 摘要 / KPI / 正文共用）。"""
+def _insitu_stats(rows, f_key="f_rich") -> dict:
+    """原位批量行的摘要数字（范围表 / 摘要 / KPI / 正文共用）。
+
+    f_key 是代表"主相分数"的列（LMFP 预设 f_rich；通用方案是第一条
+    样品相 f_<label>）。
+    """
     rows = list(rows or [])
     status = {}
     for row in rows:
@@ -287,7 +296,7 @@ def _insitu_stats(rows) -> dict:
     rwp = np.asarray([_as_float(row.get("rwp")) for row in rows],
                      dtype=float)
     rwp = rwp[np.isfinite(rwp)]
-    f_values = [(row.get("frame"), _as_float(row.get("f_rich")))
+    f_values = [(row.get("frame"), _as_float(row.get(f_key)))
                 for row in rows]
     f_values = [(frame, value) for frame, value in f_values
                 if math.isfinite(value)]
@@ -307,6 +316,7 @@ def _insitu_stats(rows) -> dict:
         "f_min": f_min[1],
         "f_min_frame": f_min[0],
         "has_f": bool(f_values),
+        "f_key": f_key,
     }
 
 
@@ -669,7 +679,12 @@ def _fig_insitu_summary(insitu: ReportInSitu) -> str:
     except ImportError:                            # pragma: no cover
         return ""
     fig = _new_figure(8.6, 5.8)
-    draw_summary(fig, insitu.rows)
+    try:
+        draw_summary(fig, insitu.rows)
+    except Exception:                              # noqa: BLE001
+        # 通用方案的逐帧行没有 LMFP 的三相列，这张 LMFP 汇总图画不了；
+        # 报告仍保留摘要表与逐帧表（列按方案），不因此失败。
+        return ""
     return _data_uri(fig)
 
 
@@ -1140,7 +1155,7 @@ def _result_sections(snapshot: ReportSnapshot) -> list:
         out.append(("refine", "全谱精修"))
     if ("insitu" in snapshot.sections and snapshot.insitu is not None
             and snapshot.insitu.rows):
-        out.append(("insitu", "原位三相批量"))
+        out.append(("insitu", "原位多相批量"))
     return out
 
 
@@ -1209,7 +1224,8 @@ def _scope_rows(snapshot: ReportSnapshot):
             insitu = snapshot.insitu
             done = bool(insitu is not None and insitu.rows)
             if done:
-                stats = _insitu_stats(insitu.rows)
+                stats = _insitu_stats(
+                    insitu.rows, getattr(insitu, "f_key", "f_rich"))
                 detail = (f"{stats['total']} 帧，可用 "
                           f"{stats['usable']}/{stats['total']}")
             else:
@@ -1287,14 +1303,15 @@ def _kpis(snapshot: ReportSnapshot) -> str:
     if "insitu" in snapshot.sections:
         insitu = snapshot.insitu
         if insitu is not None and insitu.rows:
-            stats = _insitu_stats(insitu.rows)
+            stats = _insitu_stats(
+                insitu.rows, getattr(insitu, "f_key", "f_rich"))
             cards.append(_kpi(
-                "原位三相批量",
+                "原位多相批量",
                 f"{stats['usable']}/{stats['total']} 帧",
-                f"f_rich {_num(stats['f_start'], '{:.2f}')} → "
+                f"{stats['f_key']} {_num(stats['f_start'], '{:.2f}')} → "
                 f"{_num(stats['f_end'], '{:.2f}')}"))
         else:
-            cards.append(_kpi("原位三相批量", "—", "本次未做"))
+            cards.append(_kpi("原位多相批量", "—", "本次未做"))
     return "<div class=\"kpis\">" + "".join(cards) + "</div>"
 
 
@@ -1355,10 +1372,12 @@ def _summary_text(snapshot: ReportSnapshot) -> str:
             f"{_num(refine.rp, '{:.2f}')}%；定量相分数表含 "
             f"<b>{len(refine.weights)}</b> 个晶态相。")
     if snapshot.insitu is not None and snapshot.insitu.rows:
-        stats = _insitu_stats(snapshot.insitu.rows)
+        stats = _insitu_stats(
+            snapshot.insitu.rows,
+            getattr(snapshot.insitu, "f_key", "f_rich"))
         parts.append(
-            f"原位三相批量共 <b>{stats['total']}</b> 帧，可用 "
-            f"<b>{stats['usable']}</b> 帧；f_rich 从 "
+            f"原位多相批量共 <b>{stats['total']}</b> 帧，可用 "
+            f"<b>{stats['usable']}</b> 帧；{stats['f_key']} 从 "
             f"{_num(stats['f_start'], '{:.2f}')} 变到 "
             f"{_num(stats['f_end'], '{:.2f}')}（相对散射强度，不是 wt%）。")
     available = {"curve": curve is not None,
@@ -1420,7 +1439,7 @@ def _methods_table(snapshot: ReportSnapshot, number: int):
             rows.append(f"<tr><td class=\"left\">{_esc(label)}</td>"
                         f"<td class=\"left\">{_esc(value)}</td></tr>")
     if snapshot.insitu is not None and snapshot.insitu.methods:
-        rows.append("<tr class=\"group\"><th colspan=\"2\">原位三相批量</th></tr>")
+        rows.append("<tr class=\"group\"><th colspan=\"2\">原位多相批量</th></tr>")
         for label, value in snapshot.insitu.methods:
             rows.append(f"<tr><td class=\"left\">{_esc(label)}</td>"
                         f"<td class=\"left\">{_esc(value)}</td></tr>")
@@ -1701,16 +1720,21 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
     if insitu is None or not insitu.rows:
         return "", fig_no, number
     rows = list(insitu.rows)
-    stats = _insitu_stats(rows)
+    f_key = getattr(insitu, "f_key", "f_rich")
+    stats = _insitu_stats(rows, f_key)
+    labels = list(getattr(insitu, "phase_labels", ()) or ()) or [
+        ("rich", "富锂相"), ("poor", "贫锂相"), ("Al", "Al 参考相")]
+    samples = list(getattr(insitu, "sample_labels", ()) or ()) or [
+        "rich", "poor"]
     body = []
     rwp_text = ("—" if not math.isfinite(stats["rwp_min"])
                 else f"{stats['rwp_min']:.2f}–{stats['rwp_max']:.2f}"
                      f"（中位 {stats['rwp_med']:.2f}）")
     rwp_phrase = ("Rwp —" if rwp_text == "—" else f"Rwp {rwp_text}%")
-    lead = (f"<p class=\"lead\">本次原位三相批量共 <b>{stats['total']}</b> 帧，"
+    lead = (f"<p class=\"lead\">本次原位多相批量共 <b>{stats['total']}</b> 帧，"
             f"可用 <b>{stats['usable']}</b> 帧；{rwp_phrase}。")
     if stats["has_f"]:
-        lead += (f"f_rich 从 {_num(stats['f_start'], '{:.3f}')} 变到 "
+        lead += (f"{f_key} 从 {_num(stats['f_start'], '{:.3f}')} 变到 "
                  f"{_num(stats['f_end'], '{:.3f}')}，最低 "
                  f"{_num(stats['f_min'], '{:.3f}')}（第 "
                  f"{_esc(stats['f_min_frame'])} 帧）。")
@@ -1719,19 +1743,19 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
 
     status_text = "、".join(
         f"{key}={value}" for key, value in sorted(stats["status"].items()))
-    wt_rich = [row.get("wt_rich") for row in rows]
-    wt_poor = [row.get("wt_poor") for row in rows]
     summary_rows = [
         ("帧数", str(stats["total"])),
         ("可用帧", f"{stats['usable']}/{stats['total']}"),
         ("状态统计", status_text or "—"),
         ("Rwp (%)", rwp_text),
-        ("f_rich", (f"{_num(stats['f_start'], '{:.3f}')} → "
-                    f"{_num(stats['f_end'], '{:.3f}')}"
-                    if stats["has_f"] else "—")),
-        ("wt_rich (%)", _range_text(wt_rich)),
-        ("wt_poor (%)", _range_text(wt_poor)),
+        (f_key, (f"{_num(stats['f_start'], '{:.3f}')} → "
+                 f"{_num(stats['f_end'], '{:.3f}')}"
+                 if stats["has_f"] else "—")),
     ]
+    for label in samples:
+        summary_rows.append((
+            f"wt_{label} (%)",
+            _range_text([row.get(f"wt_{label}") for row in rows])))
     table = ("<table class=\"data\"><tbody>" + "".join(
         f"<tr><td class=\"left\">{_esc(label)}</td>"
         f"<td class=\"left\">{_esc(value)}</td></tr>"
@@ -1745,9 +1769,8 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
     if img:
         body.append(
             f"<figure><img src=\"{img}\" alt=\"in-situ batch summary\">"
-            f"<figcaption>图 {fig_no}　原位三相批量汇总：相分数、两相晶胞、"
-            f"Rwp / Rp 与异常状态（底色按 f_rich 极小值划分充/放电段）"
-            f"</figcaption></figure>")
+            f"<figcaption>图 {fig_no}　原位多相批量汇总：相分数、各相晶胞、"
+            f"Rwp / Rp 与异常状态</figcaption></figure>")
         fig_no += 1
 
     img = _fig_profile(insitu.frame_fit)
@@ -1767,12 +1790,17 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
             f"面积与批量相分数的一致性</figcaption></figure>")
         fig_no += 1
 
+    # 列随方案（2026-11-18）：样品相给 f/wt，全部相给 a/c 晶胞。
+    head_cells = ["<th>帧</th>", "<th class=\"left\">状态</th>",
+                  "<th>Rwp (%)</th>"]
+    for label, _display in labels:
+        if label in samples:
+            head_cells.append(f"<th>f_{_esc(label)}</th>")
+            head_cells.append(f"<th>wt_{_esc(label)} (%)</th>")
+        head_cells.append(f"<th>{_esc(label)} a</th>")
+        head_cells.append(f"<th>{_esc(label)} c</th>")
     head = ("<table class=\"data\"><thead><tr>"
-            "<th>帧</th><th class=\"left\">状态</th><th>Rwp (%)</th>"
-            "<th>f_rich</th><th>wt_rich (%)</th><th>wt_poor (%)</th>"
-            "<th>rich a</th><th>rich c</th>"
-            "<th>poor a</th><th>poor c</th>"
-            "</tr></thead><tbody>")
+            + "".join(head_cells) + "</tr></thead><tbody>")
     frame_rows = []
     for row in rows:
         status = str(row.get("status", ""))
@@ -1785,18 +1813,21 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
         # 异常状态可能带整段异常信息：表里截短，悬停看全，别把表撑爆
         short_status = (status if len(status) <= 32
                         else status[:29] + "…")
-        frame_rows.append(
-            f"<tr><td>{_esc(row.get('frame', '—'))}</td>"
+        cells = [
+            f"<td>{_esc(row.get('frame', '—'))}</td>",
             f"<td class=\"left {qcls}\" title=\"{_esc(status)}\">"
-            f"{_esc(short_status or '—')}</td>"
-            f"<td>{_num(row.get('rwp'), '{:.2f}')}</td>"
-            f"<td>{_num(row.get('f_rich'), '{:.3f}')}</td>"
-            f"<td>{_num(row.get('wt_rich'), '{:.2f}')}</td>"
-            f"<td>{_num(row.get('wt_poor'), '{:.2f}')}</td>"
-            f"<td>{_num(row.get('rich_a'))}</td>"
-            f"<td>{_num(row.get('rich_c'))}</td>"
-            f"<td>{_num(row.get('poor_a'))}</td>"
-            f"<td>{_num(row.get('poor_c'))}</td></tr>")
+            f"{_esc(short_status or '—')}</td>",
+            f"<td>{_num(row.get('rwp'), '{:.2f}')}</td>",
+        ]
+        for label, _display in labels:
+            if label in samples:
+                cells.append(
+                    f"<td>{_num(row.get(f'f_{label}'), '{:.3f}')}</td>")
+                cells.append(
+                    f"<td>{_num(row.get(f'wt_{label}'), '{:.2f}')}</td>")
+            cells.append(f"<td>{_num(row.get(f'{label}_a'))}</td>")
+            cells.append(f"<td>{_num(row.get(f'{label}_c'))}</td>")
+        frame_rows.append("<tr>" + "".join(cells) + "</tr>")
     body.append(
         f"<div class=\"table-block long\">"
         f"{_table_caption(number, '逐帧结果（完整）')}"
@@ -1805,8 +1836,8 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
 
     note = ("<p class=\"muted\">可用 = Rwp 未超过阈值、晶胞有限且状态不是 "
             "error / high_rwp；ok_soft = 优化器退出标志为 False，但 "
-            "Rwp 与相分数仍合格。f_rich 是 Le Bail 相对散射强度分数；"
-            "wt_rich / wt_poor 只在两个 LMFP 晶态相之间归一化，Al 参考相"
+            "Rwp 与相分数仍合格。f_&lt;相&gt; 是相对散射强度分数；"
+            "wt_&lt;相&gt; 只对计入样品分数分母的晶态相归一化，参考相"
             "单列、不参与分母。</p>")
     body.append(note)
     return "".join(body), fig_no, number
@@ -1827,8 +1858,8 @@ def _limitations(snapshot: ReportSnapshot) -> str:
   <ul>
     <li>精修的 wt% 只对拟合模型里的晶态相有效；非晶或未计入的相不在
         分母里。Le Bail 相用逐反射强度的加权平均，精度低于结构模式。</li>
-    <li>原位的 f_rich 是 Le Bail 相对散射强度分数，不是 wt%；
-        wt_rich / wt_poor 只在两个 LMFP 晶态相之间归一化，Al 参考相
+    <li>原位的 f_&lt;相&gt; 是相对散射强度分数，不是 wt%；
+        wt_&lt;相&gt; 只对计入样品分数分母的晶态相归一化，参考相
         单列、不参与分母。</li>
     <li>背景用 estimated 模型时有系统偏差：合成已知配比回收的 bias
         −1.8 wt%、RMS 2.8 wt%；真实 LMFP 数据（ipoly0）对 GSAS-II 的
@@ -1844,9 +1875,9 @@ def _limitations(snapshot: ReportSnapshot) -> str:
         是候选排序，不是相含量。</li>
     <li>少数相（&lt;50%）的晶胞在弱峰帧不可独立辨识；界面上以淡色显示，
         报告不把它当独立结论。</li>
-    <li>原位每帧从上一帧种子与 CIF 端元双起点拟合，Rwp 打平时取晶胞
-        变化小的解；not_converged / cell_jump 等状态照实收录，不中断
-        批次、也不把异常帧删掉。</li>
+    <li>原位每帧从上一帧种子起步；LMFP 方案在不收敛时再补 CIF 端元
+        双起点，Rwp 打平时取晶胞变化小的解。not_converged / cell_jump
+        等状态照实收录，不中断批次、也不把异常帧删掉。</li>
   </ul>
   <h3><span class="num">4.3</span>报告范围</h3>
   <ul>

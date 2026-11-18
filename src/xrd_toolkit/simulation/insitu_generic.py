@@ -425,6 +425,7 @@ class GenericBatch:
         self.frame_no += 1
         i = self.frame_no
         path = Path(path)
+        t_start = time.perf_counter()
         result = None
         timers = {}
         status = "error"
@@ -464,6 +465,7 @@ class GenericBatch:
             win_vals = [(float("nan"),) * 3 for _ in self.windows]
             cells = {phase.label: self.seed[phase.label]
                      for phase in self.phases}
+        timers.setdefault("total", time.perf_counter() - t_start)
         cells = _cells(result, self.phases, self.seed) if result is not None \
             else {phase.label: self.seed[phase.label] for phase in self.phases}
         fracs = (fractions(result, self.phases) if result is not None

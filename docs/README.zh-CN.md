@@ -134,7 +134,7 @@ macOS 13 起 / Windows 10 起，下载约 150 MB（解压约 340 MB）。zip 里
 - **自动寻峰与单峰峰形拟合**——稳健噪声估计 + 显著度/峰高门槛 + 最小峰距 + 可选 FWHM 过滤的自动寻峰（`services/peak_finding.py`）；Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII 单峰拟合（局部背景），以及逐峰 Scherrer 尺寸和带仪器校正（quadrature / linear 扣标样，或 GUI 里已保存的 LaB₆ 基线）的 Williamson–Hall 分析；命令行入口 `scripts/fit_peaks.py`。
 - **物相筛选与晶胞精修**——把观测峰位与内置 41 张精选相库或自选 CIF 目录逐相打分，支持周期表点选元素、多相叠加与 CSV；七个晶系的峰位级晶胞精修（含 2θ 零位；`scripts/refine_cell.py`，或物相工作台的 `[精修晶胞]`）。
 - **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相、按空间群约束的原子坐标与位点占位精修，以及固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%），并给出晶态相的 Rietveld wt%（Z·M·V；非晶/未知相不参与分母）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
-- **原位三相批量与通用多相**——`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台一个入口两种方案（LMFP 三相 / 通用多相），提供趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；相表按样品相/参考相设角色，参考相不进样品分数分母；通用多相接受任意 CIF 列表、顺序精修与 CSV。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照。
+- **原位多相批量（通用页面，LMFP 是内置方案）**——`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台默认是通用相表（任意 CIF 列表、顺序精修），「方案」下拉里的 LMFP 三相当场替换相表/策略/视图，提供趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；相表按样品相/参考相设角色，参考相不进样品分数分母；方案可存成 `.json`（相、角色、策略、视图、仪器来源）。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照。
 - **工作台交互**——物相、精修、原位与命令行共用同一套引擎。进入工作台时收起参数坞和日志坞，文件栏保留：双击文件栏条目 = 对这条操作，勾选 = 批量范围；工作台内的下拉作镜像/兜底，退出恢复原样。
 - **一键分析报告**——把当前会话的 1D 曲线、峰表、单峰拟合、W-H、物相筛选、全谱精修与原位三相批量结果汇成一份自包含 HTML（图内嵌，浏览器可打印 PDF）；缺的节标注“本次未做”，并写清定量口径（wt% 与 f_rich、背景系统偏差、少数相晶胞）。
 - **命名项目预设层**——一份预设打包八项输入：几何配置、第二相 CIF、相库目录、样品元素（一定有/可能有）、处理设置（背景/平滑/裁剪快照）、原位帧目录、原位掩膜、掩膜工程（`.mask.npz` 路径）；换预设 = 一起换，不用一项一项改。参数坞可切换/保存/[管理…]，管理页里**八项都能手动选**（第二相下拉 + 浏览、目录选择、两态样品元素与周期表、掩膜文件选择等），点 [保存方案] 写入当前方案（活动方案立即生效）；坞顶另有几何下拉，选中即换当前会话几何，与方案不一致时下拉变橙提示「未写进方案」。处理设置在切换后要点 `[套用当前方案]` 才生效，调好后用 `[存进方案…]` 写回；掩膜工程在掩膜工作台按图兜底，原位批量两种掩膜格式（工程/通用）都收。旧版 `outputs/recipes.json` 的命名配方在启动时一次性迁成用户预设。内置 LMFP 预设只读，用户预设存 `presets_user.json`，下次启动自动接上上次用的那份。
@@ -178,7 +178,7 @@ python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个
 
 ## 原位三相批量
 
-`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台一个入口两种方案（LMFP 三相 / 通用多相），趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；角色分样品相/参考相。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「LMFP 原位三相批量」节。
+`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台默认是通用相表（任意 CIF 列表），「方案」下拉里的 LMFP 三相当场替换相表/策略/视图，趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；角色分样品相/参考相，参考相不进样品分数分母。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「LMFP 原位三相批量」节。
 
 ## 路线图
 

@@ -153,7 +153,7 @@ class TestReportHtml(unittest.TestCase):
 
     def test_insitu_section_summary_frames_and_figures(self):
         html = ar.build_report_html(_snapshot(insitu=_insitu()))
-        self.assertIn("原位三相批量", html)
+        self.assertIn("原位多相批量", html)
         self.assertIn("5/5", html)
         self.assertIn("0.870", html)             # f_rich 起点
         self.assertIn("ok_soft=1", html)
@@ -161,12 +161,30 @@ class TestReportHtml(unittest.TestCase):
         self.assertIn("模型无关检查", html)
         self.assertIn("in-situ single frame fit", html)
 
+    def test_insitu_table_follows_scheme_phase_labels(self):
+        """通用方案：逐帧表列跟着相名走（2026-11-18）。"""
+        rows = [{
+            "frame": 1, "status": "ok", "usable": True, "rwp": 3.0,
+            "f_alpha": 0.6, "wt_alpha": 55.0, "alpha_a": 10.1,
+            "alpha_c": 4.7, "f_beta": 0.4, "wt_beta": 45.0,
+            "beta_a": 9.8, "beta_c": 4.8}]
+        insitu = ar.ReportInSitu(
+            rows=rows,
+            phase_labels=[("alpha", "α相"), ("beta", "β相")],
+            sample_labels=["alpha", "beta"], f_key="f_alpha")
+        html = ar.build_report_html(_snapshot(insitu=insitu))
+        self.assertIn("f_alpha", html)
+        self.assertIn("wt_beta", html)
+        self.assertIn("alpha a", html)
+        self.assertIn("beta c", html)
+        self.assertIn("0.600", html)
+
     def test_missing_refine_and_insitu_are_marked(self):
         html = ar.build_report_html(_snapshot(
             sections=("curve", "refine", "insitu")))
         self.assertIn("本次未做全谱精修", html)
         self.assertIn("本次未跑原位批量", html)
-        self.assertIn("本次未做：全谱精修、原位三相批量", html)
+        self.assertIn("本次未做：全谱精修、原位多相批量", html)
 
     def test_insitu_all_error_batch_still_renders(self):
         insitu = ar.ReportInSitu(rows=[{
@@ -191,7 +209,7 @@ class TestReportHtml(unittest.TestCase):
     def test_unselected_sections_are_absent(self):
         html = ar.build_report_html(_snapshot(sections=("curve",)))
         for title in ("峰表", "单峰拟合", "Williamson–Hall / Scherrer",
-                      "物相筛选", "全谱精修", "原位三相批量"):
+                      "物相筛选", "全谱精修", "原位多相批量"):
             self.assertNotIn(f"{title}</h3>", html)
         # 结果说明与限制始终保留（它不是可勾选节）
         self.assertIn("结果说明与限制", html)

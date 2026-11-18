@@ -124,7 +124,7 @@ def _prepare_worker(config_name, scheme, mask_path, saved_baseline,
 
 
 class InSituWorkbench(QWidget):
-    """原位三相批量工作台。"""
+    """原位多相批量工作台（默认通用，方案就地替换）。"""
 
     def __init__(self, main_window):
         super().__init__()

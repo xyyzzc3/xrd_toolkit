@@ -204,7 +204,7 @@ class TestReportWindow(unittest.TestCase):
         self.assertEqual(snapshot.refine.params[0][0], "a")
         html = ar.build_report_html(snapshot)
         self.assertIn("全谱精修", html)
-        self.assertIn("原位三相批量", html)
+        self.assertIn("原位多相批量", html)
         self.assertIn("96.20", html)
 
     def test_dialog_lists_curve_and_writes_html(self):

@@ -40,7 +40,7 @@ _SECTION_CHOICES = (
     ("wh", "W-H / Scherrer"),
     ("phases", "物相筛选"),
     ("refine", "全谱精修"),
-    ("insitu", "原位三相批量"),
+    ("insitu", "原位多相批量"),
 )
 
 
@@ -278,8 +278,11 @@ def _insitu_snapshot(window):
     if editor is None or batch is None or not rows:
         return None
     meta = dict(getattr(editor, "_batch_meta", None) or {})
-    phase_paths = dict(meta.get("phases")
-                       or getattr(editor, "phase_paths", {}) or {})
+    pset = getattr(batch, "phase_set", None)
+    phases_meta = meta.get("phases") or []
+    if isinstance(phases_meta, dict):       # 2026-11-18 之前的 LMFP 快照
+        phases_meta = [phases_meta.get(key) for key in ("rich", "poor", "al")]
+    fallback_paths = [str(path) for path in phases_meta if path]
 
     mask_path = str(meta.get("mask") or "")
     if not mask_path:
@@ -290,29 +293,52 @@ def _insitu_snapshot(window):
                        else "未使用"))
 
     methods = [
+        ("方案", str(meta.get("scheme")
+                     or getattr(pset, "name", "") or "—")),
         ("数据目录", str(meta.get("data_dir")
                        or getattr(editor, "data_dir", "") or "—")),
         ("帧数", str(len(rows))),
         ("掩膜", mask_note),
     ]
-    for key, label in (("rich", "富锂相"), ("poor", "贫锂相"),
-                       ("al", "Al 参考相")):
-        path = phase_paths.get(key)
-        methods.append((label, Path(path).stem if path else "—"))
+    if pset is not None:
+        for phase in pset.phases:
+            methods.append((
+                phase.display(),
+                Path(phase.path).stem if phase.path else "—"))
+    else:
+        for path in fallback_paths:
+            methods.append((Path(path).stem, Path(path).stem))
     lab6 = str(meta.get("lab6") or "")
     if lab6:
         methods.append(("LaB₆ 标样", Path(lab6).name))
+    policy = getattr(batch, "policy", None)
+    dual = str(getattr(policy, "dual_start", "off"))
+    dual_text = {"off": "关闭（通用方案）",
+                 "auto": "自动（不收敛才补 CIF 端元）",
+                 "always": "每帧（上一帧种子 + CIF 端元）"}.get(dual, dual)
     methods += [
         ("2θ 范围", f"{batch.tth_min:g}–{batch.tth_max:g}°"),
         ("输出点数", str(batch.npt)),
         ("最大 Rwp", f"{batch.max_rwp:g}%"),
-        ("背景模型", str(batch.background_model)),
-        ("强度修正阶数", str(batch.intensity_poly)),
+        ("背景模型", str(getattr(
+            batch, "background_model",
+            getattr(policy, "background_model", "estimated")))),
+        ("强度修正阶数", str(getattr(
+            batch, "intensity_poly",
+            getattr(policy, "intensity_poly", 0)))),
         ("迭代上限", f"首帧 {batch.first_nfev} / 后续 {batch.frame_nfev}"),
-        ("双起点", "每帧（上一帧种子 + CIF 端元）"),
+        ("双起点", dual_text),
     ]
     instrument = getattr(batch, "instrument", None)
-    if instrument is not None:
+    if isinstance(instrument, dict) and instrument:
+        bits = [f"{name} {report._num(instrument.get(name), '{:.4g}')}"
+                for name in ("zero", "u", "v", "w", "x", "y")
+                if name in instrument]
+        methods.append(("仪器", "已固定（zero/U/V/W/X/Y）"))
+        if bits:
+            methods.append(("仪器参数", "、".join(bits)))
+    elif instrument is not None:
+        # 旧版本里 instrument 是 FitResult（带 rwp）；保持兼容。
         rwp_text = report._num(getattr(instrument, "rwp", float("nan")),
                                "{:.2f}")
         methods.append(("仪器标样", f"LaB₆ 精修 Rwp {rwp_text}%"))
@@ -357,8 +383,19 @@ def _insitu_snapshot(window):
                 methods.append(("模型无关检查",
                                 f"未收录：{user_error_text(err)}"))
 
+    phase_labels = [("rich", "富锂相"), ("poor", "贫锂相"),
+                    ("Al", "Al 参考相")]
+    sample_labels = ["rich", "poor"]
+    f_key = "f_rich"
+    if pset is not None:
+        phase_labels = [(phase.label, phase.display()) for phase in pset.phases]
+        sample_labels = [phase.label for phase in pset.sample_phases()
+                         if phase.include_in_fraction]
+        if sample_labels:
+            f_key = f"f_{sample_labels[0]}"
     return report.ReportInSitu(
-        rows=rows, methods=methods, frame_fit=frame_fit, mi_rows=mi_rows)
+        rows=rows, methods=methods, frame_fit=frame_fit, mi_rows=mi_rows,
+        phase_labels=phase_labels, sample_labels=sample_labels, f_key=f_key)
 
 
 # ══ 收集快照 ═════════════════════════════════════════════
