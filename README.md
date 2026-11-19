@@ -5,14 +5,54 @@
 [![Version](https://img.shields.io/github/v/release/xyyzzc3/xrd_toolkit?color=blue)](https://github.com/xyyzzc3/xrd_toolkit/releases/latest)
 ![Status](https://img.shields.io/badge/Status-active_development-orange)
 
-A modular Python toolkit for X-ray diffraction (XRD) data analysis, developed as part of *PHY6528 Advanced Research in Applied Physics* at City University of Hong Kong. It reads 2D diffraction images (`.tif` / `.edf` / `.cbf`), calibrates the detector geometry against a standard sample (LaB₆ by default; CeO₂, Si and other common standards are built in), integrates the 2D pattern into standard 1D powder spectra, and analyses them — peak finding, single-peak and full-pattern profile fitting, Le Bail/structural refinement and CIF-based pattern simulation — as a set of CLI scripts and a PySide6 desktop app over the same engine.
+A modular Python toolkit for X-ray diffraction: turn 2D detector images into
+calibrated 1D powder patterns, then analyse them — peak finding, profile
+fitting, phase screening, Le Bail/Rietveld refinement, CIF simulation and
+generic multi-phase in-situ batches. The same engine drives a PySide6 desktop
+app and a set of CLI scripts.
 
-中文说明：[README.zh-CN.md](docs/README.zh-CN.md) · Quick start for trial users: [docs/使用说明.html](docs/使用说明.html) (in-app: Help → 使用说明, F1) · Long version: [docs/NOTES.md](docs/NOTES.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Citation: [CITATION.cff](CITATION.cff)
+[中文 README](docs/README.zh-CN.md) · [User manual (Chinese, illustrated)](docs/使用说明.html) ·
+[Long-form notes](docs/NOTES.md) · [Changelog](CHANGELOG.md) ·
+[Citation](CITATION.cff) · [Showcase](https://xyyzzc3.github.io/xrd_toolkit/)
 
-## Download & run (no Python needed)
+<img src="showcase/gui/gui_insitu.png" width="100%" alt="Generic multi-phase in-situ workbench: phase table, compact result table and phase-fraction trends">
 
-**Latest release** — self-contained apps built from this repo by GitHub
-Actions (the links below always point to the newest release):
+## What it does
+
+- **Calibrated 2D → 1D** — geometry refinement against LaB₆ (default), CeO₂,
+  Si and other built-in standards; off-centre beams, partial rings and
+  36-sector azimuthal analysis. Each run reports ring-position deviation,
+  complete-ring count and per-ring lattice dispersion.
+- **Mask before integration** — paint/erase the beamstop, module gaps and
+  hot pixels, or auto-detect isolated defects; preview the 1D pattern before
+  and after; save `.mask.npz` / `.npy` / `.edf` and a traceable Mask 2D product.
+- **1D analysis** — empty-scan subtraction, rolling auto baseline with manual
+  anchors, smoothing/cropping, robust peak finding, single-peak fits
+  (Gaussian / Lorentzian / pseudo-Voigt / split-Pearson VII), Scherrer and
+  Williamson–Hall analysis with an optional LaB₆ instrument baseline.
+- **Phase screening and cell refinement** — score observed peaks against a
+  bundled 41-phase library or your own CIF folder, filter by the periodic
+  table, overlay candidates, and refine the cell for all seven crystal systems
+  plus the 2θ zero.
+- **Full-pattern fitting** — Thompson–Cox–Hastings pseudo-Voigt with
+  Caglioti/Lorentzian widths, Le Bail or structural refinement, extra phases,
+  atom coordinates/occupancy, instrument baselines and crystalline wt%.
+- **In-situ multi-phase batches** — the in-situ page is a generic phase table
+  (any CIF list, roles, structure-factor/Le Bail, fraction denominator);
+  LMFP is a built-in scheme. Save/load schemes as JSON, choose background
+  model/window and instrument source, and read a compact phase-wise result
+  table. Four views: trends, summary, single-frame fit, peak-window tracker.
+- **Report and presets** — one-click self-contained HTML report; named project
+  presets bundle geometry, second phase, in-situ directory/mask, phase library
+  and processing settings.
+- **Desktop + CLI** — a PySide6 app over the same engine (calibration, mask,
+  1D, processing/compare, phase/refine/in-situ workbenches, report), plus
+  scripts for calibration, integration, simulation and fitting.
+
+## Download & run
+
+**Latest release** — self-contained apps built by GitHub Actions (links always
+point to the newest release):
 
 | Your machine | Download |
 |---|---|
@@ -22,200 +62,138 @@ Actions (the links below always point to the newest release):
 
 Unzip → double-click. The builds are unsigned, so the system blocks the first
 launch once: Windows *More info → Run anyway*; macOS *right-click → Open*.
-Step-by-step instructions (in Chinese, for lab use): [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) — the zip also carries a Chinese quick-start (`使用说明.html`, also under Help → 使用说明, F1) and third-party license notices (`THIRD_PARTY_NOTICES.txt`, also under Help → 关于).
-Requires macOS 13+ / Windows 10+; ~150 MB download, ~340 MB installed.
+Step-by-step instructions (Chinese, illustrated): [使用说明](docs/使用说明.html)
+(also shipped in the zip and under Help → 使用说明, F1). Requires macOS 13+ /
+Windows 10+; about 150 MB download, 340 MB installed.
 
 ## Quick start
 
-1. **Open** — `[打开…]` → pick your `.tif` / `.edf` / `.cbf` images (a whole folder works too)
-2. **Calibrate and mask (optional)** — calibrate the geometry on `[校准]` against the selected standard (LaB₆ by default; CeO₂, Si and other common standards are built in), or import a pyFAI `.poni`; then use `[Mask]` to remove the beam-stop shadow, module gaps and fixed hot pixels before integration
+1. **Open** — `[打开…]` → pick your `.tif` / `.edf` / `.cbf` images (a folder works too)
+2. **Calibrate and mask (optional)** — calibrate on `[校准]` against the selected
+   standard (LaB₆ by default) or import a pyFAI `.poni`; use `[掩膜]` to remove
+   the beamstop shadow, module gaps and fixed hot pixels
 3. **Plot** — check the files → `[1D]` → `[出图（勾选文件）]`
 4. **Export** — `[导出数据]` → two-column txt / `.chi` / a combined CSV
 
-The built-in geometry covers the first LMFP batch. Skip step 2 if your data are already calibrated and clean.
+The built-in geometry covers the first LMFP batch. Skip step 2 if your data
+are already calibrated and clean. The interface is Chinese; figures and
+exported data use English labels.
 
-## Mask workbench
+## In-situ workbench
 
-Masking is the step between calibration and integration. The toolbar has a central **Mask** workbench next to **Calibrate** (the parameter and log docks collapse while it is open, while the file bar stays for double-click image switching, and everything comes back on exit): it opens on the first raw image (a drop-down lists every raw file), draws/erases beamstop, module gaps and hot pixels, auto-detects isolated hot pixels with a locate-changes view (thresholds are remembered per geometry configuration and can be reset), previews the 1D pattern before/after masking, and exports a `.mask.npz` *mask file* (mask + provenance layers + metadata) or a plain `.npy`/`.edf` mask for external tools. Applying a mask writes a small **Mask 2D** product (raw image + mask manifest) into the file dock, for the current image, every raw file, or a hand-picked list; files whose shape does not match the mask are skipped with a log entry. Double-click the Mask 2D product for a 2D view, or integrate it to 1D. Masked and unmasked 1D results are distinct sources that can be compared side by side. **Mask quick start:** the Mask chapter of the Chinese manual (`docs/使用说明.html`, section 5).
+The in-situ page is generic by default: add any CIF list and set each phase's
+role, cell/intensity model and whether it counts toward the sample fractions.
+The LMFP three-phase scheme (Li-rich / Li-poor / Al reference) fills the same
+page in place. Schemes save/load as JSON; each phase has its own B, size,
+strain, initial cell, cell bounds and colour. The batch runs with two-start
+robust fitting, seed re-locking and anomaly flags; 81 frames take about
+3.5 minutes on the development machine. The report section draws its summary
+and peak-window figures from the active scheme, and a GSAS-II cross-check
+(`scripts/gsas2_insitu_crosscheck.py`) compares cells and fraction trends.
+Details: [manual §11](docs/使用说明.html) and
+[docs/NOTES.md](docs/NOTES.md) (`#lmfp-in-situ-three-phase-batch`).
 
-## At a glance
-
-<details>
-<summary>Show the screenshots and fit figures</summary>
+## Gallery
 
 <table>
   <tr>
-    <td align="center" width="50%">
-      <img src="showcase/lab6/diffraction_image.png" width="100%"><br>
-      <sub>Raw 2D image (log scale) — the cross marks the calibrated beam centre</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="showcase/lab6/calibrated_pattern.png" width="100%"><br>
-      <sub>Calibrated 1D powder pattern — red dashed lines are the theoretical LaB₆ positions</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="showcase/gui/gui_mask.png" width="100%"><br>
-      <sub>Mask workbench before integration — paint or auto-detect the beam-stop shadow, module gaps and fixed hot pixels; the lower panel previews the 1D pattern before and after masking</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="showcase/gui/gui_main.png" width="100%"><br>
-      <sub>The GUI on the same data — file tree with stage folders on the left, parameter panel on the right</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
       <img src="showcase/gui/gui_calib.png" width="100%"><br>
-      <sub>Calibration workbench — current geometry beside comparison slots A / B, engine metrics and a verdict line</sub>
+      <sub>Calibration workbench — current geometry, comparison slots and engine metrics</sub>
     </td>
-    <td align="center" width="50%">
-      <img src="showcase/gui/gui_background.png" width="100%"><br>
-      <sub>Background subtraction on a real LMFP pattern — the auto baseline and the resulting curve; raw, baseline and result in one frame</sub>
+    <td align="center" width="33%">
+      <img src="showcase/gui/gui_mask.png" width="100%"><br>
+      <sub>Mask workbench — paint/auto-detect defects and preview the 1D pattern</sub>
     </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="showcase/lab6/sector_waterfall.png" width="100%"><br>
-      <sub>36-sector waterfall — azimuthal uniformity; the staircase edge marks where the detector clips each ring</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="showcase/gui/gui_compare_heat.png" width="100%"><br>
-      <sub>A whole batch at a glance — eight background-subtracted frames stacked beside their 2θ × sample heatmap</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <img src="showcase/simulation/sim_xrd_fit_LaB6.png" width="100%"><br>
-      <sub>Full-pattern fit of the LaB₆ standard — observed (points), calculated (line), background, the observed−calculated difference and the Bragg-position ticks (Le Bail intensities, Rwp 4.24%)</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <img src="showcase/simulation/sim_xrd_gsas_keys.png" width="100%"><br>
-      <sub>Two hard checks behind the profile model — area is conserved (peak height ∝ 1/FWHM), and the calculated FWHM agrees with GSAS-II to within 1.2% across the W / X / Size / Mustrain channels</sub>
+    <td align="center" width="33%">
+      <img src="showcase/gui/gui_refine.png" width="100%"><br>
+      <sub>Refinement workbench — full-pattern fit, instrument baseline and parameter table</sub>
     </td>
   </tr>
 </table>
 
-</details>
+More screenshots, example fits and simulation figures:
+[Showcase](https://xyyzzc3.github.io/xrd_toolkit/) · [`showcase/`](showcase/).
 
-## Highlights
+## Install from source
 
-- **Calibrated 2D → 1D integration** — geometric refinement against the selected standard (LaB₆ by default, using pyFAI's LaB₆ values; certificate not recorded; CeO₂, Si, α-Al₂O₃ and other common standards are built in), followed by full 0°–360° azimuthal integration into a standard two-column powder pattern `(2θ(deg), intensity)`, ready for peak finding, profile fitting and PDF analysis.
-- **Calibration metrics that catch what the fit residual cannot** — every run reports the median ring-position deviation, how many of the 16 rings came out complete, and the per-ring lattice-constant dispersion: a run can print a 0.0000° residual while its rings sit 10 px off the real ones.
-- **Mask workbench before integration** — paint or auto-detect the beam-stop shadow, module gaps and fixed hot pixels; preview the 1D pattern before and after masking; write a traceable **Mask 2D** product; masked and unmasked 1D results remain distinct sources.
-- **Off-centre beams and sector analysis** — partial-ring datasets (beam at the detector edge or corner) run end to end, including a built-in numpy integration where pyFAI's radial binning gets unreliable; the 36-sector waterfall exposes preferred orientation and detector clipping.
-- **Background subtraction, live** — empty-scan subtraction (with an exposure/beam-current factor), a rolling-window auto baseline, and manual anchors that set the level while the auto baseline supplies the shape; smoothing (boxcar / Savitzky–Golay) and interval cuts on top. Negatives are kept by default — clipping the noise floor at 0 biases the mean up by ≈ 1σ.
-- **Batch workflow with staged products** — integrate a folder; curves and background-subtracted curves are cached per stage (keyed by file fingerprint + geometry + settings, reusable across sessions) and listed as **groups in the file bar**, so an 80-file batch goes to a comparison plot or heatmap in two clicks instead of re-integrating.
-- **Peak finding and single-peak profile fitting** — automatic peak detection with a robust noise estimate, prominence/height thresholds, minimum spacing and optional FWHM filtering (`services/peak_finding.py`); Gaussian, Lorentzian, pseudo-Voigt and split-Pearson VII single-peak fits with local backgrounds (`scripts/fit_peaks.py`), plus per-peak Scherrer size and instrument-corrected Williamson–Hall analysis (quadrature or linear subtraction of a LaB₆ standard's width, or the saved LaB₆ baseline in the GUI).
-- **Phase screening and cell refinement** — match observed peak positions against a bundled 41-phase library or your own CIF folder, filter by the periodic table, overlay several candidates, and refine the cell for all seven crystal systems including a 2θ zero (`scripts/refine_cell.py`, or `[精修晶胞]` in the phase workbench).
-- **Full-pattern fitting of measured standard patterns** — an independent implementation of the Thompson–Cox–Hastings pseudo-Voigt profile with Caglioti/Lorentzian width terms, following the GSAS-II PXC parameter conventions and units (Caglioti, Paoletti & Ricci, 1958; Thompson, Cox & Hastings, 1987; Toby & Von Dreele, 2013), with the profile cross-checked against GSAS-II simulations. Supports Le Bail or structural fits, extra phases, symmetry-constrained atomic-coordinate and site-occupancy refinement, and fixed-pixel hot-spot masking. The LaB₆ standard fixes the instrument profile and its own pattern is fitted with Le Bail intensities (Rwp 4.24%), and the fit reports Rietveld-scale wt% for the crystalline phases (Z·M·V; amorphous or unknown phases are excluded). Example: `showcase/simulation/sim_xrd_fit_LaB6.png`.
-- **In-situ multi-phase batch (generic page, LMFP is a built-in scheme)** — the in-situ workbench defaults to a generic phase table (any CIF list, roles, structure-factor/Le Bail, fraction denominator); the LMFP three-phase preset (Li-rich LMFP, Li-poor heterosite, Al reference) fills the same page in place, with two-start robust fitting (previous seed + CIF end-member), seed re-locking, anomaly flags, a CSV summary and split timings. Trends, a summary, single-frame fits and a peak-window tracker share one set of views; schemes save/load as JSON, background model/window and instrument source are selectable, and the result table defaults to a compact phase-wise set of columns with a diagnostic all-columns toggle. A three-frame GSAS-II cross-check (`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction trends.
-- **Workbench workflow** — phase screening, refinement and the in-situ batch share the same engine as the CLI. Entering a workbench collapses the parameter and log docks but keeps the file bar: double-click an entry to operate on it, check entries for batch ranges, and the previous layout returns on exit.
-- **One-click analysis report** — collects the current session's 1D curve, peak table, single-peak fits, W–H, phase screening, whole-pattern refinement and in-situ multi-phase batch into a self-contained HTML (figures embedded; print to PDF from the browser). Missing sections are marked "not run", and the report states the quantitative caveats (wt% vs. f_rich, background bias, minority-phase cells).
-- **Named project presets** — a preset bundles geometry, second-phase CIF, in-situ frame directory/mask, the phase library, plus optional **processing settings** (background/smoothing/crop snapshot) and a **mask file** (`.mask.npz` path); switch/save/manage from the parameter dock. Processing settings take effect only when you click `[套用当前预设]`, and `[存进预设…]` writes the current set back into a preset; a mask file is a per-image fallback in the mask workbench. Legacy named recipes in `outputs/recipes.json` are migrated once to user presets on startup. The built-in LMFP preset is read-only; user presets live in `presets_user.json` and the last-used one is restored on startup. A geometry change made outside the preset (e.g. a fresh calibration) is flagged as "current settings" in the dropdown and can be folded back into a user preset from the manager.
-- **Theoretical patterns from a CIF** — an XRD simulation module (Bragg + structure factor, written out by hand) plots a structure's powder pattern with (hkl) annotations and card-style hexagonal indices, verified peak-for-peak against pymatgen's reference calculator (`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`; pymatgen is part of the core dependencies since 0.2, since the GUI workbenches need it — the `[simulation]` extra remains as an alias).
-- **Desktop app over the same engine** — five stage entrances, a live parameter panel, on-curve peak finding with a peak table, hover readout, box zoom, single-hue gradient curves, `.poni` in/out, PNG/TIF/PDF/SVG export (vector formats for papers).
-
-## Install (from source)
+<details>
+<summary>Requirements, commands and CLI examples</summary>
 
 ```bash
 conda env create -f environment.yml    # once
 conda activate XRD_Toolkit_Environment
-pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI / PySide6 / pymatgen come along
-python -m xrd_toolkit.gui              # the desktop app
+pip install -e .                       # numpy / scipy / matplotlib / fabio / pyFAI / PySide6 / pymatgen
+python -m xrd_toolkit.gui              # desktop app
 ```
 
-> Sample data are not in the repository — point `--file` at your own diffraction images. Sample-derived figures and reports go under `outputs/` (gitignored); the repository ships code, CIFs and standard-sample (LaB₆) examples only.
-
 ```bash
-# calibrate + integrate one image (prints a config entry to paste into config.py)
+# calibrate + integrate one image
 python scripts/calibrate_integrate.py --file data/xxx.tif --wavelength 0.1223 --pixel 200 --dist0 1600
-# integrate with an existing geometry, or run the sector/waterfall analysis
-python scripts/integrate_pattern.py  --file data/xxx.tif
-python scripts/sector_waterfall.py   --file data/xxx.tif --n-sectors 36
-# simulate a theoretical powder pattern from a CIF (structures ship in data/structures/)
+# integrate with an existing geometry, or run sector/waterfall analysis
+python scripts/integrate_pattern.py --file data/xxx.tif
+python scripts/sector_waterfall.py --file data/xxx.tif --n-sectors 36
+# simulate a powder pattern from a CIF
 python scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png
-# fit the LaB6 standard (Le Bail profile; Bragg-position ticks)
+# fit the LaB6 standard (Le Bail profile + Bragg ticks)
 python scripts/simulate_study.py fit
 ```
 
-Typical workflow: `view_diffraction` (inspect) → `calibrate_integrate` (geometry) → `integrate_pattern` (1D pattern) → `sector_waterfall` (uniformity). Outputs land in `outputs/{dataset}/`. Omit `--file` and each script shows an interactive menu of everything in `data/`; the three consuming scripts take `--config NAME` (default `lmfp1_lab6`). **Script table and full flag list: [docs/NOTES.md](docs/NOTES.md#cli-scripts).**
+Sample data are not in the repository — point `--file` at your own images.
+Script outputs and cached products live under `outputs/` (gitignored); the
+repository ships code, reference CIFs and standard-sample examples.
+</details>
 
-## Tests
+## Tests & repository layout
+
+<details>
+<summary>Test commands and source tree</summary>
 
 ```bash
 python scripts/run_tests.py            # full suite, behind a watchdog
-python scripts/run_tests.py --fast     # unit tests + static guards only (~3 min)
-python scripts/run_tests.py --jobs 8   # split GUI suite, 8 worker processes
+python scripts/run_tests.py --fast     # unit tests + static guards only
+python scripts/run_tests.py --jobs 8   # split GUI suite across processes
+python scripts/check_gui.py            # real-data GUI chain probe
 ```
 
-Synthetic-image unit tests (no sample data needed, plain `unittest`) cover the calibration and integration engine, the background estimators, the staged-product cache, and the GUI wiring. `scripts/check_gui.py` drives the real interface with real data and real canvas events; `scripts/stress_panels.py` is the regression probe for two offscreen deadlocks.
-
-## In-situ multi-phase batch
-
-The in-situ workbench is a generic multi-phase page: add any CIF list to the
-phase table (sample/reference roles, cell freedom, structure-factor or Le Bail
-intensity, fraction denominator) or pick the built-in LMFP three-phase scheme,
-which fills the page in place. `scripts/fit_insitu.py` refines an in-situ LMFP
-sequence with three phases (Li-rich LMFP, Li-poor heterosite, Al reference),
-two-start robust fitting (previous seed + CIF end-member), seed re-locking,
-anomaly flags, a CSV summary and split timings; the GUI shows trends, a
-summary, single-frame fits and a peak-window tracker, with minority-phase
-cells faded. A three-frame GSAS-II cross-check
-(`scripts/gsas2_insitu_crosscheck.py`) compares cells and phase-fraction
-trends against our fit. Fit parameters, the in-situ results and the cross-check:
-[docs/NOTES.md](docs/NOTES.md) (`#lmfp-in-situ-three-phase-batch`).
-
-## Roadmap
-
-Peak finding, profile fitting, full-pattern (Le Bail/structural) fitting,
-the four analysis workbenches, the one-click report (v1.1) and named project
-presets (B1, including processing settings and mask files) have landed. The remaining items are:
-
-- In-situ speed-up (81 frames, 23 min → target <15 min) and multi-instrument
-  baseline management;
-- Machine learning: clustering for phase identification and CNN peak-shape
-  classification (deliberately last, not scheduled)
-
-Experimental validation is covered by the synchrotron LaB₆ + LMFP work in v0.2.0;
-laboratory-source data and an Si standard are not a separate open task.
-
-## Project structure
+Synthetic-image unit tests (no sample data needed) cover calibration and
+integration, background estimators, staged-product caching and GUI wiring;
+GUI integration tests use real canvas events.
 
 ```
-.
-├── data/                          # raw XRD images (.tif, untracked) + data/structures/ (reference CIFs, tracked)
-├── outputs/                       # script outputs + product cache (local, not tracked)
-├── showcase/                      # curated example figures (this README, the manual, the simulation module)
-├── packaging/                     # PyInstaller build (icons, spec, constraints)
-├── scripts/                       # the analysis scripts + self-check tools
-├── src/xrd_toolkit/
-│   ├── config.py                  # named geometry configs (one per batch; --config selects)
-│   ├── cli.py                     # shared interactive file-selection menu
-│   ├── core/processor.py          # image processing (line profiles, ring-centre localization)
-│   ├── services/                  # data_loader · integrator · background · range_selector · ring_metrics · peak_finding · stage_cache
-│   ├── simulation/                # CIF → powder pattern, peak/profile fitting and microstructure (hand-written; pymatgen core)
-│   └── gui/                       # PySide6 desktop app (python -m xrd_toolkit.gui)
-├── tests/                         # synthetic-image unit tests + GUI integration tests
-├── docs/                          # Chinese README, long-form notes
-├── environment.yml                # conda environment (one-command setup)
-└── pyproject.toml                 # package metadata & dependencies
+src/xrd_toolkit/   core · services · simulation · gui
+scripts/           analysis CLI + self-check tools
+packaging/         PyInstaller spec, icons, constraints
+tests/             unit + GUI integration tests
+data/structures/   reference CIFs (tracked); data/*.tif are local samples
+showcase/          curated figures used by the README, manual and site
+docs/              manual, long-form notes, Chinese README
 ```
+</details>
+
+## Status
+
+**v0.2.1** (2026-11-19) is the latest release. The generic in-situ page,
+saveable schemes, background/instrument options, compact result tables,
+initial-cell editing and scheme-driven report figures landed in this release.
+Next: configurable in-situ cell-axis and peak-window views, deeper structural
+options for in-situ batches, and ML-assisted phase/peak classification
+(deliberately last). Experimental validation is covered by the synchrotron
+LaB₆ + LMFP work; laboratory-source and Si-standard data remain a separate
+dataset task.
 
 ## Data, privacy & compliance
 
-All computation happens **on your machine**: the app never connects to the
-network, uploads nothing, and has no telemetry. It is a scientific tool —
-verify critical numbers before publication. Licensed MIT; the full license
-texts of the bundled third-party components (Qt/PySide6, pyFAI, NumPy,
-SciPy, Matplotlib, …) ship as `THIRD_PARTY_NOTICES.txt` inside the app
-(Help → About) and in [`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt).
+All computation happens **on your machine**: the app does not connect to the
+network, upload anything or collect telemetry. It is a scientific tool —
+verify critical numbers before publication. Licensed MIT; third-party notices
+ship in the app (Help → About) and in
+[`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt).
 
 ## Author
 
-Chenze Bian — MSc in Physics with Data Modelling and Quantum Technologies, City University of Hong Kong · [GitHub](https://github.com/xyyzzc3)
+Chenze Bian — MSc in Physics with Data Modelling and Quantum Technologies,
+City University of Hong Kong · [GitHub](https://github.com/xyyzzc3)
 
 ## License
 
