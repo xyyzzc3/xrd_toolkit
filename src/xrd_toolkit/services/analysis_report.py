@@ -198,9 +198,15 @@ class ReportInSitu:
     phase_labels: list[tuple[str, str]] = field(default_factory=list)
     sample_labels: list[str] = field(default_factory=list)
     f_key: str = "f_rich"
+    # 报告图按方案画（2026-11-19）：每相的图内名/颜色/角色，峰窗和
+    # 视图配置也带上；通用方案不再套 LMFP 的 (200) 双峰图。
+    phase_info: list[dict] = field(default_factory=list)
+    peak_windows: list[dict] = field(default_factory=list)
+    shade_phase: Optional[str] = None
+    crossover_pair: Optional[tuple] = None
     # 代表性单帧拟合（当前查看的帧，或 Rwp 最低的可用帧）
     frame_fit: Optional[ReportProfileFit] = None
-    # 模型无关检查（(200) 双峰质心）；由 GUI 从已算好的拟合曲线导出
+    # 旧快照的模型无关检查（(200) 双峰质心）；有 phase_info 时改画峰窗
     mi_rows: list[dict] = field(default_factory=list)
 
 
@@ -670,10 +676,62 @@ def _fig_profile(profile: Optional[ReportProfileFit]) -> str:
     return _data_uri(fig)
 
 
+def _insitu_phase_set(insitu: ReportInSitu):
+    """报告图用的轻量 PhaseSet（不改动原始快照）。"""
+    from types import SimpleNamespace
+
+    def _names(info):
+        label = str(info.get("label") or "")
+        display = str(info.get("display") or label or "phase")
+        plot_name = str(info.get("plot_name") or display)
+        return label, display, plot_name
+
+    phases = []
+    for info in insitu.phase_info or ():
+        label, display, plot_name = _names(info)
+        is_sample = bool(info.get("sample", True))
+        phases.append(SimpleNamespace(
+            label=label, color=info.get("color"),
+            is_sample=(lambda sample=is_sample: sample),
+            display=(lambda value=display: value),
+            plot_label=(lambda value=plot_name: value)))
+    if not phases:
+        # 旧快照：只有 (label, display) 对，颜色用自动配色。
+        samples = set(insitu.sample_labels or ())
+        for label, display in insitu.phase_labels or ():
+            label, display = str(label), str(display or label)
+            phases.append(SimpleNamespace(
+                label=label, color=None,
+                is_sample=(lambda sample=label in samples: sample),
+                display=(lambda value=display: value),
+                plot_label=(lambda value=display: value)))
+    windows = [SimpleNamespace(**item)
+               for item in (insitu.peak_windows or ())]
+    views = SimpleNamespace(peak_windows=windows,
+                            shade_phase=insitu.shade_phase,
+                            crossover_pair=insitu.crossover_pair,
+                            annotations=None)
+    return SimpleNamespace(
+        phases=phases, views=views,
+        sample_phases=lambda: [p for p in phases if p.is_sample()])
+
+
 def _fig_insitu_summary(insitu: ReportInSitu) -> str:
-    """原位批量汇总图（四栏：相分数 / 两相晶胞 / Rwp）。"""
+    """原位批量汇总图：有方案信息就按相画（通用），旧快照退回 LMFP 图。"""
     if not insitu.rows:
         return ""
+    if insitu.phase_info:
+        try:
+            from xrd_toolkit.simulation.insitu_multi_plots import (
+                draw_multi_summary)
+        except ImportError:                        # pragma: no cover
+            return ""
+        fig = _new_figure(8.6, 5.8)
+        try:
+            draw_multi_summary(fig, insitu.rows, _insitu_phase_set(insitu))
+        except Exception:                          # noqa: BLE001
+            return ""
+        return _data_uri(fig)
     try:
         from xrd_toolkit.simulation.insitu_plots import draw_summary
     except ImportError:                            # pragma: no cover
@@ -682,14 +740,27 @@ def _fig_insitu_summary(insitu: ReportInSitu) -> str:
     try:
         draw_summary(fig, insitu.rows)
     except Exception:                              # noqa: BLE001
-        # 通用方案的逐帧行没有 LMFP 的三相列，这张 LMFP 汇总图画不了；
-        # 报告仍保留摘要表与逐帧表（列按方案），不因此失败。
         return ""
     return _data_uri(fig)
 
 
 def _fig_insitu_model_independent(insitu: ReportInSitu) -> str:
-    """模型无关检查图（(200) 双峰质心）；没有缓存行就跳过。"""
+    """峰窗跟踪 / 旧版模型无关检查；通用方案没配峰窗就不画。"""
+    if insitu.peak_windows:
+        try:
+            from xrd_toolkit.simulation.insitu_multi_plots import (
+                draw_window_tracker)
+        except ImportError:                        # pragma: no cover
+            return ""
+        fig = _new_figure(9.6, 5.6)
+        try:
+            draw_window_tracker(fig, insitu.rows, _insitu_phase_set(insitu))
+        except Exception:                          # noqa: BLE001
+            return ""
+        return _data_uri(fig)
+    if insitu.phase_info:
+        # 通用方案没有峰窗：绝不套 LMFP 的 (200) 窗口画一张误导图。
+        return ""
     if not insitu.mi_rows:
         return ""
     try:
@@ -1784,10 +1855,16 @@ def _section_insitu(snapshot: ReportSnapshot, fig_no: int, number: int):
 
     img = _fig_insitu_model_independent(insitu)
     if img:
+        if insitu.peak_windows:
+            alt = "peak-window tracker"
+            caption = "峰窗跟踪：窗口质心 / 面积 / 峰高与批量相分数的关系"
+        else:
+            alt = "model-independent check"
+            caption = ("模型无关检查：(200) 双峰质心 / "
+                       "面积与批量相分数的一致性")
         body.append(
-            f"<figure><img src=\"{img}\" alt=\"model-independent check\">"
-            f"<figcaption>图 {fig_no}　模型无关检查：(200) 双峰质心 / "
-            f"面积与批量相分数的一致性</figcaption></figure>")
+            f"<figure><img src=\"{img}\" alt=\"{alt}\">"
+            f"<figcaption>图 {fig_no}　{caption}</figcaption></figure>")
         fig_no += 1
 
     # 列随方案（2026-11-18）：样品相给 f/wt，全部相给 a/c 晶胞。

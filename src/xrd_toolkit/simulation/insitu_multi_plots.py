@@ -14,6 +14,7 @@ PhaseSpec 的 display_name/颜色/分数对和 (200) 峰窗填好，不写死物
 import math
 
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 
 from xrd_toolkit.simulation.insitu_plots import (
     MINORITY_FRACTION, _finite_pairs, _num, _placeholder, _status_markers)
@@ -24,6 +25,26 @@ _PALETTE = ("#1f5fa8", "#e08a1e", "#2a9d8f", "#8e5aa8",
 
 def _color(phase, index):
     return getattr(phase, "color", None) or _PALETTE[index % len(_PALETTE)]
+
+
+def _frame_ticks(ax):
+    """帧号轴最多 8 个整数刻度（2026-11-19：81 帧时标签挤成一排）。"""
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=8, integer=True))
+
+
+def _phase_display(phase_set, label):
+    """机器标签 → 图内名（峰窗图例用）；找不到就退回标签。"""
+    for phase in getattr(phase_set, "phases", ()) or ():
+        if getattr(phase, "label", None) != label:
+            continue
+        display = getattr(phase, "plot_label", None)
+        if callable(display):
+            try:
+                return str(display())
+            except Exception:                      # noqa: BLE001
+                break
+        return str(getattr(phase, "display_name", "") or label)
+    return str(label)
 
 
 def _rows(rows):
@@ -169,6 +190,7 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
     ax.grid(alpha=0.25, linestyle=":")
     for ax in axes.ravel():
         ax.tick_params(labelsize=7)
+        _frame_ticks(ax)
     fig.suptitle(title or f"In-situ multi-phase batch — {len(rows)} frames",
                  fontsize=11)
     fig.text(0.5, 0.01,
@@ -197,6 +219,7 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
         ax.set_xlim(lo, hi)
         ax.grid(alpha=0.25, linestyle=":")
         ax.tick_params(labelsize=7)
+        _frame_ticks(ax)
     ax = axes[0, 0]
     for i, phase in enumerate(samples):
         vals = np.array([_num(r.get(f"f_{phase.label}")) for r in rows],
@@ -221,14 +244,23 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
                 rows, f"{phase.label}_{axis}",
                 esd=f"{phase.label}_{axis}_esd")
             if len(x):
+                color = _color(phase, i)
                 ax.errorbar(x, y, yerr=e, fmt="o-", ms=2.2, lw=0.8,
-                            capsize=1.5, elinewidth=0.6,
-                            color=_color(phase, i),
-                            label=phase.plot_label())
+                            capsize=1.5, elinewidth=0.6, color=color,
+                            alpha=0.35, label=phase.plot_label())
+                # 实心点 = 该相分数 >= 50%；淡色 = 少数相估计（与趋势图
+                # 同口径，2026-11-19）。
+                frac = {int(r["frame"]): _num(r.get(f"f_{phase.label}"), 0.0)
+                        for r in rows}
+                solid = np.array([frac.get(int(xi), 0.0)
+                                  >= MINORITY_FRACTION for xi in x])
+                if np.any(solid):
+                    ax.plot(np.asarray(x)[solid], np.asarray(y)[solid],
+                            "o", ms=2.2, color=color, label="_nolegend_")
         ax.set_ylabel(f"{axis} (Å)", fontsize=8)
         ax.set_title(f"({'b' if axis == 'a' else 'c'}) Cell {axis}",
                      fontsize=9)
-        if samples:
+        if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=7, loc="best")
     ax = axes[1, 1]
     ax.plot(frames, [_num(r.get("rwp")) for r in rows], "o-",
@@ -242,7 +274,10 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
     n_ok = sum(1 for r in rows if str(r.get("status")) == "ok")
     fig.suptitle(title or (f"In-situ multi-phase summary — {len(rows)} "
                            f"frames, ok {n_ok}/{len(rows)}"), fontsize=11)
-    fig.tight_layout(rect=(0, 0.02, 1, 0.95))
+    fig.text(0.5, 0.01,
+             "faded cell points = minority-phase estimate (not reliable).",
+             ha="center", fontsize=6.5, color="0.4")
+    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     return fig
 
 
@@ -306,7 +341,8 @@ def draw_window_tracker(fig, rows, phase_set, *, title=None):
             continue
         color = _PALETTE[k % len(_PALETTE)]
         ax.plot(xs[ok], ys[ok], "o", ms=2.5, color=color,
-                label=f"{window.name} vs f_{window.vs_phase}")
+                label=(f"{window.name} vs "
+                       f"{_phase_display(phase_set, window.vs_phase)}"))
         if np.count_nonzero(ok) >= 3:
             try:
                 coef = np.polyfit(xs[ok], ys[ok], 1)
@@ -330,6 +366,8 @@ def draw_window_tracker(fig, rows, phase_set, *, title=None):
         ax.legend(fontsize=7, loc="best")
     for ax in axes.ravel():
         ax.tick_params(labelsize=7)
+    for ax in axes.ravel()[:3]:
+        _frame_ticks(ax)
     fig.suptitle(title or f"Peak-window tracker — {len(rows)} frames",
                  fontsize=11)
     fig.tight_layout(rect=(0, 0.02, 1, 0.95))

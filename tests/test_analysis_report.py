@@ -161,6 +161,47 @@ class TestReportHtml(unittest.TestCase):
         self.assertIn("模型无关检查", html)
         self.assertIn("in-situ single frame fit", html)
 
+    def test_insitu_generic_figures_follow_scheme(self):
+        """通用方案：汇总图按方案相画；有峰窗画峰窗，不再套 (200)。"""
+        rows = []
+        for i in range(1, 6):
+            rows.append({
+                "frame": i, "status": "ok", "usable": True, "rwp": 2.5,
+                "f_alpha": 0.62 - 0.02 * i, "f_alpha_esd": 0.01,
+                "f_beta": 0.38 + 0.02 * i, "f_beta_esd": 0.01,
+                "alpha_a": 10.1, "alpha_a_esd": 0.001,
+                "alpha_c": 4.70, "alpha_c_esd": 0.001,
+                "beta_a": 9.8, "beta_a_esd": 0.001,
+                "beta_c": 4.80, "beta_c_esd": 0.001,
+                "win_0_centroid": 1.30 + 0.01 * i,
+                "win_0_area": 100.0 + i, "win_0_height": 50.0 + i,
+            })
+        phase_info = [
+            {"label": "alpha", "display": "α相", "plot_name": "Alpha",
+             "color": "#1f5fa8", "sample": True},
+            {"label": "beta", "display": "β相", "plot_name": "Beta",
+             "color": "#e08a1e", "sample": True},
+        ]
+        window = {"name": "(200) doublet", "tth_min": 1.18,
+                  "tth_max": 1.55, "vs_phase": "beta",
+                  "side_lo": (1.18, 1.28), "side_hi": (1.50, 1.56)}
+        insitu = ar.ReportInSitu(
+            rows=rows, phase_info=phase_info, peak_windows=[window],
+            sample_labels=["alpha", "beta"], f_key="f_alpha")
+        html = ar.build_report_html(_snapshot(insitu=insitu))
+        self.assertIn("in-situ batch summary", html)
+        self.assertIn("peak-window tracker", html)
+        self.assertIn("峰窗跟踪", html)
+        self.assertNotIn("模型无关检查", html)
+        # 没有峰窗的通用方案：只画汇总图，不画 LMFP (200) 图
+        insitu2 = ar.ReportInSitu(
+            rows=rows, phase_info=phase_info,
+            sample_labels=["alpha", "beta"], f_key="f_alpha")
+        html2 = ar.build_report_html(_snapshot(insitu=insitu2))
+        self.assertIn("in-situ batch summary", html2)
+        self.assertNotIn("peak-window tracker", html2)
+        self.assertNotIn("模型无关检查", html2)
+
     def test_insitu_table_follows_scheme_phase_labels(self):
         """通用方案：逐帧表列跟着相名走（2026-11-18）。"""
         rows = [{

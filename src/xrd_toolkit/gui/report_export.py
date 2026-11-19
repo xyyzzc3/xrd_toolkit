@@ -376,34 +376,60 @@ def _insitu_snapshot(window):
                 result, f"In-situ frame {frame_no} — {Path(path).name}")
 
     mi_rows = []
-    fitted = list(getattr(batch, "fitted", None) or [])
-    if len(fitted) >= 3:
-        cached = getattr(editor, "_mi_rows", None)
-        if cached:
-            mi_rows = [dict(row) for row in cached]
-        else:
-            try:
-                from xrd_toolkit.simulation.insitu_plots import (
-                    model_independent_rows)
-                mi_rows = model_independent_rows(fitted)
-            except Exception as err:             # noqa: BLE001
-                mi_rows = []
-                methods.append(("模型无关检查",
-                                f"未收录：{user_error_text(err)}"))
+    if pset is None:
+        # 旧快照/未知方案：保留 LMFP (200) 检查；真实批次按方案峰窗画
+        # （2026-11-19），不再对通用方案硬套 LMFP 的窗口。
+        fitted = list(getattr(batch, "fitted", None) or [])
+        if len(fitted) >= 3:
+            cached = getattr(editor, "_mi_rows", None)
+            if cached:
+                mi_rows = [dict(row) for row in cached]
+            else:
+                try:
+                    from xrd_toolkit.simulation.insitu_plots import (
+                        model_independent_rows)
+                    mi_rows = model_independent_rows(fitted)
+                except Exception as err:         # noqa: BLE001
+                    mi_rows = []
+                    methods.append(("模型无关检查",
+                                    f"未收录：{user_error_text(err)}"))
 
     phase_labels = [("rich", "富锂相"), ("poor", "贫锂相"),
                     ("Al", "Al 参考相")]
     sample_labels = ["rich", "poor"]
     f_key = "f_rich"
+    phase_info = []
+    peak_windows = []
+    shade_phase = None
+    crossover_pair = None
     if pset is not None:
         phase_labels = [(phase.label, phase.display()) for phase in pset.phases]
         sample_labels = [phase.label for phase in pset.sample_phases()
                          if phase.include_in_fraction]
         if sample_labels:
             f_key = f"f_{sample_labels[0]}"
+        phase_info = [{
+            "label": phase.label,
+            "display": phase.display(),
+            "plot_name": phase.plot_label(),
+            "color": phase.color,
+            "sample": phase.is_sample(),
+        } for phase in pset.phases]
+        peak_windows = [{
+            "name": window.name,
+            "tth_min": window.tth_min,
+            "tth_max": window.tth_max,
+            "vs_phase": window.vs_phase,
+            "side_lo": window.side_lo,
+            "side_hi": window.side_hi,
+        } for window in getattr(pset.views, "peak_windows", []) or []]
+        shade_phase = getattr(pset.views, "shade_phase", None)
+        crossover_pair = getattr(pset.views, "crossover_pair", None)
     return report.ReportInSitu(
         rows=rows, methods=methods, frame_fit=frame_fit, mi_rows=mi_rows,
-        phase_labels=phase_labels, sample_labels=sample_labels, f_key=f_key)
+        phase_labels=phase_labels, sample_labels=sample_labels, f_key=f_key,
+        phase_info=phase_info, peak_windows=peak_windows,
+        shade_phase=shade_phase, crossover_pair=crossover_pair)
 
 
 # ══ 收集快照 ═════════════════════════════════════════════

@@ -184,8 +184,11 @@ class TestReportWindow(unittest.TestCase):
                        "wavelength": 0.1223, "curve_title": "fake_report"},
             _fit_result_note="")
         self.w.refine_editor = editor
+        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        batch = _fake_insitu_batch()
+        batch.phase_set = lmfp_phase_set()
         self.w.insitu_editor = SimpleNamespace(
-            batch=_fake_insitu_batch(),
+            batch=batch,
             _batch_meta={"data_dir": "/data/insitu", "mask": "",
                          "phases": {}, "lab6": ""},
             phase_paths={}, data_dir="/data/insitu", mask_path=None,
@@ -201,6 +204,9 @@ class TestReportWindow(unittest.TestCase):
         self.assertIsNotNone(snapshot.insitu)
         self.assertEqual(snapshot.refine.weights[0].label, "LMFP")
         self.assertEqual(snapshot.insitu.rows[0]["frame"], 1)
+        self.assertEqual(snapshot.insitu.phase_info[0]["label"], "rich")
+        self.assertEqual(snapshot.insitu.peak_windows[0]["name"],
+                         "(200) doublet")
         self.assertEqual(snapshot.refine.params[0][0], "a")
         html = ar.build_report_html(snapshot)
         self.assertIn("全谱精修", html)
