@@ -340,11 +340,14 @@ def _fit_once(t, y, bg, rich, poor, al, lam, inst, rich_cell, poor_cell,
 
 
 def load_frame(path, geom, mask, *, npt=NPT, tth_min=TTH_MIN,
-               tth_max=TTH_MAX):
+               tth_max=TTH_MAX, bg_window=0.2):
     """读一帧 → (t, y, bg, timers)：读图、1D 积分、自动基线。
 
     单独抽出来给少数相两段拟合实验复用（第二段要用同一份 t/y/bg，
     重新积分一次虽便宜，但口径必须逐点一致）。
+
+    `bg_window` 是自动基线的滑动窗口宽度（度，2026-11-19 B4）：通用
+    原位方案可以按方案改；旧 LMFP 引擎走默认 0.2，金标准口径不变。
     """
     timers = {}
     t0 = time.perf_counter()
@@ -355,7 +358,7 @@ def load_frame(path, geom, mask, *, npt=NPT, tth_min=TTH_MIN,
                         tth_max_deg=tth_max, mask=mask, **geom)
     timers["integrate"] = time.perf_counter() - t1
     t2 = time.perf_counter()
-    bg = estimate_baseline_sliding(t, y, 0.2)
+    bg = estimate_baseline_sliding(t, y, float(bg_window))
     timers["bg"] = time.perf_counter() - t2
     return t, y, bg, timers
 

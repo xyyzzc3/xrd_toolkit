@@ -147,6 +147,82 @@ class TestGenericEngine(unittest.TestCase):
         self.assertIsNone(gen.resolve_instrument(
             InstrumentSpec(mode="none"), {}, 1.0, record))
 
+    # ── 背景模型/窗口（2026-11-19 B4） ─────────────────────
+    def _bg_batch(self, **policy_kwargs):
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, generic_phase_set)
+        pset = generic_phase_set([RICH], name="demo")
+        pset.policy = BatchPolicy(**policy_kwargs)
+        return gen.GenericBatch([], {}, 1.5406, phase_set=pset)
+
+    def test_background_models_reach_fit_pattern(self):
+        cases = [
+            ("estimated", {"background_window": 0.3},
+             {"knots": 0.25, "smooth": gen.BG_SMOOTH, "bg_is_array": True}),
+            ("chebyshev", {"background_order": 7},
+             {"background": 7, "smooth": 0.0, "bg_is_array": False}),
+            ("none", {}, {"background": None, "smooth": 0.0,
+                          "bg_is_array": False}),
+        ]
+        for model, extra, expect in cases:
+            with self.subTest(model=model):
+                batch = self._bg_batch(background_model=model, **extra)
+                t = np.linspace(1.0, 8.0, 40)
+                y = np.ones(40)
+                bg = np.zeros(40)
+                seen = {}
+
+                def fake_fit(*_args, **kwargs):
+                    seen.update(kwargs)
+                    return _duck()
+
+                with mock.patch.object(gen, "fit_pattern",
+                                       side_effect=fake_fit):
+                    batch._fit_once(t, y, bg, 10)
+                if expect["bg_is_array"]:
+                    self.assertIs(seen["background"], bg)
+                    self.assertEqual(seen["background_knots"],
+                                     expect["knots"])
+                else:
+                    self.assertEqual(seen["background"],
+                                     expect["background"])
+                    self.assertNotIn("background_knots", seen)
+                self.assertEqual(seen["background_smooth"], expect["smooth"])
+
+    def test_background_window_reaches_load_frame(self):
+        batch = self._bg_batch(background_window=0.45)
+        captured = {}
+
+        def fake_load(_path, _geom, _mask, **kwargs):
+            captured.update(kwargs)
+            return (np.linspace(1.0, 8.0, 20), np.ones(20),
+                    np.zeros(20), {})
+
+        with mock.patch.object(gen, "load_frame", side_effect=fake_load), \
+             mock.patch.object(gen.GenericBatch, "_fit_once",
+                               return_value=_duck()):
+            batch.fit_frame("frame.tif")
+        self.assertAlmostEqual(captured["bg_window"], 0.45)
+
+    def test_bad_background_policy_fails_early(self):
+        with self.assertRaises(ValueError):
+            self._bg_batch(background_model="magic")
+        with self.assertRaises(ValueError):
+            self._bg_batch(background_window=0.0)
+
+    def test_scheme_roundtrip_keeps_background_settings(self):
+        from xrd_toolkit.simulation.phase_set import (
+            phase_set_from_dict, phase_set_to_dict)
+        batch = self._bg_batch(background_model="chebyshev",
+                               background_order=8,
+                               background_window=0.35)
+        data = phase_set_to_dict(batch.phase_set)
+        self.assertEqual(data["policy"]["background_model"], "chebyshev")
+        back = phase_set_from_dict(data)
+        self.assertEqual(back.policy.background_model, "chebyshev")
+        self.assertEqual(back.policy.background_order, 8)
+        self.assertAlmostEqual(back.policy.background_window, 0.35)
+
     def test_cell_jump_keeps_seed(self):
         batch = gen.GenericBatch([RICH, POOR], {}, 1.0)
         batch.frame_no = 1        # 第一帧不判晶胞跳变（与 LMFP 引擎同口径）
@@ -217,6 +293,44 @@ class TestGenericEntry(unittest.TestCase):
         self._pick("generic")
         self.assertEqual(self.editor.phase_table.rowCount(), 0)
         self.assertEqual(self.editor._scheme_adapter, "")
+
+    def test_background_controls_follow_scheme(self):
+        """背景模型/窗口/阶数（2026-11-19 B4）：界面、策略、存载一致。"""
+        from xrd_toolkit.gui import insitu_workbench as wb
+        self._pick("lmfp")
+        self.assertEqual(self.editor.bg_model.currentData(), "estimated")
+        self.assertTrue(self.editor.bg_window.isEnabled())
+        self.assertFalse(self.editor.bg_order.isEnabled())
+        self.editor.bg_model.setCurrentIndex(
+            self.editor.bg_model.findData("chebyshev"))
+        QApplication.processEvents()
+        self.assertFalse(self.editor.bg_window.isEnabled())
+        self.assertTrue(self.editor.bg_order.isEnabled())
+        self.editor.bg_order.setValue(7)
+        self.editor.bg_window.setValue(0.35)
+        policy = self.editor._current_policy()
+        self.assertEqual(policy.background_model, "chebyshev")
+        self.assertEqual(policy.background_order, 7)
+        self.assertAlmostEqual(policy.background_window, 0.35)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "bg.json"
+            with mock.patch.object(
+                    wb.QFileDialog, "getSaveFileName",
+                    return_value=(str(out), "")):
+                self.editor._save_scheme()
+            self._pick("generic")
+            self.assertEqual(self.editor.bg_model.currentData(), "estimated",
+                             "切回通用方案应回到默认背景设置")
+            with mock.patch.object(
+                    wb.QFileDialog, "getOpenFileName",
+                    return_value=(str(out), "")):
+                self.editor._load_scheme()
+        self.assertEqual(self.editor.bg_model.currentData(), "chebyshev")
+        self.assertEqual(self.editor.bg_order.value(), 7)
+        self.assertAlmostEqual(self.editor.bg_window.value(), 0.35)
+        self.assertFalse(self.editor.bg_window.isEnabled())
+        self.assertTrue(self.editor.bg_order.isEnabled())
 
     def test_rename_updates_plot_name_and_bragg_labels(self):
         """改名同时改图内名称（2026-11-18 用户："Li rich 这些怎么改"）。"""

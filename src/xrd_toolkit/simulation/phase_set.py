@@ -90,8 +90,12 @@ class BatchPolicy:
     xtol: float = 1e-6
     ftol: float = 1e-6
     gtol: float = 1e-6
+    # 背景（2026-11-19 B4）：estimated = 固定自动基线 + 0.25° 分段修正；
+    # chebyshev = 背景与峰联解；none = 不建模背景（只适合已扣干净的数据）。
+    # background_window 是自动基线的滑动窗口宽度（度）。
     background_model: str = "estimated"
     background_order: int = 10
+    background_window: float = 0.2
     intensity_poly: int = 0
     joint_stage: bool = False      # True = 所有非线性参数一个联合阶段
 

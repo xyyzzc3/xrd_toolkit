@@ -6,6 +6,7 @@
   * 第一相 = 主相（结构因子；正交/立方晶胞可选自由）；
   * 其余相 = 额外相（默认逐反射强度自由，即 Le Bail；晶胞可选自由）；
   * 每帧读图 → 1D 积分 → 自动基线 → 一次全谱拟合，从上一帧晶胞起步；
+    背景模型（estimated/chebyshev/none）与窗口宽度按 BatchPolicy 走；
   * 输出每相的相对强度分数 f_i = A_i / ΣA 与晶胞；不做 LMFP 的
     rich/poor 语义，也不做双起点/两段少数相——通用模式先保证能跑通。
 
@@ -27,7 +28,7 @@ from xrd_toolkit.simulation import b_iso_from_cif, fit_pattern, load_structure
 from xrd_toolkit.simulation.phase_set import (
     BatchPolicy, PhaseSet, PhaseSpec, REFERENCE, SAMPLE, _safe_label,
     phase_set_from_dict)
-from xrd_toolkit.simulation.insitu import frames_in_dir, load_frame
+from xrd_toolkit.simulation.insitu import BG_SMOOTH, frames_in_dir, load_frame
 from xrd_toolkit.services.mask import load_mask
 
 CELL_JUMP = 0.30          # 通用模式：任一晶胞轴跳 > 0.30 Å 标 cell_jump
@@ -289,6 +290,7 @@ class GenericBatch:
                 phase.lebail = bool(extra_lebail and i > 0)
             base_policy = policy or BatchPolicy.generic()
         self.policy = base_policy
+        self._check_background_policy()
         self.windows = list(getattr(getattr(phase_set, "views", None),
                                     "peak_windows", []) or [])
         self.geom = dict(geom)
@@ -320,7 +322,30 @@ class GenericBatch:
                 return phase
         raise ValueError("至少要有一张样品相（role=sample）")
 
+    def _check_background_policy(self):
+        """背景模型/窗口在准备阶段就校验，坏值别等每帧都记一条 error。"""
+        model = str(getattr(self.policy, "background_model", "estimated")
+                    or "estimated")
+        if model not in ("estimated", "chebyshev", "none"):
+            raise ValueError(f"未知背景模型：{model}")
+        if float(getattr(self.policy, "background_window", 0.2)) <= 0:
+            raise ValueError("背景窗口必须大于 0")
+
     # ── 拟合一帧 ────────────────────────────────────────────
+    def _background_kwargs(self, bg):
+        """按 BatchPolicy 组装背景参数（2026-11-19 B4）。
+
+        与旧 `insitu._background_kwargs` 同口径：estimated 用固定自动
+        基线 + 0.25° 分段修正 + 曲率罚项；chebyshev 只给阶数，背景与峰
+        一起线性解；none 完全不建模背景（只适合已经扣干净的数据）。
+        """
+        model = str(self.policy.background_model or "estimated")
+        if model == "none":
+            return {"background": None}, 0.0
+        if model == "chebyshev":
+            return {"background": int(self.policy.background_order)}, 0.0
+        return {"background": bg, "background_knots": 0.25}, BG_SMOOTH
+
     def _fit_once(self, t, y, bg, max_nfev, seed=None):
         seed = self.seed if seed is None else seed
         main = self._main_phase()
@@ -374,10 +399,11 @@ class GenericBatch:
                 for key in cell_free_params(phase.structure):
                     names.append(f"{phase.label}:{key}")
             stages = [tuple(names)]
+        bg_kwargs, bg_smooth = self._background_kwargs(bg)
         return fit_pattern(
             main.structure, t, y, wavelength=self.lam,
             b_iso=float(main.b_iso),
-            background=bg, background_knots=0.25, background_smooth=0.1,
+            **bg_kwargs, background_smooth=bg_smooth,
             weights="poisson", cell_refine=bool(main_free),
             extra_phases=extras, phase_label=main.label,
             free=free, initial=init, max_nfev=int(max_nfev),
@@ -432,7 +458,8 @@ class GenericBatch:
         try:
             t, y, bg, timers = load_frame(
                 path, self.geom, self.mask, npt=self.npt,
-                tth_min=self.tth_min, tth_max=self.tth_max)
+                tth_min=self.tth_min, tth_max=self.tth_max,
+                bg_window=float(self.policy.background_window))
             win_vals = []
             for window in self.windows:
                 win_vals.append(window_stats(t, y, window))

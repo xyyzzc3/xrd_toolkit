@@ -366,6 +366,37 @@ class InSituWorkbench(QWidget):
                                                    QSizePolicy.Preferred)
         left_lay.addWidget(self.instrument_params_label)
 
+        # 背景（2026-11-19 B4）：原来写死"自动基线 0.2° + 0.25° 分段修正"，
+        # 方案里虽然记着 background_model 却没有界面、引擎也没读。现在
+        # 三个模型可选，默认仍是原来的自动基线（LMFP 金标准口径不变）。
+        left_lay.addWidget(_section("背景"))
+        self.bg_model = QComboBox()
+        self.bg_model.addItem("自动基线", "estimated")
+        self.bg_model.addItem("Chebyshev 联解", "chebyshev")
+        self.bg_model.addItem("不扣背景", "none")
+        self.bg_model.setToolTip(
+            "自动基线：先估计一条背景再拟合（默认，最稳）；"
+            "Chebyshev 联解：背景和峰一起解，适合背景起伏大的数据；"
+            "不扣背景只适合背景已经扣干净的数据。")
+        self.bg_model.currentIndexChanged.connect(self._sync_bg_controls)
+        left_lay.addLayout(_labeled_row("模型", self.bg_model))
+        self.bg_window = QDoubleSpinBox()
+        self.bg_window.setRange(0.05, 2.0)
+        self.bg_window.setSingleStep(0.05)
+        self.bg_window.setDecimals(2)
+        self.bg_window.setValue(0.2)
+        self.bg_window.setSuffix(" °")
+        self.bg_window.setToolTip(
+            "自动基线的滑动窗口宽度：越小越贴峰底，越大越平缓")
+        left_lay.addLayout(_labeled_row("窗口", self.bg_window))
+        self.bg_order = QSpinBox()
+        self.bg_order.setRange(2, 30)
+        self.bg_order.setValue(10)
+        self.bg_order.setToolTip(
+            "Chebyshev 阶数：越高越灵活，也越容易和峰抢强度")
+        left_lay.addLayout(_labeled_row("阶数", self.bg_order))
+        self._sync_bg_controls()
+
         left_lay.addWidget(_section("参数"))
         self.max_rwp = QDoubleSpinBox()
         self.max_rwp.setRange(2.0, 50.0)
@@ -620,10 +651,22 @@ class InSituWorkbench(QWidget):
         self._refresh_instrument_label()
         self._set_status(f"方案：{pset.name}（{len(pset.phases)} 相）")
 
+    def _sync_bg_controls(self, *_args):
+        """背景模型切换：窗口只对自动基线有意义，阶数只对 Chebyshev 有意义。"""
+        model = self.bg_model.currentData() or "estimated"
+        self.bg_window.setEnabled(model == "estimated")
+        self.bg_order.setEnabled(model == "chebyshev")
+
     def _apply_policy_to_controls(self):
         self.max_rwp.setValue(float(self._scheme_policy.max_rwp))
         self.first_nfev.setValue(int(self._scheme_policy.first_nfev))
         self.frame_nfev.setValue(int(self._scheme_policy.frame_nfev))
+        index = self.bg_model.findData(
+            str(self._scheme_policy.background_model or "estimated"))
+        self.bg_model.setCurrentIndex(max(0, index))
+        self.bg_order.setValue(int(self._scheme_policy.background_order))
+        self.bg_window.setValue(float(self._scheme_policy.background_window))
+        self._sync_bg_controls()
 
     def _current_policy(self):
         from dataclasses import replace
@@ -631,7 +674,10 @@ class InSituWorkbench(QWidget):
             self._scheme_policy,
             max_rwp=float(self.max_rwp.value()),
             first_nfev=int(self.first_nfev.value()),
-            frame_nfev=int(self.frame_nfev.value()))
+            frame_nfev=int(self.frame_nfev.value()),
+            background_model=str(self.bg_model.currentData() or "estimated"),
+            background_order=int(self.bg_order.value()),
+            background_window=float(self.bg_window.value()))
 
     def _instrument_for_run(self):
         from dataclasses import replace

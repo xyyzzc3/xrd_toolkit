@@ -316,13 +316,21 @@ def _insitu_snapshot(window):
     dual_text = {"off": "关闭（通用方案）",
                  "auto": "自动（不收敛才补 CIF 端元）",
                  "always": "每帧（上一帧种子 + CIF 端元）"}.get(dual, dual)
+    bg_value = str(getattr(
+        batch, "background_model",
+        getattr(policy, "background_model", "estimated")))
+    bg_text = {"estimated": "自动基线",
+               "chebyshev": "Chebyshev 联解",
+               "none": "不扣背景"}.get(bg_value, bg_value)
+    if bg_value == "estimated":
+        bg_text += f"（窗口 {float(getattr(policy, 'background_window', 0.2)):g}°）"
+    elif bg_value == "chebyshev":
+        bg_text += f"（{int(getattr(policy, 'background_order', 10))} 阶）"
     methods += [
         ("2θ 范围", f"{batch.tth_min:g}–{batch.tth_max:g}°"),
         ("输出点数", str(batch.npt)),
         ("最大 Rwp", f"{batch.max_rwp:g}%"),
-        ("背景模型", str(getattr(
-            batch, "background_model",
-            getattr(policy, "background_model", "estimated")))),
+        ("背景模型", bg_text),
         ("强度修正阶数", str(getattr(
             batch, "intensity_poly",
             getattr(policy, "intensity_poly", 0)))),
