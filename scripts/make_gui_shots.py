@@ -60,6 +60,13 @@ sys.path.insert(0, str(ROOT / "src"))
 _SCRATCH = Path(tempfile.mkdtemp(prefix="xrd_shots_"))
 os.environ.setdefault("XRD_STAGE_CACHE", str(_SCRATCH / "stage"))
 os.environ.setdefault("XRD_RECIPES", str(_SCRATCH / "recipes.json"))
+# 精修截图会点 [存为仪器基线]；别写进用户的真实基线文件（2026-11-19）。
+# 先复制一份开发机基线进临时目录，原位截图还能用上它。
+_BASELINE_SRC = ROOT / "src" / "xrd_toolkit" / "instrument_baseline.json"
+_BASELINE_DST = _SCRATCH / "instrument_baseline.json"
+if _BASELINE_SRC.is_file():
+    shutil.copyfile(_BASELINE_SRC, _BASELINE_DST)
+os.environ.setdefault("XRD_INSTRUMENT_BASELINE", str(_BASELINE_DST))
 
 # 批处理那张图的"导出"也走临时目录（2026-10-09：此前 demo 导出落进
 # 仓库 outputs/，每重拍一次留一个 导出_时间戳_原始/ 文件夹——翻了翻
@@ -803,6 +810,9 @@ def shot_refine(window) -> None:
              timeout_s=180)
     editor.save_instrument_btn.click()
     settle(400)
+    # 截图里别露出临时目录的基线路径（真实窗口仍显示完整路径）
+    if hasattr(editor, "_set_status"):
+        editor._set_status("仪器基线已保存（演示）")
     window.resize(1600, 1000)
     settle(400)
     fit_dock(window, window.refine_dock)
@@ -836,7 +846,9 @@ def shot_phase(window) -> None:
 
 
 def shot_insitu(window) -> None:
-    """原位工作台：3 帧真数据的三相批量（表 + 趋势图）。"""
+    """原位工作台：通用相表 + 3 帧真数据（紧凑表 + 趋势图）。"""
+    from xrd_toolkit.simulation.phase_set import (
+        BatchPolicy, PhaseSet, REFERENCE, spec_from_path)
     frames_dir = _SCRATCH / "insitu_frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     for p in LMFP[:3]:
@@ -848,6 +860,29 @@ def shot_insitu(window) -> None:
     settle(300)
     _hide_side_docks(window)
     editor = window.insitu_editor
+    # 2026-11-19 起默认页是通用空表：截图用同一套 LMFP 相（含 Al
+    # 4.061 的有效晶胞）填进去，顺便展示通用相表/紧凑结果表。
+    rich = spec_from_path(
+        ROOT / "data" / "structures" / "LiMn0.6Fe0.4PO4_olivine.cif",
+        label="rich", display_name="富锂相", plot_name="Li-rich phase")
+    poor = spec_from_path(
+        ROOT / "data" / "structures"
+        / "Mn0.6Fe0.4PO4_heterosite_rich_axis.cif",
+        label="poor", display_name="贫锂相", plot_name="Li-poor phase")
+    al = spec_from_path(
+        ROOT / "data" / "phase_library" / "Al_fcc.cif", label="Al_fcc",
+        display_name="Al 参考相", plot_name="Al reference",
+        role=REFERENCE, cell_free=False, intensity="lebail",
+        include_in_fraction=False)
+    al.cell0 = (4.061, 4.061, 4.061)
+    editor._apply_phase_set(PhaseSet(
+        name="LMFP 通用相表", phases=[rich, poor, al],
+        policy=BatchPolicy.generic()))
+    mask = ROOT / "outputs" / "masks" / "lmfp1_lab6_mask.npy"
+    editor.mask_path = mask if mask.is_file() else None
+    editor._refresh_mask_label()
+    editor._data_dir_set = True
+    editor._use_checked = False
     editor.data_dir = frames_dir
     editor.outdir = _SCRATCH / "insitu_out"
     editor.limit.setValue(3)

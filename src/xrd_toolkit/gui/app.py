@@ -872,8 +872,8 @@ def _on_phase_mode(window: QMainWindow, on: bool) -> None:
         _exit_phase_mode(window)
 
 
-_INSITU_TIP = ("原位工作台（LMFP 三相·方案）：富锂 / 贫锂 / Al "
-               "批量精修，逐帧继承种子，结果表 + 趋势图")
+_INSITU_TIP = ("原位工作台（通用多相·方案）：任意相批量精修，"
+               "逐帧继承种子，结果表 + 趋势图")
 
 
 def _open_insitu_workbench(window: QMainWindow) -> None:
@@ -889,7 +889,7 @@ def _open_insitu_workbench(window: QMainWindow) -> None:
         dock.setWidget(window.insitu_editor)
         window.mdi.addSubWindow(dock)
         window.insitu_dock = dock
-        dock.setWindowTitle("原位工作台（LMFP 三相）")
+        dock.setWindowTitle("原位工作台（通用多相）")
         area = window.mdi.viewport().size()
         dock.resize(max(720, area.width() - 40),
                     max(520, area.height() - 40))
