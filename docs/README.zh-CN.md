@@ -164,7 +164,7 @@ docs/              说明书、长文档、中文 README
 
 ## 作者
 
-边晨泽（Chenze Bian）——香港城市大学物理系，物理学与数据建模及量子技术
+卞晨泽（BIAN Chenze）——香港城市大学物理系，物理学与数据建模及量子技术
 硕士 · [GitHub](https://github.com/xyyzzc3)
 
 ## 许可

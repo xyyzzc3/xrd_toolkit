@@ -400,7 +400,7 @@ def _show_about(window: QMainWindow) -> None:
     box.setInformativeText(
         "二维 XRD 衍射数据处理：LaB₆ 几何校准、方位角积分、"
         "背景扣除、批量对比与热图。\n\n"
-        "© 2026 Chenze Bian · MIT 许可\n"
+        "© 2026 BIAN Chenze · MIT 许可\n"
         "随附的第三方组件（Qt/PySide6、pyFAI、NumPy、SciPy、"
         "Matplotlib 等）各按其许可分发")
     manual_btn = box.addButton("使用说明", QMessageBox.ActionRole)

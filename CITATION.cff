@@ -3,8 +3,7 @@ message: "If you use this software in academic work, please cite it as below. / 
 title: "XRD Toolkit: 2D X-ray diffraction analysis — calibration, azimuthal integration, background subtraction, peak finding, profile fitting and full-pattern refinement"
 type: software
 authors:
-  - family-names: Bian
-    given-names: Chenze
+  - name: "BIAN Chenze"
     affiliation: "City University of Hong Kong"
 version: 0.2.1
 date-released: 2026-11-19

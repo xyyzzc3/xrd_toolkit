@@ -192,7 +192,7 @@ ship in the app (Help → About) and in
 
 ## Author
 
-Chenze Bian — MSc in Physics with Data Modelling and Quantum Technologies,
+BIAN Chenze — MSc in Physics with Data Modelling and Quantum Technologies,
 City University of Hong Kong · [GitHub](https://github.com/xyyzzc3)
 
 ## License

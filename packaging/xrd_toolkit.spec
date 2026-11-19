@@ -139,6 +139,6 @@ if MAC:
             # PySide6 6.11 的轮子下限就是 macOS 13（见 constraints）
             "LSMinimumSystemVersion": "13.0",
             "NSHumanReadableCopyright":
-                "MIT License · 2026 Chenze Bian",
+                "MIT License · 2026 BIAN Chenze",
         },
     )
