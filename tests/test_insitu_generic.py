@@ -386,21 +386,30 @@ class TestGenericEntry(unittest.TestCase):
         from xrd_toolkit.gui.insitu_phase_table import (
             _DetailsDialog, default_phase)
         spec = default_phase(RICH, set())
-        dlg = _DetailsDialog(None, spec)
-        self.assertFalse(dlg.use_cell0.isChecked())
-        self.assertIsNone(dlg.values()["cell0"])
-        dlg.use_cell0.setChecked(True)
-        for axis in ("a", "b", "c"):
-            dlg.cell0_spins[axis].setValue(4.061)
-        cell0 = dlg.values()["cell0"]
-        self.assertEqual(len(cell0), 3)
-        for value in cell0:
-            self.assertAlmostEqual(value, 4.061)
+        dlg = _DetailsDialog(self.editor, spec)
+        try:
+            self.assertFalse(dlg.use_cell0.isChecked())
+            self.assertIsNone(dlg.values()["cell0"])
+            dlg.use_cell0.setChecked(True)
+            for axis in ("a", "b", "c"):
+                dlg.cell0_spins[axis].setValue(4.061)
+            cell0 = dlg.values()["cell0"]
+            self.assertEqual(len(cell0), 3)
+            for value in cell0:
+                self.assertAlmostEqual(value, 4.061)
+        finally:
+            dlg.close()
+            dlg.deleteLater()
         spec2 = dict(spec)
         spec2["cell0"] = (9.8, 5.8, 4.77)
-        dlg2 = _DetailsDialog(None, spec2)
-        self.assertTrue(dlg2.use_cell0.isChecked())
-        self.assertAlmostEqual(dlg2.values()["cell0"][0], 9.8)
+        dlg2 = _DetailsDialog(self.editor, spec2)
+        try:
+            self.assertTrue(dlg2.use_cell0.isChecked())
+            self.assertAlmostEqual(dlg2.values()["cell0"][0], 9.8)
+        finally:
+            dlg2.close()
+            dlg2.deleteLater()
+        QApplication.processEvents()
 
     def test_mask_hint_for_known_geometry(self):
         """有现成掩膜却没选时提醒（2026-11-19：忘选掩膜 Rwp 8%）。"""
