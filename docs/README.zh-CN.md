@@ -116,7 +116,7 @@ macOS 13 起 / Windows 10 起，下载约 150 MB（解压约 340 MB）。zip 里
   <tr>
     <td align="center" colspan="2">
       <img src="../showcase/gui/gui_insitu.png" width="100%"><br>
-      <sub>原位三相批量——3 帧真 LMFP 数据逐帧精修；相分数（带 esd）与 Rwp 趋势 + 结果表</sub>
+      <sub>原位通用多相批量——3 帧真 LMFP 数据逐帧精修；方案相表 + 紧凑结果表 + 相分数/Rwp 趋势</sub>
     </td>
   </tr>
 </table>
@@ -136,7 +136,7 @@ macOS 13 起 / Windows 10 起，下载约 150 MB（解压约 340 MB）。zip 里
 - **实测标样谱全谱拟合**——独立实现的 Thompson–Cox–Hastings 伪 Voigt 峰形与 Caglioti/Lorentzian 峰宽项，参数口径与单位沿用 GSAS-II 的 PXC 模型（Caglioti, Paoletti & Ricci, 1958；Thompson, Cox & Hastings, 1987；Toby & Von Dreele, 2013），峰形与 GSAS-II 模拟做过逐点对拍。支持 Le Bail/结构拟合、额外相、按空间群约束的原子坐标与位点占位精修，以及固定坏点掩膜。LaB₆ 标样定仪器峰形并用 Le Bail 强度拟合（Rwp 4.24%），并给出晶态相的 Rietveld wt%（Z·M·V；非晶/未知相不参与分母）；图见 `showcase/simulation/sim_xrd_fit_LaB6.png`。
 - **原位多相批量（通用页面，LMFP 是内置方案）**——`scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台默认是通用相表（任意 CIF 列表、顺序精修），「方案」下拉里的 LMFP 三相当场替换相表/策略/视图，提供趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；相表按样品相/参考相设角色，参考相不进样品分数分母；方案可存成 `.json`（相、角色、策略、视图、仪器来源）。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照。
 - **工作台交互**——物相、精修、原位与命令行共用同一套引擎。进入工作台时收起参数坞和日志坞，文件栏保留：双击文件栏条目 = 对这条操作，勾选 = 批量范围；工作台内的下拉作镜像/兜底，退出恢复原样。
-- **一键分析报告**——把当前会话的 1D 曲线、峰表、单峰拟合、W-H、物相筛选、全谱精修与原位三相批量结果汇成一份自包含 HTML（图内嵌，浏览器可打印 PDF）；缺的节标注“本次未做”，并写清定量口径（wt% 与 f_rich、背景系统偏差、少数相晶胞）。
+- **一键分析报告**——把当前会话的 1D 曲线、峰表、单峰拟合、W-H、物相筛选、全谱精修与原位多相批量结果汇成一份自包含 HTML（图内嵌，浏览器可打印 PDF）；缺的节标注“本次未做”，并写清定量口径（wt% 与 f_rich、背景系统偏差、少数相晶胞）。
 - **命名项目预设层**——一份预设打包八项输入：几何配置、第二相 CIF、相库目录、样品元素（一定有/可能有）、处理设置（背景/平滑/裁剪快照）、原位帧目录、原位掩膜、掩膜工程（`.mask.npz` 路径）；换预设 = 一起换，不用一项一项改。参数坞可切换/保存/[管理…]，管理页里**八项都能手动选**（第二相下拉 + 浏览、目录选择、两态样品元素与周期表、掩膜文件选择等），点 [保存方案] 写入当前方案（活动方案立即生效）；坞顶另有几何下拉，选中即换当前会话几何，与方案不一致时下拉变橙提示「未写进方案」。处理设置在切换后要点 `[套用当前方案]` 才生效，调好后用 `[存进方案…]` 写回；掩膜工程在掩膜工作台按图兜底，原位批量两种掩膜格式（工程/通用）都收。旧版 `outputs/recipes.json` 的命名配方在启动时一次性迁成用户预设。内置 LMFP 预设只读，用户预设存 `presets_user.json`，下次启动自动接上上次用的那份。
 - **从 CIF 算理论谱（XRD 模拟）**——布拉格定律 + 结构因子全手写，出谱带 (hkl) 峰位标注与六方卡片式三位指数；与 pymatgen 参考版逐峰对过答案（`scripts/simulate_xrd.py data/structures/Si_9008565.cif outputs/sim_Si.png`；pymatgen 自 0.2 起随主依赖安装（GUI 分析工作台需要它）；`[simulation]` extra 保留为别名）。
 - **桌面界面（同一引擎）**——五个阶段入口、实时参数面板、1D 图上直接寻峰与峰表、悬停读数、框选放大、对比曲线单色渐变、`.poni` 进出、PNG/TIF/PDF/SVG 导出（PDF/SVG 为矢量，适合论文排版与再编辑）。
@@ -176,7 +176,7 @@ python scripts/run_tests.py --jobs 8   # GUI 集成套件按文件并行（8 个
 
 合成图像单元测试（不需要真实数据，纯 unittest）覆盖校准与积分引擎、各背景估计器、分阶段产物缓存与界面接线。`scripts/check_gui.py` 用真数据 + 真画布事件把界面走一遍；`scripts/stress_panels.py` 是两处 offscreen 死锁的回归探针。
 
-## 原位三相批量
+## 原位多相批量（LMFP 三相脚本）
 
 `scripts/fit_insitu.py` 对原位 LMFP 序列做三相（富锂 LMFP / 贫锂 heterosite / Al 参考）全精修，自动双起点稳健拟合（首解收敛用种子，不收敛再补 CIF 端元）、种子重锁、异常帧标记、CSV 与分段计时；GUI 原位工作台默认是通用相表（任意 CIF 列表），「方案」下拉里的 LMFP 三相当场替换相表/策略/视图，趋势 / 汇总 / 单帧拟合 / 峰窗跟踪四视图；角色分样品相/参考相，参考相不进样品分数分母。`scripts/gsas2_insitu_crosscheck.py` 用 GSAS-II 对 3 帧做独立对照（晶胞与相分数趋势）。原位精修参数、对照结果与效率评估见 [docs/NOTES.zh-CN.md](NOTES.zh-CN.md) 的「LMFP 原位三相批量」节。
 
