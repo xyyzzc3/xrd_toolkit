@@ -195,9 +195,10 @@ class InSituWorkbench(QWidget):
         self._preview_phase_set = None   # 视图在没有批次时用（含相位颜色/窗口）
         self._preset_index = 0        # 下拉当前应用过的项（取消替换时还原）
         self._table_keys = ["frame", "file", "status", "rwp", "rp"]
-        # 结果表列（2026-11-19）：通用方案默认紧凑列，右键可切全部列。
+        # 结果表列（2026-11-19）：通用方案默认紧凑列，右键可切诊断列。
         self._all_keys = []
         self._compact_keys = []
+        self._auto_compact = False
         self._show_all_columns = False
         self.outdir = paths.default_outputs_dir() / "insitu"
         self.frames = []
@@ -596,7 +597,21 @@ class InSituWorkbench(QWidget):
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
-        right.addWidget(self.table)
+        # 表头短名的图例（2026-11-19 手测：13 列时机器标签太长太挤）。
+        self.table_legend = QLabel("")
+        self.table_legend.setStyleSheet("color: gray;")
+        self.table_legend.setWordWrap(True)
+        self.table_legend.setMinimumWidth(0)
+        self.table_legend.setSizePolicy(QSizePolicy.Ignored,
+                                        QSizePolicy.Preferred)
+        self.table_legend.setVisible(False)
+        table_box = QWidget()
+        table_lay = QVBoxLayout(table_box)
+        table_lay.setContentsMargins(0, 0, 0, 0)
+        table_lay.setSpacing(2)
+        table_lay.addWidget(self.table_legend)
+        table_lay.addWidget(self.table, 1)
+        right.addWidget(table_box)
         right.setStretchFactor(0, 3)
         right.setStretchFactor(1, 1)
         right.setSizes([420, 220])
@@ -821,25 +836,82 @@ class InSituWorkbench(QWidget):
         else:
             self.instrument_label.setText("无可用基线（只精修零位）")
 
-    def _set_table_columns(self, keys):
+    def _sample_phase_list(self):
+        pset = self._phase_set()
+        phases = getattr(pset, "phases", ()) if pset is not None else ()
+        out = []
+        for phase in phases:
+            is_sample = getattr(phase, "is_sample", None)
+            if callable(is_sample) and not is_sample():
+                continue
+            out.append(phase)
+        return out
+
+    def _header_label(self, key, compact=False):
+        """紧凑列用短表头（f1/wt1/a1/c1），完整名进 tooltip/图例。"""
+        if compact:
+            for index, phase in enumerate(self._sample_phase_list(), start=1):
+                label = str(getattr(phase, "label", ""))
+                if not label:
+                    continue
+                if key == f"f_{label}":
+                    return f"f{index}"
+                if key == f"wt_{label}":
+                    return f"wt{index}%"
+                if key == f"{label}_a":
+                    return f"a{index}"
+                if key == f"{label}_c":
+                    return f"c{index}"
+        return _column_label(key)
+
+    def _update_table_legend(self, compact):
+        """紧凑列表头短名的图例：P1/P2 分别是哪条样品相。"""
+        legend = getattr(self, "table_legend", None)
+        if legend is None:
+            return
+        phases = self._sample_phase_list() if compact else []
+        if not phases:
+            legend.setText("")
+            legend.setVisible(False)
+            return
+        bits = []
+        for index, phase in enumerate(phases, start=1):
+            display = getattr(phase, "display", None)
+            name = (display() if callable(display)
+                    else (getattr(phase, "display_name", "")
+                          or getattr(phase, "label", "")))
+            bits.append(f"P{index} = {name}")
+        legend.setText("；".join(bits))
+        legend.setToolTip(
+            "f = 相对散射强度分数，wt = Rietveld 重量分数，"
+            "a / c = 晶胞轴长（Å）；表头悬停可看完整列名")
+        legend.setVisible(True)
+
+    def _set_table_columns(self, keys, *, compact=False):
         """结果表列：方案给了就按方案（LMFP 紧凑 12 列），空 = 基础列。"""
         keys = [str(k) for k in (keys or ())]
         self._table_keys = keys or ["frame", "file", "status", "rwp", "rp"]
         self.table.setColumnCount(len(self._table_keys))
         self.table.setHorizontalHeaderLabels(
-            [_column_label(k) for k in self._table_keys])
+            [self._header_label(k, compact) for k in self._table_keys])
+        for col, key in enumerate(self._table_keys):
+            item = self.table.horizontalHeaderItem(col)
+            if item is not None:
+                item.setToolTip(f"{_column_label(key)}（{key}）")
+        self._update_table_legend(compact)
 
     def _rebuild_table_columns(self):
-        """右键「显示全部列」/取消：换列并重填已有行（2026-11-19）。"""
+        """右键「诊断列」/取消：换列并重填已有行（2026-11-19）。"""
         keys = (self._all_keys if self._show_all_columns
                 else (self._compact_keys or self._all_keys))
-        self._set_table_columns(keys)
+        compact = bool(self._auto_compact and not self._show_all_columns)
+        self._set_table_columns(keys, compact=compact)
         rows = list(getattr(self.batch, "rows", []) or [])
         self.table.setRowCount(0)
         for row in rows:
             self._append_row(row)
         self._set_status(
-            f"结果表：{'全部列' if self._show_all_columns else '紧凑列'}"
+            f"结果表：{'诊断列' if self._show_all_columns else '紧凑列'}"
             f"（{len(self._table_keys)} 列）")
 
     def _reset_run(self):
@@ -847,8 +919,11 @@ class InSituWorkbench(QWidget):
         self._batch_meta = None
         self._all_keys = []
         self._compact_keys = []
+        self._auto_compact = False
         self._show_all_columns = False
         self.table.setRowCount(0)
+        if hasattr(self, "table_legend"):
+            self.table_legend.setVisible(False)
         self._clear_fit_view()
         self._mi_rows = None
         self._mi_len = -1
@@ -1184,11 +1259,14 @@ class InSituWorkbench(QWidget):
                        else wanted)
         phases = getattr(
             getattr(self.batch, "phase_set", None), "phases", ())
+        auto = ([] if scheme_keys
+                else compact_table_columns(all_keys, phases))
         self._all_keys = list(all_keys)
-        self._compact_keys = (scheme_keys
-                              or compact_table_columns(all_keys, phases))
+        self._compact_keys = scheme_keys or auto
+        self._auto_compact = bool(auto)
         self._show_all_columns = False
-        self._set_table_columns(self._compact_keys or all_keys)
+        self._set_table_columns(self._compact_keys or all_keys,
+                                compact=self._auto_compact)
         self._refresh_instrument_label()
         self._set_status("已就绪，开始逐帧精修…")
         self._start_next()
@@ -1594,7 +1672,7 @@ class InSituWorkbench(QWidget):
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
         menu.addSeparator()
-        act_cols = menu.addAction("显示全部列")
+        act_cols = menu.addAction("诊断列（esd / 计时）")
         act_cols.setCheckable(True)
         act_cols.setChecked(bool(self._show_all_columns))
         act_cols.setEnabled(bool(self._all_keys))

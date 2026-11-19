@@ -340,8 +340,10 @@ class TestGenericEntry(unittest.TestCase):
         all_keys = ["frame", "file", "status", "usable", "rwp", "rp",
                     "f_demo", "a_demo", "wt_demo", "demo_a", "demo_b",
                     "demo_c", "t_fit_s", "t_total_s"]
-        phase = SimpleNamespace(label="demo", is_sample=lambda: True)
-        ref = SimpleNamespace(label="Al", is_sample=lambda: False)
+        phase = SimpleNamespace(label="demo", display_name="Demo phase",
+                                is_sample=lambda: True)
+        ref = SimpleNamespace(label="Al", display_name="Al foil",
+                              is_sample=lambda: False)
         fake = SimpleNamespace(
             rows=[],
             mask=None,
@@ -359,6 +361,25 @@ class TestGenericEntry(unittest.TestCase):
                          ["frame", "file", "status", "rwp",
                           "f_demo", "wt_demo", "demo_a", "demo_c",
                           "t_fit_s"])
+        # 短表头 + 图例（2026-11-19 手测：13 列时机器标签太长）
+        self.assertEqual(editor.table.horizontalHeaderItem(4).text(), "f1")
+        self.assertEqual(editor.table.horizontalHeaderItem(5).text(), "wt1%")
+        self.assertEqual(editor.table.horizontalHeaderItem(6).text(), "a1")
+        self.assertEqual(editor.table.horizontalHeaderItem(7).text(), "c1")
+        self.assertIn("P1 = Demo phase", editor.table_legend.text())
+        self.assertNotIn("Al foil", editor.table_legend.text())
+        self.assertFalse(editor.table_legend.isHidden())
+        # 诊断列：完整表头、图例收起（全列里 f_demo 在第 7 列）
+        editor._show_all_columns = True
+        editor._rebuild_table_columns()
+        self.assertEqual(editor.table.horizontalHeaderItem(6).text(),
+                         "f demo")
+        self.assertTrue(editor.table_legend.isHidden())
+        # 切回紧凑列
+        editor._show_all_columns = False
+        editor._rebuild_table_columns()
+        self.assertEqual(editor.table.horizontalHeaderItem(4).text(), "f1")
+        self.assertFalse(editor.table_legend.isHidden())
 
     def test_details_dialog_edits_initial_cell(self):
         """相细节能填初始晶胞（2026-11-19 手测：Al 4.061 进不去 UI）。"""

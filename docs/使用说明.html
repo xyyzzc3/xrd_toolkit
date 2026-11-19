@@ -941,8 +941,10 @@ f_rich = A_rich / (A_rich + A_poor)
 <li>表列跟随方案：<code>LMFP 三相</code> 是它自己的 12 列（帧 / 文件 / 状态 / Rwp /
    f_rich / wt rich% / wt poor% / 两相 a、c / 拟合耗时）；通用方案默认
    紧凑列（帧 / 文件 / 状态 / Rwp + 每条样品相的 f、wt、a、c + 拟合
-   耗时，参考相不占列），表格右键「显示全部列」可切回引擎全列（每相
-   f / wt / 晶胞 + esd + 分段耗时）；状态
+   耗时，参考相不占列）。紧凑列的表头用短名 <strong>f1 / wt1% / a1 / c1</strong>，
+   表格上方一行灰字图例写明 <strong>P1 / P2 是哪条样品相</strong>，表头悬停可看完整
+   列名；表格右键「诊断列（esd / 计时）」可切回引擎全列（每相 f / wt /
+   晶胞 + esd + 分段耗时）；状态
    <code>ok</code>（严格收敛）、<code>ok_soft</code>（优化器退出标志失败但 Rwp/相分数合格）、
    <code>high_rwp(x%)</code>、<code>cell_jump</code>、<code>no_phase_signal</code>、<code>error: ...</code>。
    <code>high_rwp</code>/<code>error</code> 标红，其余非 <code>ok</code> 标黄——都不中断，下一帧仍用上一个
