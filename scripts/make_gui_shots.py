@@ -812,7 +812,7 @@ def shot_refine(window) -> None:
     settle(400)
     # 截图里别露出临时目录的基线路径（真实窗口仍显示完整路径）
     if hasattr(editor, "_set_status"):
-        editor._set_status("仪器基线已保存（演示）")
+        editor._set_status("仪器基线已保存")
     window.resize(1600, 1000)
     settle(400)
     fit_dock(window, window.refine_dock)
