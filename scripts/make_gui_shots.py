@@ -878,7 +878,8 @@ def shot_insitu(window) -> None:
     editor._apply_phase_set(PhaseSet(
         name="LMFP 通用相表", phases=[rich, poor, al],
         policy=BatchPolicy.generic()))
-    mask = ROOT / "outputs" / "masks" / "lmfp1_lab6_mask.npy"
+    from xrd_toolkit import paths
+    mask = paths.default_outputs_dir() / "masks" / "lmfp1_lab6_mask.npy"
     editor.mask_path = mask if mask.is_file() else None
     editor._refresh_mask_label()
     editor._data_dir_set = True
