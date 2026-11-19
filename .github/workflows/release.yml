@@ -37,7 +37,7 @@ jobs:
           # （作者本机是 Intel，可以本机打）
           - os: macos-15-intel
             asset: XRD-Toolkit-macos-intel.zip
-          - os: macos-14       # Apple Silicon
+          - os: macos-15       # Apple Silicon
             asset: XRD-Toolkit-macos-apple-silicon.zip
           - os: windows-latest
             asset: XRD-Toolkit-windows.zip
