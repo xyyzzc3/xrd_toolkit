@@ -782,6 +782,8 @@ class InSituWorkbench(QWidget):
     def _toggle_phase_role(self):
         if self.phase_table.toggle_role():
             self._set_status("已切换角色（参考相默认固定晶胞 + Le Bail + 不进分母）")
+        else:
+            self._set_status("先点一下相名选中那一行，再点 [切换角色]")
 
     def _rename_phase(self):
         if not self.phase_table.rename_selected(self):

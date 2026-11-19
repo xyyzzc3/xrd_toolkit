@@ -288,6 +288,30 @@ class TestGenericEntry(unittest.TestCase):
         self.assertIn("f_rich", self.editor._table_keys)
         self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
 
+    def test_role_dropdown_applies_reference_defaults(self):
+        """直接在下拉里改角色也要套默认（2026-11-19 手测）。"""
+        table = self.editor.phase_table
+        table.add_paths(
+            [str(ROOT / "data" / "structures" / "Al_metal.cif")])
+        role = table.cellWidget(0, 0)
+        role.setCurrentIndex(role.findData("reference"))
+        QApplication.processEvents()
+        self.assertFalse(table.cellWidget(0, 2).isChecked())
+        self.assertEqual(table.cellWidget(0, 3).currentData(), "lebail")
+        self.assertFalse(table.cellWidget(0, 4).isChecked())
+        spec = table.phases()[0]
+        self.assertEqual(spec["role"], "reference")
+        self.assertFalse(spec["cell_free"])
+        self.assertEqual(spec["intensity"], "lebail")
+        self.assertFalse(spec["include_in_fraction"])
+        self.assertTrue(table.dirty)
+        # 切回样品相也恢复默认
+        role.setCurrentIndex(role.findData("sample"))
+        QApplication.processEvents()
+        self.assertTrue(table.cellWidget(0, 2).isChecked())
+        self.assertEqual(table.cellWidget(0, 3).currentData(), "structure")
+        self.assertTrue(table.cellWidget(0, 4).isChecked())
+
     def test_switching_to_generic_clears_the_table(self):
         self._pick("lmfp")
         self._pick("generic")

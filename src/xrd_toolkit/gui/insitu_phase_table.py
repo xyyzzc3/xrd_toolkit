@@ -286,6 +286,10 @@ class InsituPhaseTable(QTableWidget):
         role.setCurrentIndex(
             0 if str(spec.get("role") or ROLE_SAMPLE) == ROLE_SAMPLE else 1)
         role.currentIndexChanged.connect(self._mark_dirty)
+        # 用户直接在下拉里改角色也要套参考相默认（2026-11-19 手测：
+        # 只改下拉时晶胞/强度/计入分数不动，看起来像"没生效"）。
+        role.currentIndexChanged.connect(
+            lambda _index, r=row: self._on_role_changed(r))
         self.setCellWidget(row, 0, role)
 
         name = (spec.get("display_name") or spec.get("label")
@@ -327,6 +331,27 @@ class InsituPhaseTable(QTableWidget):
     def _mark_dirty(self, *_args):
         if not self._loading:
             self.dirty = True
+
+    def _on_role_changed(self, row):
+        """行内下拉改角色时套上该角色的默认设置（2026-11-19 用户手测）。"""
+        if self._loading or row < 0:
+            return
+        role = self.cellWidget(row, 0)
+        if role is None:
+            return
+        self._apply_role_defaults(row, role.currentData() == ROLE_SAMPLE)
+
+    def _apply_role_defaults(self, row, is_sample):
+        """参考相 = 固定晶胞 + Le Bail + 不进分母；样品相恢复默认。"""
+        cell = self.cellWidget(row, 2)
+        kind = self.cellWidget(row, 3)
+        include = self.cellWidget(row, 4)
+        if cell is None or kind is None or include is None:
+            return
+        cell.setChecked(bool(is_sample))
+        kind.setCurrentIndex(0 if is_sample else 1)
+        include.setChecked(bool(is_sample))
+        self.dirty = True
 
     # ── 载入 / 导出 ──────────────────────────────────────────
     def load(self, phases):
@@ -402,10 +427,7 @@ class InsituPhaseTable(QTableWidget):
             return False
         is_sample = role.currentData() == ROLE_SAMPLE
         role.setCurrentIndex(1 if is_sample else 0)
-        # 切角色时套默认：参考相 = 固定晶胞 + Le Bail + 不进分母
-        self.cellWidget(row, 2).setChecked(not is_sample)
-        self.cellWidget(row, 3).setCurrentIndex(1 if is_sample else 0)
-        self.cellWidget(row, 4).setChecked(not is_sample)
+        # 上面的下标变化会触发 _on_role_changed，自动套角色默认值。
         self.dirty = True
         return True
 
