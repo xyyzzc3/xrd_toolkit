@@ -104,6 +104,31 @@ def _fmt(value, digits=3):
     return f"{value:.{digits}f}" if np.isfinite(value) else "—"
 
 
+def compact_table_columns(columns, phases):
+    """通用方案的紧凑结果表列（2026-11-19 手测：41 列太挤）。
+
+    基础四列 + 每条样品相的分数/重量分数/晶胞 a、c + 拟合耗时；
+    参考相（Al 等）不占列。方案显式给了 `table_columns` 时不用这套
+    （LMFP 预设仍是它自己那 12 列），右键「显示全部列」可看引擎全列。
+    """
+    available = set(str(k) for k in (columns or ()))
+    keys = [k for k in ("frame", "file", "status", "rwp") if k in available]
+    for phase in phases or ():
+        is_sample = getattr(phase, "is_sample", None)
+        if callable(is_sample) and not is_sample():
+            continue
+        label = getattr(phase, "label", "")
+        if not label:
+            continue
+        for key in (f"f_{label}", f"wt_{label}",
+                    f"{label}_a", f"{label}_c"):
+            if key in available:
+                keys.append(key)
+    if "t_fit_s" in available:
+        keys.append("t_fit_s")
+    return keys
+
+
 def _prepare_worker(config_name, scheme, mask_path, saved_baseline,
                     max_rwp, first_nfev, frame_nfev, npt,
                     tth_min, tth_max):
@@ -170,6 +195,10 @@ class InSituWorkbench(QWidget):
         self._preview_phase_set = None   # 视图在没有批次时用（含相位颜色/窗口）
         self._preset_index = 0        # 下拉当前应用过的项（取消替换时还原）
         self._table_keys = ["frame", "file", "status", "rwp", "rp"]
+        # 结果表列（2026-11-19）：通用方案默认紧凑列，右键可切全部列。
+        self._all_keys = []
+        self._compact_keys = []
+        self._show_all_columns = False
         self.outdir = paths.default_outputs_dir() / "insitu"
         self.frames = []
         self._use_checked = False       # 帧来源 = 文件栏勾选
@@ -227,13 +256,35 @@ class InSituWorkbench(QWidget):
             f"已应用预设「{preset.get('name', '')}」："
             f"{len(self.frames)} 帧")
 
+    def _suggested_mask_path(self):
+        """当前几何在 outputs/masks 里现成的掩膜（只提醒，不自动选）。"""
+        name = str(getattr(self.main, "config_name", "") or "").strip()
+        if not name:
+            return None
+        folder = paths.default_outputs_dir() / "masks"
+        for filename in (f"{name}_mask.npy", f"{name}_mask.edf",
+                         f"{name}.mask.npz", f"{name}_mask.mask.npz"):
+            path = folder / filename
+            if path.is_file():
+                return path
+        return None
+
     def _refresh_mask_label(self):
         if self.mask_path is not None:
             self.mask_label.setText(f"掩膜：{self.mask_path.name}")
             self.mask_label.setToolTip(str(self.mask_path))
         else:
-            self.mask_label.setText("掩膜：不遮")
-            self.mask_label.setToolTip("")
+            hint = self._suggested_mask_path()
+            if hint is not None:
+                # 2026-11-19 手测：忘选掩膜时 Rwp 从 ~3% 掉到 ~8%，
+                # 这里只提醒，不替用户改输入。
+                self.mask_label.setText(
+                    f"掩膜：不遮（建议选 {hint.name}）")
+                self.mask_label.setToolTip(
+                    f"{hint}\n热像素不遮会明显抬高 Rwp；点 [选掩膜…] 选它")
+            else:
+                self.mask_label.setText("掩膜：不遮")
+                self.mask_label.setToolTip("")
 
     # ── 界面组装 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -347,6 +398,19 @@ class InSituWorkbench(QWidget):
         left_lay.setSpacing(6)
 
         left_lay.addWidget(_section("仪器"))
+        # 仪器来源三选一（2026-11-19 手测：通用页原先只能跟着方案走，
+        # 没有已保存基线时也切不到标样帧路径）。
+        self.instrument_mode = QComboBox()
+        self.instrument_mode.addItem("用已保存基线", "baseline")
+        self.instrument_mode.addItem("标样帧现拟合", "lab6")
+        self.instrument_mode.addItem("不固定（只精修零位）", "none")
+        self.instrument_mode.setToolTip(
+            "仪器峰形来源：已保存基线 = 之前存下的 LaB₆ 参数；"
+            "标样帧现拟合 = 每次跑批先从标样图定仪器（LMFP 方案用）；"
+            "不固定 = 只精修零位，峰宽全交给样品。")
+        self.instrument_mode.currentIndexChanged.connect(
+            self._on_instrument_mode_changed)
+        left_lay.addLayout(_labeled_row("来源", self.instrument_mode))
         self.instrument_label = QLabel("—")
         self.instrument_label.setStyleSheet("color: gray;")
         self.instrument_label.setWordWrap(True)
@@ -700,8 +764,22 @@ class InSituWorkbench(QWidget):
                 bits.append(f"{name} {value:.4g}")
         return ("参数：" + "，".join(bits)) if bits else ""
 
+    def _on_instrument_mode_changed(self, *_args):
+        """左栏「来源」下拉：换仪器峰形来源（baseline/lab6/none）。"""
+        from dataclasses import replace
+        mode = str(self.instrument_mode.currentData() or "baseline")
+        self._scheme_instrument = replace(self._scheme_instrument, mode=mode)
+        self._refresh_instrument_label()
+        if mode == "lab6" and self.lab6_path is None:
+            self._set_status("标样帧现拟合：先点 [换标样帧…] 选一张标样图")
+
     def _refresh_instrument_label(self):
         mode = self._scheme_instrument.mode
+        index = self.instrument_mode.findData(mode)
+        if index >= 0 and index != self.instrument_mode.currentIndex():
+            self.instrument_mode.blockSignals(True)
+            self.instrument_mode.setCurrentIndex(index)
+            self.instrument_mode.blockSignals(False)
         # 跑过的批次带着实际用上的参数；没跑时看方案来源。
         batch_instrument = getattr(self.batch, "instrument", None)
         if isinstance(batch_instrument, dict) and batch_instrument:
@@ -751,9 +829,25 @@ class InSituWorkbench(QWidget):
         self.table.setHorizontalHeaderLabels(
             [_column_label(k) for k in self._table_keys])
 
+    def _rebuild_table_columns(self):
+        """右键「显示全部列」/取消：换列并重填已有行（2026-11-19）。"""
+        keys = (self._all_keys if self._show_all_columns
+                else (self._compact_keys or self._all_keys))
+        self._set_table_columns(keys)
+        rows = list(getattr(self.batch, "rows", []) or [])
+        self.table.setRowCount(0)
+        for row in rows:
+            self._append_row(row)
+        self._set_status(
+            f"结果表：{'全部列' if self._show_all_columns else '紧凑列'}"
+            f"（{len(self._table_keys)} 列）")
+
     def _reset_run(self):
         self.batch = None
         self._batch_meta = None
+        self._all_keys = []
+        self._compact_keys = []
+        self._show_all_columns = False
         self.table.setRowCount(0)
         self._clear_fit_view()
         self._mi_rows = None
@@ -1028,6 +1122,12 @@ class InSituWorkbench(QWidget):
         where = ("文件栏勾选" if self._use_checked else str(self.data_dir))
         _log(self.main, f"原位批量：{where}（{len(self.frames)} 帧，"
                         f"方案「{self._scheme_name}」）")
+        if self.mask_path is None:
+            hint = self._suggested_mask_path()
+            if hint is not None:
+                _log(self.main,
+                     f"原位批量：未选掩膜；{hint.name} 可用，建议选上"
+                     "（热像素会明显抬高 Rwp）")
 
         task = None
 
@@ -1071,7 +1171,8 @@ class InSituWorkbench(QWidget):
 
     def _on_prepared(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
-        # 列：方案指定了就用方案的顺序；没指定用引擎给的全部列。
+        # 列：方案指定了就用方案的顺序；没指定用通用紧凑列（2026-11-19：
+        # 引擎 41 列全塞进表里太挤）；右键可以切回全部列。
         try:
             all_keys = list(self.batch.columns())
         except AttributeError:                 # 测试里的假 batch
@@ -1079,8 +1180,15 @@ class InSituWorkbench(QWidget):
         wanted = list(getattr(
             getattr(getattr(self.batch, "phase_set", None), "views", None),
             "table_columns", ()) or ())
-        keys = [k for k in wanted if k in all_keys] if all_keys else wanted
-        self._set_table_columns(keys or all_keys)
+        scheme_keys = ([k for k in wanted if k in all_keys] if all_keys
+                       else wanted)
+        phases = getattr(
+            getattr(self.batch, "phase_set", None), "phases", ())
+        self._all_keys = list(all_keys)
+        self._compact_keys = (scheme_keys
+                              or compact_table_columns(all_keys, phases))
+        self._show_all_columns = False
+        self._set_table_columns(self._compact_keys or all_keys)
         self._refresh_instrument_label()
         self._set_status("已就绪，开始逐帧精修…")
         self._start_next()
@@ -1485,6 +1593,11 @@ class InSituWorkbench(QWidget):
         menu.addSeparator()
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
+        menu.addSeparator()
+        act_cols = menu.addAction("显示全部列")
+        act_cols.setCheckable(True)
+        act_cols.setChecked(bool(self._show_all_columns))
+        act_cols.setEnabled(bool(self._all_keys))
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen is act_view:
             self._show_frame_fit(frame)
@@ -1499,6 +1612,9 @@ class InSituWorkbench(QWidget):
             self._copy_table(True)
         elif chosen is act_all:
             self._copy_table(False)
+        elif chosen is act_cols:
+            self._show_all_columns = bool(act_cols.isChecked())
+            self._rebuild_table_columns()
 
     def _set_status(self, text):
         self.status.setText(text)

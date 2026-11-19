@@ -44,7 +44,7 @@ class PhaseSpec:
     intensity: str = "structure"     # structure | lebail
     include_in_fraction: bool = True
     b_iso: float = 0.0
-    size_um: float = 1e4
+    size_um: float = 0.1      # 典型粉末尺度；原 1e4 µm（10 mm）离真实太远
     mustrain: float = 0.0
     cell_bounds: dict = field(default_factory=dict)   # {"a": (lo,hi), ...}
     jump_tol: float | None = None
@@ -110,7 +110,9 @@ class BatchPolicy:
 
     @classmethod
     def generic(cls):
-        return cls(dual_start="off", pending_frames=0,
+        # pending_frames=2（2026-11-19 手测）：晶胞跳变后连续两帧落在
+        # 同一个新晶胞就重锁种子，不再拖一串 cell_jump。
+        return cls(dual_start="off", pending_frames=2,
                    cell_jump_default=0.30,
                    first_nfev=120, frame_nfev=120,
                    xtol=1e-6, ftol=1e-6, gtol=1e-6)
@@ -198,7 +200,7 @@ def spec_from_path(path, *, label=None, display_name="", plot_name="",
                    role=SAMPLE,
                    cell_free=True, width_free=True, intensity="structure",
                    include_in_fraction=True, b_iso=None,
-                   size_um=1e4, mustrain=0.0, cell_bounds=None,
+                   size_um=0.1, mustrain=0.0, cell_bounds=None,
                    jump_tol=None, color=None, cell0=None, free_extra=()):
     """读一张 CIF → PhaseSpec（label 不给就用文件名洗出来）。"""
     path = Path(path)

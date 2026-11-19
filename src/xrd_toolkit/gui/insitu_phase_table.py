@@ -111,6 +111,30 @@ class _DetailsDialog(QDialog):
         self.width_free = QCheckBox("峰宽随数据精修（结构精修相）")
         form.addRow("", self.width_free)
 
+        # 初始晶胞（2026-11-19 手测）：方案里一直有 cell0 字段，但没有
+        # 界面；LMFP 预设的 Al 固定 4.061 Å 就是靠它，通用页原先只能
+        # 加载预设才用得上。不勾 = 用 CIF 晶胞。
+        self.use_cell0 = QCheckBox("指定初始晶胞 (Å)")
+        cell0_box = QWidget()
+        grid0 = QGridLayout(cell0_box)
+        grid0.setContentsMargins(0, 0, 0, 0)
+        self.cell0_spins = {}
+        for col, axis in enumerate(("a", "b", "c")):
+            grid0.addWidget(QLabel(axis), 0, col * 2)
+            spin = QDoubleSpinBox()
+            spin.setRange(0.01, 100.0)
+            spin.setDecimals(4)
+            spin.setSingleStep(0.001)
+            self.cell0_spins[axis] = spin
+            grid0.addWidget(spin, 0, col * 2 + 1)
+        form.addRow(self.use_cell0, cell0_box)
+        cell0_hint = QLabel(
+            "不勾 = 用 CIF 晶胞；参考相要按实测值固定时可勾上"
+            "（例如 Al 填 4.061）")
+        cell0_hint.setStyleSheet("color: gray;")
+        cell0_hint.setWordWrap(True)
+        form.addRow(cell0_hint)
+
         bounds = QWidget()
         grid = QGridLayout(bounds)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -160,6 +184,7 @@ class _DetailsDialog(QDialog):
         self._prefill()
         self.use_cif_b.toggled.connect(
             lambda on: self.b_iso.setEnabled(not on))
+        self.use_cell0.toggled.connect(self._toggle_cell0)
         self.use_bounds.toggled.connect(self._toggle_bounds)
         self.use_default_jump.toggled.connect(
             lambda on: self.jump_tol.setEnabled(not on))
@@ -187,7 +212,29 @@ class _DetailsDialog(QDialog):
         self.use_default_jump.setChecked(jump is None)
         self.jump_tol.setEnabled(jump is not None)
         self.jump_tol.setValue(0.3 if jump is None else float(jump))
+        cell0 = self.spec.get("cell0")
+        self.use_cell0.setChecked(cell0 is not None)
+        if cell0 is None:
+            cell0 = self._cif_abc() or (0.0, 0.0, 0.0)
+        for axis, value in zip(("a", "b", "c"), cell0):
+            self.cell0_spins[axis].setValue(float(value))
+        self._toggle_cell0(cell0 is not None)
         self.color_edit.setText(str(self.spec.get("color") or ""))
+
+    def _cif_abc(self):
+        """CIF 里的晶胞（给初始晶胞框做占位）；读不到就返回 None。"""
+        path = str(self.spec.get("path") or "")
+        if not path:
+            return None
+        try:
+            from xrd_toolkit.simulation import load_structure
+            return tuple(float(x) for x in load_structure(path).lattice.abc)
+        except Exception:                       # noqa: BLE001
+            return None
+
+    def _toggle_cell0(self, on):
+        for spin in self.cell0_spins.values():
+            spin.setEnabled(bool(on))
 
     def _toggle_bounds(self, on):
         for lo, hi in self.bound_spins.values():
@@ -207,6 +254,10 @@ class _DetailsDialog(QDialog):
         spec["size_um"] = float(self.size_um.value())
         spec["mustrain"] = float(self.mustrain.value())
         spec["width_free"] = bool(self.width_free.isChecked())
+        spec["cell0"] = (
+            tuple(float(self.cell0_spins[axis].value())
+                  for axis in ("a", "b", "c"))
+            if self.use_cell0.isChecked() else None)
         if self.use_bounds.isChecked():
             spec["cell_bounds"] = {
                 axis: (float(lo.value()), float(hi.value()))
@@ -235,7 +286,7 @@ def default_phase(path, used):
         "intensity": "structure",
         "include_in_fraction": True,
         "b_iso": None,          # None = 读 CIF 的 Uiso（phase_set_from_dict 解析）
-        "size_um": 1e4,
+        "size_um": 0.1,         # 典型粉末尺度（2026-11-19；原 1e4 太远）
         "mustrain": 0.0,
         "cell_bounds": {},
         "jump_tol": None,

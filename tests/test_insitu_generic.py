@@ -287,6 +287,131 @@ class TestGenericEntry(unittest.TestCase):
         self.assertEqual(len(self.editor._table_keys), 12)
         self.assertIn("f_rich", self.editor._table_keys)
         self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
+        self.assertEqual(self.editor.instrument_mode.currentData(), "lab6")
+
+    def test_instrument_source_can_be_changed(self):
+        """通用页也能选仪器来源（2026-11-19 手测）。"""
+        self.assertEqual(self.editor.instrument_mode.currentData(), "baseline")
+        mode = self.editor.instrument_mode
+        mode.setCurrentIndex(mode.findData("none"))
+        QApplication.processEvents()
+        self.assertEqual(self.editor._scheme_instrument.mode, "none")
+        self.assertIn("不固定", self.editor.instrument_label.text())
+        mode.setCurrentIndex(mode.findData("lab6"))
+        QApplication.processEvents()
+        self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
+        self.assertFalse(self.editor.lab6_btn.isHidden())
+        self._pick("generic")
+        self.assertEqual(self.editor.instrument_mode.currentData(),
+                         "baseline")
+
+    def test_compact_columns_and_show_all(self):
+        """通用方案默认紧凑列，右键可切全部列（2026-11-19 手测）。"""
+        from types import SimpleNamespace
+        all_keys = ["frame", "file", "status", "rwp", "rp",
+                    "f_demo", "f_demo_esd", "a_demo", "wt_demo",
+                    "demo_a", "demo_a_esd", "demo_b", "demo_b_esd",
+                    "demo_c", "demo_c_esd", "f_Al", "wt_Al", "Al_a",
+                    "t_fit_s", "t_total_s"]
+        phase = SimpleNamespace(label="demo", is_sample=lambda: True)
+        ref = SimpleNamespace(label="Al", is_sample=lambda: False)
+        from xrd_toolkit.gui.insitu_workbench import compact_table_columns
+        keys = compact_table_columns(all_keys, [phase, ref])
+        self.assertEqual(keys, ["frame", "file", "status", "rwp",
+                                "f_demo", "wt_demo", "demo_a", "demo_c",
+                                "t_fit_s"])
+        self.assertNotIn("Al_a", keys)
+        self.assertNotIn("f_demo_esd", keys)
+        self.assertNotIn("rp", keys)
+        # 右键切全部列/切回
+        self.editor._all_keys = list(all_keys)
+        self.editor._compact_keys = list(keys)
+        self.editor.batch = SimpleNamespace(rows=[])
+        self.editor._show_all_columns = True
+        self.editor._rebuild_table_columns()
+        self.assertEqual(self.editor._table_keys, all_keys)
+        self.editor._show_all_columns = False
+        self.editor._rebuild_table_columns()
+        self.assertEqual(self.editor._table_keys, keys)
+
+    def test_prepared_batch_uses_compact_columns(self):
+        """准备完成后通用方案自动用紧凑列（2026-11-19 手测）。"""
+        from types import SimpleNamespace
+        all_keys = ["frame", "file", "status", "usable", "rwp", "rp",
+                    "f_demo", "a_demo", "wt_demo", "demo_a", "demo_b",
+                    "demo_c", "t_fit_s", "t_total_s"]
+        phase = SimpleNamespace(label="demo", is_sample=lambda: True)
+        ref = SimpleNamespace(label="Al", is_sample=lambda: False)
+        fake = SimpleNamespace(
+            rows=[],
+            mask=None,
+            columns=lambda: list(all_keys),
+            phase_set=SimpleNamespace(
+                phases=[phase, ref],
+                views=SimpleNamespace(table_columns=())),
+            instrument=None)
+        editor = self.editor
+        editor.batch = fake
+        editor.frames = []
+        editor._on_prepared()
+        self.assertEqual(editor._all_keys, all_keys)
+        self.assertEqual(editor._table_keys,
+                         ["frame", "file", "status", "rwp",
+                          "f_demo", "wt_demo", "demo_a", "demo_c",
+                          "t_fit_s"])
+
+    def test_details_dialog_edits_initial_cell(self):
+        """相细节能填初始晶胞（2026-11-19 手测：Al 4.061 进不去 UI）。"""
+        from xrd_toolkit.gui.insitu_phase_table import (
+            _DetailsDialog, default_phase)
+        spec = default_phase(RICH, set())
+        dlg = _DetailsDialog(None, spec)
+        self.assertFalse(dlg.use_cell0.isChecked())
+        self.assertIsNone(dlg.values()["cell0"])
+        dlg.use_cell0.setChecked(True)
+        for axis in ("a", "b", "c"):
+            dlg.cell0_spins[axis].setValue(4.061)
+        cell0 = dlg.values()["cell0"]
+        self.assertEqual(len(cell0), 3)
+        for value in cell0:
+            self.assertAlmostEqual(value, 4.061)
+        spec2 = dict(spec)
+        spec2["cell0"] = (9.8, 5.8, 4.77)
+        dlg2 = _DetailsDialog(None, spec2)
+        self.assertTrue(dlg2.use_cell0.isChecked())
+        self.assertAlmostEqual(dlg2.values()["cell0"][0], 9.8)
+
+    def test_mask_hint_for_known_geometry(self):
+        """有现成掩膜却没选时提醒（2026-11-19：忘选掩膜 Rwp 8%）。"""
+        from xrd_toolkit.gui import insitu_workbench as wb
+        with tempfile.TemporaryDirectory() as tmp:
+            masks = Path(tmp) / "masks"
+            masks.mkdir()
+            (masks / "demo_geom_mask.npy").write_bytes(b"")
+            editor = self.editor
+            old_mask = editor.mask_path
+            editor.mask_path = None
+            try:
+                with mock.patch.object(editor.main, "config_name",
+                                       "demo_geom"), \
+                     mock.patch.object(wb.paths, "default_outputs_dir",
+                                       return_value=Path(tmp)):
+                    self.assertEqual(editor._suggested_mask_path().name,
+                                     "demo_geom_mask.npy")
+                    editor._refresh_mask_label()
+                    self.assertIn("建议", editor.mask_label.text())
+            finally:
+                editor.mask_path = old_mask
+                editor._refresh_mask_label()
+
+    def test_new_phase_defaults(self):
+        """新相默认 0.1 µm、通用策略 pending=2（2026-11-19 手测）。"""
+        from xrd_toolkit.gui.insitu_phase_table import default_phase
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, spec_from_path)
+        self.assertEqual(default_phase(RICH, set())["size_um"], 0.1)
+        self.assertEqual(spec_from_path(RICH).size_um, 0.1)
+        self.assertEqual(BatchPolicy.generic().pending_frames, 2)
 
     def test_role_dropdown_applies_reference_defaults(self):
         """直接在下拉里改角色也要套默认（2026-11-19 手测）。"""
@@ -439,3 +564,6 @@ class TestGenericEntry(unittest.TestCase):
                 self.editor._scheme_views.peak_windows[0].tth_min, 1.18)
             self.assertEqual(self.editor._scheme_instrument.mode, "lab6")
             self.assertEqual(self.editor._scheme_adapter, "lmfp")
+            self.assertEqual(
+                tuple(self.editor.phase_table.phases()[2]["cell0"]),
+                (4.061, 4.061, 4.061), "Al 的初始晶胞要随方案保存")

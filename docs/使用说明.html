@@ -907,17 +907,22 @@ f_rich = A_rich / (A_rich + A_poor)
    ——LMFP 方案默认是 <code>Li-rich phase</code> 这些）；图内名称留空就用
    界面显示名。改完图会立即重画，名字也随方案文件保存。
    <code>[细节…]</code>（或<strong>双击相名</strong>）改这一相的
-   <strong>B / 尺寸 / 应变 / 晶胞范围 / 晶胞跳变容差 / 颜色</strong>：数值下一次
-   <code>[开始]</code> 生效，颜色立即重画；这些也都随方案文件保存。顶部的
-   <code>LMFP 三相</code> 方案会一键把富锂 / 贫锂 / Al 三行填好。</li>
-<li><strong>仪器</strong>：方案决定来源。<code>LMFP 三相</code> 用 <strong>LaB₆ 标样帧</strong>
-   现拟合（<code>[换标样帧…]</code> 选你的标样图；打包版不带仓库样例，
+   <strong>B / 尺寸 / 应变 / 初始晶胞 / 晶胞范围 / 晶胞跳变容差 / 颜色</strong>：
+   数值下一次 <code>[开始]</code> 生效，颜色立即重画；这些也都随方案文件保存。
+   「初始晶胞」不勾 = 用 CIF 晶胞；参考相要按实测值固定时可勾上（例如这批
+   LMFP 数据的 Al 有效值 4.061 Å）。顶部的 <code>LMFP 三相</code> 方案会一键把
+   富锂 / 贫锂 / Al 三行填好。</li>
+<li><strong>仪器</strong>：方案决定来源，左栏「来源」下拉可以随时改：<strong>用已保存基线</strong>
+   / <strong>标样帧现拟合</strong> / <strong>不固定（只精修零位）</strong>。<code>LMFP 三相</code> 用
+   <strong>LaB₆ 标样帧</strong>现拟合（<code>[换标样帧…]</code> 选你的标样图；打包版不带仓库样例，
    没选 <code>[开始]</code> 会提示）；通用方案默认用<strong>已保存的仪器基线</strong>
    （波长不符就只精修零位）。左边灰字会列出实际用上的
    <strong>zero/U/V/W/X/Y</strong> 参数：基线方案直接显示，标样帧方案在准备
    完成后显示。</li>
 <li><strong>掩膜</strong>：默认 <code>outputs/masks/lmfp1_lab6_mask.npy</code>（只在 LMFP 几何下
-   自动带），可以 <code>[选掩膜…]</code> 或 <code>[清除]</code>。热像素不遮会让 Rwp 明显变差。</li>
+   自动带），可以 <code>[选掩膜…]</code> 或 <code>[清除]</code>。热像素不遮会让 Rwp 明显变差；
+   当前几何在 <code>outputs/masks</code> 里有现成掩膜却没选时，掩膜一行会提示
+   「建议选 …」，开始跑批的日志也会再提醒一句。</li>
 <li><strong>背景</strong>与参数：背景模型默认「自动基线」（滑动窗口估一条背景再拟合，
    窗口默认 0.2°）；「Chebyshev 联解」让背景和峰一起解（阶数默认 10，
    适合背景起伏大或自动基线贴不住的数据）；「不扣背景」只适合背景已经
@@ -933,9 +938,11 @@ f_rich = A_rich / (A_rich + A_poor)
 <li>点 <code>[开始]</code>。<strong>确认</strong>：状态行先显示「准备中（读结构 + LaB₆ 定仪器）」，
    随后变成「第 i/N 帧：文件名」，右下角的<strong>帧进度条</strong>同步走 k/N；表里
    逐行出现结果，右侧视图同步更新。跑完/停止/出错时进度条自动收起。</li>
-<li>表列跟随方案：<code>LMFP 三相</code> 是紧凑的 12 列（帧 / 文件 / 状态 / Rwp /
-   f_rich / wt rich% / wt poor% / 两相 a、c / 拟合耗时），通用方案显示
-   引擎给的全部列（每相 f / wt / 晶胞 + esd + 分段耗时）；状态
+<li>表列跟随方案：<code>LMFP 三相</code> 是它自己的 12 列（帧 / 文件 / 状态 / Rwp /
+   f_rich / wt rich% / wt poor% / 两相 a、c / 拟合耗时）；通用方案默认
+   紧凑列（帧 / 文件 / 状态 / Rwp + 每条样品相的 f、wt、a、c + 拟合
+   耗时，参考相不占列），表格右键「显示全部列」可切回引擎全列（每相
+   f / wt / 晶胞 + esd + 分段耗时）；状态
    <code>ok</code>（严格收敛）、<code>ok_soft</code>（优化器退出标志失败但 Rwp/相分数合格）、
    <code>high_rwp(x%)</code>、<code>cell_jump</code>、<code>no_phase_signal</code>、<code>error: ...</code>。
    <code>high_rwp</code>/<code>error</code> 标红，其余非 <code>ok</code> 标黄——都不中断，下一帧仍用上一个
