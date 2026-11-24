@@ -111,6 +111,23 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertAlmostEqual(r["wt_poor"], 100.0 / 3.0)
         self.assertAlmostEqual(r["wt_al"], 10.0)
 
+    def test_row_has_dual_start_provenance(self):
+        timers = {
+            "fit": 1.0, "total": 1.3,
+            "dual_start": 1, "start_used": "cif",
+            "rwp_seed": 2.473, "rwp_cif": 2.416,
+            "success_seed": 1, "success_cif": 1,
+            "f_rich_seed": 0.7048, "f_rich_cif": 0.7210,
+        }
+        r = fi._row(28, Path("frame.tif"), _result(), 0.7210,
+                    timers, "ok", usable=True)
+        self.assertEqual(r["dual_start"], 1)
+        self.assertEqual(r["start_used"], "cif")
+        self.assertAlmostEqual(r["rwp_seed"], 2.473)
+        self.assertAlmostEqual(r["rwp_cif"], 2.416)
+        self.assertEqual(r["success_seed"], 1)
+        self.assertEqual(r["f_rich_cif"], 0.7210)
+
     def test_summary_counts_usable(self):
         rows = [
             {"status": "ok", "usable": True, "t_total_s": 1.0,
@@ -364,7 +381,7 @@ class TestCompoundStarts(unittest.TestCase):
 
 
 class TestDualStartPolicy(unittest.TestCase):
-    """2026-11-11：自动双起点——首解收敛就跳过 CIF 端元那一次。"""
+    """自动双起点：种子 Rwp 高位仍跑第二起点（2026-11-24 补）。"""
 
     @classmethod
     def setUpClass(cls):
@@ -389,12 +406,48 @@ class TestDualStartPolicy(unittest.TestCase):
                 None, None, self.seed, max_nfev=5, **kwargs)
         return res, timers, fit
 
-    def test_converged_seed_skips_second_start(self):
+    def test_converged_seed_outside_transition_skips_second_start(self):
         good = _result(success=True, rwp=2.1)
+        # f_rich = 100/(100+1900) = 0.05，已在相变区外
+        good.params["LMFP_poor:scale"] = 38.0
         res, timers, fit = self._run([good], dual_start="auto")
         self.assertIs(res, good)
         self.assertEqual(fit.call_count, 1)
         self.assertEqual(timers["dual_start"], 0)
+        self.assertEqual(timers["start_used"], "seed")
+
+    def test_converged_seed_below_guard_skips_second_start(self):
+        seed_res = _result(success=True, rwp=2.1)   # f_rich = 0.667
+        cif_res = _result(success=True, rwp=2.05)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="auto")
+        self.assertIs(res, seed_res)
+        self.assertEqual(fit.call_count, 1)
+        self.assertEqual(timers["dual_start"], 0)
+        self.assertEqual(timers["start_used"], "seed")
+
+    def test_high_rwp_guard_runs_second_start(self):
+        seed_res = _result(success=True, rwp=2.46)
+        cif_res = _result(success=True, rwp=2.30)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="auto")
+        self.assertIs(res, cif_res)
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(timers["dual_start"], 1)
+        self.assertEqual(timers["start_used"], "cif")
+
+    def test_frame28_regression_runs_second_start(self):
+        # 第 28 帧的实测值：种子 2.473 / CIF 2.416，两者都 success
+        seed_res = _result(success=True, rwp=2.473)
+        cif_res = _result(success=True, rwp=2.416)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="auto")
+        self.assertIs(res, cif_res)
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(timers["dual_start"], 1)
+        self.assertEqual(timers["start_used"], "cif")
+        self.assertAlmostEqual(timers["rwp_seed"], 2.473)
+        self.assertAlmostEqual(timers["rwp_cif"], 2.416)
 
     def test_unconverged_seed_still_runs_both_starts(self):
         seed_res = _result(success=False, rwp=2.62)
@@ -402,6 +455,16 @@ class TestDualStartPolicy(unittest.TestCase):
         res, timers, fit = self._run([seed_res, cif_res],
                                      dual_start="auto")
         self.assertIs(res, cif_res, "CIF 起点 Rwp 更低，应取它")
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(timers["dual_start"], 1)
+
+    def test_missing_fraction_runs_second_start(self):
+        seed_res = _result(success=True, rwp=2.2)
+        del seed_res.extra_phase_table_sum
+        cif_res = _result(success=True, rwp=2.1)
+        res, timers, fit = self._run([seed_res, cif_res],
+                                     dual_start="auto")
+        self.assertIs(res, cif_res)
         self.assertEqual(fit.call_count, 2)
         self.assertEqual(timers["dual_start"], 1)
 

@@ -74,6 +74,11 @@ CELL_JUMP_POOR = 0.25
 # 双起点（2026-11-03）：种子起点 + CIF 端元起点。Rwp 差在这以内时，
 # 取晶胞变化更小的解（避免为了 0.01% 的 Rwp 去追一个跳变解）。
 ROBUST_TIE_RWP = 0.05
+# 自动双起点的补充触发（2026-11-24）：strict success 只说明优化器正常
+# 退出，不说明种子解优于 CIF 起点（frame 28 实测 2.473 vs 2.416）。
+# 只对种子 Rwp 高的帧跑第二起点；相变区无条件跑第二起点的版本在
+# 81 帧验证中改变了种子链（frame 35 f 0.569→0.587），已否决。
+AUTO_RWP_GUARD = 2.45
 # 连续 N 帧落在同一个新晶胞（容差 Å）时接受为新种子。原来只认“和旧种子
 # 差 < CELL_JUMP_*”，两相区一跳就永远不更新，44/46/48/49 会重复报假跳。
 PENDING_CELL_TOL = 0.02
@@ -298,6 +303,38 @@ def _choose_fit(res_seed, res_cif, seed):
     return best
 
 
+def _need_second_start(res_seed, f_rich, cif_is_seed, mode):
+    """自动双起点是否跑 CIF 端元起点。
+
+    2026-11-24：原来只看 ``res_seed.success``；frame 28 的种子解
+    success=True 但 Rwp 2.473，CIF 起点 2.416，说明“严格退出”不等于
+    “更好”。现在种子 Rwp ≥ AUTO_RWP_GUARD 时也跑第二起点。
+    相变区无条件跑第二起点的版本在 81 帧验证中改变了种子链
+    （frame 35 f 0.569→0.587），已否决；Rwp 高位守卫既能抓住
+    frame 28，又不碰两个起点本来一致的帧。
+    """
+    if cif_is_seed:
+        return False
+    mode = str(mode or "auto")
+    if mode == "always":
+        return True
+    if mode == "off":
+        return False
+    if not bool(getattr(res_seed, "success", True)):
+        return True
+    try:
+        f_value = float(f_rich)
+    except (TypeError, ValueError):
+        return True
+    if not math.isfinite(f_value):
+        return True
+    try:
+        rwp = float(res_seed.rwp)
+    except (TypeError, ValueError):
+        return True
+    return math.isfinite(rwp) and rwp >= AUTO_RWP_GUARD
+
+
 def _background_kwargs(bg, background_model=None, background_order=None):
     """按背景模型给 fit_pattern 组装背景参数（生产/回收实验共用）。
 
@@ -407,6 +444,16 @@ def _fit_second_stage(t, y, bg, rich, poor, al, lam, inst, res, f_rich, *,
         max_nfev=max_nfev, xtol=FIT_XTOL, ftol=FIT_FTOL, gtol=FIT_GTOL)
 
 
+def _fraction_value(result):
+    """安全读取 f_rich；失败返回 NaN（只用于触发判断/CSV 诊断）。"""
+    if result is None:
+        return float("nan")
+    try:
+        return float(_fractions(result)[3])
+    except Exception:                                   # noqa: BLE001
+        return float("nan")
+
+
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
              max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
              background_model=None, background_order=None,
@@ -422,6 +469,10 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     上一帧种子；这一解**严格收敛**就采用，不再白跑 CIF 端元起点——
     81 帧里绝大多数帧都收敛，省掉一半拟合时间。首解没严格收敛
     （两相区常见的 exit flag=False）时仍跑两个起点，保住稳健性。
+    2026-11-24：strict success 不等于更好（frame 28 种子 2.473 vs
+    CIF 2.416），所以种子 Rwp ≥ 2.45 时也跑第二起点；相变区无条件
+    跑第二起点的版本在 81 帧验证中改变了种子链，已否决。见
+    `_need_second_start`。
     "always" = 旧的每帧双起点；"off" 只跑种子（对照/调试用）。
     """
     t0 = time.perf_counter()
@@ -442,24 +493,30 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     res_cif = None
     cif_is_seed = (_cells_close(seed_rich, cif_rich, 1e-4)
                    and _cells_close(seed_poor, cif_poor, 1e-4))
-    mode = str(dual_start or "auto")
-    if mode == "always":
-        need_second = not cif_is_seed
-    elif mode == "off":
-        need_second = False
-    else:
-        need_second = (not cif_is_seed
-                       and not bool(getattr(res_seed, "success", True)))
+    f_seed = _fraction_value(res_seed)
+    need_second = _need_second_start(res_seed, f_seed, cif_is_seed,
+                                     dual_start)
     if need_second:
         res_cif = _fit_once(t, y, bg, rich, poor, al, lam, inst,
                             cif_rich, cif_poor, max_nfev,
                             background_model=background_model,
                             background_order=background_order,
                             intensity_poly=intensity_poly)
+    f_cif = _fraction_value(res_cif)
     res = _choose_fit(res_seed, res_cif, seed)
     timers["fit"] = time.perf_counter() - t3
     timers["total"] = time.perf_counter() - t0
     timers["dual_start"] = int(res_cif is not None)
+    timers["start_used"] = (
+        "cif" if res_cif is not None and res is res_cif else "seed")
+    timers["rwp_seed"] = float(res_seed.rwp)
+    timers["rwp_cif"] = (float(res_cif.rwp) if res_cif is not None
+                         else float("nan"))
+    timers["success_seed"] = int(bool(res_seed.success))
+    timers["success_cif"] = (int(bool(res_cif.success))
+                             if res_cif is not None else -1)
+    timers["f_rich_seed"] = f_seed
+    timers["f_rich_cif"] = f_cif
     return res, timers
 
 
@@ -554,6 +611,16 @@ def _row(frame, path, res, f_rich, timers, status, *, usable=False):
         "poor_c_esd": _e("LMFP_poor:c"),
         "al_a": al_a,
         "al_ref": A_al,
+        # 双起点诊断（2026-11-24）：哪个起点胜出、各自 Rwp/success/f。
+        # 老 CSV 没有这些列，读入时按缺省值处理；新批处理写入。
+        "dual_start": int(timers.get("dual_start", 0)),
+        "start_used": timers.get("start_used", ""),
+        "rwp_seed": timers.get("rwp_seed", float("nan")),
+        "rwp_cif": timers.get("rwp_cif", float("nan")),
+        "success_seed": timers.get("success_seed", -1),
+        "success_cif": timers.get("success_cif", -1),
+        "f_rich_seed": timers.get("f_rich_seed", float("nan")),
+        "f_rich_cif": timers.get("f_rich_cif", float("nan")),
         "t_load_s": timers.get("load", float("nan")),
         "t_integrate_s": timers.get("integrate", float("nan")),
         "t_bg_s": timers.get("bg", float("nan")),
@@ -604,6 +671,13 @@ def write_summary(outdir, rows, mask_on, phase_set=None):
         f"others: {n - len(strict) - len(soft)}",
         f"usable: {len(usable)}/{n} (Rwp<=max, finite cells, non-error)",
         "status: " + ", ".join(f"{k}={v}" for k, v in sorted(status.items())),
+        "dual start: "
+        + f"{sum(1 for r in rows if int(r.get('dual_start', 0)))} frames"
+        + "  (start used: "
+        + ", ".join(
+            f"{key}={sum(1 for r in rows if (r.get('start_used') or 'seed') == key)}"
+            for key in sorted({(r.get('start_used') or 'seed') for r in rows}))
+        + ")",
         f"mask: {'on' if mask_on else 'off'}",
         f"total: {total:.1f} s  ({total / 60.0:.1f} min)",
         f"mean per frame: {means['total']:.1f} s",
