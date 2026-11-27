@@ -3,6 +3,35 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构。
 版本号 = `src/xrd_toolkit/__init__.py` 的 `__version__`（唯一出处）。
 
+## [Unreleased] — 未发布
+
+### 原位双起点统一（2026-11-27）
+
+- **通用引擎接上定向双起点**：`insitu_policy.needs_second_start` 现在
+  两个引擎共用；`BatchPolicy.auto_rwp_guard` 记录守卫阈值。LMFP 预设
+  默认 2.45%，通用预设保持 `None`（只看是否收敛），旧 LMFP 方案文件
+  读入时自动补上默认值。GUI [原位] 工作台（走通用引擎）因此也拿到
+  2026-11-24 的 frame 28 修复。
+- **CSV 溯源列**：通用引擎也写 `dual_start / start_used / rwp_seed /
+  rwp_cif / success_seed / success_cif / f_<主相>_seed / f_<主相>_cif`，
+  与旧 LMFP 引擎同名列；摘要只统计真正有拟合记录的帧，不再把报错帧
+  算成 seed，也不会在旧 CSV 上误报 0 次双起点。
+- **界面提示**：结果表 Rwp/状态单元格悬停显示两个起点各自的 Rwp 和
+  最终采用哪一个；状态行、报告「双起点统计」、趋势图（紫色点线标出
+  CIF 起点胜出的帧）同步显示。
+- **参考门禁增强**：`scripts/check_insitu_reference.py` 现在也比较
+  `rich_c / poor_c / al_a / wt_rich / wt_poor`；支持同名 sidecar JSON
+  记录版本、容差和允许帧，v0.2.1 参考默认允许 28-30。新增
+  `scripts/accept_insitu_reference.py` 接受新参考、`scripts/release_check.py`
+  一条命令跑环境 + 单测 + 参考门禁；`scripts/fit_insitu.py --engine generic`
+  用与 GUI 相同的代码路径生成待检批次。
+- **新参考批次**：`tests/data/insitu_reference_v022_81.csv`（通用引擎，
+  带溯源列）；v0.2.1 参考保留作历史基线。
+- **守卫扫描**：`scripts/sweep_dual_start_guard.py` 对 2.35/2.40/2.45/
+  2.50 各跑一遍 81 帧。2.35/2.40 的输出与 2.45 一致，但分别多跑 19/7
+  次拟合（364/267 s vs 235 s）；2.50 漏掉帧 28 的 CIF 解（Rwp 回到
+  2.473），只快约 20 s。2.45 是实测的收益/成本拐点，保留为默认。
+
 ## [0.2.1] — 2026-11-19
 
 > 下一版按补丁号 `0.2.1` 记；正式发版时再统一改 `__version__`、说明书

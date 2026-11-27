@@ -309,11 +309,15 @@ Quick start: the Mask chapter of `docs/使用说明.html` (section 8). Tests: `t
 `Al` (a=4.061 Å fixed, per-reflection intensities). The instrument is fixed
 from a LaB₆ Le Bail fit; the background is a sliding baseline + 0.25°
 piecewise correction + curvature penalty. max_nfev is 120 for the first
-frame and 40 afterwards. Since 2026-11-03 each frame runs **two starts**
-(previous seed + CIF end-member) and keeps the lower Rwp; when the two are
-within 0.05% it keeps the solution with the smaller cell change. After a
-cell jump, two consecutive frames on the same new cell re-lock the seed
-(this removes the spurious 44/46/48/49 jumps).
+frame and 40 afterwards. The dual-start policy evolved: 2026-11-03 ran
+both starts every frame; 2026-11-11 skipped the CIF start when the seed
+fit converged strictly; 2026-11-24 added an Rwp guard (run the CIF start
+when the seed Rwp is >= 2.45% even if success=True); 2026-11-27 moved the
+rule to `simulation.insitu_policy` and shared it with the generic engine.
+The lower-Rwp solution wins; when the two are within 0.05% it keeps the
+solution with the smaller cell change. After a cell jump, two consecutive
+frames on the same new cell re-lock the seed (this removes the spurious
+44/46/48/49 jumps).
 
 - Fraction: `A_p = scale_p × ΣI_p × norm_p / 100`, `f_rich = A_r/(A_r+A_p)`;
   this is a **relative scattering intensity**, not wt%.
@@ -353,6 +357,42 @@ cell jump, two consecutive frames on the same new cell re-lock the seed
 - Plot: the 4-panel from `scripts/plot_insitu_summary.py`
   (`outputs/insitu_ipoly0_81/`); solid cell markers = phase ≥50%, faded =
   minority estimate.
+
+### Dual-start guard and reference gate (2026-11-24/27)
+
+- Frame 28 was a "false success": the seed fit reported success with Rwp
+  2.473%, while the CIF start reached 2.416%. The guard now runs the CIF
+  start when the seed Rwp is >= 2.45%. In the 2026-11-24 legacy-engine
+  check, frames 27-30 all had seed Rwp >= 2.45; only 28-30 changed (frame
+  27 still preferred the seed), at ~3.3 min per batch. In the 2026-11-27
+  generic-engine batch, frame 28 taking the CIF solution pulls the seed
+  Rwp of frames 29/30 below the threshold, so only 27/28 trigger (see
+  the Chinese notes).
+- A rejected variant ran the CIF start unconditionally in the transition
+  region; it shifted the seed chain (frame 35 f_rich 0.569 -> 0.587).
+  Extra starts are not automatically safer — the guard only probes frames
+  whose seed Rwp is already high.
+- The CSV records `dual_start`, `start_used`, `rwp_seed`, `rwp_cif`,
+  `success_seed`, `success_cif` and `f_<main>_seed/cif`; error rows keep
+  empty provenance and are excluded from summary counts.
+- References: `tests/data/insitu_reference_v021_81.csv` (old behavior)
+  and `insitu_reference_v022_81.csv` (new behavior with provenance), each
+  with a sidecar JSON for tolerances/allowed frames.
+  `scripts/check_insitu_reference.py` compares Rwp, fractions, a/c axes,
+  Al cell and wt%; `accept_insitu_reference.py` accepts a new baseline;
+  `release_check.py` runs environment + tests + gate.
+- Guard sweep: `scripts/sweep_dual_start_guard.py` at 2.35/2.40/2.45/2.50.
+  New reference batch (`insitu_reference_v022_81.csv`, generic engine,
+  `--intensity-poly 0`): 81/81 ok, 235.3 s, mean Rwp 2.282% (v0.2.1:
+  2.285%). Only frames 27 and 28 trigger: frame 27 keeps the seed
+  (2.4528 vs 2.4219; the <=0.05 tie prefers the smaller cell change),
+  frame 28 takes the CIF start (2.4730 -> 2.4156, f_rich +0.016, poor_a
+  -0.213). Frames 29/30 do not trigger themselves but improve through
+  the new seed chain (Rwp -0.089/-0.102, poor_a -0.215).
+  Sweep: 2.35/2.40 give identical results to 2.45 but run 21/9 second
+  starts (364.4/267.2 s vs 235.3 s); 2.50 drops frame 28's CIF solution
+  (Rwp 2.473, f_rich -0.016, poor_a +0.213) and saves only ~20 s. 2.45 is
+  the measured knee. The full table is in the Chinese notes.
 
 ## Quantitative validation (2026-11-06, A)
 
@@ -571,7 +611,7 @@ No processing is stated too (`chain: none` + `cut: 0 points removed`) — there 
 - **Cell refinement for all seven crystal systems** (2026-10-31) — `simulation/cell_refine.py` and `scripts/refine_cell.py`: enumerate hkl, match observed peaks to unique d values (Hungarian + coarse scale scan), then least-squares under the crystal-system constraints (cubic a; tetragonal/hexagonal a,c; rhombohedral a,α; orthorhombic a,b,c; monoclinic one angle; triclinic all six) with an optional 2θ zero. The phase workbench `[精修晶胞]` runs it on the selected CIF and shows a copyable report (cell, esd, RMS, per-peak hkl).
 - **Refinement workbench in the GUI** (2026-10-30) — the toolbar `[精修]` opens a central MDI workbench (same pattern as the Mask editor): pick one finished 1D panel and one CIF from `data/structures` (or open any CIF), choose what to refine (cell a/b/c, instrument U/V/W/X/Y, Size/Mustrain, temperature factor B, or Le Bail with free intensities) plus the background, and run the same `simulation.fit.fit_pattern` engine the CLI uses on a background thread. The result is an observed/calculated/background plot with an obs−calc residual and Bragg ticks, an Rwp/Rp readout, a parameter table with initial/fitted/esd columns and the full report; the figure can be saved as PNG/PDF and the report copied. Cell refinement is trimmed to the crystal system automatically (cubic → a only; non-orthogonal → skipped, with a note in the status line). Closing the workbench only hides it, so the curve, CIF and last result survive; it is mutually exclusive with calibration, Mask and the phase workbench. Extra-phase CIFs (e.g. an Al substrate) can be added on the left with free per-reflection intensities, which adds a Bragg row and an `Al:scale` parameter. After refining a LaB₆ pattern, `[存为仪器基线]` stores the fitted instrument profile in `instrument_baseline.json` (reloaded on the next start); a later sample fit can tick 「固定仪器」 to fix zero/U/V/W/X/Y (a wavelength mismatch is refused with a status note). `[采纳为图面板]` turns the fit into an ordinary 1D panel (observed + calculated + background, processing off, overlaid by curve fingerprint) that participates in saving and comparison.
 - **Phase-identification workbench in the GUI** (2026-10-30; two-state elements and in-dialog screening 2026-11-17) — the toolbar `[物相]` opens a central workbench: pick a finished 1D panel and a CIF library directory (default `data/structures`, or any folder), optionally pick sample elements from a periodic-table dialog or type them to prune the chemistry, and run the screen on a background thread. Since 2026-11-17 the elements have **two states**: one click = must-have (solid blue), the next = may-have (light blue), the next = off; screening eligibility is the **union** of the two (so splitting the list never hides a phase), while "must-have" is used for reading the results — a candidate containing none of them is tagged “可能为衬底/杂质” and one that uses a may-have element is tagged “含 X” in the table's 备注 column. The dialog also carries a **[确定并筛相]** button (apply the elements and start screening at once); the page's `[开始筛相]` remains for re-runs after changing the peak-finding settings or tolerance. It finds the observed peaks, scans every CIF in the library with a 0.96–1.05 cell-scale sweep and ranks them by coverage + 0.2 × purity (the same scoring as `scripts/analyze_pattern.py`, now shared through `simulation.phase_search`); selecting a row overlays that phase's calculated peak positions on the observed curve, and `[送去精修]` carries the curve and CIF into the refinement workbench with both drop-downs preselected. `Al_metal.cif` is excluded from the primary-phase pool and only handled as the substrate phase. The candidate table supports multi-select (each selected phase overlays in its own colour), `[打开 1D…]` loads a two-column text curve directly, and `[导出到默认位置]` writes the ranking to CSV with the library, element filter and wavelength, straight to the default output directory (no save dialog, 2026-11-02).
-- **In-situ batch workbench in the GUI** (2026-10-30; four views added 2026-11-02; mask formats widened 2026-11-17) — toolbar `[原位]` brings the 81-frame three-phase batch into the GUI: pick the frame folder (default `~/Data/XRD/lmfpdata`), mask (default `outputs/masks/lmfp1_lab6_mask.npy`; a `.mask.npz` mask project is now accepted too, and the preset can store either a bare file name resolved under `outputs/masks` or a full path), the rich/poor/Al CIFs, 2θ range and points, iteration budgets and a frame limit. Preparation (LaB₆ instrument + structures) runs in the background, then each frame is fitted in a chained background task; rows land in a table (Rwp, f_rich, both cells, timing). The right side now has four views: trends (fractions / rich cell / poor cell / Rwp), summary (status markers + cell esd + charge/discharge shading), single-frame fit (double-click a row for observed/calculated/background + residual + Bragg ticks; copy report), and model-independent ((200) doublet centroid/area vs f_poor). `[保存当前图…]` redraws at the script figure size before saving. The CSV is rewritten after each frame, and `fit_summary.txt` is written at the end. Stop finishes the current frame and keeps completed rows. Fractions remain relative scattering-intensity fractions, not wt%. The engine lives in `simulation.insitu` and is shared with `scripts/fit_insitu.py`; the four views live in `simulation.insitu_plots`.
+- **In-situ batch workbench in the GUI** (2026-10-30; four views added 2026-11-02; mask formats widened 2026-11-17) — toolbar `[原位]` brings the 81-frame three-phase batch into the GUI: pick the frame folder (default `~/Data/XRD/lmfpdata`), mask (default `outputs/masks/lmfp1_lab6_mask.npy`; a `.mask.npz` mask project is now accepted too, and the preset can store either a bare file name resolved under `outputs/masks` or a full path), the rich/poor/Al CIFs, 2θ range and points, iteration budgets and a frame limit. Preparation (LaB₆ instrument + structures) runs in the background, then each frame is fitted in a chained background task; rows land in a table (Rwp, f_rich, both cells, timing). The right side now has four views: trends (fractions / rich cell / poor cell / Rwp), summary (status markers + cell esd + charge/discharge shading), single-frame fit (double-click a row for observed/calculated/background + residual + Bragg ticks; copy report), and model-independent ((200) doublet centroid/area vs f_poor). `[保存当前图…]` redraws at the script figure size before saving. The CSV is rewritten after each frame, and `fit_summary.txt` is written at the end. Stop finishes the current frame and keeps completed rows. Fractions remain relative scattering-intensity fractions, not wt%. Since 2026-11-17 the engine is `simulation.insitu_generic` (LMFP is just the `lmfp_phase_set()` preset); `scripts/fit_insitu.py --engine generic` uses the same path, while `--engine legacy` keeps the old LMFP engine as the gold standard. Both engines share the dual-start rule in `simulation.insitu_policy`; the four views live in `simulation.insitu_multi_plots` / `insitu_plots`.
 - **Geometric calibration on a standard sample** — pyFAI `GeometryRefinement` against the selected pyFAI calibrant (LaB₆ by default, pyFAI values, certificate not recorded; CeO₂, Si, α-Al₂O₃ and other common standards are built in), starting from an FFT cross-correlation estimate of the direct-beam position (accuracy < 1 px). Example result: distance refined to 1595.80 mm (`lmfp1_lab6`). Every run reports **engine metrics the fit residual cannot**: median ring-position deviation, how many of the selected rings came out complete, and the dispersion of the standard's d values back-solved ring by ring — a run can report a 0.0000° residual while the rings sit 10 px off the real ones.
 - **Automatic 2θ range** — `--range auto` (default) takes the lower bound from the material's standard and finds the upper bound where the data starts failing, judged by *relative arc coverage* (the ring's fraction of azimuth inside the detector falling below 50 % of its own maximum ≈ 7.9° for a centred beam) rather than a fixed threshold, so one criterion adapts to any beam placement.
 - **Sector-wise waterfall** — N azimuthal sectors (default 36) integrated separately; the stacked raw-intensity plot reveals preferred orientation and large-grain spotiness, and visualises the detector-clipping geometry. Every row shares one height (the overall peak × 0.7 — no per-sector rescaling, so a taller peak really is a stronger sector), and the GUI version runs the processing chain per sector: cut the giant peak that squashes everything else and the weak sectors become readable.
