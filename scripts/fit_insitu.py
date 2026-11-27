@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """LMFP 原位序列的三相全精修批处理（2026-10-27，Week 9 任务二）。
 
-命令行入口；引擎在 `xrd_toolkit.simulation.insitu`，GUI [原位] 工作台
-共用同一份流程。
+命令行入口；默认走 `xrd_toolkit.simulation.insitu`（旧 LMFP 引擎，
+81 帧金标准口径）。`--engine generic` 改走通用引擎 + LMFP 预设
+（`simulation.insitu_generic`），与 GUI [原位] 工作台同一条代码路径。
 
 三相：
   * LMFP_rich  富锂相（LiMn0.6Fe0.4PO4，主相，晶胞 a/b/c 自由）
@@ -12,9 +13,10 @@
 流程：
   1. LaB6 标样定 zero/U/V/W/X/Y（之后固定，逐帧不再精修峰形）；
   2. 每帧：读图 → mask → 1D 积分 → 自动基线；
-  3. 第一帧用较多迭代充分收敛；后续帧从「上一帧种子」和「CIF 端元」
-     各跑一次（2026-11-03 双起点），取 Rwp 更低者；晶胞跳变后连续
-     2 帧落在同一个新晶胞时重锁种子；
+  3. 第一帧用较多迭代充分收敛；后续帧先跑「上一帧种子」；不收敛或
+     种子 Rwp ≥ 2.45% 时再跑「CIF 端元」起点，取 Rwp 更低者
+     （2026-11-24 定向双起点）；晶胞跳变后连续 2 帧落在同一个新晶胞
+     时重锁种子；
   4. 不收敛/高 Rwp/晶胞跳变的帧标异常，**不中断**，下一帧仍用上一个
      好种子；
   5. 输出 CSV（帧号、相分数、两相晶胞、Rwp/Rp、状态、分段耗时）、
@@ -47,9 +49,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from xrd_toolkit.simulation import plot_fit  # noqa: E402
 from xrd_toolkit.simulation.insitu import (  # noqa: E402
-    DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, FIRST_NFEV, FRAME_NFEV,
-    LAB6_CIF, LAB6_TIF, InSituBatch, _cell, _extra_phases, _fractions,
-    _fraction_esd, _frames, _instrument, _row, _status, _tag,
+    AUTO_RWP_GUARD, DEFAULT_AL, DEFAULT_POOR, DEFAULT_RICH, FIRST_NFEV,
+    FRAME_NFEV, LAB6_CIF, LAB6_TIF, InSituBatch, _cell, _extra_phases,
+    _fractions, _fraction_esd, _frames, _instrument, _row, _status, _tag,
     _write_summary, frames_in_dir, load_seed_cells, prepare_setup,
     INTENSITY_POLY)
 
@@ -74,6 +76,41 @@ def _trend_figure(outdir, rows):
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return path
+
+
+def _guard_value(text):
+    """--auto-rwp-guard：数字或 off/0（关闭 Rwp 守卫）。"""
+    raw = str(text).strip().lower()
+    if raw in ("off", "none", "0", ""):
+        return 0.0
+    try:
+        return float(raw)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(
+            f"需要数字或 off/0：{text}") from err
+
+
+def _build_generic_batch(args, mask_path):
+    """通用引擎 + LMFP 预设（与 GUI 同一条代码路径）。"""
+    from xrd_toolkit.simulation.insitu_generic import prepare_batch
+    from xrd_toolkit.simulation.phase_set import (
+        lmfp_phase_set, phase_set_to_dict)
+
+    pset = lmfp_phase_set(args.rich, args.poor, args.al)
+    pset.policy.dual_start = "auto"
+    pset.policy.auto_rwp_guard = args.auto_rwp_guard
+    pset.policy.background_model = args.background_model
+    pset.policy.background_order = args.background_order
+    pset.policy.intensity_poly = args.intensity_poly
+    if args.lab6:
+        pset.instrument.lab6_tif = str(Path(args.lab6).expanduser())
+    if args.lab6_cif:
+        pset.instrument.lab6_cif = str(Path(args.lab6_cif).expanduser())
+    batch = prepare_batch(
+        args.config, phase_set_to_dict(pset), mask_path=mask_path,
+        max_rwp=args.max_rwp, first_nfev=args.first_nfev,
+        frame_nfev=args.frame_nfev)
+    return batch, pset
 
 
 def main():
@@ -112,6 +149,14 @@ def main():
     ap.add_argument("--intensity-poly", type=int, default=INTENSITY_POLY,
                     help="主相平滑强度修正阶数；与相比例简并，"
                          "定量验证建议 0")
+    ap.add_argument("--engine", choices=("legacy", "generic"),
+                    default="legacy",
+                    help="legacy = 旧 LMFP 引擎（金标准）；"
+                         "generic = 通用引擎 + LMFP 预设（与 GUI 同路径）")
+    ap.add_argument("--auto-rwp-guard", type=_guard_value,
+                    default=AUTO_RWP_GUARD,
+                    help=f"自动双起点的 Rwp 守卫（默认 {AUTO_RWP_GUARD}；"
+                         "off/0 = 只看 success）")
     args = ap.parse_args()
 
     data_dir = Path(args.data).expanduser()
@@ -146,31 +191,52 @@ def main():
         else:
             print(f"警告：掩膜文件不存在（{mp}），按不遮运行")
 
+    pset = None
     try:
-        batch = prepare_setup(
-            args.config, rich_path=args.rich, poor_path=args.poor,
-            al_path=args.al, mask_path=mask_path,
-            lab6_tif=args.lab6, lab6_cif=args.lab6_cif,
-            max_rwp=args.max_rwp,
-            first_nfev=args.first_nfev, frame_nfev=args.frame_nfev,
-            background_model=args.background_model,
-            background_order=args.background_order,
-            intensity_poly=args.intensity_poly)
+        if args.engine == "generic":
+            batch, pset = _build_generic_batch(args, mask_path)
+        else:
+            batch = prepare_setup(
+                args.config, rich_path=args.rich, poor_path=args.poor,
+                al_path=args.al, mask_path=mask_path,
+                lab6_tif=args.lab6, lab6_cif=args.lab6_cif,
+                max_rwp=args.max_rwp,
+                first_nfev=args.first_nfev, frame_nfev=args.frame_nfev,
+                background_model=args.background_model,
+                background_order=args.background_order,
+                intensity_poly=args.intensity_poly,
+                auto_rwp_guard=args.auto_rwp_guard)
     except Exception as err:                       # noqa: BLE001
         ap.error(f"准备失败：{err}")
 
+    print(f"engine: {args.engine}")
     inst = batch.instrument
-    print(f"LaB6: zero={inst.params['zero']:+.5f}  "
-          f"U={inst.params['u']:.3f} V={inst.params['v']:.3f} "
-          f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
-          f"Y={inst.params['y']:.3f}  (Rwp {inst.rwp:.3f}%)")
+    if isinstance(inst, dict):
+        bits = "  ".join(
+            f"{key}={float(inst[key]):+.4g}"
+            for key in ("zero", "u", "v", "w", "x", "y")
+            if key in inst)
+        print(f"LaB6: {bits}  (fixed from standard frame)")
+    else:
+        print(f"LaB6: zero={inst.params['zero']:+.5f}  "
+              f"U={inst.params['u']:.3f} V={inst.params['v']:.3f} "
+              f"W={inst.params['w']:.3f} X={inst.params['x']:.3f} "
+              f"Y={inst.params['y']:.3f}  (Rwp {inst.rwp:.3f}%)")
     if batch.mask is not None:
         import numpy as np
         print(f"mask: {mask_path} ({int(np.sum(batch.mask))} px)")
-    print(f"background: {batch.background_model}"
-          + (f" (order {batch.background_order})"
-             if batch.background_model == "chebyshev" else "")
-          + f"; intensity_poly={batch.intensity_poly}")
+    background_model = getattr(batch, "background_model", None)
+    if background_model is None:
+        background_model = batch.policy.background_model
+    background_order = getattr(batch, "background_order", None)
+    if background_order is None:
+        background_order = batch.policy.background_order
+    intensity_poly = (getattr(batch, "intensity_poly", 0)
+                      if pset is None else pset.policy.intensity_poly)
+    print(f"background: {background_model}"
+          + (f" (order {background_order})"
+             if background_model == "chebyshev" else "")
+          + f"; intensity_poly={intensity_poly}")
 
     csv_path = outdir / "insitu_fit.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as fh:
@@ -182,7 +248,12 @@ def main():
             # 真实帧号写进 CSV；跳帧时用生产 CSV 上一帧的晶胞作种子。
             batch.frame_no = number - 1
             if (number - 1) in seeds:
-                batch.seed = seeds[number - 1]
+                if pset is None:
+                    batch.seed = seeds[number - 1]
+                else:
+                    # 通用引擎的种子还带参考相（Al），只覆盖 CSV 里的
+                    # rich/poor 两相，别把 Al 丢掉。
+                    batch.seed.update(seeds[number - 1])
             row = batch.fit_frame(path)
             if writer is None:
                 writer = csv.DictWriter(fh, fieldnames=list(row))
@@ -191,14 +262,16 @@ def main():
             fh.flush()
             if row["status"].startswith("error"):
                 print(f"  异常：{row['status']}", flush=True)
+            start = str(row.get("start_used") or "")
+            start_note = f"  start={start}" if start else ""
             print(f"  status={row['status']}  Rwp={row['rwp']:.3f}%  "
-                  f"f_rich={row['f_rich']:.3f}  "
-                  f"wt_rich={row['wt_rich']:.2f}%  "
-                  f"fit={row['t_fit_s']:.1f}s", flush=True)
+                  f"f_rich={row.get('f_rich', float('nan')):.3f}  "
+                  f"wt_rich={row.get('wt_rich', float('nan')):.2f}%  "
+                  f"fit={row['t_fit_s']:.1f}s{start_note}", flush=True)
 
     rows = batch.rows
     summary_path, means, total = _write_summary(
-        outdir, rows, batch.mask is not None)
+        outdir, rows, batch.mask is not None, phase_set=pset)
     print(f"\nCSV: {csv_path}\nsummary: {summary_path}")
 
     if batch.fitted:

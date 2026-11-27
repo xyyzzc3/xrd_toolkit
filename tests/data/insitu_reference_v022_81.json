@@ -1,0 +1,14 @@
+{
+  "version": "0.2.2",
+  "generated": "2026-11-27",
+  "engine": "generic",
+  "command": "python scripts/fit_insitu.py --engine generic --data ~/Data/XRD/lmfpdata --mask outputs/masks/lmfp1_lab6_mask.npy --outdir outputs/insitu_v022_81 --intensity-poly 0",
+  "frames": 81,
+  "tolerances": {
+    "f_rich": 0.01,
+    "cell": 0.05,
+    "rwp": 0.05,
+    "wt": 0.1
+  },
+  "allow_frames": []
+}

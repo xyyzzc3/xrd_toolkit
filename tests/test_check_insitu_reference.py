@@ -12,13 +12,19 @@ import check_insitu_reference as ref  # noqa: E402
 
 
 def _row(frame, *, rwp=2.20, f_rich=0.50, rich_a=10.30, poor_a=9.90,
-         status="ok", usable="True", start_used=""):
+         rich_c=4.70, poor_c=4.78, al_a=4.061, wt_rich=50.0,
+         wt_poor=50.0, status="ok", usable="True", start_used=""):
     return {
         "frame": str(frame),
         "rwp": str(rwp),
         "f_rich": str(f_rich),
         "rich_a": str(rich_a),
+        "rich_c": str(rich_c),
         "poor_a": str(poor_a),
+        "poor_c": str(poor_c),
+        "al_a": str(al_a),
+        "wt_rich": str(wt_rich),
+        "wt_poor": str(wt_poor),
         "status": status,
         "usable": usable,
         "start_used": start_used,
@@ -48,6 +54,20 @@ class TestCompareRows(unittest.TestCase):
         diffs, _missing, _extra = ref.compare_rows(a, b)
         self.assertEqual(len(diffs), 1)
         self.assertEqual(diffs[0][1], "poor_a")
+
+    def test_c_axis_is_compared(self):
+        a = {1: _row(1, poor_c=4.78)}
+        b = {1: _row(1, poor_c=4.86)}
+        diffs, _missing, _extra = ref.compare_rows(a, b)
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0][1], "poor_c")
+
+    def test_weight_fraction_is_compared(self):
+        a = {1: _row(1, wt_rich=50.0)}
+        b = {1: _row(1, wt_rich=51.0)}
+        diffs, _missing, _extra = ref.compare_rows(a, b)
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0][1], "wt_rich")
 
     def test_rwp_tolerance_flags(self):
         a = {1: _row(1, rwp=2.20)}
@@ -110,6 +130,42 @@ class TestMain(unittest.TestCase):
                              "--candidate", str(cand_path),
                              "--allow-frames", "28"])
         self.assertEqual(code, 0)
+
+    def test_manifest_supplies_allowed_frames(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            ref_path = Path(td) / "ref.csv"
+            cand_path = Path(td) / "cand.csv"
+            self._write(ref_path, [_row(28)])
+            self._write(cand_path, [_row(28, f_rich=0.72)])
+            ref_path.with_suffix(".json").write_text(json.dumps(
+                {"version": "0.2.1", "allow_frames": [28]}),
+                encoding="utf-8")
+            code = ref.main(["--reference", str(ref_path),
+                             "--candidate", str(cand_path)])
+        self.assertEqual(code, 0)
+
+    def test_cli_allow_frames_overrides_manifest(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            ref_path = Path(td) / "ref.csv"
+            cand_path = Path(td) / "cand.csv"
+            self._write(ref_path, [_row(28)])
+            self._write(cand_path, [_row(28, f_rich=0.72)])
+            ref_path.with_suffix(".json").write_text(json.dumps(
+                {"allow_frames": [28]}), encoding="utf-8")
+            code = ref.main(["--reference", str(ref_path),
+                             "--candidate", str(cand_path),
+                             "--allow-frames", ""])
+        self.assertEqual(code, 1)
+
+    def test_broken_manifest_is_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            ref_path = Path(td) / "ref.csv"
+            self._write(ref_path, [_row(1)])
+            ref_path.with_suffix(".json").write_text("{not json",
+                                                     encoding="utf-8")
+            self.assertEqual(ref.load_manifest(ref_path), {})
 
 
 if __name__ == "__main__":

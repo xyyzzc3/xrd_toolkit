@@ -1,0 +1,14 @@
+{
+  "version": "0.2.1",
+  "generated": "2026-11-24",
+  "engine": "legacy",
+  "command": "python scripts/fit_insitu.py --data ~/Data/XRD/lmfpdata --mask outputs/masks/lmfp1_lab6_mask.npy --outdir outputs/insitu_v021_81 --intensity-poly 0",
+  "tolerances": {
+    "f_rich": 0.01,
+    "cell": 0.05,
+    "rwp": 0.05,
+    "wt": 0.1
+  },
+  "allow_frames": [28, 29, 30],
+  "note": "v0.2.1 behavior before the 2026-11-24 targeted dual-start trigger; frames 28-30 change with the new guard."
+}
