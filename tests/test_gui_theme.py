@@ -26,7 +26,7 @@ class TestThemeTokens(unittest.TestCase):
         self.assertEqual(palette.color(QPalette.ColorRole.Window).name(),
                          theme.BG.lower())
         self.assertEqual(palette.color(QPalette.ColorRole.Highlight).name(),
-                         theme.ACCENT.lower())
+                         theme.SELECT.lower())
         self.assertEqual(palette.color(QPalette.ColorRole.Text).name(),
                          theme.TEXT.lower())
 

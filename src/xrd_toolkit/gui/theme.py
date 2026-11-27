@@ -12,7 +12,8 @@
 """
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication, QMdiSubWindow, QPushButton
 
 # ── 设计令牌（与官网/说明书同一套冷色调）────────────────────
@@ -22,9 +23,11 @@ SURFACE_ALT = "#eef2f7"   # 表头、交替行、MDI 工作区
 BORDER = "#dfe5ec"        # 分隔线
 TEXT = "#1c2733"
 MUTED = "#5b6773"
-ACCENT = "#1d5496"        # 品牌蓝（选中/主按钮）
+ACCENT = "#1d5496"        # 品牌蓝（主按钮）
 ACCENT_HOVER = "#17447c"
 ACCENT_SOFT = "#dce8f7"   # 工具栏当前页
+SELECT = "#cfe0f5"        # 选中底（表格/菜单/MDI 标题栏）
+SELECT_TEXT = "#12365f"
 DANGER = "#a93226"
 DANGER_SOFT = "#fdf0ee"
 DISABLED = "#9aa4ae"
@@ -48,14 +51,20 @@ def build_palette() -> QPalette:
     palette.setColor(role.Button, QColor("#f7f9fc"))
     palette.setColor(role.ButtonText, QColor(TEXT))
     palette.setColor(role.BrightText, QColor("#ffffff"))
-    palette.setColor(role.Highlight, QColor(ACCENT))
-    palette.setColor(role.HighlightedText, QColor("#ffffff"))
+    palette.setColor(role.Highlight, QColor(SELECT))
+    palette.setColor(role.HighlightedText, QColor(SELECT_TEXT))
     palette.setColor(role.ToolTipBase, QColor(SURFACE))
     palette.setColor(role.ToolTipText, QColor(TEXT))
     palette.setColor(role.PlaceholderText, QColor(MUTED))
     palette.setColor(role.Link, QColor(ACCENT))
-    for key in (role.Text, role.WindowText, role.ButtonText):
-        palette.setColor(group.Disabled, key, QColor(DISABLED))
+    # MDI 标题栏在非活动状态会取 Inactive/Disabled 组；不显式写的话
+    # 浅色标题栏上会出现浅灰字（2026-11-28 截图确认）。
+    for state in (group.Active, group.Inactive):
+        for key in (role.Text, role.WindowText, role.ButtonText):
+            palette.setColor(state, key, QColor(TEXT))
+    palette.setColor(group.Disabled, role.WindowText, QColor(MUTED))
+    palette.setColor(group.Disabled, role.Text, QColor(MUTED))
+    palette.setColor(group.Disabled, role.ButtonText, QColor(MUTED))
     return palette
 
 
@@ -179,8 +188,12 @@ def set_role(button: QPushButton, role: str) -> None:
 
 
 def brand_subwindow(sub: QMdiSubWindow) -> None:
-    """MDI 子窗口标题栏用应用图标，别显示 Qt 默认图标。"""
-    app = QApplication.instance()
-    if app is None or app.windowIcon().isNull():
-        return
-    sub.setWindowIcon(app.windowIcon())
+    """MDI 子窗口标题栏保持纯文字（不画小图标）。
+
+    2026-11-28 用户反馈：标题栏左侧的小图标会被认成 Qt 标志。空
+    QIcon 会被 Fusion 回退成默认 Qt 图标，所以给一个 1×1 全透明
+    pixmap；应用图标仍用于任务栏/主窗口。
+    """
+    blank = QPixmap(1, 1)
+    blank.fill(Qt.GlobalColor.transparent)
+    sub.setWindowIcon(QIcon(blank))
