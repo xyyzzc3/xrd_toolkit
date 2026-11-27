@@ -243,6 +243,113 @@ class TestGenericEngine(unittest.TestCase):
         self.assertEqual(batch.seed, before)
 
 
+class TestGenericDualStart(unittest.TestCase):
+    """2026-11-27：通用引擎接上共享双起点规则和溯源列。"""
+
+    def _batch(self, *, guard=2.45, mode="auto"):
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, generic_phase_set)
+        pset = generic_phase_set([RICH, POOR])
+        pset.policy = BatchPolicy(dual_start=mode, auto_rwp_guard=guard,
+                                  pending_frames=2)
+        batch = gen.GenericBatch([], {}, 1.0, phase_set=pset)
+        # 种子必须不是 CIF 端元，否则 _is_cif_seed 会直接跳过第二起点。
+        batch.seed[batch.phases[0].label] = (10.20, 6.00, 4.70)
+        return batch
+
+    def _run(self, results, **policy):
+        batch = self._batch(**policy)
+        with mock.patch.object(
+                gen, "load_frame",
+                return_value=(np.linspace(1.0, 8.0, 20), np.ones(20),
+                              np.zeros(20), {})), \
+             mock.patch.object(gen.GenericBatch, "_fit_once",
+                               side_effect=results) as fit:
+            row = batch.fit_frame("frame.tif")
+        return row, fit
+
+    def test_high_rwp_runs_second_start_and_records_provenance(self):
+        row, fit = self._run([_duck(rwp=2.473), _duck(rwp=2.416)])
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(row["dual_start"], 1)
+        self.assertEqual(row["start_used"], "cif")
+        self.assertAlmostEqual(row["rwp_seed"], 2.473)
+        self.assertAlmostEqual(row["rwp_cif"], 2.416)
+        self.assertEqual(row["success_seed"], 1)
+        self.assertEqual(row["success_cif"], 1)
+        self.assertAlmostEqual(row["f_LiFePO4_olivine_seed"], 2.0 / 3.0,
+                               places=6)
+        self.assertEqual(row["status"][:2], "ok")
+
+    def test_low_rwp_converged_seed_skips_second_start(self):
+        row, fit = self._run([_duck(rwp=2.10)])
+        self.assertEqual(fit.call_count, 1)
+        self.assertEqual(row["dual_start"], 0)
+        self.assertEqual(row["start_used"], "seed")
+        self.assertAlmostEqual(row["rwp_seed"], 2.10)
+        self.assertTrue(math.isnan(row["rwp_cif"]))
+
+    def test_non_strict_seed_runs_second_start(self):
+        row, fit = self._run([_duck(success=False, rwp=2.60),
+                              _duck(rwp=2.30)])
+        self.assertEqual(fit.call_count, 2)
+        self.assertEqual(row["start_used"], "cif")
+        self.assertEqual(row["success_seed"], 0)
+
+    def test_no_guard_keeps_old_generic_behavior(self):
+        row, fit = self._run([_duck(rwp=9.0)], guard=None)
+        self.assertEqual(fit.call_count, 1)
+        self.assertEqual(row["start_used"], "seed")
+
+    def test_columns_include_provenance(self):
+        batch = self._batch()
+        cols = batch.columns()
+        for key in ("dual_start", "start_used", "rwp_seed", "rwp_cif",
+                    "success_seed", "success_cif",
+                    "f_LiFePO4_olivine_seed", "f_LiFePO4_olivine_cif"):
+            self.assertIn(key, cols)
+
+    def test_scheme_roundtrip_keeps_guard(self):
+        from xrd_toolkit.simulation.phase_set import (
+            phase_set_from_dict, phase_set_to_dict)
+        batch = self._batch()
+        data = phase_set_to_dict(batch.phase_set)
+        self.assertEqual(data["policy"]["auto_rwp_guard"], 2.45)
+        back = phase_set_from_dict(data)
+        self.assertEqual(back.policy.auto_rwp_guard, 2.45)
+
+    def test_lmfp_preset_has_guard_generic_does_not(self):
+        from xrd_toolkit.simulation.phase_set import (
+            BatchPolicy, lmfp_phase_set)
+        self.assertEqual(lmfp_phase_set().policy.auto_rwp_guard, 2.45)
+        self.assertIsNone(BatchPolicy.generic().auto_rwp_guard)
+
+    def test_old_lmfp_scheme_gets_guard_default(self):
+        from xrd_toolkit.simulation.phase_set import (
+            lmfp_phase_set, phase_set_from_dict, phase_set_to_dict)
+        data = phase_set_to_dict(lmfp_phase_set())
+        data["policy"].pop("auto_rwp_guard", None)
+        back = phase_set_from_dict(data)
+        self.assertEqual(back.policy.auto_rwp_guard, 2.45)
+
+    def test_lmfp_columns_include_legacy_aliases(self):
+        import tempfile
+        from xrd_toolkit.simulation.phase_set import lmfp_phase_set
+        batch = gen.LMFPBatch([], {}, 1.0, phase_set=lmfp_phase_set())
+        cols = batch.columns()
+        for key in ("wt_al", "al_a", "al_ref"):
+            self.assertIn(key, cols)
+        row = {key: 0 for key in cols}
+        row.update({"frame": 1, "file": "f.tif", "status": "ok",
+                    "usable": True, "start_used": "seed"})
+        batch.rows = [row]
+        with tempfile.TemporaryDirectory() as td:
+            path = batch.write_csv(Path(td) / "lmfp.csv")
+            header = path.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn("wt_al", header)
+        self.assertIn("start_used", header)
+
+
 class TestGenericEntry(unittest.TestCase):
     def setUp(self):
         self.w = create_window()

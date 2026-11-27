@@ -6,6 +6,7 @@
   * 异常判据（不收敛/高 Rwp/晶胞跳变/无相信号）；
   * 额外相规格（poor 晶胞自由、Al 逐反射）。
 """
+import argparse
 import sys
 import tempfile
 import unittest
@@ -144,6 +145,29 @@ class TestRowAndSummary(unittest.TestCase):
         self.assertIn("usable: 2/2", text)
         self.assertIn("strict ok: 1  ok_soft: 1", text)
         self.assertIn("strict convergence: 50.0%", text)
+        self.assertIn("dual start: not recorded", text)
+
+    def test_summary_counts_only_fitted_starts(self):
+        rows = [
+            {"status": "ok", "usable": True, "t_total_s": 1.0,
+             "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
+             "t_fit_s": 0.8, "dual_start": 1, "start_used": "cif"},
+            {"status": "ok", "usable": True, "t_total_s": 2.0,
+             "t_load_s": 0.1, "t_integrate_s": 0.1, "t_bg_s": 0.0,
+             "t_fit_s": 1.8, "dual_start": 0, "start_used": "seed"},
+            # 拟合前就报错的帧：没有 start_used，不能算成 seed
+            {"status": "error: ValueError: bad", "usable": False,
+             "t_total_s": 0.0, "t_load_s": 0.0, "t_integrate_s": 0.0,
+             "t_bg_s": 0.0, "t_fit_s": 0.0, "dual_start": 0,
+             "start_used": ""},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            path, _means, _total = fi._write_summary(
+                Path(td), rows, True)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("dual start: 1 frames", text)
+        self.assertIn("cif=1, seed=1", text)
+        self.assertNotIn("seed=2", text)
 
 
 class TestBackgroundModel(unittest.TestCase):
@@ -380,6 +404,15 @@ class TestCompoundStarts(unittest.TestCase):
                       smoother)
 
 
+class TestGuardCli(unittest.TestCase):
+    def test_guard_value_parsing(self):
+        self.assertAlmostEqual(fi._guard_value("2.45"), 2.45)
+        self.assertEqual(fi._guard_value("off"), 0.0)
+        self.assertEqual(fi._guard_value("0"), 0.0)
+        with self.assertRaises(argparse.ArgumentTypeError):
+            fi._guard_value("high")
+
+
 class TestDualStartPolicy(unittest.TestCase):
     """自动双起点：种子 Rwp 高位仍跑第二起点（2026-11-24 补）。"""
 
@@ -448,6 +481,21 @@ class TestDualStartPolicy(unittest.TestCase):
         self.assertEqual(timers["start_used"], "cif")
         self.assertAlmostEqual(timers["rwp_seed"], 2.473)
         self.assertAlmostEqual(timers["rwp_cif"], 2.416)
+
+    def test_guard_is_configurable(self):
+        seed_res = _result(success=True, rwp=2.20)
+        cif_res = _result(success=True, rwp=2.00)
+        res, timers, fit = self._run(
+            [seed_res, cif_res], dual_start="auto", auto_rwp_guard=2.0)
+        self.assertIs(res, cif_res)
+        self.assertEqual(fit.call_count, 2)
+
+    def test_guard_zero_disables_rwp_trigger(self):
+        seed_res = _result(success=True, rwp=2.90)
+        res, timers, fit = self._run(
+            [seed_res], dual_start="auto", auto_rwp_guard=0)
+        self.assertIs(res, seed_res)
+        self.assertEqual(fit.call_count, 1)
 
     def test_unconverged_seed_still_runs_both_starts(self):
         seed_res = _result(success=False, rwp=2.62)

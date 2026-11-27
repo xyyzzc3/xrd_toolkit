@@ -17,7 +17,8 @@ import numpy as np
 from matplotlib.ticker import MaxNLocator
 
 from xrd_toolkit.simulation.insitu_plots import (
-    MINORITY_FRACTION, _finite_pairs, _num, _placeholder, _status_markers)
+    MINORITY_FRACTION, _finite_pairs, _num, _placeholder, _status_markers,
+    mark_cif_starts)
 
 _PALETTE = ("#1f5fa8", "#e08a1e", "#2a9d8f", "#8e5aa8",
             "#c0392b", "#16a085", "#7f8c8d", "#d35400")
@@ -188,14 +189,17 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
     ax.set_ylabel("Rwp (%)", fontsize=8)
     ax.set_title("(d) Rwp / anomaly status", fontsize=9)
     ax.grid(alpha=0.25, linestyle=":")
+    marked = mark_cif_starts(axes.ravel(), rows)
     for ax in axes.ravel():
         ax.tick_params(labelsize=7)
         _frame_ticks(ax)
     fig.suptitle(title or f"In-situ multi-phase batch — {len(rows)} frames",
                  fontsize=11)
-    fig.text(0.5, 0.01,
-             "phase fractions are relative scattering intensity, not wt%; "
-             "faded cell markers = minority-phase estimate (not reliable).",
+    footnote = ("phase fractions are relative scattering intensity, not wt%; "
+                "faded cell markers = minority-phase estimate (not reliable).")
+    if marked:
+        footnote += " Purple dotted verticals = CIF start won."
+    fig.text(0.5, 0.01, footnote,
              ha="center", fontsize=6.5, color="0.4")
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     return fig

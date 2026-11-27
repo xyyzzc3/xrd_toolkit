@@ -313,9 +313,14 @@ def _insitu_snapshot(window):
         methods.append(("LaB₆ 标样", Path(lab6).name))
     policy = getattr(batch, "policy", None)
     dual = str(getattr(policy, "dual_start", "off"))
-    dual_text = {"off": "关闭（通用方案）",
-                 "auto": "自动（不收敛才补 CIF 端元）",
-                 "always": "每帧（上一帧种子 + CIF 端元）"}.get(dual, dual)
+    guard = getattr(policy, "auto_rwp_guard", None)
+    if dual == "auto" and guard is not None:
+        dual_text = f"自动（不收敛或种子 Rwp ≥ {float(guard):g}% 时补 CIF 端元）"
+    else:
+        dual_text = {"off": "关闭（通用方案）",
+                     "auto": "自动（不收敛才补 CIF 端元）",
+                     "always": "每帧（上一帧种子 + CIF 端元）"}.get(dual,
+                                                                  dual)
     bg_value = str(getattr(
         batch, "background_model",
         getattr(policy, "background_model", "estimated")))
@@ -337,6 +342,13 @@ def _insitu_snapshot(window):
         ("迭代上限", f"首帧 {batch.first_nfev} / 后续 {batch.frame_nfev}"),
         ("双起点", dual_text),
     ]
+    recorded = [r for r in rows if str(r.get("start_used") or "").strip()]
+    if recorded:
+        n_cif = sum(1 for r in recorded
+                    if str(r.get("start_used")).strip() == "cif")
+        methods.append((
+            "双起点统计",
+            f"{len(recorded)} 帧有溯源记录，CIF 起点胜出 {n_cif} 帧"))
     instrument = getattr(batch, "instrument", None)
     if isinstance(instrument, dict) and instrument:
         bits = [f"{name} {report._num(instrument.get(name), '{:.4g}')}"

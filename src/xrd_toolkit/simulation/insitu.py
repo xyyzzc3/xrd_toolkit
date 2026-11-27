@@ -1,6 +1,8 @@
 """LMFP 原位序列的三相全精修引擎（2026-10-30 从脚本抽出）。
 
-命令行 `scripts/fit_insitu.py` 与 GUI [原位] 工作台共用这份流程：
+命令行 `scripts/fit_insitu.py` 默认走这份流程（81 帧金标准口径）；
+GUI [原位] 工作台 2026-11-17 起走通用引擎 `insitu_generic`，两边
+共用 `insitu_policy` 的双起点判断（2026-11-27 统一）。
 
 三相：
   * LMFP_rich  富锂相（LiMn0.6Fe0.4PO4，主相，晶胞 a/b/c 自由）
@@ -9,7 +11,8 @@
 
 每帧：读图 → mask → 1D 积分 → 自动基线 → 三相结构精修。
 第一帧用较多迭代充分收敛；后续帧从上一帧种子起步，严格收敛就采用；
-不收敛时再补跑 CIF 端元起点（2026-11-11 自动双起点，2026-11-03 版本的
+不收敛、或种子 Rwp 达到守卫阈值（默认 2.45%）时再补跑 CIF 端元起点
+（2026-11-11 自动双起点；2026-11-24 加 Rwp 守卫；2026-11-03 版本的
 每帧双起点仍可用 `dual_start="always"`），取 Rwp 更低者；Rwp 打平时
 取晶胞变化小的解。
 不收敛/高 Rwp/晶胞跳变的帧标异常，不中断；晶胞跳变后连续 2 帧
@@ -32,6 +35,7 @@ import math
 import re
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -43,6 +47,8 @@ from xrd_toolkit.services.integrator import integrate_1d
 from xrd_toolkit.services.mask import load_mask
 from xrd_toolkit.simulation import (
     b_iso_from_cif, fit_pattern, load_structure)
+from xrd_toolkit.simulation.insitu_policy import (
+    DEFAULT_AUTO_RWP_GUARD, needs_second_start)
 
 _STRUCT = structures_dir()
 DEFAULT_RICH = _STRUCT / "LiMn0.6Fe0.4PO4_olivine.cif"
@@ -78,7 +84,8 @@ ROBUST_TIE_RWP = 0.05
 # 退出，不说明种子解优于 CIF 起点（frame 28 实测 2.473 vs 2.416）。
 # 只对种子 Rwp 高的帧跑第二起点；相变区无条件跑第二起点的版本在
 # 81 帧验证中改变了种子链（frame 35 f 0.569→0.587），已否决。
-AUTO_RWP_GUARD = 2.45
+# 2026-11-27 规则抽到 `insitu_policy`，通用引擎共用同一份。
+AUTO_RWP_GUARD = DEFAULT_AUTO_RWP_GUARD
 # 连续 N 帧落在同一个新晶胞（容差 Å）时接受为新种子。原来只认“和旧种子
 # 差 < CELL_JUMP_*”，两相区一跳就永远不更新，44/46/48/49 会重复报假跳。
 PENDING_CELL_TOL = 0.02
@@ -195,6 +202,15 @@ def _extra_phases(poor, al, poor_cell, *, refine_poor_cell=True):
     ]
 
 
+class Fractions(NamedTuple):
+    """相对散射强度分数（2026-11-27 改成具名元组，不再用魔法下标）。"""
+
+    A_rich: float
+    A_poor: float
+    A_al: float
+    f_rich: float
+
+
 def _fractions(result):
     """相对散射强度分数 + Al 参考强度。"""
     A_rich = (float(result.scale)
@@ -218,7 +234,7 @@ def _fractions(result):
     total = A_rich + A_poor
     f_rich = (A_rich / total
               if math.isfinite(total) and total > 0 else float("nan"))
-    return A_rich, A_poor, A_al, f_rich
+    return Fractions(A_rich, A_poor, A_al, f_rich)
 
 
 def _fraction_esd(result, A_rich, A_poor):
@@ -303,36 +319,20 @@ def _choose_fit(res_seed, res_cif, seed):
     return best
 
 
-def _need_second_start(res_seed, f_rich, cif_is_seed, mode):
-    """自动双起点是否跑 CIF 端元起点。
+def _need_second_start(res_seed, f_rich, cif_is_seed, mode,
+                       auto_rwp_guard=AUTO_RWP_GUARD):
+    """自动双起点是否跑 CIF 端元起点（薄包装，规则在 insitu_policy）。
 
     2026-11-24：原来只看 ``res_seed.success``；frame 28 的种子解
     success=True 但 Rwp 2.473，CIF 起点 2.416，说明“严格退出”不等于
-    “更好”。现在种子 Rwp ≥ AUTO_RWP_GUARD 时也跑第二起点。
-    相变区无条件跑第二起点的版本在 81 帧验证中改变了种子链
-    （frame 35 f 0.569→0.587），已否决；Rwp 高位守卫既能抓住
-    frame 28，又不碰两个起点本来一致的帧。
+    “更好”。现在种子 Rwp ≥ 守卫阈值时也跑第二起点。
+    2026-11-27：判断抽到 `insitu_policy.needs_second_start`，通用引擎
+    共用；本函数只负责从结果对象里取 success/rwp。
     """
-    if cif_is_seed:
-        return False
-    mode = str(mode or "auto")
-    if mode == "always":
-        return True
-    if mode == "off":
-        return False
-    if not bool(getattr(res_seed, "success", True)):
-        return True
-    try:
-        f_value = float(f_rich)
-    except (TypeError, ValueError):
-        return True
-    if not math.isfinite(f_value):
-        return True
-    try:
-        rwp = float(res_seed.rwp)
-    except (TypeError, ValueError):
-        return True
-    return math.isfinite(rwp) and rwp >= AUTO_RWP_GUARD
+    return needs_second_start(
+        getattr(res_seed, "success", True),
+        getattr(res_seed, "rwp", float("nan")),
+        f_rich, cif_is_seed, mode, auto_rwp_guard)
 
 
 def _background_kwargs(bg, background_model=None, background_order=None):
@@ -449,15 +449,24 @@ def _fraction_value(result):
     if result is None:
         return float("nan")
     try:
-        return float(_fractions(result)[3])
+        return float(_fractions(result).f_rich)
     except Exception:                                   # noqa: BLE001
+        return float("nan")
+
+
+def _safe_float(value):
+    """诊断列用：转不成数字就给 NaN，不要让溯源信息拖挂整帧。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
         return float("nan")
 
 
 def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
              max_nfev, npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
              background_model=None, background_order=None,
-             intensity_poly=None, dual_start="auto"):
+             intensity_poly=None, dual_start="auto",
+             auto_rwp_guard=AUTO_RWP_GUARD):
     """一帧：读图/积分/背景 + 三相精修 + 计时。
 
     2026-11-03：只从上一帧种子起步会在两相区卡在“minority 相被 majority
@@ -495,7 +504,7 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
                    and _cells_close(seed_poor, cif_poor, 1e-4))
     f_seed = _fraction_value(res_seed)
     need_second = _need_second_start(res_seed, f_seed, cif_is_seed,
-                                     dual_start)
+                                     dual_start, auto_rwp_guard)
     if need_second:
         res_cif = _fit_once(t, y, bg, rich, poor, al, lam, inst,
                             cif_rich, cif_poor, max_nfev,
@@ -509,9 +518,9 @@ def _fit_one(path, rich, poor, al, geom, lam, inst, mask, seed, *,
     timers["dual_start"] = int(res_cif is not None)
     timers["start_used"] = (
         "cif" if res_cif is not None and res is res_cif else "seed")
-    timers["rwp_seed"] = float(res_seed.rwp)
-    timers["rwp_cif"] = (float(res_cif.rwp) if res_cif is not None
-                         else float("nan"))
+    timers["rwp_seed"] = _safe_float(getattr(res_seed, "rwp", None))
+    timers["rwp_cif"] = (_safe_float(getattr(res_cif, "rwp", None))
+                         if res_cif is not None else float("nan"))
     timers["success_seed"] = int(bool(res_seed.success))
     timers["success_cif"] = (int(bool(res_cif.success))
                              if res_cif is not None else -1)
@@ -646,6 +655,13 @@ def write_summary(outdir, rows, mask_on, phase_set=None):
     for r in rows:
         key = r["status"].split("(", 1)[0]
         status[key] = status.get(key, 0) + 1
+    # 双起点溯源（2026-11-27）：只统计真正有拟合记录的帧；旧 CSV / 通用
+    # 引擎旧版本没有这一列时不要误报成 "0 帧 / seed=N"。
+    starts = [str(r.get("start_used") or "").strip() for r in rows]
+    start_counts = {}
+    for start in starts:
+        if start:
+            start_counts[start] = start_counts.get(start, 0) + 1
     if phase_set is not None:
         title = (f"=== {getattr(phase_set, 'name', 'in-situ')} "
                  "in-situ batch ===")
@@ -671,13 +687,12 @@ def write_summary(outdir, rows, mask_on, phase_set=None):
         f"others: {n - len(strict) - len(soft)}",
         f"usable: {len(usable)}/{n} (Rwp<=max, finite cells, non-error)",
         "status: " + ", ".join(f"{k}={v}" for k, v in sorted(status.items())),
-        "dual start: "
-        + f"{sum(1 for r in rows if int(r.get('dual_start', 0)))} frames"
-        + "  (start used: "
-        + ", ".join(
-            f"{key}={sum(1 for r in rows if (r.get('start_used') or 'seed') == key)}"
-            for key in sorted({(r.get('start_used') or 'seed') for r in rows}))
-        + ")",
+        ("dual start: "
+         + f"{sum(1 for r in rows if int(r.get('dual_start', 0)))} frames"
+         + "  (start used: "
+         + ", ".join(f"{key}={value}"
+                     for key, value in sorted(start_counts.items()))
+         + ")") if start_counts else "dual start: not recorded",
         f"mask: {'on' if mask_on else 'off'}",
         f"total: {total:.1f} s  ({total / 60.0:.1f} min)",
         f"mean per frame: {means['total']:.1f} s",
@@ -719,7 +734,8 @@ class InSituBatch:
                  tth_min=TTH_MIN, tth_max=TTH_MAX,
                  background_model=BG_MODEL,
                  background_order=BG_CHEBYSHEV_ORDER,
-                 intensity_poly=INTENSITY_POLY):
+                 intensity_poly=INTENSITY_POLY,
+                 auto_rwp_guard=AUTO_RWP_GUARD):
         self.rich = rich
         self.poor = poor
         self.al = al
@@ -728,6 +744,8 @@ class InSituBatch:
         self.background_model = str(background_model)
         self.background_order = int(background_order)
         self.intensity_poly = int(intensity_poly)
+        self.auto_rwp_guard = (None if auto_rwp_guard is None
+                               else float(auto_rwp_guard))
         self.instrument = instrument
         self.mask = mask
         self.max_rwp = float(max_rwp)
@@ -764,7 +782,8 @@ class InSituBatch:
                 npt=self.npt, tth_min=self.tth_min, tth_max=self.tth_max,
                 background_model=self.background_model,
                 background_order=self.background_order,
-                intensity_poly=self.intensity_poly)
+                intensity_poly=self.intensity_poly,
+                auto_rwp_guard=self.auto_rwp_guard)
             _a, _p, _al, f_rich = _fractions(res)
             rich_cell = _cell(res)
             poor_cell = _cell(res, "LMFP_poor")
@@ -829,8 +848,12 @@ def prepare_setup(config_name="lmfp1_lab6", *, rich_path=None, poor_path=None,
                   npt=NPT, tth_min=TTH_MIN, tth_max=TTH_MAX,
                   background_model=BG_MODEL,
                   background_order=BG_CHEBYSHEV_ORDER,
-                  intensity_poly=INTENSITY_POLY):
-    """GUI [原位] 的准备步骤：读结构、定仪器、读 mask，返回 InSituBatch。
+                  intensity_poly=INTENSITY_POLY,
+                  auto_rwp_guard=AUTO_RWP_GUARD):
+    """旧 LMFP 引擎的准备步骤：读结构、定仪器、读 mask，返回 InSituBatch。
+
+    2026-11-27 起 GUI [原位] 工作台走通用引擎（`insitu_generic`），
+    本函数留给命令行/旧脚本与金标准对照。
 
     lab6_tif 是用户的 LaB₆ 标样帧（打包后仓库样例不带）；None 时退回
     仓库里的 `data/lab6-00024.tif`，没有就报错。这一步含拟合（数秒），
@@ -853,4 +876,4 @@ def prepare_setup(config_name="lmfp1_lab6", *, rich_path=None, poor_path=None,
         first_nfev=first_nfev, frame_nfev=frame_nfev,
         npt=npt, tth_min=tth_min, tth_max=tth_max,
         background_model=background_model, background_order=background_order,
-        intensity_poly=intensity_poly)
+        intensity_poly=intensity_poly, auto_rwp_guard=auto_rwp_guard)

@@ -93,6 +93,23 @@ def _shade(ax, lo, hi, trans):
     ax.axvline(trans + 0.5, color="0.55", lw=0.8, ls="--")
 
 
+def mark_cif_starts(axes, rows, *, color="#8e44ad"):
+    """在趋势图各子图画“CIF 起点胜出”的淡竖线（2026-11-27）。
+
+    只标记真正跑过第二起点且 CIF 胜出的帧；老 CSV 没有 start_used 列，
+    什么都不画。
+    """
+    frames = sorted({int(r["frame"]) for r in (rows or [])
+                     if str(r.get("start_used") or "").strip() == "cif"})
+    if not frames:
+        return False
+    for ax in axes:
+        for frame in frames:
+            ax.axvline(frame, color=color, lw=0.7, ls=":", alpha=0.45,
+                       zorder=0)
+    return True
+
+
 def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
     """四栏趋势：相分数 / rich 晶胞 / poor 晶胞 / Rwp。
 
@@ -181,13 +198,17 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
     ax4.set_title("(d) Rwp", fontsize=9)
     ax4.grid(alpha=0.25, linestyle=":")
 
+    marked = mark_cif_starts(fig.axes, rows)
+
     for ax in fig.axes:
         ax.tick_params(labelsize=7)
     fig.suptitle(title, fontsize=11)
-    fig.text(0.5, 0.012,
-             "cell tracks: solid markers only when that phase is the majority (≥50%); "
-             "faded = minority-phase estimate (not reliable). Dotted line in (a) = "
-             "50/50 crossover; dashed verticals mark crossings.",
+    footnote = ("cell tracks: solid markers only when that phase is the majority (≥50%); "
+                "faded = minority-phase estimate (not reliable). Dotted line in (a) = "
+                "50/50 crossover; dashed verticals mark crossings.")
+    if marked:
+        footnote += " Purple dotted verticals = CIF start won."
+    fig.text(0.5, 0.012, footnote,
              ha="center", fontsize=7, color="0.4")
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     return fig

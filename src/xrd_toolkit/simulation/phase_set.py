@@ -22,6 +22,7 @@ from pathlib import Path
 
 from xrd_toolkit import paths
 from xrd_toolkit.simulation import load_structure
+from xrd_toolkit.simulation.insitu_policy import DEFAULT_AUTO_RWP_GUARD
 
 # 角色
 SAMPLE = "sample"
@@ -80,6 +81,11 @@ class BatchPolicy:
     """批处理策略。LMFP 预设打开全部稳健项；通用预设默认最简。"""
 
     dual_start: str = "off"           # off | auto | always
+    # 自动双起点的 Rwp 守卫（2026-11-27）：种子解 success=True 但 Rwp
+    # 达到这个值时也补跑 CIF 起点。None/0 = 只看 success（旧通用行为）。
+    # LMFP 预设用 2.45（24 号实测口径）；通用预设保持 None，避免把
+    # LMFP 的绝对 Rwp 水平套到别的数据上。
+    auto_rwp_guard: float | None = None
     pending_frames: int = 0           # >0 = 连续 N 帧同新晶胞才重锁
     pending_tol: float = 0.02
     tie_rwp: float = 0.05
@@ -101,7 +107,8 @@ class BatchPolicy:
 
     @classmethod
     def lmfp(cls):
-        return cls(dual_start="auto", pending_frames=2, pending_tol=0.02,
+        return cls(dual_start="auto", auto_rwp_guard=DEFAULT_AUTO_RWP_GUARD,
+                   pending_frames=2, pending_tol=0.02,
                    tie_rwp=0.05, max_rwp=20.0, cell_jump_default=0.30,
                    first_nfev=120, frame_nfev=120,
                    xtol=1e-6, ftol=1e-6, gtol=1e-6,
@@ -339,7 +346,13 @@ def phase_set_from_dict(data):
                 for key, bound in values["cell_bounds"].items()}
         values["structure"] = load_structure(str(path))
         phases.append(PhaseSpec(**values))
-    policy = BatchPolicy(**(data.get("policy") or {}))
+    policy_raw = dict(data.get("policy") or {})
+    adapter = str(data.get("adapter") or "")
+    if adapter == "lmfp" and "auto_rwp_guard" not in policy_raw:
+        # 旧版 LMFP 方案文件没有这个字段；补上 2026-11-24 的默认守卫，
+        # 避免打开旧方案后行为悄悄退回“只看 success”。
+        policy_raw["auto_rwp_guard"] = DEFAULT_AUTO_RWP_GUARD
+    policy = BatchPolicy(**policy_raw)
     views_raw = dict(data.get("views") or {})
     windows = [PeakWindow(**w) for w in views_raw.pop("peak_windows", [])]
     # JSON 把元组写成列表；读回来还原成元组，保持与内存里一致。
@@ -357,8 +370,7 @@ def phase_set_from_dict(data):
     instrument = InstrumentSpec(**(data.get("instrument") or {}))
     return PhaseSet(name=str(data.get("name") or "insitu 方案"),
                     phases=phases, policy=policy, views=views,
-                    instrument=instrument,
-                    adapter=str(data.get("adapter") or ""))
+                    instrument=instrument, adapter=adapter)
 
 
 def save_phase_set(phase_set, path):

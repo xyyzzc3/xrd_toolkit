@@ -89,6 +89,8 @@ def _fake_insitu_batch():
         "wt_rich": 80.0, "wt_poor": 20.0,
         "rich_a": 10.4, "rich_b": 6.0, "rich_c": 4.7,
         "poor_a": 9.9, "poor_b": 5.8, "poor_c": 4.75,
+        "dual_start": 1, "start_used": "cif",
+        "rwp_seed": 2.15, "rwp_cif": 2.10,
     }]
     return SimpleNamespace(
         rows=rows, fitted=[], mask=None, tth_min=1.0, tth_max=8.0,
@@ -212,6 +214,8 @@ class TestReportWindow(unittest.TestCase):
         self.assertIn("全谱精修", html)
         self.assertIn("原位多相批量", html)
         self.assertIn("96.20", html)
+        self.assertIn("双起点统计", html)
+        self.assertIn("CIF 起点胜出 1 帧", html)
 
     def test_dialog_lists_curve_and_writes_html(self):
         self._open_panel()

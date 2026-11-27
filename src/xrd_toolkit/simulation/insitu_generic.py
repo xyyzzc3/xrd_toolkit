@@ -7,8 +7,10 @@
   * 其余相 = 额外相（默认逐反射强度自由，即 Le Bail；晶胞可选自由）；
   * 每帧读图 → 1D 积分 → 自动基线 → 一次全谱拟合，从上一帧晶胞起步；
     背景模型（estimated/chebyshev/none）与窗口宽度按 BatchPolicy 走；
+  * 双起点按 `BatchPolicy.dual_start` / `auto_rwp_guard` 走：LMFP 预设
+    默认 auto + 2.45% 守卫（2026-11-24 规则），通用预设默认 off；
   * 输出每相的相对强度分数 f_i = A_i / ΣA 与晶胞；不做 LMFP 的
-    rich/poor 语义，也不做双起点/两段少数相——通用模式先保证能跑通。
+    rich/poor 语义，也不做两段少数相。
 
 分数口径与 `insitu._fractions` 同源：
     A_main = scale × Σ(peak_table_intensities) × norm / 100
@@ -29,6 +31,7 @@ from xrd_toolkit.simulation.phase_set import (
     BatchPolicy, PhaseSet, PhaseSpec, REFERENCE, SAMPLE, _safe_label,
     phase_set_from_dict)
 from xrd_toolkit.simulation.insitu import BG_SMOOTH, frames_in_dir, load_frame
+from xrd_toolkit.simulation.insitu_policy import needs_second_start
 from xrd_toolkit.services.mask import load_mask
 
 CELL_JUMP = 0.30          # 通用模式：任一晶胞轴跳 > 0.30 Å 标 cell_jump
@@ -132,6 +135,25 @@ def _amplitudes(result, phases):
         except (AttributeError, KeyError, TypeError, ValueError):
             amps[phase.label] = float("nan")
     return amps
+
+
+def _main_fraction(result, phases):
+    """主相分数；只给双起点触发判断/溯源用，失败给 NaN。"""
+    if result is None:
+        return float("nan")
+    try:
+        label = _main_label(phases)
+        return float(fractions(result, phases).get(label, float("nan")))
+    except Exception:                                   # noqa: BLE001
+        return float("nan")
+
+
+def _safe_float(value):
+    """诊断列用：转不成数字就给 NaN，不要让溯源信息拖挂整帧。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def fractions(result, phases):
@@ -408,6 +430,7 @@ class GenericBatch:
             extra_phases=extras, phase_label=main.label,
             free=free, initial=init, max_nfev=int(max_nfev),
             stages=stages, bounds=extra_bounds or None,
+            intensity_poly=int(getattr(self.policy, "intensity_poly", 0)),
             xtol=self.policy.xtol, ftol=self.policy.ftol,
             gtol=self.policy.gtol)
 
@@ -467,22 +490,36 @@ class GenericBatch:
             nfev = self.first_nfev if i == 1 else self.frame_nfev
             res_seed = self._fit_once(t, y, bg, nfev)
             res_cif = None
+            f_seed = _main_fraction(res_seed, self.phases)
             cif_is_seed = self._is_cif_seed(self.seed)
-            mode = str(self.policy.dual_start or "off")
-            if mode == "always":
-                need_second = not cif_is_seed
-            elif mode == "auto":
-                need_second = (not cif_is_seed
-                               and not bool(getattr(res_seed, "success",
-                                                    True)))
-            else:
-                need_second = False
+            need_second = needs_second_start(
+                getattr(res_seed, "success", True),
+                getattr(res_seed, "rwp", float("nan")),
+                f_seed, cif_is_seed,
+                getattr(self.policy, "dual_start", "off"),
+                getattr(self.policy, "auto_rwp_guard", None))
             if need_second:
                 res_cif = self._fit_once(t, y, bg, nfev,
                                          seed=self._cif_seed())
+            f_cif = _main_fraction(res_cif, self.phases)
             result = self._choose_fit(res_seed, res_cif)
             timers["fit"] = time.perf_counter() - t0
             timers["dual_start"] = int(res_cif is not None)
+            timers["start_used"] = (
+                "cif" if res_cif is not None and result is res_cif
+                else "seed")
+            timers["rwp_seed"] = _safe_float(
+                getattr(res_seed, "rwp", None))
+            timers["rwp_cif"] = (_safe_float(getattr(res_cif, "rwp", None))
+                                 if res_cif is not None
+                                 else float("nan"))
+            timers["success_seed"] = int(bool(
+                getattr(res_seed, "success", True)))
+            timers["success_cif"] = (int(bool(
+                getattr(res_cif, "success", True)))
+                if res_cif is not None else -1)
+            timers["f_main_seed"] = f_seed
+            timers["f_main_cif"] = f_cif
             cells = _cells(result, self.phases, self.seed)
             status = _status(result, cells, self.seed, self.max_rwp,
                              self.phases, self.policy,
@@ -499,6 +536,7 @@ class GenericBatch:
                  else {phase.label: float("nan") for phase in self.phases})
         amps = (_amplitudes(result, self.phases) if result is not None
                 else {phase.label: float("nan") for phase in self.phases})
+        main_label = _main_label(self.phases)
         row = {"frame": i, "file": path.name, "status": status,
                "usable": (result is not None
                           and not status.startswith(("error", "high_rwp"))
@@ -506,7 +544,19 @@ class GenericBatch:
                "rwp": (float(result.rwp) if result is not None
                        else float("nan")),
                "rp": (float(result.rp) if result is not None
-                      else float("nan"))}
+                      else float("nan")),
+               # 双起点溯源（2026-11-27）：与旧 LMFP 引擎同名列，
+               # 参考门禁/摘要/GUI 诊断列都能直接读。
+               "dual_start": int(timers.get("dual_start", 0)),
+               "start_used": str(timers.get("start_used", "") or ""),
+               "rwp_seed": _safe_float(timers.get("rwp_seed")),
+               "rwp_cif": _safe_float(timers.get("rwp_cif")),
+               "success_seed": int(timers.get("success_seed", -1)),
+               "success_cif": int(timers.get("success_cif", -1)),
+               f"f_{main_label}_seed": _safe_float(
+                   timers.get("f_main_seed")),
+               f"f_{main_label}_cif": _safe_float(
+                   timers.get("f_main_cif"))}
         weights = {}
         for weight in (getattr(result, "phase_weights", None) or []):
             try:
@@ -523,7 +573,6 @@ class GenericBatch:
                                if label in sample_labels else v)
                        for label, v in weights.items()}
         stderr = dict(getattr(result, "stderr", None) or {}) if result else {}
-        main_label = _main_label(self.phases)
         f_esds = fraction_esds(result, self.phases, amps) if result else {}
         for phase in self.phases:
             row[f"f_{phase.label}"] = fracs.get(phase.label, float("nan"))
@@ -545,7 +594,6 @@ class GenericBatch:
         for key in ("load", "integrate", "bg", "fit", "total"):
             row[f"t_{key}_s"] = float(timers.get(key, float("nan")))
         self.rows.append(row)
-        main_label = _main_label(self.phases)
         f_main = fracs.get(main_label, float("nan"))
         self.fitted.append((i, path, result, f_main, status))
         # 种子更新：晶胞正常立刻接；跳变后连续 pending_frames 帧落在
@@ -582,7 +630,11 @@ class GenericBatch:
 
     # ── 输出 ────────────────────────────────────────────────
     def columns(self):
-        cols = ["frame", "file", "status", "usable", "rwp", "rp"]
+        cols = ["frame", "file", "status", "usable", "rwp", "rp",
+                "dual_start", "start_used", "rwp_seed", "rwp_cif",
+                "success_seed", "success_cif"]
+        main_label = _main_label(self.phases)
+        cols += [f"f_{main_label}_seed", f"f_{main_label}_cif"]
         for phase in self.phases:
             cols.append(f"f_{phase.label}")
             cols.append(f"f_{phase.label}_esd")
@@ -719,3 +771,8 @@ class LMFPBatch(GenericBatch):
             self.fitted[-1][2] if self.fitted else None,
             row.get("a_rich", float("nan")), row.get("a_poor", float("nan")))
         return row
+
+    def columns(self):
+        # 旧 LMFP 工作台/CSV 读这几个别名；write_csv 的 fieldnames 必须
+        # 包含它们，否则 DictWriter 会拒绝这些行（2026-11-27 补）。
+        return super().columns() + ["wt_al", "al_a", "al_ref"]

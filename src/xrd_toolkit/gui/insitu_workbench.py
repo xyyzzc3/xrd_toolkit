@@ -21,6 +21,7 @@
 样品分母）。单帧拟合双击表格行；[保存当前图…] 按脚本同尺寸重画。
 """
 import csv
+import math
 import time
 from pathlib import Path
 
@@ -102,6 +103,36 @@ def _fmt(value, digits=3):
     except (TypeError, ValueError):
         return "—"
     return f"{value:.{digits}f}" if np.isfinite(value) else "—"
+
+
+def _dual_start_note(row):
+    """双起点溯源提示（2026-11-27）：悬停 Rwp 看两个起点各是多少。"""
+    start = str(row.get("start_used") or "").strip()
+    if not start:
+        return ""
+    try:
+        dual = int(row.get("dual_start", 0) or 0)
+    except (TypeError, ValueError):
+        dual = 0
+    if not dual:
+        return ""
+    seed = row.get("rwp_seed")
+    cif = row.get("rwp_cif")
+    try:
+        seed_v = float(seed)
+        cif_v = float(cif)
+    except (TypeError, ValueError):
+        return f"采用 {start} 起点"
+    if not (math.isfinite(seed_v) and math.isfinite(cif_v)):
+        return f"采用 {start} 起点"
+    return (f"种子起点 Rwp {seed_v:.3f}% → CIF 起点 {cif_v:.3f}%；"
+            f"采用 {start.upper()}")
+
+
+def _start_suffix(row):
+    """状态行尾巴：CIF 起点胜出时提醒一句（不占表格列）。"""
+    return "  （CIF 起点）" if str(
+        row.get("start_used") or "").strip() == "cif" else ""
 
 
 def compact_table_columns(columns, phases):
@@ -1320,7 +1351,7 @@ class InSituWorkbench(QWidget):
         self._set_status(
             f"第 {row['frame']}/{len(self.frames)} 帧：{row['status']}  "
             f"Rwp {_fmt(row['rwp'])}%  f_{label} {_fmt(fraction)}  "
-            f"wt {_fmt(weight, 1)}%")
+            f"wt {_fmt(weight, 1)}%" + _start_suffix(row))
         self._start_next()
 
     def _stop_run(self):
@@ -1384,6 +1415,7 @@ class InSituWorkbench(QWidget):
         i = table.rowCount()
         table.insertRow(i)
         status = str(row.get("status", ""))
+        note = _dual_start_note(row)
         for col, key in enumerate(self._table_keys):
             item = QTableWidgetItem(_cell_text(key, row.get(key, "")))
             if key not in ("file", "status"):
@@ -1393,6 +1425,8 @@ class InSituWorkbench(QWidget):
                 item.setForeground(QBrush(QColor("#c0392b")))
             elif key == "status" and status != "ok":
                 item.setForeground(QBrush(QColor("#b7791f")))
+            if note and key in ("rwp", "status"):
+                item.setToolTip(note)
             table.setItem(i, col, item)
         table.scrollToBottom()
 
@@ -1540,9 +1574,12 @@ class InSituWorkbench(QWidget):
         self.copy_report_btn.setEnabled(True)
         self.view_tabs.setCurrentWidget(self.fit_canvas)
         self._draw_fit()
+        record = next((r for r in (self.batch.rows if self.batch else [])
+                       if int(r.get("frame", -1)) == int(i)), {})
         self._set_status(
             f"第 {i} 帧：{status}  Rwp {res.rwp:.2f}%  "
-            f"f_{self._fit_main_label} {_fmt(fraction)}")
+            f"f_{self._fit_main_label} {_fmt(fraction)}"
+            + _start_suffix(record))
 
     def _on_cell_double_clicked(self, row, _col):
         if self.batch is None or row < 0 or row >= len(self.batch.rows):
@@ -1672,7 +1709,7 @@ class InSituWorkbench(QWidget):
         act_sel = menu.addAction("复制选中行")
         act_all = menu.addAction("复制全部")
         menu.addSeparator()
-        act_cols = menu.addAction("诊断列（esd / 计时）")
+        act_cols = menu.addAction("诊断列（esd / 计时 / 起点）")
         act_cols.setCheckable(True)
         act_cols.setChecked(bool(self._show_all_columns))
         act_cols.setEnabled(bool(self._all_keys))
