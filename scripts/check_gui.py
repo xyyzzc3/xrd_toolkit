@@ -60,6 +60,7 @@ from xrd_toolkit.gui import plot_panels as gui_plot_panels   # noqa: E402
 from xrd_toolkit.gui import plot_views as gui_views      # noqa: E402
 from xrd_toolkit.gui import app as gui_app               # noqa: E402
 from xrd_toolkit.gui.app import create_window            # noqa: E402
+from xrd_toolkit.gui.theme import apply_app_theme        # noqa: E402
 
 # 默认样例数据（不入仓库，换机器要自己拷；见 scripts/check_env.py）
 SAMPLE_LAB6 = "data/lab6-00024.tif"
@@ -955,7 +956,8 @@ def main() -> int:
     print(f"项目根目录：{ROOT}")
     print(f"样例数据：{lab6.name} + {lmfp.name}")
     print(f"产物缓存：{_SCRATCH}（临时目录——探测不往 outputs/ 里写东西）\n")
-    app = QApplication.instance() or QApplication([])   # noqa: F841
+    app = QApplication.instance() or QApplication([])
+    apply_app_theme(app)
     window = create_window()
     try:
         # 传**绝对路径**：应用按进程工作目录解析相对路径，脚本要能在任何

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QMdiSubWindow, QPushButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.panel_state import _content, _log
+from xrd_toolkit.gui.theme import MDI_BG
 from xrd_toolkit.gui.panel_container import (
     _FloatedWindow, _PlotSubWindow, _apply_panel_chrome, _close_all_panels,
     _copy_panel_attrs)
@@ -30,7 +31,7 @@ def _build_center(window: QMainWindow) -> None:
     # 探针验证）；平铺只摆位置不缩放，放不下就靠滚动条看
     mdi.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     mdi.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    mdi.setStyleSheet("QMdiArea { background-color: #c8c8c8; }")
+    mdi.setStyleSheet(f"QMdiArea {{ background-color: {MDI_BG}; }}")
     window.mdi = mdi
     # Ctrl+滚轮 = 总缩放（Excel 习惯）：过滤器装在视口上管灰底/
     # 标题栏上的 Ctrl+滚轮，普通滚轮穿透给 QMdiArea 自己滚动；

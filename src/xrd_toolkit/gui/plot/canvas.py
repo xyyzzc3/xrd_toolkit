@@ -71,9 +71,9 @@ def _apply_text_guards(dock, ax, keep_title, keep_xlabel, keep_ylabel,
     ours_display = getattr(dock, "_title_display", None)
     if (ours is not None and keep_title != ours
             and ours_display == dock.panel_display):
-        ax.set_title(keep_title)   # 用户为准（不更新 ours：它仍是默认基准）
+        ax.set_title(keep_title, wrap=True)   # 用户为准（不更新 ours：它仍是默认基准）
     else:
-        ax.set_title(default_title)
+        ax.set_title(default_title, wrap=True)
         dock._title_ours = default_title
         dock._title_display = dock.panel_display
     ours = getattr(dock, "_xlabel_ours", None)

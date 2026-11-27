@@ -31,6 +31,7 @@ from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _panel_extra, _PlotSubWindow, _settle,
                                     _toggle_pop_out)
 from xrd_toolkit.gui.plot_export import _ask_save_options, _resolution_note
+from xrd_toolkit.gui.theme import ACCENT_SOFT, BORDER, SURFACE_ALT, TEXT
 # 画布辅助与交互层（2026-10-21 从本文件原样搬出；再导出，plot_views 与
 # 测试照旧经 gui_plot_panels 取用）
 from xrd_toolkit.gui.plot.canvas import (
@@ -55,12 +56,12 @@ PANEL_BAR_H = 26   # 自绘标题栏高度：标题 + 四个按钮 + [弹出][�
 # 面板去掉了原生标题栏后，顶端那条默认苍白底（Qt 窗口色 239）夹在
 # 工作区（159 灰）与画布（255 白）之间，只差 16 级、没有分界线，看着
 # 像条空槽。给一个真正的底色 + 一条与画布的分隔线 + 按钮悬停反馈。
-PANEL_BAR_BG = "#dde1e6"        # 比画布暗、比工作区亮的一档灰
-PANEL_BAR_ACTIVE = "#c6d0da"    # 当前编辑对象的标题栏深一档（活动/非活动）
-PANEL_BAR_LINE = "#b4bac1"      # 标题栏与画布之间的分隔线
-PANEL_BAR_TEXT = "#2b2f33"      # 标题文字（11px 小字要够深才读得清）
-PANEL_BAR_HOVER = "#c8ced6"     # 按钮悬停底
-PANEL_BAR_PRESS = "#b0b7c0"     # 按钮按下底
+PANEL_BAR_BG = SURFACE_ALT      # 与工具栏/表头同一档浅灰
+PANEL_BAR_ACTIVE = ACCENT_SOFT  # 当前编辑对象：品牌浅蓝
+PANEL_BAR_LINE = BORDER         # 标题栏与画布之间的分隔线
+PANEL_BAR_TEXT = TEXT           # 标题文字
+PANEL_BAR_HOVER = "#e6edf6"     # 按钮悬停底
+PANEL_BAR_PRESS = "#cfdff2"     # 按钮按下底
 PANEL_BAR_CLOSE_HOVER = "#d64545"   # 关闭按钮悬停（危险动作给危险色）
 
 class _SlimToolbar(QWidget):

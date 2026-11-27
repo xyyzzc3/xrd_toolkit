@@ -41,6 +41,7 @@ from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
+from xrd_toolkit.gui.theme import MUTED, set_role
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 
 _OBS_COLOR = "#333333"
@@ -389,6 +390,7 @@ class PhaseWorkbench(QWidget):
         self.periodic_btn.clicked.connect(self._open_periodic_table)
         row2.addWidget(self.periodic_btn)
         self.screen_btn = QPushButton("开始筛相")
+        set_role(self.screen_btn, "primary")
         self.screen_btn.setToolTip("对相库目录里的每张 CIF 打峰位匹配分")
         self.screen_btn.clicked.connect(self._start_screen)
         row2.addWidget(self.screen_btn)
@@ -400,6 +402,7 @@ class PhaseWorkbench(QWidget):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setMinimumWidth(236)
         left_scroll.setMaximumWidth(330)
         left = QWidget()
@@ -1350,7 +1353,7 @@ class PhaseWorkbench(QWidget):
 
 def _section(text):
     label = QLabel(text)
-    label.setStyleSheet("color: gray; font-weight: 600;")
+    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
     return label
 
 

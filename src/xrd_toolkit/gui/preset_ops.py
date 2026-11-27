@@ -42,6 +42,7 @@ from xrd_toolkit.gui.config_ops import (
 from xrd_toolkit.gui.panel_state import _log, set_geometry
 from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import user_error_text
+from xrd_toolkit.gui.theme import set_role
 from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, get_preset, is_builtin, mask_ref, preset_names,
     preset_phase_library, remove_user_preset, resolve_mask_ref,
@@ -652,6 +653,7 @@ class PresetManagerDialog(QDialog):
             "没打开的工作台与第二相保留该方案原值")
         self.update_btn.clicked.connect(self._update)
         self.delete_btn = QPushButton("删除方案")
+        set_role(self.delete_btn, "danger")
         self.delete_btn.clicked.connect(self._delete)
         save_btn = QPushButton("保存当前…")
         save_btn.clicked.connect(self._save_current)

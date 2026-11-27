@@ -45,6 +45,7 @@ from xrd_toolkit.gui.figure_appearance import (
     apply_figure_appearance, edit_figure_appearance)
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.plot_export import save_figure_with_options
+from xrd_toolkit.gui.theme import MUTED, set_role
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
@@ -63,7 +64,7 @@ _RWP_WARN_PERCENT = 15.0
 def _section(text):
     """左栏的小节标题（灰字加粗，与 1D 页的「峰表」「峰形拟合」同款）。"""
     label = QLabel(text)
-    label.setStyleSheet("color: gray; font-weight: 600;")
+    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
     return label
 
 
@@ -261,6 +262,7 @@ class RefineWorkbench(QWidget):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setMinimumWidth(236)
         left_scroll.setMaximumWidth(330)
         left = QWidget()
@@ -357,6 +359,7 @@ class RefineWorkbench(QWidget):
         left_lay.addWidget(self.extra_btn)
 
         self.run_btn = QPushButton("开始精修")
+        set_role(self.run_btn, "primary")
         self.run_btn.setToolTip("用选中的 1D 曲线和 CIF 做全谱最小二乘拟合")
         self.run_btn.clicked.connect(self._start_fit)
         left_lay.addWidget(self.run_btn)
@@ -380,6 +383,7 @@ class RefineWorkbench(QWidget):
         left_lay.addWidget(self.appearance_btn)
 
         self.rwp_label = QLabel("Rwp = —")
+        self.rwp_label.setWordWrap(True)
         self.rwp_label.setStyleSheet("font-size: 15px; font-weight: 600;")
         self.rwp_label.setToolTip(
             "Rwp/Rp：标准 Rietveld 拟合优度（加权/未加权剖面 R）。\n"

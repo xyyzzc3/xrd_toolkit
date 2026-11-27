@@ -16,6 +16,7 @@ from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panels import _install_resize_grip, _settle
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import user_error_text
+from xrd_toolkit.gui.theme import brand_subwindow
 from xrd_toolkit.services.calibrants import calibrant_short_label
 from xrd_toolkit.services.data_loader import load_diffraction_image
 # 绘制 / 交互（2026-10-22 从本文件原样搬出；再导出，外部照旧经
@@ -143,6 +144,7 @@ def _open_calib_panel(window: QMainWindow, path: Path) -> None:
     sub = _CalibSubWindow(window, key)
     sub.setObjectName("calib_panel")
     window.mdi.addSubWindow(sub)
+    brand_subwindow(sub)
     content = QWidget()
     lay = QVBoxLayout(content)
     lay.setContentsMargins(0, 0, 0, 0)

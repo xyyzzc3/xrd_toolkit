@@ -29,6 +29,7 @@ from xrd_toolkit.gui.files.sorting import (
     _sync_sort_menu)
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.plot_export import _run_export, _save_figures
+from xrd_toolkit.gui.theme import set_role
 from xrd_toolkit.services import stage_cache
 
 
@@ -79,6 +80,7 @@ def _build_file_dock(window: QMainWindow) -> QDockWidget:
     btn_open = QPushButton("打开…")
     btn_save = QPushButton("保存图片…")
     btn_delete = QPushButton("删除")
+    set_role(btn_delete, "danger")
     btn_export = QPushButton("导出数据")
     btn_open.setObjectName("open_btn")
     btn_save.setObjectName("save_btn")

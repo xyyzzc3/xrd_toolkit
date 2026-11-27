@@ -84,6 +84,7 @@ from PySide6.QtWidgets import (
 
 from xrd_toolkit import config, paths
 from xrd_toolkit.cli import SUPPORTED_EXTS   # 文件夹导入的格式白名单（与 CLI 菜单一致）
+from xrd_toolkit.gui.theme import apply_app_theme, brand_subwindow
 from xrd_toolkit.config import CONFIGS, DEFAULT_CONFIG, entry_display
 from xrd_toolkit.presets import (
     active_preset_name, get_preset, migrate_legacy_recipes)
@@ -535,6 +536,7 @@ def _open_mask_workbench(window: QMainWindow) -> None:
         dock.setObjectName("mask_workbench")
         dock.setWidget(window.mask_editor)
         window.mdi.addSubWindow(dock)
+        brand_subwindow(dock)
         window.mask_dock = dock
         dock.setWindowTitle("掩膜工作台")
         area = window.mdi.viewport().size()
@@ -718,6 +720,7 @@ def _open_refine_workbench(window: QMainWindow) -> None:
         dock.setObjectName("refine_workbench")
         dock.setWidget(window.refine_editor)
         window.mdi.addSubWindow(dock)
+        brand_subwindow(dock)
         window.refine_dock = dock
         dock.setWindowTitle("精修工作台")
         area = window.mdi.viewport().size()
@@ -804,6 +807,7 @@ def _open_phase_workbench(window: QMainWindow) -> None:
         dock.setObjectName("phase_workbench")
         dock.setWidget(window.phase_editor)
         window.mdi.addSubWindow(dock)
+        brand_subwindow(dock)
         window.phase_dock = dock
         dock.setWindowTitle("物相工作台")
         area = window.mdi.viewport().size()
@@ -888,6 +892,7 @@ def _open_insitu_workbench(window: QMainWindow) -> None:
         dock.setObjectName("insitu_workbench")
         dock.setWidget(window.insitu_editor)
         window.mdi.addSubWindow(dock)
+        brand_subwindow(dock)
         window.insitu_dock = dock
         dock.setWindowTitle("原位工作台（通用多相）")
         area = window.mdi.viewport().size()
@@ -1509,6 +1514,7 @@ def main() -> int:
     不断接收鼠标/键盘/重绘事件并分发出去，直到窗口被关闭。
     """
     app = QApplication(sys.argv)
+    apply_app_theme(app)
     _install_chinese_translations(app)
     # 旧 recipes.json 一次性迁成用户预设（2026-11-11：UI 不再有"配方"）。
     # 放在 create_window 之前：预设下拉一建好就包含迁进来的条目。

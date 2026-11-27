@@ -43,6 +43,7 @@ from xrd_toolkit.gui.config_ops import (
 from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
 from xrd_toolkit.gui.panels import _settle
+from xrd_toolkit.gui.theme import set_role
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
@@ -489,6 +490,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     auto_hint.setWordWrap(True)
     al.addWidget(auto_hint)
     btn_auto = QPushButton("定位束心并精修")
+    set_role(btn_auto, "primary")
     btn_auto.setObjectName("start_auto_calib")
     btn_auto.clicked.connect(lambda: _start_auto_calib(window))
     al.addWidget(btn_auto)

@@ -58,6 +58,7 @@ from xrd_toolkit.gui.figure_layout import compact_margins
 from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
+from xrd_toolkit.gui.theme import set_role
 from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels, mask_suspicion
@@ -563,6 +564,7 @@ class MaskWorkbench(QWidget):
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         fl.addWidget(self.scope_combo)
         self.btn_apply = QPushButton("生成掩膜 2D")
+        set_role(self.btn_apply, "primary")
         self.btn_apply.setToolTip(
             "为选定范围生成「掩膜后的 2D」产物（原始像素 + 掩膜）")
         self.btn_apply.setEnabled(False)

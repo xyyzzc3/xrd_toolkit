@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QMainWindow, QMdiSubWindow, QWidget
 
 from xrd_toolkit.gui.panel_state import (
     FOCUS_EMPTY_TEXT, _content, _log, _set_focus)
+from xrd_toolkit.gui.theme import brand_subwindow
 
 
 # 面板状态属性的白名单：弹出/收回时整体搬家的"行李清单"。
@@ -180,6 +181,7 @@ def _apply_panel_chrome(dock, content) -> None:
     """
     if not isinstance(dock, QMdiSubWindow):
         return
+    brand_subwindow(dock)
     flags = Qt.FramelessWindowHint if hasattr(content, "slim_bar") \
         else getattr(dock, "_native_flags", Qt.Window)
     dock.setWindowFlags(flags)

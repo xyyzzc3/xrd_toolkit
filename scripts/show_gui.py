@@ -63,6 +63,7 @@ from shiboken6 import isValid                            # noqa: E402
 from xrd_toolkit.gui import panel_state as gui_state     # noqa: E402
 from xrd_toolkit.gui import plot_views as gui_views      # noqa: E402
 from xrd_toolkit.gui.app import create_window            # noqa: E402
+from xrd_toolkit.gui.theme import apply_app_theme        # noqa: E402
 
 # data/ 下认这些后缀（与 CLI 的白名单同一批；真数据不入仓库）
 SUFFIXES = (".tif", ".tiff", ".edf", ".cbf")
@@ -162,7 +163,8 @@ def main() -> int:
           f"上限演示：{args.cap_demo or '关'}")
     print(f"产物缓存：{_SCRATCH}（临时目录——不往 outputs/ 里写产物）\n")
 
-    app = QApplication.instance() or QApplication([])   # noqa: F841
+    app = QApplication.instance() or QApplication([])
+    apply_app_theme(app)
     window = create_window()
     window.resize(1500, 950)
     window.show()

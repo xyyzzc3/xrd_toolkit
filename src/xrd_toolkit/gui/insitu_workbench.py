@@ -45,6 +45,7 @@ from xrd_toolkit.gui.insitu_phase_table import (
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.plot_export import save_figure_with_options
+from xrd_toolkit.gui.theme import MUTED, set_role
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, PROJECT_PRESET, resolve_mask_ref)
@@ -549,6 +550,7 @@ class InSituWorkbench(QWidget):
         left_lay.addWidget(self.out_btn)
 
         self.start_btn = QPushButton("开始")
+        set_role(self.start_btn, "primary")
         self.start_btn.clicked.connect(self._start)
         left_lay.addWidget(self.start_btn)
         self.stop_btn = QPushButton("停止")
@@ -1756,7 +1758,7 @@ class InSituWorkbench(QWidget):
 
 def _section(text):
     label = QLabel(text)
-    label.setStyleSheet("color: gray; font-weight: 600;")
+    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
     return label
 
 

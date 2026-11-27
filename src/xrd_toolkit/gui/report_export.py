@@ -27,6 +27,7 @@ from xrd_toolkit.gui.panel_state import (
     _collect_geometry, _log, _proc_curve, _proc_settings)
 from xrd_toolkit.gui.peak_view import _settings as _peak_settings
 from xrd_toolkit.gui.tasks import user_error_text
+from xrd_toolkit.gui.theme import set_role
 from xrd_toolkit.services import analysis_report as report
 from xrd_toolkit.services import export as data_export
 from xrd_toolkit.services import process
@@ -742,6 +743,7 @@ class ReportDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         self.generate_btn = QPushButton("生成报告")
+        set_role(self.generate_btn, "primary")
         self.generate_btn.setObjectName("report_generate_btn")
         self.generate_btn.setDefault(True)
         self.generate_btn.setEnabled(bool(self.curves))

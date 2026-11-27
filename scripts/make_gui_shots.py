@@ -81,9 +81,13 @@ from PySide6.QtWidgets import QApplication, QPushButton    # noqa: E402
 
 from xrd_toolkit.gui import panel_state as gui_state       # noqa: E402
 from xrd_toolkit.gui.app import create_window              # noqa: E402
+from xrd_toolkit.gui.theme import apply_app_theme          # noqa: E402
 from xrd_toolkit.services import stage_cache               # noqa: E402
 
 OUT = ROOT / "showcase" / "gui"
+# 报告专用状态：校准页显示报告保存的几何/指标，掩膜页载入报告用的掩膜，
+# 避免截图里的数字与正文不一致。默认关闭（README/说明书仍用演示状态）。
+REPORT_STATE = os.environ.get("XRD_REPORT_SHOTS") == "1"
 
 # 数据自动找（不写死路径）：先看项目 data/，再看用户那份原始数据目录
 # （真数据不入仓库，换机器要自己拷——见 scripts/check_env.py）
@@ -656,8 +660,71 @@ def _has_result(window, name: str) -> bool:
                (getattr(window, "calib_state", {}) or {}).get("results", []))
 
 
+def _shot_calib_report(window) -> None:
+    """报告专用校准页：显示报告保存的几何与指标，不自动重算。
+
+    报告 5.1 的 scorecard：距离 1595.79 mm、残差 0.0036°、环位偏差中位
+    0.26 px、完整环 16/16、d 值离散度 520 ppm。A/B 两槽用同一几何的
+    两次保存结果（PONI/距离有亚像素级差异），只用于展示表格结构。
+    """
+    from xrd_toolkit import config
+    from xrd_toolkit.gui.calib_model import _calib_state, _geom_to_result_shape
+    from xrd_toolkit.gui.calib_table import _refresh_table, _sync_slot_combos
+
+    add_all(window, [LAB6])
+    window.calib_btn.click()
+    window.calib_pixel_chk.setChecked(True)
+    settle(400)
+    geom = dict(config.get_config("lmfp1_lab6")["geometry"])
+    geom["dist_m"] = 1.59579
+    geom["beam_center_rc"] = (1022.0, 1022.3)
+    metrics = {"dev_px": 0.26, "n_complete": 16, "rings": [{}] * 16,
+               "a": {"spread_ppm": 520.0}, "clip_frac": 0.0}
+    state = _calib_state(window)
+    state["current_geom"] = geom
+    state["current_from"] = "lmfp1_lab6"
+    state["current_metrics"] = dict(metrics)
+    state["current_error"] = None
+    state["custom"] = False
+    state["calibrant"] = "LaB6"
+    state["n_rings"] = 16
+
+    def make(name, kind, dist, poni1, rot2):
+        r = _geom_to_result_shape(geom)
+        r["dist_m"] = dist
+        r["poni1_px"] = poni1
+        r["rot2_deg"] = rot2
+        r["residual_deg"] = 0.0036
+        r["metrics"] = dict(metrics)
+        return {"name": name, "kind": kind, "result": r}
+
+    state["results"] = [
+        make("手动选点1", "manual", 1.59579, 1045.2, -0.163),
+        make("精修1", "refined", 1.59578, 1044.6, -0.162),
+    ]
+    state["slots"] = {"current": None, "A": "手动选点1", "B": "精修1"}
+    state["pinned"] = {"A": True, "B": True}
+    _sync_slot_combos(window)
+    _refresh_table(window)
+    from xrd_toolkit.gui.calib_calibrant import _current_geom_text
+    window.calib_current_lbl.setText(_current_geom_text(window))
+    gui_state._log(
+        window,
+        "当前配置：距离 1595.79 mm，残差 0.0036°｜环位偏差中位 0.26 px、"
+        "完整环 16/16、标样 d 值离散度 520 ppm")
+    window.resize(1500, 1000)
+    settle(600)
+    if hasattr(window, "calib_dock"):
+        fit_dock(window, window.calib_dock)
+    _scroll_calib_to_table(window)
+    save(window, "gui_calib", size=(1500, 1000))
+
+
 def shot_calib(window) -> None:
     """校准页：跑两次 自动取点（A/B 两槽都有结果：三列 + Δ + 结论）。"""
+    if REPORT_STATE:
+        _shot_calib_report(window)
+        return
     add_all(window, [LAB6])
     window.calib_btn.click()          # 进校准工作台
     window.calib_pixel_chk.setChecked(True)
@@ -714,19 +781,29 @@ def _mask_editor_setup(window, *, zoom=0.45):
             or Path(editor.image_path) != img):
         editor.load_image(img)
         settle(400)
-    editor.tool_buttons[editor.TOOL_RECT].click()
     h, w = editor.image.shape
     r, c = h // 2, w // 2
-    editor._fill_rect((r - 84, c - 100), (r + 100, c + 100), True)  # 束心
-    editor.btn_hot.click()                       # 孤立坏点（后台）
-    wait_for(lambda: editor._auto_task is None, timeout_s=120)
-    settle(300)
-    # 存一份临时配方（不进 outputs/）：图上的掩膜 2D 标签才像用户流程
-    from xrd_toolkit.services.mask import save_recipe
-    editor.mask_path = save_recipe(
-        _SCRATCH / "lmfp_mask.mask.npz", editor.mask,
-        source=editor._ensure_source(), meta=editor._recipe_meta())
-    editor._update_status()
+    if REPORT_STATE:
+        # 报告专用：载入报告用的掩膜（25,159 px / 0.60%），不重新自动检测。
+        from xrd_toolkit.services.mask import load_mask
+        mp = ROOT.joinpath("outputs", "masks", "lmfp1_lab6_mask.npy")
+        mask = load_mask(mp)
+        editor._set_mask(mask, None, mp)
+        editor._say(
+            f"已载入报告掩膜：{mp.name}（{int(mask.sum())} px，"
+            f"{mask.mean() * 100:.2f}%）")
+    else:
+        editor.tool_buttons[editor.TOOL_RECT].click()
+        editor._fill_rect((r - 84, c - 100), (r + 100, c + 100), True)  # 束心
+        editor.btn_hot.click()                       # 孤立坏点（后台）
+        wait_for(lambda: editor._auto_task is None, timeout_s=120)
+        settle(300)
+        # 存一份临时配方（不进 outputs/）：图上的掩膜 2D 标签才像用户流程
+        from xrd_toolkit.services.mask import save_recipe
+        editor.mask_path = save_recipe(
+            _SCRATCH / "lmfp_mask.mask.npz", editor.mask,
+            source=editor._ensure_source(), meta=editor._recipe_meta())
+        editor._update_status()
     window.mask_dock.resize(1400, 1000)
     settle(600)
     if zoom:
@@ -738,9 +815,12 @@ def _mask_editor_setup(window, *, zoom=0.45):
 
 def shot_mask(window) -> None:
     """掩膜编辑器：束心方块（红）+ 孤立坏点（青）+ mask 前后 1D 预览。"""
-    editor = _mask_editor_setup(window)
+    # 2026-11-25：报告要用完整 2D 图，不再放大到 2.2× 看掩膜细节。
+    editor = _mask_editor_setup(window, zoom=None)
     editor.btn_preview.click()                   # 预览是独立按钮
     wait_for(lambda: len(editor.ax_prev.lines) >= 2, timeout_s=180)
+    editor.btn_home.click()                      # 复位视图：显示全图
+    editor._redraw_all()
     settle(500)
     # 2026-11-14 起调整控件在参数坞「掩膜」页：截整窗才看得到新格局
     path = OUT / "gui_mask.png"
@@ -796,15 +876,16 @@ def _open_lab6_panel(window, *, peaks=False) -> str:
 
 
 def shot_refine(window) -> None:
-    """精修工作台：LaB₆ + Al 额外相 + 仪器基线。"""
-    from xrd_toolkit.simulation.insitu import DEFAULT_AL, LAB6_CIF
+    """精修工作台：LaB₆ 标样（Le Bail 口径）+ 仪器基线。"""
+    from xrd_toolkit.simulation.insitu import LAB6_CIF
     _open_lab6_panel(window)
     window.refine_btn.click()
     settle(300)
     _hide_side_docks(window)
     editor = window.refine_editor
     _select_cif(editor.cif_combo, LAB6_CIF)
-    editor.add_extra_phase(DEFAULT_AL)
+    # LaB₆ 标样没有 Al 基片；标样精修用 Le Bail（与 §5.6 一致）。
+    editor.chk_lebail.setChecked(True)
     editor.run_btn.click()
     wait_for(lambda: editor.result is not None and editor._task is None,
              timeout_s=180)
@@ -820,25 +901,34 @@ def shot_refine(window) -> None:
 
 
 def shot_phase(window) -> None:
-    """物相工作台：LaB₆ 曲线 → 相库筛选 → LaB₆ + LiFePO₄ 双选叠加。"""
+    """物相工作台：LaB₆ 曲线 → La/B 元素筛选 → 峰位精修晶胞。"""
     _open_lab6_panel(window)
     window.phase_btn.click()
     settle(300)
     _hide_side_docks(window)
     editor = window.phase_editor
+    # 2026-11-25：旧图沿用了 LMFP 的 Li/Mn/Fe/P/O 元素，导致 LiFePO4
+    # 排第一；LaB₆ 标样应改用 La/B 筛选。
+    editor.elements_edit.setText("La B")
+    editor.elements_possible_edit.clear()
     editor.screen_btn.click()
     wait_for(lambda: len(editor.rows) > 0, timeout_s=180)
     model = editor.table.selectionModel()
     model.clearSelection()
-    picks = [0]
-    for i, row in enumerate(editor.rows):
-        if row.path.name.startswith("LiFePO4"):
-            picks.append(i)
-            break
-    for i in picks:
-        model.select(editor.table.model().index(i, 0),
-                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    model.select(editor.table.model().index(0, 0),
+                 QItemSelectionModel.Select | QItemSelectionModel.Rows)
     settle(400)
+    # 用观测峰位精修晶胞；叠加图会按精修晶胞 + 零位重画。
+    if hasattr(editor, "cell_btn"):
+        editor.cell_btn.click()
+        wait_for(lambda: getattr(editor, "_cell_dialog", None) is not None,
+                 timeout_s=180)
+        settle(400)
+        try:
+            editor._cell_dialog.close()
+        except Exception:                       # noqa: BLE001
+            pass
+        settle(400)
     window.resize(1600, 1000)
     settle(400)
     fit_dock(window, window.phase_dock)
@@ -950,7 +1040,8 @@ def main() -> int:
     LAB6, LMFP = lab6[0], lmfp
     print("用到的数据：", LAB6, "|", ", ".join(LMFP))
     OUT.mkdir(parents=True, exist_ok=True)
-    QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    apply_app_theme(app)
     print(f"项目根：{ROOT}\n输出目录：{OUT.relative_to(ROOT)}\n")
     for name in names:
         print(f"[{name}]")
