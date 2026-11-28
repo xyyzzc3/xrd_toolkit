@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 BG = "#f4f6f9"            # 窗口底色
 SURFACE = "#ffffff"       # 内容/输入底色
 SURFACE_ALT = "#eef2f7"   # 表头、交替行、MDI 工作区
-BORDER = "#dfe5ec"        # 分隔线
+BORDER = "#c3cfdc"        # 普通分隔（表头列线、小节线、标签页边）
+BORDER_STRONG = "#b3c1d0"  # 区域分界（工作台框、splitter、面板标题栏）
 TEXT = "#1c2733"
 MUTED = "#5b6773"
 ACCENT = "#1d5496"        # 品牌蓝（主按钮）
@@ -81,7 +82,7 @@ _STYLE_SHEET = f"""
 QToolBar {{
     background: {BG};
     border: 0;
-    border-bottom: 1px solid {BORDER};
+    border-bottom: 1px solid {BORDER_STRONG};
     padding: 5px 8px;
     spacing: 4px;
 }}
@@ -137,7 +138,7 @@ QHeaderView::section {{
     background: {SURFACE_ALT};
     border: 0;
     border-right: 1px solid {BORDER};
-    border-bottom: 1px solid {BORDER};
+    border-bottom: 1px solid {BORDER_STRONG};
     padding: 4px 6px;
     font-weight: bold;
 }}
@@ -150,7 +151,7 @@ QLabel#sectionLabel {{
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {BORDER};
+    border: 1px solid {BORDER_STRONG};
     border-radius: 6px;
     top: -1px;
 }}
@@ -165,9 +166,21 @@ QTabBar::tab {{
 QTabBar::tab:hover {{ background: #e6edf6; }}
 QTabBar::tab:selected {{
     background: {SURFACE};
-    border-color: {BORDER};
+    border-color: {BORDER_STRONG};
     color: {ACCENT_HOVER};
     font-weight: bold;
+}}
+
+/* 中央工作区框：一条线同时画出文件栏/参数栏/日志栏与工作台的分界。
+   splitter 把手保留 4px 拖动区，只在朝左/朝上的边画 1px 线。 */
+QMdiArea {{ border: 1px solid {BORDER_STRONG}; }}
+QSplitter::handle:horizontal {{
+    background: {BG};
+    border-left: 1px solid {BORDER_STRONG};
+}}
+QSplitter::handle:vertical {{
+    background: {BG};
+    border-top: 1px solid {BORDER_STRONG};
 }}
 """
 

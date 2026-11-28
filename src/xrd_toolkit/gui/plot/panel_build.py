@@ -31,7 +31,8 @@ from xrd_toolkit.gui.panels import (_apply_area_zoom, _apply_panel_chrome,
                                     _panel_extra, _PlotSubWindow, _settle,
                                     _toggle_pop_out)
 from xrd_toolkit.gui.plot_export import _ask_save_options, _resolution_note
-from xrd_toolkit.gui.theme import ACCENT_SOFT, BORDER, SURFACE_ALT, TEXT
+from xrd_toolkit.gui.theme import (
+    ACCENT_SOFT, BORDER_STRONG, SURFACE_ALT, TEXT)
 # 画布辅助与交互层（2026-10-21 从本文件原样搬出；再导出，plot_views 与
 # 测试照旧经 gui_plot_panels 取用）
 from xrd_toolkit.gui.plot.canvas import (
@@ -58,7 +59,7 @@ PANEL_BAR_H = 26   # 自绘标题栏高度：标题 + 四个按钮 + [弹出][�
 # 像条空槽。给一个真正的底色 + 一条与画布的分隔线 + 按钮悬停反馈。
 PANEL_BAR_BG = SURFACE_ALT      # 与工具栏/表头同一档浅灰
 PANEL_BAR_ACTIVE = ACCENT_SOFT  # 当前编辑对象：品牌浅蓝
-PANEL_BAR_LINE = BORDER         # 标题栏与画布之间的分隔线
+PANEL_BAR_LINE = BORDER_STRONG  # 标题栏与画布之间的分隔线
 PANEL_BAR_TEXT = TEXT           # 标题文字
 PANEL_BAR_HOVER = "#e6edf6"     # 按钮悬停底
 PANEL_BAR_PRESS = "#cfdff2"     # 按钮按下底

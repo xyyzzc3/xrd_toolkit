@@ -36,6 +36,13 @@ class TestThemeTokens(unittest.TestCase):
         self.assertIn('[role="danger"]', theme._STYLE_SHEET)
         self.assertIn("QToolBar", theme._STYLE_SHEET)
 
+    def test_style_sheet_draws_region_dividers(self):
+        # 工作台框和 splitter 线是“补画”的，不是换色就能有的。
+        self.assertIn(theme.BORDER_STRONG, theme._STYLE_SHEET)
+        self.assertIn("QMdiArea", theme._STYLE_SHEET)
+        self.assertIn("QSplitter::handle:horizontal", theme._STYLE_SHEET)
+        self.assertIn("QSplitter::handle:vertical", theme._STYLE_SHEET)
+
     def test_set_role_sets_dynamic_property(self):
         button = QPushButton("开始")
         theme.set_role(button, "primary")
