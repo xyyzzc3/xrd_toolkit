@@ -26,6 +26,7 @@ BORDER = "#c3cfdc"        # 普通分隔（表头列线、小节线、标签页�
 BORDER_STRONG = "#b3c1d0"  # 区域分界（工作台框、splitter、面板标题栏）
 TEXT = "#1c2733"
 MUTED = "#5b6773"
+SECTION_TEXT = "#33424f"  # 小节标题：比说明文字深，比正文柔和
 ACCENT = "#1d5496"        # 品牌蓝（主按钮）
 ACCENT_HOVER = "#17447c"
 ACCENT_SOFT = "#dce8f7"   # 工具栏当前页

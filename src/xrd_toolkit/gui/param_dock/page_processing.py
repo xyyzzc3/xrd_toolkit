@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QWidget)
 
 from xrd_toolkit.gui.panels import _ElideLabel
+from xrd_toolkit.gui.theme import HINT_CSS
 from xrd_toolkit.gui.param_dock.helpers import (
     _apply_preset_processing, _fit_max_width, _on_bg_mode, _on_choose_blank,
     _on_clear_anchors, _on_pick_anchor, _save_processing_to_preset_dialog)
@@ -33,7 +34,7 @@ def build_processing_page(window, form_bg, btns_bg):
     proc_hint = QLabel("处理的是「编辑对象」那张图：在文件栏双击「1D 产物」"
                        "即可选定；参数改了立刻重画")
     proc_hint.setWordWrap(True)
-    proc_hint.setStyleSheet("color: gray;")
+    proc_hint.setStyleSheet(HINT_CSS)
     form_bg.addRow(proc_hint)
     # 计算顺序说清楚（用户 2026-10-07）：页面顺序（裁剪在最上）只管操作
     # 顺手，实际计算永远按 背景 → 平滑 → 裁剪 走（services/process.
@@ -41,7 +42,7 @@ def build_processing_page(window, form_bg, btns_bg):
     order_hint = QLabel("计算顺序固定：扣背景 → 平滑 → 裁剪"
                         "（与页面上的排列顺序无关）")
     order_hint.setWordWrap(True)
-    order_hint.setStyleSheet("color: gray;")
+    order_hint.setStyleSheet(HINT_CSS)
     form_bg.addRow(order_hint)
 
     # ── 裁剪区间（小节）：把一段 2θ 从曲线里挖掉，其余看得清 ──
@@ -84,7 +85,7 @@ def build_processing_page(window, form_bg, btns_bg):
     # 动态长文本（几段区间串起来能到二三百 px）：省略号 + 悬停看全，
     # min_cap 封顶——不封的话窄坞下这一行把页面顶宽、右缘被裁
     cut_list_lbl = _ElideLabel("清单：空", min_cap=180)
-    cut_list_lbl.setStyleSheet("color: gray;")
+    cut_list_lbl.setStyleSheet(HINT_CSS)
     cut_list_lbl.setToolTip("当前要挖掉的全部区间（图上、处理产物与导出文件"
                             "里同样生效）")
     window.cut_list_lbl = cut_list_lbl
@@ -168,7 +169,7 @@ def build_processing_page(window, form_bg, btns_bg):
     # 动态长文本（"21 个锚点（1.29–2.69°）"）：省略号 + 悬停看全，
     # min_cap 封顶——实测它是把处理页内容顶到 301 > 坞最小 280 的主力
     bg_count_lbl = _ElideLabel("", min_cap=140)
-    bg_count_lbl.setStyleSheet("color: gray;")
+    bg_count_lbl.setStyleSheet(HINT_CSS)
     bg_fit_combo = QComboBox()
     # 默认 = 保单调平滑：三种都严格过锚点，差别在锚点之间——弯背景上
     # 折线偏高（实测中段 +29）、自然样条会过冲（扣过头），pchip 既平滑
@@ -233,7 +234,7 @@ def build_processing_page(window, form_bg, btns_bg):
                           "先取 0.05–0.15° 试，看削掉多少再定")
     window.params["平滑窗口 (°)"] = smooth_box
     smooth_pts_lbl = QLabel("")           # 折成几个点（刷新时按当前曲线填）
-    smooth_pts_lbl.setStyleSheet("color: gray;")
+    smooth_pts_lbl.setStyleSheet(HINT_CSS)
     window.smooth_points_lbl = smooth_pts_lbl
     form_bg.addRow(bg_row((smooth_box, 1), (smooth_pts_lbl, 1)))
 
@@ -271,12 +272,12 @@ def build_processing_page(window, form_bg, btns_bg):
     # 这里只留三样：本图上次处理（只读）、当前预设的处理设置、两个动作。
     add_caption(form_bg, "方案处理设置")
     bg_prov_lbl = QLabel("")
-    bg_prov_lbl.setStyleSheet("color: gray;")
+    bg_prov_lbl.setStyleSheet(HINT_CSS)
     bg_prov_lbl.setWordWrap(True)
     window.bg_prov_lbl = bg_prov_lbl
     form_bg.addRow(bg_prov_lbl)
     preset_proc_lbl = QLabel("")
-    preset_proc_lbl.setStyleSheet("color: gray;")
+    preset_proc_lbl.setStyleSheet(HINT_CSS)
     preset_proc_lbl.setWordWrap(True)
     window.preset_proc_lbl = preset_proc_lbl
     form_bg.addRow(preset_proc_lbl)

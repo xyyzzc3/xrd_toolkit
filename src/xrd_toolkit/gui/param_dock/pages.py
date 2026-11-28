@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QPushButton, QWi
 from xrd_toolkit.config import CONFIGS, entry_display
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.plot_views import _plot_view, _refresh_proc
+from xrd_toolkit.gui.theme import HINT_CSS
 
 
 def _refresh_dock_geom_combo(window: QMainWindow) -> None:
@@ -171,7 +172,7 @@ def _build_check_summary(window: QMainWindow) -> QWidget:
     lbl = QLabel("")
     lbl.setObjectName("check_summary_lbl")
     lbl.setWordWrap(True)
-    lbl.setStyleSheet("color: gray;")
+    lbl.setStyleSheet(HINT_CSS)
     lbl.setToolTip("点条目行：勾这一条；点组那一行：整组一起勾；"
                    "对号方块可以取消勾选。出图按钮只画勾选的条目。")
     window.check_summary_lbl = lbl

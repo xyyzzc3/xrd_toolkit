@@ -14,8 +14,9 @@ from xrd_toolkit.gui.fit_view import (
 from xrd_toolkit.gui.panel_state import _apply_auto_ylim, _log, set_geometry
 from xrd_toolkit.gui.panel_widgets import _WrappedLabel
 from xrd_toolkit.gui.param_dock.widgets import (
-    _toggle_section, add_caption, add_float, add_range,
-    add_section_toggle)
+    _toggle_section, add_caption, add_collapsible_hint, add_float,
+    add_range, add_section_toggle)
+from xrd_toolkit.gui.theme import HINT_CSS
 from xrd_toolkit.gui.peak_view import (
     TABLE_COLUMNS, copy_peak_table, install_peak_view, zoom_to_peak)
 from xrd_toolkit.gui.plot_views import (
@@ -34,15 +35,14 @@ def build_1d_page(window, form_1d, btns_1d):
 
     # 积分设置（2θ 范围 + 输出点数）搬去坞顶第三行：所有分析页共用，
     # 见 _build_param_dock 里 data_row 的说明（用户 2026-09-27）
-    # 这一页因此只剩"出图"这件事——留一行灰字指路（用户 2026-09-27 让
-    # 我按自己的想法收尾）：整页空白看着像没做完
-    page_hint = QLabel(
+    # 这一页因此只剩"出图"这件事——留一行可展开的说明（用户 2026-09-27
+    # 让我按自己的想法收尾）：整页空白看着像没做完。2026-11-28 用户：
+    # 4 行灰字太长，默认收起，点「说明」再看。
+    add_collapsible_hint(
+        form_1d,
         "2θ 范围与点数在参数面板顶部，改了按 [重算这张图]。勾选超过 25 项"
         "只计算、不弹面板——结果都在文件栏「1D 产物」：双击看单张、右键"
         "整组打开")
-    page_hint.setWordWrap(True)
-    page_hint.setStyleSheet("color: gray;")
-    form_1d.addRow(page_hint)
 
     # ── 1D 显示（小节，2026-10-07 从「原图」页搬回本页）──
     # 它本来就是曲线图自己的显示参数，原图页改名后屋里只剩 2D/剖面/瀑布，
@@ -435,9 +435,9 @@ def build_1d_page(window, form_1d, btns_1d):
     wh_scherrer.setToolTip(
         "用一样的勾选峰和仪器宽度逐峰算 D = Kλ/(β cosθ)（K=0.9）；"
         "只统计有限值，范围与中位便于和 W-H 结果对照")
-    wh_scherrer.setStyleSheet("color: gray;")
+    wh_scherrer.setStyleSheet(HINT_CSS)
     wh_note = _WrappedLabel("再拟合几根峰（至少 3 根）")
-    wh_note.setStyleSheet("color: gray;")
+    wh_note.setStyleSheet(HINT_CSS)
     wh_view = QPushButton("查看 W-H 图")
     wh_view.setEnabled(False)
     wh_view.setToolTip("在窗口里看 W-H 图（参与/排除的点、拟合线、R²）")

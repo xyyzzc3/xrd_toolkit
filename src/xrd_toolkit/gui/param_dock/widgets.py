@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from xrd_toolkit.gui.param_dock.helpers import _fit_max_width
+from xrd_toolkit.gui.theme import (
+    ACCENT_HOVER, BORDER, HINT_CSS, MUTED, SECTION_TEXT)
 
 
 def make_page():
@@ -53,11 +55,11 @@ def add_caption(form, text):
     也一起吃这套。
     """
     cap = QLabel(text)
-    cap.setStyleSheet("color: gray; font-weight: 600;")
+    cap.setStyleSheet(f"color: {SECTION_TEXT}; font-weight: 600;")
     line = QFrame()
     line.setFixedHeight(1)
     # 裸 QFrame 上给 color 画不出来（实测）——固定 1px 高 + 背景色
-    line.setStyleSheet("background-color: #e3e8ee;")
+    line.setStyleSheet(f"background-color: {BORDER};")
     row = QWidget()
     box = QVBoxLayout(row)
     # 2026-11-03：小节之间多留一点呼吸；线只有这一条（1D 页的
@@ -68,6 +70,41 @@ def add_caption(form, text):
     box.addWidget(cap)
     form.addRow(row)
     return cap
+
+
+def add_collapsible_hint(form, text, title="说明"):
+    """长说明默认收起：一行「▸ 说明」，点开才铺开灰字。
+
+    2026-11-28 用户：右栏那段 4 行灰字像说明书贴在面板上，默认收起。
+    用 QToolButton 的箭头而不是 Unicode ▸/▾：中文字体里这两个字形
+    不一定有，Windows 上会变成方框。
+    """
+    btn = QToolButton()
+    btn.setObjectName("paramHintToggle")
+    btn.setText(title)
+    btn.setCheckable(True)
+    btn.setChecked(False)
+    btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    btn.setArrowType(Qt.RightArrow)
+    btn.setStyleSheet(
+        f"QToolButton {{ border: none; color: {MUTED};"
+        f" font-size: 9pt; padding: 2px 0; }}"
+        f"QToolButton:hover {{ color: {ACCENT_HOVER}; }}")
+    btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    btn.setToolTip("点开看这段说明")
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setStyleSheet(HINT_CSS)
+    form.addRow(btn)
+    form.addRow(label)
+    form.setRowVisible(label, False)
+
+    def _sync(checked):
+        btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        form.setRowVisible(label, bool(checked))
+
+    btn.toggled.connect(_sync)
+    return btn, label
 
 
 def add_float(window, form, name, lo, hi, value, decimals=2,
@@ -174,7 +211,7 @@ def add_section_toggle(form, text, tooltip="", checked=False):
     btn.setChecked(checked)
     btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
     btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-    btn.setStyleSheet("QToolButton { border: none; color: gray;"
+    btn.setStyleSheet(f"QToolButton {{ border: none; color: {SECTION_TEXT};"
                       " font-weight: 600; padding: 2px 0; }")
     btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     if tooltip:

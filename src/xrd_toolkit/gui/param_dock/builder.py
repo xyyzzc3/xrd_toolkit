@@ -16,6 +16,7 @@ from xrd_toolkit.gui.preset_ops import (
 from xrd_toolkit.gui.panel_state import (
     DATA_PARAM_DEFAULTS, FOCUS_EMPTY_TEXT)
 from xrd_toolkit.gui.panels import _FocusElideLabel
+from xrd_toolkit.gui.theme import HINT_CSS
 from xrd_toolkit.gui.param_dock.helpers import (
     _connect_pending_hooks, _fit_max_width, _sync_bg_rows)
 from xrd_toolkit.gui.param_dock.page_1d import build_1d_page
@@ -88,7 +89,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # 不撑宽参数坞
     window.focus_label = _FocusElideLabel(FOCUS_EMPTY_TEXT,
                                      Qt.ElideMiddle)
-    window.focus_label.setStyleSheet("color: gray;")
+    window.focus_label.setStyleSheet(HINT_CSS)
     lay.addWidget(window.focus_label)     # 固定最上方，不随页面滚动
 
     # 项目预设（v0.2.1 B1，2026-11-10）：几何 + 第二相 + 原位目录/掩膜 +
@@ -221,7 +222,7 @@ def _build_param_dock(window: QMainWindow) -> QDockWidget:
     # [重算这张图] 时亮着——"图上还是按旧范围算的"一眼可见。切图/记住由
     # panel_state 那一套管（_PENDING_GROUPS 的"数据"组）
     lbl_data_pending = QLabel("未应用")
-    lbl_data_pending.setStyleSheet("color: gray;")
+    lbl_data_pending.setStyleSheet(HINT_CSS)
     lbl_data_pending.setToolTip("改的 2θ 范围 / 点数还没生效（图上仍是按旧"
                                 "范围算的）——按「1D」页或「处理」页的 "
                                 "[重算这张图]")

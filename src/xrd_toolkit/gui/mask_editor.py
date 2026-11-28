@@ -47,7 +47,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
-    QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QMdiSubWindow, QScrollArea, QSizePolicy,
     QSpinBox, QVBoxLayout, QWidget)
 
@@ -58,7 +58,7 @@ from xrd_toolkit.gui.figure_layout import compact_margins
 from xrd_toolkit.gui.image_utils import downsample_max
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.tasks import BackgroundTask
-from xrd_toolkit.gui.theme import set_role
+from xrd_toolkit.gui.theme import HINT_CSS, section_header, set_role
 from xrd_toolkit.paths import OUTPUTS_DIR
 from xrd_toolkit.services.data_loader import load_diffraction_image
 from xrd_toolkit.services.hot_pixels import mask_hot_pixels, mask_suspicion
@@ -309,7 +309,7 @@ class MaskWorkbench(QWidget):
         status_row.addWidget(self.lbl_legend)
         root.addLayout(status_row)
         self.lbl_hint = QLabel("")
-        self.lbl_hint.setStyleSheet("color: #5a6068;")
+        self.lbl_hint.setStyleSheet(HINT_CSS)
         self.lbl_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.lbl_hint.setWordWrap(True)
         root.addWidget(self.lbl_hint)
@@ -337,8 +337,9 @@ class MaskWorkbench(QWidget):
         box.setSpacing(6)
 
         # ── 图像：文件栏全部原始数据的镜像（双击 = 换图）───────────
-        grp = QGroupBox("图像")
-        gl = QVBoxLayout(grp)
+        # 2026-11-28：QGroupBox → 和工作台/参数坞同一套 section_header
+        # （细线 + 深色标题），组框自带的边框与拉伸空白一并去掉。
+        box.addWidget(section_header("图像", first=True))
         self.image_combo = QComboBox()
         self.image_combo.setObjectName("mask_image_combo")
         self.image_combo.setMinimumWidth(120)
@@ -348,13 +349,13 @@ class MaskWorkbench(QWidget):
                                        QSizePolicy.Fixed)
         self.image_combo.setToolTip("文件栏里的全部原始数据；换图不用关工作台")
         self.image_combo.activated.connect(self._on_image_combo)
-        gl.addWidget(self.image_combo)
-        box.addWidget(grp)
+        box.addWidget(self.image_combo)
 
         # ── 掩膜文件：工程（可再改） vs 通用掩膜（给外部软件）────
-        grp = QGroupBox("掩膜文件")
-        grid = QGridLayout(grp)
-        grid.setContentsMargins(4, 4, 4, 4)
+        box.addWidget(section_header("掩膜文件"))
+        files_host = QWidget()
+        grid = QGridLayout(files_host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(3)
         self.btn_load = QPushButton("打开掩膜…")
         self.btn_load.setToolTip(
@@ -374,12 +375,13 @@ class MaskWorkbench(QWidget):
             "（不含来源分层）")
         self.btn_save_generic.clicked.connect(self._export_generic)
         grid.addWidget(self.btn_save_generic, 1, 0, 1, 2)
-        box.addWidget(grp)
+        box.addWidget(files_host)
 
         # ── 绘制：工具两列 + 笔刷 + 撤销/清空 ──────────────────────
-        grp = QGroupBox("绘制")
-        grid = QGridLayout(grp)
-        grid.setContentsMargins(4, 4, 4, 4)
+        box.addWidget(section_header("绘制"))
+        draw_host = QWidget()
+        grid = QGridLayout(draw_host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(3)
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
@@ -417,11 +419,14 @@ class MaskWorkbench(QWidget):
                                   "掩膜 2D 产物不受影响）")
         self.btn_clear.clicked.connect(self._clear)
         grid.addWidget(self.btn_clear, 4, 1)
-        box.addWidget(grp)
+        box.addWidget(draw_host)
 
         # ── 自动检测 ───────────────────────────────────────────────
-        grp = QGroupBox("自动检测")
-        gl = QVBoxLayout(grp)
+        box.addWidget(section_header("自动检测"))
+        detect_host = QWidget()
+        gl = QVBoxLayout(detect_host)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(3)
         self.btn_hot = QPushButton("孤立坏点（局部，推荐）")
         self.btn_hot.setToolTip(
             "15×15 局部中值 + 小连通域：只抓孤立亮团/坏点簇，"
@@ -455,7 +460,7 @@ class MaskWorkbench(QWidget):
         self.btn_locate.setEnabled(False)
         self.btn_locate.clicked.connect(self._locate_changes)
         gl.addWidget(self.btn_locate)
-        box.addWidget(grp)
+        box.addWidget(detect_host)
 
         # ── 高级：孤立坏点的检测参数（默认收起）───────────────────
         self.btn_adv = QPushButton("高级（孤立坏点参数）")

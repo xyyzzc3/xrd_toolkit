@@ -43,7 +43,7 @@ from xrd_toolkit.gui.config_ops import (
 from xrd_toolkit import config
 from xrd_toolkit.core.processor import find_ring_center, fit_center_from_rings
 from xrd_toolkit.gui.panels import _settle
-from xrd_toolkit.gui.theme import set_role
+from xrd_toolkit.gui.theme import HINT_CSS, set_role
 from xrd_toolkit.gui.panel_state import (
     _auto_contrast_values, _collect_geometry, _log, _reload_config_combo)
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
@@ -378,7 +378,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     name_edit.setText(_default_config_name(window))
     window._calib_name_auto = name_edit.text()   # 上次预填值：用户改过就不再覆盖
     save_hint = QLabel("还没有校准结果")
-    save_hint.setStyleSheet("color: gray;")
+    save_hint.setStyleSheet(HINT_CSS)
     save_hint.setWordWrap(True)
     for w_ in (name_edit, save_hint):
         ops.addWidget(w_)
@@ -417,7 +417,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
             (("current", "当前配置"), ("A", "A"), ("B", "B")), start=1):
         hdr = QLabel(text)
         hdr.setAlignment(Qt.AlignCenter)
-        hdr.setStyleSheet("color: gray;")
+        hdr.setStyleSheet(HINT_CSS)
         grid.addWidget(hdr, 0, c)
         combo = QComboBox()
         combo.setToolTip({
@@ -447,7 +447,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
             for c, slot in enumerate(("current", "A", "B"), start=1):
                 label = QLabel("—")
                 label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                label.setStyleSheet("color: gray;")
+                label.setStyleSheet(HINT_CSS)
                 grid.addWidget(label, row_idx, c)
                 window.calib_vals["delta"].setdefault(key_, {})[slot] = label
             row_idx += 1
@@ -461,7 +461,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     # 比"选一个基准再看结论"少一步，也不会再出现"基准列写着 A、结论在讲 B"。
     delta_note = QLabel("Δ = 该列 − 当前配置；结论同样以「当前配置」为准")
     delta_note.setWordWrap(True)
-    delta_note.setStyleSheet("color: gray;")
+    delta_note.setStyleSheet(HINT_CSS)
     tb.addWidget(delta_note)
 
     verdict = QLabel("结论：—")
@@ -469,7 +469,7 @@ def _build_calib_form(window: QMainWindow) -> QWidget:
     tb.addWidget(verdict)
     hint = QLabel(COMPARE_HINT)
     hint.setWordWrap(True)
-    hint.setStyleSheet("color: gray;")
+    hint.setStyleSheet(HINT_CSS)
     tb.addWidget(hint)
     lay.addWidget(intro)
     # 数据表（三列表 + Δ + 结论）**放最下**（用户 2026-09-30："校准数据放最下，
