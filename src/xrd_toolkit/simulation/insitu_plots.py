@@ -203,14 +203,16 @@ def draw_trends(fig, rows, *, title="LMFP in-situ three-phase fit trends"):
     for ax in fig.axes:
         ax.tick_params(labelsize=7)
     fig.suptitle(title, fontsize=11)
-    footnote = ("cell tracks: solid markers only when that phase is the majority (≥50%); "
-                "faded = minority-phase estimate (not reliable). Dotted line in (a) = "
-                "50/50 crossover; dashed verticals mark crossings.")
+    lines = [
+        "cell tracks: solid markers only when that phase is the majority (≥50%);",
+        "faded = minority-phase estimate (not reliable).",
+        "Dotted line in (a) = 50/50 crossover; dashed verticals mark crossings.",
+    ]
     if marked:
-        footnote += " Purple dotted verticals = CIF start won."
-    fig.text(0.5, 0.012, footnote,
-             ha="center", fontsize=7, color="0.4")
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+        lines.append("Purple dotted verticals = CIF start won.")
+    fig.text(0.5, 0.008, "\n".join(lines), ha="center", va="bottom",
+             fontsize=8, color="0.4", linespacing=1.2)
+    fig.tight_layout(rect=(0, 0.12 if marked else 0.095, 1, 0.95))
     return fig
 
 
@@ -358,12 +360,13 @@ def draw_summary(fig, rows, *, title=None):
                   f"{len(rows)} frames, strict ok {n_ok}/{len(rows)}, "
                   f"usable {n_use}/{len(rows)}"),
         fontsize=11)
-    fig.text(0.5, 0.005,
-             "charge/discharge shading inferred from the f_rich minimum; "
-             "phase fractions are relative scattering intensity, not wt%; "
+    fig.text(0.5, 0.008,
+             "charge/discharge shading inferred from the f_rich minimum;\n"
+             "phase fractions are relative scattering intensity, not wt%;\n"
              "cell markers are solid only when that phase is the majority (≥50%).",
-             ha="center", fontsize=6.5, color="0.4")
-    fig.tight_layout(rect=(0, 0.02, 1, 0.95))
+             ha="center", va="bottom", fontsize=8, color="0.4",
+             linespacing=1.2)
+    fig.tight_layout(rect=(0, 0.1, 1, 0.95))
     return fig
 
 

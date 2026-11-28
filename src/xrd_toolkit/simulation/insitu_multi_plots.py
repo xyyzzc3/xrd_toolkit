@@ -195,13 +195,15 @@ def draw_multi_trends(fig, rows, phase_set, *, title=None):
         _frame_ticks(ax)
     fig.suptitle(title or f"In-situ multi-phase batch — {len(rows)} frames",
                  fontsize=11)
-    footnote = ("phase fractions are relative scattering intensity, not wt%; "
-                "faded cell markers = minority-phase estimate (not reliable).")
+    # 8pt 后一行放不下（会压到底排 x 轴标签、右端还会被画布裁掉），
+    # 拆成两行并把下方留白从 3% 提到 6.5%（有紫色标记时 9%）。
+    lines = ["phase fractions are relative scattering intensity, not wt%.",
+             "faded cell markers = minority-phase estimate (not reliable)."]
     if marked:
-        footnote += " Purple dotted verticals = CIF start won."
-    fig.text(0.5, 0.01, footnote,
-             ha="center", fontsize=6.5, color="0.4")
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+        lines.append("Purple dotted verticals = CIF start won.")
+    fig.text(0.5, 0.008, "\n".join(lines), ha="center", va="bottom",
+             fontsize=8, color="0.4", linespacing=1.25)
+    fig.tight_layout(rect=(0, 0.09 if marked else 0.065, 1, 0.95))
     return fig
 
 
@@ -278,10 +280,10 @@ def draw_multi_summary(fig, rows, phase_set, *, title=None):
     n_ok = sum(1 for r in rows if str(r.get("status")) == "ok")
     fig.suptitle(title or (f"In-situ multi-phase summary — {len(rows)} "
                            f"frames, ok {n_ok}/{len(rows)}"), fontsize=11)
-    fig.text(0.5, 0.01,
+    fig.text(0.5, 0.008,
              "faded cell points = minority-phase estimate (not reliable).",
-             ha="center", fontsize=6.5, color="0.4")
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+             ha="center", va="bottom", fontsize=8, color="0.4")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.95))
     return fig
 
 

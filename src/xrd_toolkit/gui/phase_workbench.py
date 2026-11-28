@@ -41,7 +41,7 @@ from xrd_toolkit.gui.files.open_figures import set_workbench_open
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.periodic_table import PeriodicTableDialog, sort_elements
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
-from xrd_toolkit.gui.theme import MUTED, set_role
+from xrd_toolkit.gui.theme import HINT_CSS, section_header, set_role
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
 
 _OBS_COLOR = "#333333"
@@ -283,7 +283,7 @@ class PhaseWorkbench(QWidget):
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
-        self.best_label.setStyleSheet("color: gray;")
+        self.best_label.setStyleSheet(HINT_CSS)
         self.near_label.clear()
         self.near_label.setVisible(False)
         self._refresh_lib_label()
@@ -345,7 +345,7 @@ class PhaseWorkbench(QWidget):
         top.addSpacing(10)
         top.addWidget(QLabel("相库"))
         self.lib_label = QLabel("")
-        self.lib_label.setStyleSheet("color: gray;")
+        self.lib_label.setStyleSheet(HINT_CSS)
         top.addWidget(self.lib_label, 1)
         self.lib_btn = QPushButton("选目录…")
         self.lib_btn.clicked.connect(self._choose_lib)
@@ -410,7 +410,7 @@ class PhaseWorkbench(QWidget):
         left_lay.setContentsMargins(2, 2, 8, 2)
         left_lay.setSpacing(6)
 
-        left_lay.addWidget(_section("寻峰"))
+        left_lay.addWidget(section_header("寻峰", first=True))
         self.prominence = QDoubleSpinBox()
         self.prominence.setRange(1.0, 50.0)
         self.prominence.setDecimals(1)
@@ -436,14 +436,14 @@ class PhaseWorkbench(QWidget):
         self.tolerance.setToolTip("理论峰与观测峰允许的最大偏差")
         left_lay.addLayout(_labeled_row("匹配容差", self.tolerance))
 
-        left_lay.addWidget(_section("结果"))
+        left_lay.addWidget(section_header("结果"))
         self.best_label = QLabel("还没有筛相")
         self.best_label.setWordWrap(True)
-        self.best_label.setStyleSheet("color: gray;")
+        self.best_label.setStyleSheet(HINT_CSS)
         left_lay.addWidget(self.best_label)
         self.near_label = QLabel("")
         self.near_label.setWordWrap(True)
-        self.near_label.setStyleSheet("color: gray;")
+        self.near_label.setStyleSheet(HINT_CSS)
         self.near_label.setVisible(False)
         left_lay.addWidget(self.near_label)
         self.send_btn = QPushButton("送去精修")
@@ -471,7 +471,7 @@ class PhaseWorkbench(QWidget):
         left_lay.addWidget(self.save_fig_btn)
         self.preset_hint = QLabel("")
         self.preset_hint.setWordWrap(True)
-        self.preset_hint.setStyleSheet("color: gray;")
+        self.preset_hint.setStyleSheet(HINT_CSS)
         left_lay.addWidget(self.preset_hint)
         left_lay.addStretch(1)
         left_scroll.setWidget(left)
@@ -514,7 +514,7 @@ class PhaseWorkbench(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(6)
         self.status = QLabel("选一条 1D 曲线，点 [开始筛相]")
-        self.status.setStyleSheet("color: gray;")
+        self.status.setStyleSheet(HINT_CSS)
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.status.setSizePolicy(QSizePolicy.Ignored,
@@ -609,7 +609,7 @@ class PhaseWorkbench(QWidget):
             self.cell_btn.setEnabled(False)
             self.export_default_btn.setEnabled(True)
             self.best_label.setText("还没有筛相")
-            self.best_label.setStyleSheet("color: gray;")
+            self.best_label.setStyleSheet(HINT_CSS)
             self.near_label.clear()
             self.near_label.setVisible(False)
             if curve is not None:
@@ -709,7 +709,7 @@ class PhaseWorkbench(QWidget):
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
-        self.best_label.setStyleSheet("color: gray;")
+        self.best_label.setStyleSheet(HINT_CSS)
         self.near_label.clear()
         self.near_label.setVisible(False)
         self._set_status("已切换到内置精选相库，点 [开始筛相]")
@@ -727,7 +727,7 @@ class PhaseWorkbench(QWidget):
         self.table.setRowCount(0)
         self.send_btn.setEnabled(False)
         self.best_label.setText("还没有筛相")
-        self.best_label.setStyleSheet("color: gray;")
+        self.best_label.setStyleSheet(HINT_CSS)
         self.near_label.clear()
         self.near_label.setVisible(False)
         self._set_status("相库已切换，点 [开始筛相]")
@@ -870,7 +870,7 @@ class PhaseWorkbench(QWidget):
                             f"最佳 {best.path.stem}（score {best.score:.3f}）")
         else:
             self.best_label.setText("没有候选相能匹配观测峰")
-            self.best_label.setStyleSheet("color: gray;")
+            self.best_label.setStyleSheet(HINT_CSS)
             self.send_btn.setEnabled(False)
             self.cell_btn.setEnabled(False)
             self.export_default_btn.setEnabled(True)
@@ -904,7 +904,7 @@ class PhaseWorkbench(QWidget):
             self.near_label.setStyleSheet(
                 "color: #b35c00; font-weight: 600;")
         else:
-            self.near_label.setStyleSheet("color: gray;")
+            self.near_label.setStyleSheet(HINT_CSS)
         self.near_label.setText(text)
         self.near_label.setVisible(True)
         _log(self.main, "被样品元素表排除的相近相："
@@ -1349,12 +1349,6 @@ class PhaseWorkbench(QWidget):
         bar = getattr(self, "screen_bar", None)
         if bar is not None:
             bar.setVisible(False)
-
-
-def _section(text):
-    label = QLabel(text)
-    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
-    return label
 
 
 def _labeled_row(text, widget):

@@ -279,7 +279,8 @@ class TestRefineWorkbench(unittest.TestCase):
         self.assertIn("Observed", editor.fig.axes[0].get_title())
         # 1D 产物/普通面板只是普通提示，不该用警示色（2026-11-18）
         self.assertIn("1D 产物", editor.source_mode_label.text())
-        self.assertIn("gray", editor.source_mode_label.styleSheet())
+        from xrd_toolkit.gui.theme import HINT_CSS
+        self.assertEqual(editor.source_mode_label.styleSheet(), HINT_CSS)
         # 隐藏再显示（切走再回来）：showEvent 要补画，不能变空白
         self.w.refine_dock.hide()
         QApplication.processEvents()

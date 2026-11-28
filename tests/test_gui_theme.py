@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from PySide6.QtGui import QPalette  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPushButton, QMdiSubWindow  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication, QFrame, QLabel, QMdiSubWindow, QPushButton)
 
 from xrd_toolkit.gui import theme  # noqa: E402
 
@@ -47,6 +48,34 @@ class TestThemeTokens(unittest.TestCase):
             theme.brand_subwindow(sub)
         finally:
             sub.deleteLater()
+
+    def test_section_header_rule_only_after_first(self):
+        # 第一条标题不加分隔线；后续小节标题 = 1px 线 + 标签。
+        first = theme.section_header("数据", first=True)
+        later = theme.section_header("背景")
+        try:
+            self.assertEqual(first.findChildren(QFrame, "sectionRule"), [])
+            rules = later.findChildren(QFrame, "sectionRule")
+            self.assertEqual(len(rules), 1)
+            self.assertEqual(rules[0].height(), 1)
+            self.assertEqual(later.findChild(QLabel, "sectionLabel").text(),
+                             "背景")
+        finally:
+            first.deleteLater()
+            later.deleteLater()
+
+    def test_mdi_area_uses_theme_background(self):
+        # QSS 管不到 QMdiArea 的 viewport；必须走 setBackground。
+        from PySide6.QtWidgets import QMainWindow
+        from xrd_toolkit.gui.panel_layout import _build_center
+        window = QMainWindow()
+        try:
+            _build_center(window)
+            self.assertEqual(window.mdi.background().color().name(),
+                             theme.MDI_BG.lower())
+        finally:
+            window.close()
+            window.deleteLater()
 
 
 if __name__ == "__main__":

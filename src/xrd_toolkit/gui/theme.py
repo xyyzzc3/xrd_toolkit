@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
-from PySide6.QtWidgets import QApplication, QMdiSubWindow, QPushButton
+from PySide6.QtWidgets import (
+    QApplication, QFrame, QLabel, QMdiSubWindow, QPushButton, QVBoxLayout,
+    QWidget)
 
 # ── 设计令牌（与官网/说明书同一套冷色调）────────────────────
 BG = "#f4f6f9"            # 窗口底色
@@ -32,6 +34,10 @@ DANGER = "#a93226"
 DANGER_SOFT = "#fdf0ee"
 DISABLED = "#9aa4ae"
 MDI_BG = "#eef2f7"        # 图面板工作区（比内容暗一档）
+
+# 灰色说明文字（侧栏提示、状态行）统一用这一串，避免各处
+# "color: gray" 与主题灰不一致；字号比正文低半档，层次更清楚。
+HINT_CSS = f"color: {MUTED}; font-size: 9pt;"
 
 # 字号：只在系统默认偏小时抬一档，避免把 macOS/Windows 的布局全改掉
 _MIN_POINT_SIZE = 9.5
@@ -68,6 +74,9 @@ def build_palette() -> QPalette:
     return palette
 
 
+# QMdiArea 的底色不写在这里：真正铺满可见区域的是 viewport，QSS 的
+# QMdiArea 背景在 Fusion 下不生效（2026-11-28 离屏取样仍是 #9f9f9f），
+# 由 panel_layout._build_center 的 setBackground 设置。
 _STYLE_SHEET = f"""
 QToolBar {{
     background: {BG};
@@ -134,6 +143,12 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {SURFACE_ALT}; border: 0; }}
 
+QFrame#sectionRule {{ background: {BORDER}; border: 0; }}
+QLabel#sectionLabel {{
+    color: {MUTED};
+    font-weight: 600;
+}}
+
 QTabWidget::pane {{
     border: 1px solid {BORDER};
     border-radius: 6px;
@@ -154,7 +169,6 @@ QTabBar::tab:selected {{
     color: {ACCENT_HOVER};
     font-weight: bold;
 }}
-QMdiArea {{ background: {MDI_BG}; }}
 """
 
 
@@ -185,6 +199,29 @@ def set_role(button: QPushButton, role: str) -> None:
     if style is not None:
         style.unpolish(button)
         style.polish(button)
+
+
+def section_header(text: str, *, first: bool = False) -> QWidget:
+    """侧栏小节标题：一条淡分隔线 + 灰字加粗标题（2026-11-28）。
+
+    第一条不加线，免得标题上方顶着一条横线。分隔线用 1px 的
+    QFrame 而不是 QLabel 边框：QLabel 的 border 会把文字和线
+    挤在一起，滚动区里也更容易被裁。
+    """
+    box = QWidget()
+    box.setObjectName("sectionHeader")
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0 if first else 5, 0, 0)
+    lay.setSpacing(5)
+    if not first:
+        rule = QFrame()
+        rule.setObjectName("sectionRule")
+        rule.setFixedHeight(1)
+        lay.addWidget(rule)
+    label = QLabel(text)
+    label.setObjectName("sectionLabel")
+    lay.addWidget(label)
+    return box
 
 
 def brand_subwindow(sub: QMdiSubWindow) -> None:

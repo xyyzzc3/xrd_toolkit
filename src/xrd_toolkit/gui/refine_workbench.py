@@ -45,7 +45,7 @@ from xrd_toolkit.gui.figure_appearance import (
     apply_figure_appearance, edit_figure_appearance)
 from xrd_toolkit.gui.panel_state import _collect_geometry, _log
 from xrd_toolkit.gui.plot_export import save_figure_with_options
-from xrd_toolkit.gui.theme import MUTED, set_role
+from xrd_toolkit.gui.theme import HINT_CSS, section_header, set_role
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.services.background import estimate_baseline_sliding
 from xrd_toolkit.presets import PROJECT_PRESET, preset_phase_library
@@ -59,13 +59,6 @@ _OBS_COLOR = "#333333"
 # 15% 是"真实数据里明显不对劲"的量级——GUI 的 LMFP 快精修约 10%，
 # 校准标样约 4%，处理产物则普遍在几十个百分点。
 _RWP_WARN_PERCENT = 15.0
-
-
-def _section(text):
-    """左栏的小节标题（灰字加粗，与 1D 页的「峰表」「峰形拟合」同款）。"""
-    label = QLabel(text)
-    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
-    return label
 
 
 def _fmt(value):
@@ -270,20 +263,20 @@ class RefineWorkbench(QWidget):
         left_lay.setContentsMargins(2, 2, 8, 2)
         left_lay.setSpacing(6)
 
-        left_lay.addWidget(_section("数据"))
+        left_lay.addWidget(section_header("数据", first=True))
         self.range_label = QLabel("还没有选曲线")
         self.range_label.setWordWrap(True)
-        self.range_label.setStyleSheet("color: gray;")
+        self.range_label.setStyleSheet(HINT_CSS)
         self.range_label.setToolTip(
             "精修用这条 1D 曲线的积分数据，背景由工作台自己估计；"
             "波长取顶部选中的几何配置。")
         left_lay.addWidget(self.range_label)
         self.source_mode_label = QLabel("")
         self.source_mode_label.setWordWrap(True)
-        self.source_mode_label.setStyleSheet("color: gray;")
+        self.source_mode_label.setStyleSheet(HINT_CSS)
         left_lay.addWidget(self.source_mode_label)
 
-        left_lay.addWidget(_section("背景"))
+        left_lay.addWidget(section_header("背景"))
         bg_row = QHBoxLayout()
         bg_row.setSpacing(4)
         self.bg_combo = QComboBox()
@@ -301,7 +294,7 @@ class RefineWorkbench(QWidget):
         bg_row.addWidget(self.bg_window)
         left_lay.addLayout(bg_row)
 
-        left_lay.addWidget(_section("精修选项"))
+        left_lay.addWidget(section_header("精修选项"))
         self.chk_cell = QCheckBox("晶胞 a/b/c")
         self.chk_cell.setChecked(True)
         self.chk_cell.setToolTip("只对正交或立方晶胞开放；其他晶系请关掉")
@@ -322,7 +315,7 @@ class RefineWorkbench(QWidget):
                        self.chk_b, self.chk_lebail):
             left_lay.addWidget(widget)
 
-        left_lay.addWidget(_section("仪器"))
+        left_lay.addWidget(section_header("仪器"))
         self.chk_fix_instrument = QCheckBox("固定仪器（LaB₆ 基线）")
         self.chk_fix_instrument.setEnabled(False)
         self.chk_fix_instrument.setToolTip(
@@ -331,7 +324,7 @@ class RefineWorkbench(QWidget):
         left_lay.addWidget(self.chk_fix_instrument)
         self.instrument_label = QLabel("仪器基线：未保存")
         self.instrument_label.setWordWrap(True)
-        self.instrument_label.setStyleSheet("color: gray;")
+        self.instrument_label.setStyleSheet(HINT_CSS)
         left_lay.addWidget(self.instrument_label)
         self.save_instrument_btn = QPushButton("存为仪器基线")
         self.save_instrument_btn.setEnabled(False)
@@ -346,7 +339,7 @@ class RefineWorkbench(QWidget):
         # 左侧只放高频控件（2026-11-18 用户 1+2+4；2026-11-19 用户：
         # "宽度是问题、长度可以"——"更多"折叠取消，按钮直接排出来）：
         # 结构参数/额外相用非模态窗口，其余按钮直接放在左栏。
-        left_lay.addWidget(_section("进阶"))
+        left_lay.addWidget(section_header("进阶"))
         self.site_btn = QPushButton("结构参数（坐标/占位）…")
         self.site_btn.setToolTip(
             "精修主相 CIF 的原子坐标/占位；坐标按空间群只放开允许的方向")
@@ -436,7 +429,7 @@ class RefineWorkbench(QWidget):
         site_lay.setSpacing(4)
         self.site_hint = QLabel("切到本页时列出当前 CIF 可精修的位点")
         self.site_hint.setWordWrap(True)
-        self.site_hint.setStyleSheet("color: gray;")
+        self.site_hint.setStyleSheet(HINT_CSS)
         site_lay.addWidget(self.site_hint)
         self.site_table = QTableWidget(0, 4)
         self.site_table.setHorizontalHeaderLabels(
@@ -479,7 +472,7 @@ class RefineWorkbench(QWidget):
         extra_lay.addWidget(self.chk_extra_lebail)
         extra_hint = QLabel("额外相只精修比例与峰强，不精修原子位置/占位")
         extra_hint.setWordWrap(True)
-        extra_hint.setStyleSheet("color: gray;")
+        extra_hint.setStyleSheet(HINT_CSS)
         extra_lay.addWidget(extra_hint)
         self.extra_dialog.hide()
 
@@ -499,7 +492,7 @@ class RefineWorkbench(QWidget):
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
         self.status = QLabel("选一条 1D 曲线和一张 CIF，点 [开始精修]")
-        self.status.setStyleSheet("color: gray;")
+        self.status.setStyleSheet(HINT_CSS)
         status_row.addWidget(self.status, 1)
         self.fit_progress = QProgressBar()
         self.fit_progress.setObjectName("refine_progress")
@@ -775,7 +768,7 @@ class RefineWorkbench(QWidget):
                 idx = self.bg_combo.findData("auto")
                 if idx >= 0:
                     self.bg_combo.setCurrentIndex(idx)
-            self.source_mode_label.setStyleSheet("color: gray;")
+            self.source_mode_label.setStyleSheet(HINT_CSS)
             self.source_mode_label.setText(
                 "1D 产物/面板积分曲线：原始计数数据，可用 Poisson 权重"
                 "和自动背景做全谱定量。")

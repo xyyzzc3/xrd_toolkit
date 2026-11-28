@@ -4,7 +4,7 @@
 panels 再导出，plot_panels 与 app 照旧经 gui_panels 取用。
 """
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMdiArea,
     QMdiSubWindow, QPushButton, QVBoxLayout, QWidget)
@@ -31,7 +31,9 @@ def _build_center(window: QMainWindow) -> None:
     # 探针验证）；平铺只摆位置不缩放，放不下就靠滚动条看
     mdi.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     mdi.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    mdi.setStyleSheet(f"QMdiArea {{ background-color: {MDI_BG}; }}")
+    # 底色必须走 setBackground：QSS 的 QMdiArea { background } 只刷外框，
+    # viewport 仍画 Fusion 的 #9f9f9f（2026-11-28 离屏取样确认）。
+    mdi.setBackground(QBrush(QColor(MDI_BG)))
     window.mdi = mdi
     # Ctrl+滚轮 = 总缩放（Excel 习惯）：过滤器装在视口上管灰底/
     # 标题栏上的 Ctrl+滚轮，普通滚轮穿透给 QMdiArea 自己滚动；

@@ -45,7 +45,7 @@ from xrd_toolkit.gui.insitu_phase_table import (
 from xrd_toolkit.gui.panel_state import _log
 from xrd_toolkit.gui.panel_widgets import _ElideLabel
 from xrd_toolkit.gui.plot_export import save_figure_with_options
-from xrd_toolkit.gui.theme import MUTED, set_role
+from xrd_toolkit.gui.theme import HINT_CSS, section_header, set_role
 from xrd_toolkit.gui.tasks import BackgroundTask, user_error_text
 from xrd_toolkit.presets import (
     DEFAULT_PRESET_NAME, PROJECT_PRESET, resolve_mask_ref)
@@ -331,7 +331,7 @@ class InSituWorkbench(QWidget):
         # 长路径用省略号标签，并给数据/掩膜各留上限；否则长路径会把
         # 右上角的 mask 灰字压到按钮底下（2026-11-03 用户报“遮盖灰字”）。
         self.data_label = _ElideLabel("", Qt.ElideMiddle)
-        self.data_label.setStyleSheet("color: gray;")
+        self.data_label.setStyleSheet(HINT_CSS)
         self.data_label.setMinimumWidth(0)
         self.data_label.setMaximumWidth(420)
         top.addWidget(self.data_label, 1)
@@ -369,7 +369,7 @@ class InSituWorkbench(QWidget):
         top.addWidget(self.load_scheme_btn)
         top.addStretch(1)
         self.mask_label = _ElideLabel("掩膜：不遮", Qt.ElideMiddle)
-        self.mask_label.setStyleSheet("color: gray;")
+        self.mask_label.setStyleSheet(HINT_CSS)
         self.mask_label.setMinimumWidth(170)
         self.mask_label.setMaximumWidth(260)
         # 必须用 Preferred：_ElideLabel 默认 Ignored，布局会把它的宽度
@@ -430,7 +430,7 @@ class InSituWorkbench(QWidget):
         left_lay.setContentsMargins(2, 2, 8, 2)
         left_lay.setSpacing(6)
 
-        left_lay.addWidget(_section("仪器"))
+        left_lay.addWidget(section_header("仪器", first=True))
         # 仪器来源三选一（2026-11-19 手测：通用页原先只能跟着方案走，
         # 没有已保存基线时也切不到标样帧路径）。
         self.instrument_mode = QComboBox()
@@ -445,7 +445,7 @@ class InSituWorkbench(QWidget):
             self._on_instrument_mode_changed)
         left_lay.addLayout(_labeled_row("来源", self.instrument_mode))
         self.instrument_label = QLabel("—")
-        self.instrument_label.setStyleSheet("color: gray;")
+        self.instrument_label.setStyleSheet(HINT_CSS)
         self.instrument_label.setWordWrap(True)
         self.instrument_label.setMinimumWidth(0)
         self.instrument_label.setSizePolicy(QSizePolicy.Ignored,
@@ -456,7 +456,7 @@ class InSituWorkbench(QWidget):
         self.lab6_btn.clicked.connect(self._choose_lab6)
         left_lay.addWidget(self.lab6_btn)
         self.instrument_params_label = QLabel("")
-        self.instrument_params_label.setStyleSheet("color: gray;")
+        self.instrument_params_label.setStyleSheet(HINT_CSS)
         self.instrument_params_label.setWordWrap(True)
         self.instrument_params_label.setMinimumWidth(0)
         self.instrument_params_label.setSizePolicy(QSizePolicy.Ignored,
@@ -466,7 +466,7 @@ class InSituWorkbench(QWidget):
         # 背景（2026-11-19 B4）：原来写死"自动基线 0.2° + 0.25° 分段修正"，
         # 方案里虽然记着 background_model 却没有界面、引擎也没读。现在
         # 三个模型可选，默认仍是原来的自动基线（LMFP 金标准口径不变）。
-        left_lay.addWidget(_section("背景"))
+        left_lay.addWidget(section_header("背景"))
         self.bg_model = QComboBox()
         self.bg_model.addItem("自动基线", "estimated")
         self.bg_model.addItem("Chebyshev 联解", "chebyshev")
@@ -494,7 +494,7 @@ class InSituWorkbench(QWidget):
         left_lay.addLayout(_labeled_row("阶数", self.bg_order))
         self._sync_bg_controls()
 
-        left_lay.addWidget(_section("参数"))
+        left_lay.addWidget(section_header("参数"))
         self.max_rwp = QDoubleSpinBox()
         self.max_rwp.setRange(2.0, 50.0)
         self.max_rwp.setDecimals(1)
@@ -537,9 +537,9 @@ class InSituWorkbench(QWidget):
             lambda _v: self._refresh_data_label())
         left_lay.addLayout(_labeled_row("帧数上限", self.limit))
 
-        left_lay.addWidget(_section("输出"))
+        left_lay.addWidget(section_header("输出"))
         self.out_label = QLabel(str(self.outdir))
-        self.out_label.setStyleSheet("color: gray;")
+        self.out_label.setStyleSheet(HINT_CSS)
         self.out_label.setWordWrap(True)
         self.out_label.setMinimumWidth(0)
         self.out_label.setSizePolicy(QSizePolicy.Ignored,
@@ -581,7 +581,7 @@ class InSituWorkbench(QWidget):
                       "就采用），通常几秒/帧，两相区更慢；晶胞只在相占"
                       "多数时可信。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
+        hint.setStyleSheet(HINT_CSS)
         hint.setMinimumWidth(0)
         hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         left_lay.addWidget(hint)
@@ -632,7 +632,7 @@ class InSituWorkbench(QWidget):
         self.table.customContextMenuRequested.connect(self._table_menu)
         # 表头短名的图例（2026-11-19 手测：13 列时机器标签太长太挤）。
         self.table_legend = QLabel("")
-        self.table_legend.setStyleSheet("color: gray;")
+        self.table_legend.setStyleSheet(HINT_CSS)
         self.table_legend.setWordWrap(True)
         self.table_legend.setMinimumWidth(0)
         self.table_legend.setSizePolicy(QSizePolicy.Ignored,
@@ -659,7 +659,7 @@ class InSituWorkbench(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(6)
         self.status = QLabel("选帧目录，点 [开始]")
-        self.status.setStyleSheet("color: gray;")
+        self.status.setStyleSheet(HINT_CSS)
         self.status.setSizePolicy(QSizePolicy.Ignored,
                                   QSizePolicy.Preferred)
         status_row.addWidget(self.status, 1)
@@ -1754,12 +1754,6 @@ class InSituWorkbench(QWidget):
         bar = getattr(self, "frame_progress", None)
         if bar is not None:
             bar.setVisible(False)
-
-
-def _section(text):
-    label = QLabel(text)
-    label.setStyleSheet(f"color: {MUTED}; font-weight: 600;")
-    return label
 
 
 def _labeled_row(text, widget):
