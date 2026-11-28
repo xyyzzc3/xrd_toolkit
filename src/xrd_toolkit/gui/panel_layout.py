@@ -15,6 +15,8 @@ from xrd_toolkit.gui.panel_container import (
     _FloatedWindow, _PlotSubWindow, _apply_panel_chrome, _close_all_panels,
     _copy_panel_attrs)
 from xrd_toolkit.gui.panel_widgets import _CoordReadout
+from xrd_toolkit.gui.welcome_card import (
+    WelcomeCard, WelcomeCardFilter, sync_welcome)
 
 
 def _build_center(window: QMainWindow) -> None:
@@ -35,6 +37,12 @@ def _build_center(window: QMainWindow) -> None:
     # viewport 仍画 Fusion 的 #9f9f9f（2026-11-28 离屏取样确认）。
     mdi.setBackground(QBrush(QColor(MDI_BG)))
     window.mdi = mdi
+    # 空态欢迎卡：viewport 的子控件（不是 MDI 子窗口），随子窗口增删
+    # 显示/隐藏，见 gui/welcome_card.py。
+    window.welcome_card = WelcomeCard(mdi.viewport())
+    window.welcome_card.hide()
+    window._welcome_filter = WelcomeCardFilter(window)
+    mdi.viewport().installEventFilter(window._welcome_filter)
     # Ctrl+滚轮 = 总缩放（Excel 习惯）：过滤器装在视口上管灰底/
     # 标题栏上的 Ctrl+滚轮，普通滚轮穿透给 QMdiArea 自己滚动；
     # 光标在图上方的那条路在 _wheel_zoom 的 mpl 层拦截
@@ -136,6 +144,7 @@ def _build_center(window: QMainWindow) -> None:
     lay.addWidget(strip)
     window._bottom_strip = strip
     window.setCentralWidget(center)
+    sync_welcome(window)
 
 
 def _set_bottom_strip_visible(window: QMainWindow, visible: bool) -> None:
